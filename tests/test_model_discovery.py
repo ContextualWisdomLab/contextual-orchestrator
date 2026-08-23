@@ -77,8 +77,9 @@ EMBEDDING_SOURCE = ProviderModelSource(
 OPENROUTER_SOURCE = ProviderModelSource(
     provider_name="openrouter",
     credential_name="OPENROUTER_API_KEY",
-    list_url="https://openrouter.ai/api/v1/models",
+    list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
     chat_base_url="https://openrouter.ai/api/v1",
+    capabilities=("chat",),
 )
 
 BYTEZ_SOURCE = ProviderModelSource(
@@ -116,12 +117,13 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
         discovered = discover_provider_models(OPENROUTER_SOURCE)
 
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-router"
-    assert seen_requests[0].full_url == "https://openrouter.ai/api/v1/models"
+    assert seen_requests[0].full_url == "https://openrouter.ai/api/v1/models?output_modalities=text"
     assert [m.model_id for m in discovered] == ["meta/llama-3.3", "no-pricing-model"]
     priced = discovered[0]
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
+    assert all(model.capabilities == ("chat",) for model in discovered)
 
 
 def test_discovery_preserves_operator_declared_source_capabilities() -> None:
