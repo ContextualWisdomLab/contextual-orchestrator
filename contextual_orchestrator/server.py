@@ -5670,6 +5670,7 @@ def build_server(
                         purpose=effective_purpose,
                         allowed=True,
                         reason="authorized",
+                        durable=True,
                     )
                 except Exception as exc:
                     raise RequestError(

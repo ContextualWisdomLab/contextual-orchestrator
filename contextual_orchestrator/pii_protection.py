@@ -41,19 +41,25 @@ def _decode_secret(secret: str, *, key_name: str = "") -> bytes:
 
     Raw unprefixed 32-byte strings are rejected because a human passphrase can
     otherwise be mistaken for a uniformly random AES key. Operators may use
-    ``base64:`` or ``hex:`` for generated key bytes, or ``passphrase:`` for a
-    password-derived key.
+    ``base64:`` or ``hex:`` for generated key bytes, or
+    ``passphrase:<base64-salt>:<passphrase>`` for a password-derived key.
     """
     if not isinstance(secret, str) or not secret:
         raise PiiProtectionError("PII encryption key is empty")
     if secret.startswith(PASSPHRASE_PREFIX):
-        passphrase = secret[len(PASSPHRASE_PREFIX) :]
+        try:
+            salt_text, passphrase = secret[len(PASSPHRASE_PREFIX) :].split(":", 1)
+            salt = base64.b64decode(salt_text + "=" * (-len(salt_text) % 4), altchars=b"-_", validate=True)
+        except (ValueError, binascii.Error):
+            raise PiiProtectionError("PII passphrase must include a valid base64 salt") from None
+        if len(salt) < 16:
+            raise PiiProtectionError("PII passphrase salt must decode to at least 16 bytes")
         if not passphrase:
             raise PiiProtectionError("PII encryption passphrase is empty")
         try:
             return hashlib.scrypt(
                 passphrase.encode("utf-8"),
-                salt=f"contextual-orchestrator:pii-key:{key_name}".encode("utf-8"),
+                salt=salt,
                 n=2**14,
                 r=8,
                 p=1,
@@ -68,7 +74,8 @@ def _decode_secret(secret: str, *, key_name: str = "") -> bytes:
             raise PiiProtectionError("PII encryption key is not valid hex") from exc
     elif secret.startswith("base64:"):
         try:
-            decoded = base64.urlsafe_b64decode(secret[7:] + "=" * (-len(secret[7:]) % 4))
+            encoded = secret[7:]
+            decoded = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
         except (binascii.Error, ValueError) as exc:
             raise PiiProtectionError("PII encryption key is not valid base64") from exc
     else:

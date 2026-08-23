@@ -8,7 +8,7 @@ complementary, permissively licensed tools.
 | Tool | License | Role |
 | --- | --- | --- |
 | [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`). Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
-| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.11. |
+| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.12. |
 
 Both drivers call the same invariant checks in [`fuzz/targets.py`](../fuzz/targets.py),
 so a bug found by either tool reproduces under the other.

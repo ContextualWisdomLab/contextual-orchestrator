@@ -18,7 +18,6 @@ import json
 import math
 import os
 from pathlib import Path
-import queue
 import random
 import re
 import socket
@@ -1579,13 +1578,16 @@ class _StateStore:
         self._conn.execute(self._CREATE_RECORDS_SQL)
         self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
         self._conn.commit()
-        # Stream kinds (audit/authorization/analytics) are already bounded and
-        # best-effort by design (see class docstring). Route them through a
-        # background queue so an unauthenticated request flood — e.g. denied
-        # authorizations — cannot force synchronous, lock-serialized disk
-        # commits on the request-handling thread. Keyed kinds (workflow_run,
-        # evaluation_run) need durability and stay synchronous.
-        self._stream_queue: queue.Queue[tuple[str, str | None, dict[str, Any]]] = queue.Queue(maxsize=2048)
+        # Stream kinds are best-effort by design, but each keeps its own newest
+        # retention window so an authorization flood cannot evict audit data.
+        # The worker keeps unauthenticated denial writes off the request thread.
+        self._stream_events: dict[str, deque[tuple[str | None, dict[str, Any]]]] = {
+            kind: deque(maxlen=limit) for kind, limit in self._STREAM_LIMITS.items()
+        }
+        self._stream_condition = threading.Condition()
+        self._stream_closing = False
+        self._stream_writing = False
+        self._next_stream_index = 0
         self._stream_worker = threading.Thread(
             target=self._drain_stream_queue,
             name="contextual-orchestrator-state-store",
@@ -1593,12 +1595,13 @@ class _StateStore:
         )
         self._stream_worker.start()
 
-    def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
-        if kind in self._STREAM_LIMITS:
-            try:
-                self._stream_queue.put_nowait((kind, key, payload))
-            except queue.Full:
-                pass
+    def save(self, kind: str, key: str | None, payload: dict[str, Any], *, durable: bool = False) -> None:
+        if kind in self._STREAM_LIMITS and not durable:
+            with self._stream_condition:
+                if self._stream_closing:
+                    raise RuntimeError("state store is closed")
+                self._stream_events[kind].append((key, payload))
+                self._stream_condition.notify()
             return
         self._save_sync(kind, key, payload)
 
@@ -1615,14 +1618,42 @@ class _StateStore:
 
     def _drain_stream_queue(self) -> None:
         while True:
-            kind, key, payload = self._stream_queue.get()
+            with self._stream_condition:
+                while not self._stream_closing and not any(self._stream_events.values()):
+                    self._stream_condition.wait()
+                event = self._next_stream_event()
+                if event is None:
+                    return
+                kind, key, payload = event
+                self._stream_writing = True
             try:
                 self._save_sync(kind, key, payload)
+            except Exception:  # noqa: BLE001 - a best-effort stream write must not stop later persistence.
+                pass
             finally:
-                self._stream_queue.task_done()
+                with self._stream_condition:
+                    self._stream_writing = False
+                    self._stream_condition.notify_all()
+
+    def _next_stream_event(self) -> tuple[str, str | None, dict[str, Any]] | None:
+        """Return one pending event fairly; caller holds ``_stream_condition``."""
+        kinds = tuple(self._STREAM_LIMITS)
+        for offset in range(len(kinds)):
+            index = (self._next_stream_index + offset) % len(kinds)
+            kind = kinds[index]
+            if self._stream_events[kind]:
+                self._next_stream_index = (index + 1) % len(kinds)
+                key, payload = self._stream_events[kind].popleft()
+                return kind, key, payload
+        return None
+
+    def _flush_streams(self) -> None:
+        with self._stream_condition:
+            while self._stream_writing or any(self._stream_events.values()):
+                self._stream_condition.wait()
 
     def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
-        self._stream_queue.join()
+        self._flush_streams()
         with self._lock:
             if limit is None:
                 rows = self._conn.execute(self._SELECT_ALL_SQL, (kind,)).fetchall()
@@ -1633,7 +1664,11 @@ class _StateStore:
 
     def close(self) -> None:
         """Close the sqlite handle so Windows can release the database file."""
-        self._stream_queue.join()
+        self._flush_streams()
+        with self._stream_condition:
+            self._stream_closing = True
+            self._stream_condition.notify_all()
+        self._stream_worker.join()
         with self._lock:
             self._conn.close()
 
@@ -2783,6 +2818,7 @@ class TaskOrchestrator:
         *,
         pii_fields: Iterable[str] = (),
         stream: str = "audit",
+        durable: bool = False,
     ) -> None:
         """Append an event to a bounded audit stream."""
         event = {
@@ -2793,7 +2829,7 @@ class TaskOrchestrator:
         events = self._authorization_events if stream == "authorization" else self._audit_events
         events.append(event)
         if self._store is not None:
-            self._store.save(stream, None, event)
+            self._store.save(stream, None, event, durable=durable)
 
     def record_authorization_decision(
         self,
@@ -2802,6 +2838,7 @@ class TaskOrchestrator:
         purpose: str,
         allowed: bool,
         reason: str,
+        durable: bool = False,
     ) -> None:
         """Record a secret-free role/purpose authorization decision."""
         self._append_audit_event(
@@ -2813,6 +2850,7 @@ class TaskOrchestrator:
                 "reason": reason,
             },
             stream="authorization",
+            durable=durable,
         )
 
     def _infer_provider_name(self, base_url: str) -> str:

@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -187,6 +188,43 @@ def test_stream_save_does_not_block_on_a_held_lock() -> None:
         assert elapsed < 0.5  # queued without waiting for the held lock
         assert store.load("authorization") == [{"denied": True}]
         store.close()
+
+
+def test_saturated_authorization_stream_keeps_newest_audit_event() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        authorization_limit = store._STREAM_LIMITS["authorization"]
+        with store._lock:
+            for index in range(authorization_limit * 9):
+                store.save("authorization", None, {"index": index})
+            store.save("audit", None, {"event": "must-survive"})
+
+        assert store.load("authorization", 1) == [{"index": authorization_limit * 9 - 1}]
+        assert store.load("audit") == [{"event": "must-survive"}]
+        store.close()
+
+
+def test_stream_worker_survives_a_failed_best_effort_write() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        worker = store._stream_worker
+        original_save = store._save_sync
+        failed = threading.Event()
+
+        def fail_once(kind: str, key: str | None, payload: dict[str, object]) -> None:
+            failed.set()
+            raise TypeError("deliberate persistence failure")
+
+        store._save_sync = fail_once  # type: ignore[method-assign]
+        store.save("audit", None, {"discarded": True})
+        assert failed.wait(timeout=1)
+        assert worker.is_alive()
+
+        store._save_sync = original_save  # type: ignore[method-assign]
+        store.save("audit", None, {"saved": True})
+        assert store.load("audit") == [{"saved": True}]
+        store.close()
+        assert not worker.is_alive()
 
 
 def test_keyed_save_remains_synchronous() -> None:

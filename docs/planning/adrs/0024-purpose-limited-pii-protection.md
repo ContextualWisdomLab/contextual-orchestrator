@@ -52,7 +52,9 @@ top-level fields through `pii_fields`. Those fields are encrypted with
 AES-256-GCM using a 32-byte key resolved from the existing KV credential
 registry (`CONTEXTUAL_ORCHESTRATOR_PII_ENCRYPTION_KEY` by default). Generated
 key bytes must use an explicit `base64:` or `hex:` encoding; an operator
-passphrase must use `passphrase:` and is derived with memory-hard scrypt.
+passphrase must use `passphrase:<base64-salt>:<passphrase>` and is derived
+with memory-hard scrypt. The salt must be a generated, unique 16-byte-or-longer
+value retained with the passphrase in the KV credential.
 Unprefixed raw 32-byte strings are rejected so a human passphrase cannot be
 mistaken for uniformly random key material. Ciphertext,
 nonce, algorithm, version, and key name are stored; the plaintext field is not.
@@ -71,9 +73,8 @@ usable content.
   reads see the ciphertext envelope.
 * Key rotation is represented by the stored key name; old keys must remain in
   the KV registry until their protected records expire or are re-encrypted.
-* Passphrase-derived keys use a stable key-name salt, so changing the key name
-  remains the deliberate rotation boundary and old records require the old KV
-  key name during replay.
+* Changing a KV key name or passphrase/salt rotates the derived key; old
+  records therefore require the prior KV credential during replay.
 
 ## Evidence
 

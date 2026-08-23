@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
+import sqlite3
 import sys
+import tempfile
+import threading
+from unittest.mock import patch
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -19,11 +26,14 @@ from contextual_orchestrator.pii_protection import (  # noqa: E402
     is_encrypted_detail,
     load_pii_encryptor,
 )
-from contextual_orchestrator.server import RequestError, SecurityConfig  # noqa: E402
+from contextual_orchestrator.server import RequestError, SecurityConfig, build_server  # noqa: E402
 
 
 KEY_BYTES = b"0123456789abcdef0123456789abcdef"
 KEY_BASE64 = "base64:" + base64.urlsafe_b64encode(KEY_BYTES).decode("ascii")
+PASSPHRASE_SALT = base64.urlsafe_b64encode(b"passphrase-salt!").decode("ascii")
+OTHER_PASSPHRASE_SALT = base64.urlsafe_b64encode(b"other-passphrase").decode("ascii")
+PASSPHRASE_SECRET = f"passphrase:{PASSPHRASE_SALT}:human-readable-secret"
 
 
 @pytest.fixture(autouse=True)
@@ -45,10 +55,11 @@ def test_field_encryption_round_trip_and_key_formats() -> None:
     assert "alice@example.com" not in json.dumps(protected)
     assert encryptor.decrypt_fields(protected) == detail
     assert PiiFieldEncryptor.from_secret("k", "hex:" + KEY_BYTES.hex()).key == KEY_BYTES
-    passphrase_key = PiiFieldEncryptor.from_secret("k", "passphrase:human-readable-secret")
+    passphrase_key = PiiFieldEncryptor.from_secret("k", PASSPHRASE_SECRET)
     assert len(passphrase_key.key) == 32
     assert passphrase_key.key != b"human-readable-secret"
-    assert PiiFieldEncryptor.from_secret("k", "passphrase:human-readable-secret").key == passphrase_key.key
+    assert PiiFieldEncryptor.from_secret("k", PASSPHRASE_SECRET).key == passphrase_key.key
+    assert PiiFieldEncryptor.from_secret("k", f"passphrase:{OTHER_PASSPHRASE_SALT}:human-readable-secret").key != passphrase_key.key
     assert is_encrypted_detail(protected)
     assert not is_encrypted_detail(detail)
 
@@ -72,8 +83,10 @@ def test_empty_field_set_and_plain_decrypt_are_copy_operations() -> None:
         "",
         "hex:bad",
         "base64:not@@base64",
+        "base64:!" + base64.urlsafe_b64encode(KEY_BYTES).decode("ascii"),
         base64.urlsafe_b64encode(KEY_BYTES).decode("ascii"),
         "passphrase:",
+        "passphrase:human-readable-secret",
         "0123456789abcdef0123456789abcdef",
         "not-a-32-byte-key",
     ],
@@ -188,6 +201,30 @@ def test_audit_replay_isolates_undecryptable_event() -> None:
     assert replay[0]["event_detail"]["__pii_protection_error__"] == "unavailable"
     assert "alice@example.com" not in json.dumps(replay[0])
     assert replay[1]["event_detail"]["email"] == "alice@example.com"
+
+
+def test_audit_replay_rejects_when_durable_audit_write_fails() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        orchestrator = TaskOrchestrator(
+            [ModelAgent("general_agent", "mock")], state_db=os.path.join(directory, "state.db")
+        )
+        assert orchestrator._store is not None
+        server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token="test-token"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/admin/state",
+            headers={"authorization": "Bearer test-token", "connection": "close"},
+        )
+        try:
+            with patch.object(orchestrator._store, "_save_sync", side_effect=sqlite3.OperationalError("disk unavailable")):
+                with pytest.raises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(request, timeout=5)
+            assert error.value.code == 503
+            assert json.loads(error.value.read().decode("utf-8"))["error"]["code"] == "authorization_audit_unavailable"
+        finally:
+            server.shutdown()
+            orchestrator.close()
 
 
 def test_purpose_policy_is_role_scoped() -> None:
