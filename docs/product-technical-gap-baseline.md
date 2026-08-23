@@ -126,7 +126,7 @@ required workflows, and a normal merge.
 | [#775](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/775) | `fb8fb621faa66859e36fa9496d3d6deefd09c18e` | ready, based on main | Promoted after exact-head review: marker regression test passed, Python 3.10 resolver skips Atheris, Linux CPython 3.12 resolves Atheris 3.1.0, and the generated hash lock preserves `python_full_version == 3.12.*`. Hosted Checks are green; protected independent approval remains required. |
 | [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) | `912645f1003d6dea2e83967b3f1987039b4fb8a3` | open, stacked on `fix/agent-pool-boundary-current` at `a1f6716dd2d87a9b5975ebf9770d760837980025`; Checks rerunning | Root #804 agent-pool ownership repair was merged into the PR branch non-force before changing the PR base. Merge-result exact-tree evidence is `57` focused tests passed and `1466 passed in 540.29s`, plus compileall/actionlint/diff-check. Prior Strix IDOR failure is dependency-owned by #804; exact-head SSRF probes reject HTTP and private HTTPS destinations before transport. Independent approval and fresh hosted Checks remain required. |
 | [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) | `ec609fa7b526a995346c34434e277eb12f5a0246` | ready, based on main | Issue [#568](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/568) exact-head proof is full suite `1461 passed in 580.97s`, focused judge/failover/passthrough/profile suite `69 passed`, and Ruff/diff clean; independent approval and protected Checks remain required. |
-| [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | self-reference — refetch live PR head | ready, based on main | This document is the PR's own changing artifact, so embedding its content SHA would become stale on every refresh commit. Refetch the live PR #773 head before relying on this row; review the dated product/technical gap register and ADR 0023 against the other exact heads. |
+| [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | self-reference — refetch live PR head | open, based on main; `BLOCKED` / `REVIEW_REQUIRED` at this snapshot | This document is the PR's own changing artifact, so embedding its content SHA would become stale on every refresh commit. The current hosted rollup has terminal functional/security jobs, but `strix` is in progress and `opencode-review` is queued; an independent approval and terminal required checks remain mandatory. Refetch the live #773 head before relying on this row. |
 | [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) | `f72ddc886cc55a3243ebe79f6498c7f942409c83` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions; exact-head cache/cost/ledger proof is `63 passed`, with full suite `1451 passed`. |
 | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) | `cc806cdb809068b78388d843758086747a21750a` | live head advanced after prior audit; required workflows queued, approvals `0`; prior evidence stale | The live head added a malformed-provider-response fail-closed repair, so the earlier `e258875e` proof no longer transfers. Exact local follow-up `276ed4f0` adds terminal `409 tool_execution_stopped` preservation across chat/raw retry layers and HTTP contract coverage: focused `114 passed`, direct fallback file `96 passed`, full `1538 passed`, compileall/actionlint/diff-check/Semgrep/pip-audit clean. That follow-up could not yet be pushed because the active all-branch ruleset rejected the update until PR-required workflows are satisfied. Repository coverage remains `90%` statement / `146` partial branches and docstring `95.9%`, below the 100% standard. Decision: `WAIT_AND_REMEDIATE`. |
 | [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770) | `7494f227d0ca84f65ccaac6af9614c59d1fc233b` | ready, based on [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768) | Current stack consumes the shared ordinary-chat classifier and price-honest provider-diverse selection. The latest exact head removes a trailing blank line from the doctoring record; focused discovery/bootstrap/model-selection proof is `32 passed`, and Ruff/compileall/diff-check pass. Hosted Checks must regenerate on this exact head; obtain independent current-head approval before protected merge. |
@@ -357,22 +357,24 @@ either PR's source correctness. Initial central repair
 [.github#1254](https://github.com/ContextualWisdomLab/.github/pull/1254) was
 closed without merge as a duplicate. Its active successor
 [.github#1213](https://github.com/ContextualWisdomLab/.github/pull/1213) is
-open at `5ab58341`, stacked on central
+open at `8d0f7ca8`, stacked on central
 [#1233](https://github.com/ContextualWisdomLab/.github/pull/1233)
 (`fix/organization-loop-oidc-fallback@dfb8e261`) rather than protected
-`.github/main`. It removes only the two complete clean advisory lines from
-console and non-symlink report logs, retains fail-closed handling for fatal,
-denied, timeout, and every other warning evidence, and now normalizes the
-workflow-facing `openai-direct/*` fallback before LiteLLM dispatch. A prior
-`5edaf36c` run terminally failed because `pull_request_target` executed the
-protected trusted source `.github/main@885f2cd`, which still misclassified the
-clean `MODEL QUALITY WARNING` banner and passed the raw alias to LiteLLM. That
-fail-closed result is correct under the trust boundary, but cannot validate an
-unmerged gate remedy. The existing protected-main `repository_dispatch`
-recheck path is now scanning exact #1233 with direct OpenAI; its terminal
-result, then #1213's fresh exact-head Strix evidence, normal stack integration,
-independent approvals, and fresh target checks remain required. Neither target
-PR is protected-main evidence or unblocked before those conditions hold.
+`.github/main`. It normalizes the workflow-facing `openai-direct/*` fallback
+before LiteLLM dispatch and strips only an exact timestamped advisory that says
+optional web search lacks `PERPLEXITY_API_KEY`; fatal, denied, timeout, and all
+other warnings remain fail-closed. Direct-OpenAI `repository_dispatch` run
+`32643804284` validated live #1233 metadata and found zero vulnerabilities,
+but its old protected-main classifier terminally failed on seven instances of
+that optional advisory; its subsequent same-head status publisher was rate
+limited, so it created no success evidence. Because both `pull_request_target`
+and `repository_dispatch` deliberately execute trusted protected-main source,
+the unmerged #1213 cannot change its own protected scan behavior. Executing
+the PR-head gate with credentials, fabricating a status, or using a bypass
+would violate the boundary. A human-authorized non-bypass bootstrap decision,
+then fresh exact-head Strix evidence, normal stack integration, independent
+approvals, and fresh target checks remain required. Neither target PR is
+protected-main evidence or unblocked before those conditions hold.
 
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
