@@ -624,6 +624,7 @@ OPENAPI_SPEC = {
                         )
                     },
                     "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
+                    "503": {"description": "No enabled embedding-capable agent is available"},
                 },
             }
         },
