@@ -44,9 +44,9 @@ configured `ModelAgent` records. The current implementation keeps that public
 record out of internal roles with provider exclusions until the runtime has a
 bounded, authenticated recursion protocol; it is not administratively disabled.
 
-- `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
-- `Orchestrator.route_once`: the low-latency routing path.
-- `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
+- `TaskOrchestrator.route_once`: the low-latency routing path.
+- `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
