@@ -235,6 +235,31 @@ def test_authorization_decisions_cannot_evict_substantive_audit_events() -> None
     assert len(orchestrator.list_recent_authorization_decisions(page_size=orchestrator._authorization_events.maxlen)) == orchestrator._authorization_events.maxlen
 
 
+def test_substantive_audit_events_are_durable_while_denials_remain_best_effort() -> None:
+    """A persisted governance change cannot outlive its audit record."""
+    with tempfile.TemporaryDirectory() as directory:
+        orchestrator = TaskOrchestrator(
+            [ModelAgent("general_agent", "mock")], state_db=os.path.join(directory, "state.db")
+        )
+        assert orchestrator._store is not None
+        writes: list[tuple[str, str, bool]] = []
+
+        def capture(kind, _key, payload, *, durable=False):
+            writes.append((kind, payload.get("event_type", payload.get("event_name")), durable))
+
+        try:
+            with patch.object(orchestrator._store, "save", side_effect=capture):
+                orchestrator.add_agent("default", {"id": "coding_agent", "model": "mock"})
+                orchestrator.record_authorization_decision(
+                    scope="inference", purpose="message_delivery", allowed=False, reason="denied"
+                )
+        finally:
+            orchestrator.close()
+
+    assert ("audit", "agent_added", True) in writes
+    assert ("authorization", "authorization_decision", False) in writes
+
+
 def test_audit_replay_isolates_undecryptable_event() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "mock")])
     orchestrator._append_audit_event(

@@ -47,6 +47,10 @@ inference/operator traffic keeps using the existing analytics path. The route
 chooses the purpose; a caller cannot escalate by declaring a different purpose
 in request data. Invalid role-purpose combinations fail closed.
 
+Governance audit records commit synchronously with their bounded retention;
+only explicitly non-durable authorization denials and routine analytics use
+the best-effort background stream.
+
 Callers that place personal data in audit or analytics details must declare the
 top-level fields through `pii_fields`. Those fields are encrypted with
 AES-256-GCM using a 32-byte key resolved from the existing KV credential

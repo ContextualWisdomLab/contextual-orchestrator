@@ -1550,7 +1550,7 @@ class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
     ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
-    upsert by key; stream kinds append. Durable audit streams use the same bounded
+    upsert by key; stream kinds append. Streams saved as durable commit synchronously and use the same bounded
     retention as their in-memory deques so request traffic cannot grow the DB forever.
     Runtime values (kind, key, payload, limit) are always bound through SQLite
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
@@ -1578,9 +1578,9 @@ class _StateStore:
         self._conn.execute(self._CREATE_RECORDS_SQL)
         self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
         self._conn.commit()
-        # Stream kinds are best-effort by design, but each keeps its own newest
+        # Non-durable streams are best-effort, but each keeps its own newest
         # retention window so an authorization flood cannot evict audit data.
-        # The worker keeps unauthenticated denial writes off the request thread.
+        # The worker keeps best-effort denial writes off the request thread.
         self._stream_events: dict[str, deque[tuple[str | None, dict[str, Any]]]] = {
             kind: deque(maxlen=limit) for kind, limit in self._STREAM_LIMITS.items()
         }
@@ -2818,9 +2818,9 @@ class TaskOrchestrator:
         *,
         pii_fields: Iterable[str] = (),
         stream: str = "audit",
-        durable: bool = False,
+        durable: bool = True,
     ) -> None:
-        """Append an event to a bounded audit stream."""
+        """Append a durable event to a bounded audit stream by default."""
         event = {
             "created_at": int(time.time()),
             "event_type": event_type,
