@@ -334,8 +334,9 @@ including reviews, unresolved threads, and required checks.
 
 **Exact protected-gate refresh — 2026-08-23.** REST inventory
 (`GET /pulls?state=open`) returned **31** open PRs, not 29. The current #803
-security repair is `7233f64e`, and #804's ADR reconciliation is `d8a34558`;
-each has 31 terminal exact-head check runs with no failure in this refresh.
+governance-audit durability repair is `5c6670cb`, with 6 active workflows out
+of 29 and no failure; #804's ADR reconciliation is `d8a34558`, with 31
+terminal exact-head check runs and no failure in this refresh.
 #818 is `083316fc`, with one active replacement check out of 29 after the
 session-correlation repair. New #824 is `a4219151`, with six active checks out
 of 28 for the locked local-test entrypoint. #820 (`9cae444a`) has 30 terminal
