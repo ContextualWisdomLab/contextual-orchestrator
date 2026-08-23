@@ -57,5 +57,32 @@ def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(m
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
 
-    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": [], "removed": []}
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert [agent.id for agent in orchestrator.agents] == ["bootstrap_agent"]
+
+
+def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> None:
+    """Startup discovery must not replace an operator-managed agent."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([discovered], []),
+    )
+    existing = ModelAgent(
+        "openai_chat_capable_model",
+        discovered.model_id,
+        tags=("chat", "operator-tag"),
+        disabled=True,
+    )
+    bootstrap = ModelAgent("bootstrap_agent", "bootstrap-model")
+    orchestrator = TaskOrchestrator([bootstrap, existing])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert orchestrator.candidates == [bootstrap, existing]

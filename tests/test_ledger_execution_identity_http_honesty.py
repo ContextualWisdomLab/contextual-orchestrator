@@ -22,7 +22,7 @@ from contextual_orchestrator import (
 )
 from contextual_orchestrator.server import SecurityConfig, build_server
 
-_TEST_AUTH_TOKEN = "ledger_execution_identity_http_honesty_token"
+_TEST_AUTH_TOKEN = "ledger_execution_identity_http_honesty_token"  # noqa: S105
 
 
 def _serve():

@@ -245,6 +245,15 @@ def test_pending_batch_preserves_resolved_model_identity() -> None:
     assert polled["model"] == "resolved-embedding"
 
 
+def test_empty_batch_preserves_resolved_model_identity() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+
+    document = coordinator.complete_embeddings_batch([], model="resolved-embedding")
+
+    assert document["model"] == "resolved-embedding"
+
+
 def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
     """Large embedding inputs are mapped into provider-safe parts, then reduced."""
     agents = [

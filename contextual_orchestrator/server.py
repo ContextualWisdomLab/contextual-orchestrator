@@ -4203,7 +4203,7 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     is resolved by the orchestrator's explicit ``embedding`` capability pool;
     no consumer-side sentinel model is accepted.
     """
-    if "model" not in body:
+    if body.get("model") is None:
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4217,8 +4217,6 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
         body["model"] = model
         return model
     model = body.get("model")
-    if model is None:
-        raise RequestError(400, "invalid_model", "model is required")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()

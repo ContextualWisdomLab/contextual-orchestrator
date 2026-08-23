@@ -255,9 +255,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     """Discover and activate only models with explicit chat capability evidence."""
     discovered, _errors = discover_all_models()
     chat_models = [model for model in discovered if "chat" in model.capabilities]
-    if not chat_models:
-        return {"added": [], "updated": [], "removed": []}
-    agents = [replace(agent_from_discovered(model), disabled=False) for model in chat_models]
+    existing_ids = {agent.id for agent in orchestrator.candidates}
+    agents = [
+        replace(agent_from_discovered(model), disabled=False)
+        for model in chat_models
+        if agent_id_for(model) not in existing_ids
+    ]
+    if not agents:
+        return {"added": [], "updated": []}
     return orchestrator.sync_discovered_agents(agents)
 
 

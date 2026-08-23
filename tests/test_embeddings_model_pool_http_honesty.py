@@ -149,6 +149,17 @@ def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
         thread.join(timeout=5)
 
 
+def test_http_embeddings_null_model_auto_selects_enabled_embedding_agent() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, "/v1/embeddings", {"model": None, "input": "invoice"})
+        assert status == 200, body
+        assert body["model"] == "mock-planner"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_embeddings_auto_selection_fails_when_capability_is_missing() -> None:
     server, thread, port = _server_without_embedding()
     try:
