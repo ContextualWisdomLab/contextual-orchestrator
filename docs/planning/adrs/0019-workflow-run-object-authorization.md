@@ -20,10 +20,10 @@ mismatch is intentionally reported as not found so identifiers cannot be
 confirmed across owners.
 
 The library API continues to support local single-process callers that omit an
-owner key. HTTP callers do not omit it. Deployments with an external bearer
-verifier may use stable per-principal credentials; token rotation may revoke
-access to older evidence and must be handled by the deployment's identity
-policy.
+owner key. HTTP callers do not omit it. For an external bearer verifier, the
+key is derived from the verified issuer and subject claims, never from the
+bearer credential. Token rotation that preserves those claims therefore keeps
+the same owner boundary; an issuer or subject change creates a different owner.
 
 ## Consequences
 
@@ -41,15 +41,15 @@ policy.
   never rendered in public payloads.
 - Shared static credentials represent one deployment principal; multi-principal
   deployments must issue distinct verified bearers. External bearer deployments
-  currently use the bearer credential digest as that principal key, so token
-  rotation can revoke access to older evidence.
+  use the verified `iss`/`sub` pair as principal material before hashing, so
+  normal credential rotation preserves access to that principal's evidence.
 - Old records without an owner key are not visible through the owner-bound HTTP
   resource routes, which is fail-closed during migration.
 
 ## Acceptance evidence
 
-Owner mismatch, list filtering, evaluation ownership, digest stability, and
-response redaction are covered by
+Owner mismatch, list filtering, evaluation ownership, stable principal-digest
+derivation, and response redaction are covered by
 `tests/test_workflow_run_object_authorization.py`. External-bearer spend and
 audit isolation, shared-budget truthfulness, and single-scan consistency are
 covered by `tests/test_spend_analytics.py`.
