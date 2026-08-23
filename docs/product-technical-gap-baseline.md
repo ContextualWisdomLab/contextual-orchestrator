@@ -334,14 +334,15 @@ including reviews, unresolved threads, and required checks.
 
 **Exact protected-gate refresh — 2026-08-23.** REST inventory
 (`GET /pulls?state=open`) returned **30** open PRs, not 29. The current #803
-security repair is `7233f64e`; its replacement exact-head check set has 15
-active runs out of 22. #818 is `a344bb82` with one active check run, while
-#804 (`3828ca42`) and #820 (`9cae444a`) have no failed or active exact-head
-check runs in this refresh. Those terminal results are only partial gate
-evidence: #803 is explicitly `REVIEW_REQUIRED`, and every PR needs its own
-fresh independent approvals, resolved-thread evidence, and required terminal
-workflows before a normal protected merge. No PR is described here as
-merge-ready while any of those facts are missing or unverified.
+security repair is `7233f64e`, and #804's ADR reconciliation is `d8a34558`;
+each has 31 terminal exact-head check runs with no failure in this refresh.
+#818 is `083316fc`, whose 13 replacement runs are active out of 22 after the
+session-correlation repair. #820 (`9cae444a`) has 30 terminal exact-head runs
+with no failure. Those results are only partial gate evidence: #803 and #818
+are explicitly `REVIEW_REQUIRED`, and every PR needs its own fresh independent
+approvals, resolved-thread evidence, and required terminal workflows before a
+normal protected merge. No PR is described here as merge-ready while any of
+those facts are missing or unverified.
 
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
