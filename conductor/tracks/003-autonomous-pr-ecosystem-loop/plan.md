@@ -2764,3 +2764,81 @@ suite is `pytest tests -q`, documented separately); issue #123 above.
 4. Update *this* file going forward, not just session-local `goal.md` — the
    3-day gap this entry closes is exactly the failure mode this file's own
    "always add a dated Status entry" convention exists to prevent.
+
+## Status as of 2026-08-23, iteration 78 — ultracode-scaled doc audit, 9 more real findings closed (1 was a real code bug)
+
+Following iteration 77's own checklist item 4 ("update this file going
+forward"), logging here rather than only in session-local `goal.md`.
+
+User enabled `/effort ultracode` mid-session. Scaled the direct-verification
+doc-audit pattern from iteration 77 into a proper Workflow: 8 parallel sweep
+agents covering all 57 doc/ADR files in the repo (core docs, 3 commercial-doc
+clusters totaling 26 files, design/ADR docs, 2 ADR clusters, root+conductor
+docs), each tasked with extracting every concrete checkable claim and
+direct-verifying it against actual current code — followed by an adversarial
+Verify phase, one independent skeptic agent per candidate finding. 18 agents
+total, 10 candidates, 9 confirmed real (1 correctly rejected, not a false
+positive left unresolved).
+
+**The important one is a real code bug, not a doc gap**:
+`commercial_procurement_readiness_report`, `commercial_contract_readiness_report`,
+`commercial_onboarding_readiness_report`, and
+`commercial_operations_readiness_report` (`orchestrator.py`) each silently
+omit "document mismatch" from their blocked-status rule string, while 10+
+sibling report methods in the same file correctly include it. Verified the
+omission is not cosmetic: `blocked_count = state_counts.get("blocked", 0) +
+len(concrete_blockers)` already counts document-mismatch blockers (threaded
+in from `commercial_release_candidate_report`'s `release_gates`) toward the
+blocked status — only the buyer-facing explanation of *why* silently dropped
+the phrase on these four reports. Fixed all four rule strings and added one
+regression test per report (none existed; confirmed unguarded before this).
+
+Also closed, all with direct code verification, not doc-vs-doc comparison:
+docs/commercial_launch_readiness.md + docs/analytics_spec.md described a
+field (`commercial_launch_external_input_count`) that has never existed in
+the API — real field is `launch_summary.external_input_group_count`,
+already correctly locked by an existing runtime test; two doc-text-presence
+test assertions were locking the wrong (fake) string and got fixed too.
+docs/fuzzing.md had three separate stale claims (wrong Python version — 3.11
+vs actual 3.12; a Targets list covering only 4 of the 6 actually-fuzzed
+surfaces; a local-repro command list missing the 5th target) — fixed all
+three, plus `fuzz/targets.py`'s own docstring internal inconsistency ("five
+surfaces" above a list of six) found in the same pass. Also cherry-picked an
+already-existing, already-reviewed commit (`1f19590c`, on a lineage this
+branch never merged from) that fixes the exact same stale
+"ModelClient reads os.environ.get" claim in AGENTS.md the sweep independently
+re-discovered — reused rather than reinvented.
+
+Full local suite (1439 passed) confirmed green before push; ran slower than
+usual (~9min wall clock but the background job took longer to be observed
+finishing, under heavy concurrent load from 11 peer Claude sessions active on
+this machine at the time) — verified via `sample` mid-run that it was
+genuinely executing, not hung, before deciding to keep waiting rather than
+kill/rerun.
+
+**Peer coordination**: per user request, reached out via `ListAgents`/
+`SendMessage` to 2 relevant peers. `Buyer 표현 제거 및 객체명 정규화`
+(title matches this track's own "remove Buyer naming, keep PII masking
+removed" standing instructions) confirmed it is working on
+`ContextualWisdomLab/LineageWeave` (worktree `/private/tmp/lineageweave-kg-fix-20260822`,
+PRs #460/#463/#465/#466, all stacked on unmerged #433), not this repo — no
+overlap. `lineageweave wiring completion` contacted, asked whether its work
+touches this repo's wiring surface; no reply yet as of this entry, not
+blocking on it.
+
+### Next iteration checklist
+
+1. #768/#794/#804/#818/#803/#773 (this track's own PRs) — keep light-checking
+   merge status; the only blocker remains the external, shared OpenCode App
+   installation rate limit (ID `141441800`). No repo-side work left on them.
+2. If `lineageweave wiring completion` replies with genuine overlap, adjust
+   scope and note it here.
+3. Keep applying the direct-verification-against-code pattern for further
+   gaps — it has now found 16 real, independently-confirmed issues this
+   session (7 sequential + 9 from the workflow sweep), zero false fixes
+   applied (2 investigated leads were correctly declined: README's Check-list
+   scope, issue #123's governance ambiguity).
+4. Issues #86 (live NVIDIA NIM benchmark) and #102 (race-to-first-valid
+   endpoints) remain real but need either live provider credentials absent
+   from this session or materially larger new-feature scope — don't force
+   either without the missing prerequisite.
