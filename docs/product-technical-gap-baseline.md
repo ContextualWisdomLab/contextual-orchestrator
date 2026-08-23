@@ -367,14 +367,20 @@ other warnings remain fail-closed. Direct-OpenAI `repository_dispatch` run
 `32643804284` validated live #1233 metadata and found zero vulnerabilities,
 but its old protected-main classifier terminally failed on seven instances of
 that optional advisory; its subsequent same-head status publisher was rate
-limited, so it created no success evidence. Because both `pull_request_target`
-and `repository_dispatch` deliberately execute trusted protected-main source,
-the unmerged #1213 cannot change its own protected scan behavior. Executing
-the PR-head gate with credentials, fabricating a status, or using a bypass
-would violate the boundary. A human-authorized non-bypass bootstrap decision,
-then fresh exact-head Strix evidence, normal stack integration, independent
-approvals, and fresh target checks remain required. Neither target PR is
-protected-main evidence or unblocked before those conditions hold.
+limited, so it created no success evidence. Fresh #773 head `1240bc23` then
+terminally failed run `32644795368` with the same pattern: zero NIM findings,
+then raw `openai-direct/gpt-5.6-luna` rejected by LiteLLM as an unknown provider;
+it emitted no source vulnerability. #1213's exact `8d0f7ca8` run `32644636757`
+likewise scanned its three changed files without a vulnerability before the
+trusted pre-#1213 gate passed that same raw alias to LiteLLM. Because both
+`pull_request_target` and `repository_dispatch` deliberately execute a trusted
+base gate rather than the PR-head gate, the unmerged #1213 cannot change its
+own protected scan behavior. Executing the PR-head gate with credentials,
+fabricating a status, or using a bypass would violate the boundary. A
+human-authorized non-bypass bootstrap decision, then fresh exact-head Strix
+evidence, normal stack integration, independent approvals, and fresh target
+checks remain required. Neither target PR is protected-main evidence or
+unblocked before those conditions hold.
 
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
