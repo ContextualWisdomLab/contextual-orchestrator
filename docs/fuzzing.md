@@ -1,14 +1,15 @@
 # Fuzzing
 
 The orchestrator consumes untrusted input at a handful of well-defined seams:
-HTTP request bodies, agent-pool configuration, arbitrary prompt text, and trace
-payloads that pass through secret/PII redaction. Those seams are fuzzed with two
-complementary, permissively licensed tools.
+HTTP request bodies, agent-pool configuration, arbitrary prompt text, trace
+payloads that pass through secret/PII redaction, untrusted model-generated
+judge verdicts, and a remote provider's model-list HTTP response. Those seams
+are fuzzed with two complementary, permissively licensed tools.
 
 | Tool | License | Role |
 | --- | --- | --- |
-| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`). Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
-| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.11. |
+| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`), covering all six targets below. Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
+| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.12 (the first Atheris 3.1.0 wheel; also the pin the central CPython 3.14 coverage-evidence image preflights). Covers targets 1-5; target 6 currently has Hypothesis coverage only. |
 
 Both drivers call the same invariant checks in [`fuzz/targets.py`](../fuzz/targets.py),
 so a bug found by either tool reproduces under the other.
@@ -31,6 +32,13 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
+5. **Model-judge response parsing** — `orchestrator._parse_model_judge_reply`.
+   Strict parsing of untrusted, model-generated verdict text; has its own
+   Atheris CI job and corpus (`fuzz/corpus/judge`).
+6. **Provider model-list parsing** — `model_discovery._parse_openai_compatible`
+   / `_parse_bytez`. Parsing of a remote (attacker/compromised-provider-
+   controlled) model-list HTTP response. Hypothesis property coverage only —
+   no dedicated Atheris CI job exists for this target yet.
 
 ## Running locally
 
@@ -41,7 +49,7 @@ pip install -e '.[fuzz]'      # hypothesis
 pytest tests/fuzz -q
 ```
 
-Coverage-guided harnesses (needs Clang/libFuzzer; use Python < 3.13):
+Coverage-guided harnesses (needs Clang/libFuzzer; use Python >= 3.12):
 
 ```bash
 pip install atheris
@@ -49,6 +57,7 @@ python fuzz/fuzz_request_body.py  -max_total_time=60 fuzz/corpus/request_body
 python fuzz/fuzz_agent_config.py  -max_total_time=60 fuzz/corpus/agent_config
 python fuzz/fuzz_redaction.py     -max_total_time=60 fuzz/corpus/redaction
 python fuzz/fuzz_orchestration.py -max_total_time=60 fuzz/corpus/orchestration
+python fuzz/fuzz_model_judge.py   -max_total_time=60 fuzz/corpus/judge
 ```
 
 Seed corpora live in `fuzz/corpus/<target>/`.
