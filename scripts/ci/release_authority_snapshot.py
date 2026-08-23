@@ -15,6 +15,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from contextual_orchestrator.credentials import get_credential
+from contextual_orchestrator.release_authorization import (
+    RELEASE_AUTHORITY_SIGNING_CREDENTIAL,
+    sign_release_authority_snapshot,
+)
+
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -300,7 +310,11 @@ def main(argv: list[str] | None = None) -> int:
             _read_findings(args.findings_json),
             expected_head_sha=args.expected_head_sha,
         )
-    except RuntimeError as exc:
+        signing_key = get_credential(RELEASE_AUTHORITY_SIGNING_CREDENTIAL)
+        if not signing_key:
+            raise RuntimeError("release_authority_signing_key_unavailable")
+        snapshot = sign_release_authority_snapshot(snapshot, signing_key)
+    except (RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     print(json.dumps(snapshot, sort_keys=True))

@@ -29,9 +29,11 @@ owner filter.
 
 ## Customer next action
 
-Run the protected CI collector against the exact candidate SHA and persist its
-machine-readable output under `artifacts/release-authority/<sha>.json`. Start
-the gateway with `--release-authority-json` pointing at that file, then
+Register `CONTEXTUAL_ORCHESTRATOR_RELEASE_AUTHORITY_SIGNING_KEY` in the KV for
+both the protected CI collector and the gateway. Run the collector against the
+exact candidate SHA and persist its signed machine-readable output under
+`artifacts/release-authority/<sha>.json`. Start the gateway with
+`--release-authority-json` pointing at that file, then
 re-query the admin endpoint. The release status can change only after that
 fresh evidence passes every gate; restart with a newly collected file after
 the candidate head changes.

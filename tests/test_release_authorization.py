@@ -10,6 +10,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import evaluate_release_authorization  # noqa: E402
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
+from contextual_orchestrator.release_authorization import (  # noqa: E402
+    RELEASE_AUTHORITY_SIGNING_CREDENTIAL,
+    sign_release_authority_snapshot,
+    verify_release_authority_snapshot,
+)
 
 
 HEAD = "a" * 40
@@ -76,6 +82,20 @@ def test_missing_authority_preserves_fail_closed_boundary() -> None:
     result = evaluate_release_authorization(None)
     assert result["status"] == "release_authorization_blocked"
     assert result["blockers"] == ["authority_evidence_unavailable"]
+
+
+def test_authority_snapshot_requires_a_kv_backed_signature() -> None:
+    backend = InMemoryCredentialBackend()
+    set_backend(backend)
+    try:
+        signed = sign_release_authority_snapshot(authority(), "test-signing-key")
+        assert verify_release_authority_snapshot(signed) is None
+        backend.set(RELEASE_AUTHORITY_SIGNING_CREDENTIAL, "test-signing-key")
+        assert verify_release_authority_snapshot(signed) == authority()
+        signed["head_is_current"] = False
+        assert verify_release_authority_snapshot(signed) is None
+    finally:
+        set_backend(None)
 
 
 def test_zero_required_approvals_cannot_authorize_release() -> None:

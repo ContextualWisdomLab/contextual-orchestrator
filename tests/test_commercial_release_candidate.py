@@ -12,6 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.admin import ADMIN_HTML, ADMIN_TRANSLATIONS  # noqa: E402
 from contextual_orchestrator.api_contract import OPENAPI_SPEC  # noqa: E402
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
+from contextual_orchestrator.release_authorization import (  # noqa: E402
+    RELEASE_AUTHORITY_SIGNING_CREDENTIAL,
+    sign_release_authority_snapshot,
+)
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
@@ -253,8 +258,8 @@ def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()
     assert "release_artifacts" in release
 
 
-def test_server_passes_explicit_release_authority_snapshot_to_report() -> None:
-    """An operator-supplied snapshot reaches the protected report boundary."""
+def test_server_blocks_an_unsigned_release_authority_snapshot() -> None:
+    """A caller-controlled JSON object cannot claim protected release evidence."""
     server = build_server(
         build(),
         port=0,
@@ -272,7 +277,34 @@ def test_server_passes_explicit_release_authority_snapshot_to_report() -> None:
         server.shutdown()
         thread.join(timeout=5)
     assert status == 200
-    assert "repository_mismatch" in report["release_authorization"]["blockers"]
+    assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
+
+
+def test_server_accepts_only_a_kv_signed_release_authority_snapshot() -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set(RELEASE_AUTHORITY_SIGNING_CREDENTIAL, "test-signing-key")
+    set_backend(backend)
+    try:
+        server = build_server(
+            build(),
+            port=0,
+            security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"),
+            release_authority=sign_release_authority_snapshot(valid_release_authority(), "test-signing-key"),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, report = get_json(
+                f"http://127.0.0.1:{server.server_address[1]}/api/v1/commercial_release_candidates/latest",
+                "admin_secret",
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+        assert status == 200
+        assert report["release_authorization"]["authorized"] is True
+    finally:
+        set_backend(None)
 
 
 if __name__ == "__main__":  # pragma: no cover

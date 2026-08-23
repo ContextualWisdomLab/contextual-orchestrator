@@ -8,6 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
+from contextual_orchestrator.release_authorization import RELEASE_AUTHORITY_SIGNING_CREDENTIAL
+
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts/ci/release_authority_snapshot.py"
 _SPEC = importlib.util.spec_from_file_location("release_authority_snapshot", _MODULE_PATH)
@@ -265,12 +268,32 @@ def test_collect_authority_rejects_malformed_pull_response(monkeypatch: pytest.M
 
 def test_main_reports_collection_errors_and_success(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The CLI returns a nonzero code for collection failure and JSON on success."""
-    monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: {"authorized": False})
-    assert collector.main(["--repo", "owner/repo", "--pr", "7", "--expected-head-sha", "a" * 40]) == 0
-    assert '"authorized": false' in capsys.readouterr().out
-    monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("blocked")))
-    assert collector.main(["--repo", "owner/repo", "--pr", "7", "--expected-head-sha", "a" * 40]) == 2
-    assert "blocked" in capsys.readouterr().err
+    backend = InMemoryCredentialBackend()
+    backend.set(RELEASE_AUTHORITY_SIGNING_CREDENTIAL, "test-signing-key")
+    set_backend(backend)
+    try:
+        monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: {"authorized": False})
+        assert collector.main(["--repo", "owner/repo", "--pr", "7", "--expected-head-sha", "a" * 40]) == 0
+        output = capsys.readouterr().out
+        assert '"authorized": false' in output
+        assert '"signature":' in output
+        monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("blocked")))
+        assert collector.main(["--repo", "owner/repo", "--pr", "7", "--expected-head-sha", "a" * 40]) == 2
+        assert "blocked" in capsys.readouterr().err
+    finally:
+        set_backend(None)
+
+
+def test_main_fails_closed_when_the_signing_key_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    set_backend(InMemoryCredentialBackend())
+    try:
+        monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: {"authorized": False})
+        assert collector.main(["--repo", "owner/repo", "--pr", "7", "--expected-head-sha", "a" * 40]) == 2
+        assert "release_authority_signing_key_unavailable" in capsys.readouterr().err
+    finally:
+        set_backend(None)
 
 
 if __name__ == "__main__":  # pragma: no cover

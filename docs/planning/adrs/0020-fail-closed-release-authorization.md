@@ -17,10 +17,12 @@ responsible for obtaining the current protected-head, ruleset, checks, review,
 and finding evidence. The evaluator returns only machine-readable blocker codes
 and non-sensitive counts.
 
-The serving CLI accepts the persisted collector JSON through
-`--release-authority-json` and passes it to the protected admin reports. A
-missing file or malformed snapshot leaves the reports blocked; a changed
-candidate requires a newly collected exact-head file.
+The serving CLI accepts a persisted collector JSON through
+`--release-authority-json` only when it carries an HMAC-SHA-256 signature made
+with `CONTEXTUAL_ORCHESTRATOR_RELEASE_AUTHORITY_SIGNING_KEY` from the KV
+registry. The server verifies the signature with that same non-exported KV
+credential before passing the snapshot to protected admin reports. A missing
+key, unsigned/malformed snapshot, or changed candidate leaves reports blocked.
 
 ## Consequences
 
@@ -28,8 +30,8 @@ candidate requires a newly collected exact-head file.
   honestly blocked until operational evidence exists.
 - GitHub governance remains in the central `.github` repository rather than
   being duplicated in the inference runtime.
-- A release cannot be approved from a local synthetic merge tree or caller-side
-  boolean that merely says checks passed.
+- A release cannot be approved from a local synthetic merge tree, caller-side
+  boolean, or tampered collector JSON that merely says checks passed.
 
 ## Customer next action
 

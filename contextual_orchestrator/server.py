@@ -32,6 +32,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .release_authorization import verify_release_authority_snapshot
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -4461,6 +4462,7 @@ def build_server(
     """
     security = security or SecurityConfig()
     security.check_bind(host)
+    release_authority = verify_release_authority_snapshot(release_authority)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)

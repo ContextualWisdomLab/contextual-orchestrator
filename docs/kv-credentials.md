@@ -186,6 +186,11 @@ The CLI resolves named server tokens from this KV when `--auth-token-key`,
 legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
 Explicit token flags remain local-development escape hatches.
 
+Release collector output is also signed with the KV-only
+`CONTEXTUAL_ORCHESTRATOR_RELEASE_AUTHORITY_SIGNING_KEY`; seed the same value
+into the protected CI collector and serving gateway, never into the JSON
+snapshot or a command-line argument.
+
 For production ecosystem access, construct `SecurityConfig` with a reviewed
 `bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must
 own issuer/audience/signature/expiry/scope validation and key rotation; do not

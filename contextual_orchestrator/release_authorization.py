@@ -8,11 +8,18 @@ tokens, prompts, reviewer credentials, or private reasoning.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .credentials import get_credential
+
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+RELEASE_AUTHORITY_SIGNING_CREDENTIAL = "CONTEXTUAL_ORCHESTRATOR_RELEASE_AUTHORITY_SIGNING_KEY"
+_SIGNATURE_FIELD = "signature"
 _APPROVED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 _FINDING_SOURCES = frozenset(
     {
@@ -40,6 +47,49 @@ def _is_bool(value: Any, expected: bool) -> bool:
 def _as_list(value: Any) -> list[Any] | None:
     """Return a mutable list view only for real sequence inputs."""
     return list(value) if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
+
+
+def _signature_payload(authority: Mapping[str, Any]) -> bytes:
+    """Serialize a snapshot without its detached integrity signature."""
+    if any(type(name) is not str for name in authority):
+        raise ValueError("release authority keys must be strings")
+    unsigned = {name: value for name, value in authority.items() if name != _SIGNATURE_FIELD}
+    return json.dumps(
+        unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+
+def sign_release_authority_snapshot(authority: Mapping[str, Any], signing_key: str) -> dict[str, Any]:
+    """Return a collector snapshot bound to a non-exported KV signing credential."""
+    if not isinstance(authority, Mapping) or not isinstance(signing_key, str) or not signing_key:
+        raise ValueError("release authority signing input is invalid")
+    signed = dict(authority)
+    signed[_SIGNATURE_FIELD] = hmac.new(
+        signing_key.encode("utf-8"), _signature_payload(signed), hashlib.sha256
+    ).hexdigest()
+    return signed
+
+
+def verify_release_authority_snapshot(authority: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return only a snapshot signed by the runtime KV credential, otherwise ``None``."""
+    if not isinstance(authority, Mapping):
+        return None
+    signature = authority.get(_SIGNATURE_FIELD)
+    try:
+        signing_key = get_credential(RELEASE_AUTHORITY_SIGNING_CREDENTIAL)
+    except Exception:  # noqa: BLE001 - a signing-key outage must fail the release gate closed.
+        return None
+    if not isinstance(signature, str) or not isinstance(signing_key, str) or not signing_key:
+        return None
+    try:
+        expected = hmac.new(
+            signing_key.encode("utf-8"), _signature_payload(authority), hashlib.sha256
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return None
+    if not hmac.compare_digest(signature, expected):
+        return None
+    return {name: value for name, value in authority.items() if name != _SIGNATURE_FIELD}
 
 
 def _result(
