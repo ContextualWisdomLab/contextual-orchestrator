@@ -4419,7 +4419,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Serve the authenticated OpenAI-compatible and administrative routes."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Route every unauthenticated, inference-scope, and admin-scope GET path."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -4769,6 +4772,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Apply a partial update to one worker agent in an agent pool."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4792,6 +4796,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Remove one worker agent from an agent pool."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4812,6 +4817,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Route every inference and admin-scope POST path (completions, agent create, etc.)."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -5655,6 +5661,7 @@ def build_server(
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Suppress the stdlib per-request access log line."""
             return
 
         def _send_error(
