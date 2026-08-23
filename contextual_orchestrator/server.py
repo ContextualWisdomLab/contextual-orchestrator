@@ -5769,12 +5769,15 @@ def build_server(
             self._send_security_headers()
             self.end_headers()
 
-        def _write_sse(self, frame: str) -> None:
+        def _write_sse(self, frame: str) -> bool:
+            """Write one SSE frame and report whether the client remains connected."""
             try:
                 self.wfile.write(frame.encode("utf-8"))
                 self.wfile.flush()
+                return True
             except (BrokenPipeError, ConnectionResetError):
                 _LOGGER.debug("client_disconnected")
+                return False
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
@@ -5795,11 +5798,16 @@ def build_server(
             security.acquire_run_slot()
             try:
                 self._begin_sse()
-                self._write_sse(frame({"role": "assistant"}))
+                if not self._write_sse(frame({"role": "assistant"})):
+                    return
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
-                        self._write_sse(frame({"content": delta}))
-                    self._write_sse(frame({}, finish="stop"))
+                    upstream = orchestrator.stream_route(messages, workflow_run_id=run_id)
+                    for delta in upstream:
+                        if not self._write_sse(frame({"content": delta})):
+                            upstream.close()
+                            return
+                    if not self._write_sse(frame({}, finish="stop")):
+                        return
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     self._write_sse(frame({}, finish="error"))
                 self._write_sse("data: [DONE]\n\n")
