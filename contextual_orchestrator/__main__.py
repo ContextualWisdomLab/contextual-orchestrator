@@ -252,13 +252,14 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover provider models and activate the usable agents for this server."""
+    """Discover and activate only models with explicit chat capability evidence."""
     discovered, errors = discover_all_models()
-    if not discovered:
+    chat_models = [model for model in discovered if "chat" in model.capabilities]
+    if not chat_models:
         detail = "; ".join(str(error) for error in errors)
         suffix = f": {detail}" if detail else ""
-        raise RuntimeError(f"automatic model discovery found no usable models{suffix}")
-    agents = [replace(agent_from_discovered(model), disabled=False) for model in discovered]
+        raise RuntimeError(f"automatic model discovery found no chat-capable models{suffix}")
+    agents = [replace(agent_from_discovered(model), disabled=False) for model in chat_models]
     return orchestrator.sync_discovered_agents(agents)
 
 
@@ -334,7 +335,7 @@ def main() -> None:
     parser.add_argument(
         "--auto-discover-model-agents",
         action="store_true",
-        help="discover provider models at startup and activate the discovered agents",
+        help="discover source-declared chat-capable models at startup and activate them",
     )
     args = parser.parse_args()
 

@@ -92,6 +92,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         auth_scheme="Key",
         style="bytez",
         task_filter="chat",
+        capabilities=("chat",),
     ),
 )
 

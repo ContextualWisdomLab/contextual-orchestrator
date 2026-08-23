@@ -88,6 +88,7 @@ BYTEZ_SOURCE = ProviderModelSource(
     auth_scheme="Key",
     style="bytez",
     task_filter="chat",
+    capabilities=("chat",),
 )
 
 
@@ -155,6 +156,7 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     assert len(discovered) == 1
     assert discovered[0].model_id == "0-hero/Matter-0.1-Slim-7B-C"
     assert discovered[0].auth_scheme == "Key"
+    assert discovered[0].capabilities == ("chat",)
     # Bytez prices by GPU-second, not per-token: no fabricated per-1k estimate.
     assert discovered[0].prompt_price_per_1k is None
 
