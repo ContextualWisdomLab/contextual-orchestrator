@@ -65,6 +65,14 @@ OPENAI_SOURCE = ProviderModelSource(
     chat_base_url="https://api.openai.com/v1",
 )
 
+EMBEDDING_SOURCE = ProviderModelSource(
+    provider_name="embedding_provider",
+    credential_name="EMBEDDING_API_KEY",
+    list_url="https://embedding.example/v1/models",
+    chat_base_url="https://embedding.example/v1",
+    capabilities=("embedding",),
+)
+
 OPENROUTER_SOURCE = ProviderModelSource(
     provider_name="openrouter",
     credential_name="OPENROUTER_API_KEY",
@@ -112,6 +120,17 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
+
+
+def test_discovery_preserves_operator_declared_source_capabilities() -> None:
+    register_credential("EMBEDDING_API_KEY", "registered-secret")
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"data": [{"id": "embedding-deployment"}]}),
+    ):
+        discovered = discover_provider_models(EMBEDDING_SOURCE)
+
+    assert discovered[0].capabilities == ("embedding",)
 
 
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
@@ -186,6 +205,19 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
     assert agent.credential_key == "BYTEZ_API_KEY"
     assert agent.priority == 3
     assert "discovered" in agent.tags
+
+
+def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="embedding-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+    )
+
+    assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
 
 
 def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:

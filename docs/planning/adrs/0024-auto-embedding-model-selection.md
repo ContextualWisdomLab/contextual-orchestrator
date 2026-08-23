@@ -47,6 +47,8 @@ guess, or consumer-side fallback.
 2. When omitted, the gateway selects the highest-ranked enabled agent carrying
    the `embedding` capability. Ranking continues to use the existing priority
    and capability policy; disabled agents and provider exclusions are ignored.
+   Discovery may attach that capability only from explicit provider or operator
+   metadata; model-name guessing is not evidence of embedding support.
 3. An explicitly supplied model remains supported only when it matches an
    enabled embedding-capable agent. Unknown, disabled, or non-embedding models
    fail closed with the existing invalid-model contract.
@@ -64,8 +66,9 @@ guess, or consumer-side fallback.
 The OpenAPI contract marks `model` optional and documents the unavailable
 response. Loopback HTTP tests cover omitted-model selection for sync and batch
 requests, explicit pool validation, and the no-capability failure. Provider
-backend contract tests must preserve the resolved model in every serialized
-embedding request before this ADR moves from proposed to accepted.
+backend contract tests preserve the resolved model in every serialized
+embedding request. Discovery tests preserve explicit capability metadata into
+the runtime agent pool and leave unclassified models ineligible.
 
 ## Consequences
 

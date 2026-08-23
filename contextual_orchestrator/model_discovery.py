@@ -54,6 +54,7 @@ class ProviderModelSource:
     auth_scheme: str = "Bearer"
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
+    capabilities: tuple[str, ...] = ()
 
 
 # NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
@@ -104,6 +105,7 @@ class DiscoveredModel:
     credential_name: str
     chat_base_url: str
     auth_scheme: str
+    capabilities: tuple[str, ...] = ()
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
@@ -162,6 +164,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
+                capabilities=source.capabilities,
                 prompt_price_per_1k=_price_per_1k(pricing.get("prompt")),
                 completion_price_per_1k=_price_per_1k(pricing.get("completion")),
             )
@@ -185,6 +188,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
+                capabilities=source.capabilities,
                 # Bytez prices by GPU-second (meterPrice), not per-token; leaving
                 # per-1k pricing unset is more honest than a misleading estimate.
             )
@@ -253,7 +257,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
-        tags=("discovered",),
+        tags=("discovered", *discovered.capabilities),
         priority=priority,
         disabled=True,
     )
