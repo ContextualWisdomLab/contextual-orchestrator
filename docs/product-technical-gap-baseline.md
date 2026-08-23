@@ -355,9 +355,9 @@ fallback whose exact `MODEL QUALITY WARNING` banner was misclassified as an
 infrastructure failure; this is shared-gate behavior, not zero-finding proof of
 either PR's source correctness. Central repair
 [.github#1254](https://github.com/ContextualWisdomLab/.github/pull/1254) is
-open at `e21c149a`: it preserves fail-closed handling for fatal, denied,
-timeout, and other warning evidence, keeps automatic fallback within NVIDIA
-NIM, and adds this regression. It is not protected-main evidence. Both target
+open at `bcd1318e`: it preserves fail-closed handling for fatal, denied,
+timeout, and every other warning evidence while adding this regression. It is
+not protected-main evidence. Both target
 PRs remain blocked until #1254 is normally protected-merged and fresh Strix
 checks succeed on these exact unchanged heads, alongside the independent
 approval and terminal-check requirements already stated above.
