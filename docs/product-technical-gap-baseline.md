@@ -353,14 +353,20 @@ merge-ready while any of those facts are missing or unverified.
 show a rate-limited primary NVIDIA NIM attempt followed by a zero-finding NIM
 fallback whose exact `MODEL QUALITY WARNING` banner was misclassified as an
 infrastructure failure; this is shared-gate behavior, not zero-finding proof of
-either PR's source correctness. Central repair
-[.github#1254](https://github.com/ContextualWisdomLab/.github/pull/1254) is
-open at `bcd1318e`: it preserves fail-closed handling for fatal, denied,
-timeout, and every other warning evidence while adding this regression. It is
-not protected-main evidence. Both target
-PRs remain blocked until #1254 is normally protected-merged and fresh Strix
-checks succeed on these exact unchanged heads, alongside the independent
-approval and terminal-check requirements already stated above.
+either PR's source correctness. Initial central repair
+[.github#1254](https://github.com/ContextualWisdomLab/.github/pull/1254) was
+closed without merge as a duplicate. Its active successor
+[.github#1213](https://github.com/ContextualWisdomLab/.github/pull/1213) is
+open at `5edaf36c`, stacked on
+`fix/organization-loop-oidc-fallback@dfb8e261` rather than protected
+`.github/main`. It removes only the two complete clean advisory lines from
+console and non-symlink report logs, retains fail-closed handling for fatal,
+denied, timeout, and every other warning evidence, and has a current Strix run
+in progress. This is not protected-main evidence. Both target PRs remain
+blocked until #1213 reaches protected `.github/main` through normal stack
+integration and fresh Strix checks succeed on these exact unchanged heads,
+alongside the independent approval and terminal-check requirements already
+stated above.
 
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
