@@ -357,22 +357,22 @@ either PR's source correctness. Initial central repair
 [.github#1254](https://github.com/ContextualWisdomLab/.github/pull/1254) was
 closed without merge as a duplicate. Its active successor
 [.github#1213](https://github.com/ContextualWisdomLab/.github/pull/1213) is
-open at `5edaf36c`, stacked on central
+open at `5ab58341`, stacked on central
 [#1233](https://github.com/ContextualWisdomLab/.github/pull/1233)
 (`fix/organization-loop-oidc-fallback@dfb8e261`) rather than protected
 `.github/main`. It removes only the two complete clean advisory lines from
 console and non-symlink report logs, retains fail-closed handling for fatal,
-denied, timeout, and every other warning evidence. Its 2026-08-23 Strix run
-is terminally failed: `pull_request_target` executed the protected trusted
-source `.github/main@885f2cd` rather than #1213's unmerged gate, so it still
-misclassified the clean `MODEL QUALITY WARNING` banner and passed the raw
-`openai-direct/gpt-5.6-luna` alias to LiteLLM. That fail-closed result is
-correct under the current trust boundary, but cannot validate #1213's remedy.
-This is not protected-main evidence. A safe protected rollout path for the
-shared gate is required before a normal #1233 -> #1213 integration; both
-target PRs remain blocked until that occurs and fresh Strix checks succeed on
-their exact unchanged heads, alongside the independent approval and
-terminal-check requirements already stated above.
+denied, timeout, and every other warning evidence, and now normalizes the
+workflow-facing `openai-direct/*` fallback before LiteLLM dispatch. A prior
+`5edaf36c` run terminally failed because `pull_request_target` executed the
+protected trusted source `.github/main@885f2cd`, which still misclassified the
+clean `MODEL QUALITY WARNING` banner and passed the raw alias to LiteLLM. That
+fail-closed result is correct under the trust boundary, but cannot validate an
+unmerged gate remedy. The existing protected-main `repository_dispatch`
+recheck path is now scanning exact #1233 with direct OpenAI; its terminal
+result, then #1213's fresh exact-head Strix evidence, normal stack integration,
+independent approvals, and fresh target checks remain required. Neither target
+PR is protected-main evidence or unblocked before those conditions hold.
 
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
