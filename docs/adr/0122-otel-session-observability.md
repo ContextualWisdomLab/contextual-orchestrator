@@ -22,7 +22,9 @@ Telemetry deployment settings may enter the process KV during bootstrap from non
 2. Accept `X-LineageWeave-Session-Id` and compatible metadata fields, bind the
    normalized value to the request context, and reset it when the request
    handler finishes. Extract and inject only W3C `traceparent`/`tracestate`;
-   caller-controlled baggage never crosses the provider egress boundary.
+   caller-controlled baggage never crosses the provider egress boundary. Raw
+   session identifiers never enter telemetry attributes, spans, logs, or OTLP
+   exports; only the bounded correlation hash may be emitted.
 3. Add the bounded session correlation to provider spans for chat and embedding
    calls. Follow the current OpenTelemetry GenAI span convention: emit CLIENT
    spans named `chat {model}` or `embeddings {model}`, include the required
