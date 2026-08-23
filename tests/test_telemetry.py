@@ -1,5 +1,6 @@
 """Tests for request session binding and prompt-safe telemetry."""
 
+import hashlib
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from types import SimpleNamespace
@@ -72,6 +73,9 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
             "server.port": 2,
             "gen_ai.operation.name": "chat",
             "gen_ai.request.model": "model-x",
+            "contextual_orchestrator.session_id_hash": hashlib.sha256(
+                b"session-safe"
+            ).hexdigest(),
         }
     finally:
         reset_session_id(token)
@@ -364,7 +368,12 @@ def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(mon
     tracer.start_as_current_span.assert_called_once_with(
         "chat model-x",
         kind=telemetry_module.SpanKind.CLIENT,
-        attributes={"gen_ai.operation.name": "chat"},
+        attributes={
+            "gen_ai.operation.name": "chat",
+            "contextual_orchestrator.session_id_hash": hashlib.sha256(
+                b"session-secret"
+            ).hexdigest(),
+        },
         record_exception=False,
         set_status_on_exception=False,
     )

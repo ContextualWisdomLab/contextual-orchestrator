@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -36,6 +37,7 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "gen_ai.provider.name",
         "gen_ai.request.model",
         "contextual_orchestrator.agent_id",
+        "contextual_orchestrator.session_id_hash",
         "server.address",
         "server.port",
         "error.type",
@@ -153,6 +155,11 @@ def _safe_attributes(
             result[key] = value[:256]
         elif isinstance(value, (bool, int, float)):
             result[key] = value
+    session_id = current_session_id()
+    if session_id:
+        result["contextual_orchestrator.session_id_hash"] = hashlib.sha256(
+            session_id.encode("utf-8")
+        ).hexdigest()
     return result
 
 
