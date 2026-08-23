@@ -290,6 +290,8 @@ Grounding papers (LLM cost, routing, load balancing) live in
 - [Commercial investment committee memo](docs/commercial_investment_committee_memo.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
+- [Fuzzing](docs/fuzzing.md)
+- [Product and technical gap baseline](docs/product-technical-gap-baseline.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
 - [Commercial plugin readiness plan](docs/superpowers/plans/2026-07-02-commercial-plugin-readiness.md)
 
