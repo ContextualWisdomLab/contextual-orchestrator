@@ -11,8 +11,35 @@ gaps. This file (`conductor/tracks/003-autonomous-pr-ecosystem-loop/plan.md`) is
 loop's memory across iterations — always read the latest `## Status as of ...`
 section and its "Next iteration checklist" first; they supersede everything above.
 
-**Standing authorizations already granted this session** (don't re-ask):
-full autonomous merge authority; org-wide repo scope (every repo where
+**STALE as of 2026-08-23 (verified, not assumed) — the admin-merge bypass
+below is REVERTED, do not rely on it:** direct API checks this session
+(`gh api repos/ContextualWisdomLab/contextual-orchestrator/rulesets/18156473`)
+show ruleset `18156473` ("CWL Central required workflows") currently has
+`bypass_actors: []` — no `OrganizationAdmin` actor, contradicting the
+paragraph below. `gh pr merge --admin` was directly attempted and fails with
+a real rule violation. This is consistent with the exit-condition procedure
+this same section describes further down actually having been completed at
+some point after iteration 76 (2026-08-20) — whoever did it did not come back
+and edit this evergreen paragraph, which is exactly the failure mode "always
+read the latest Status entry, they supersede everything above" doesn't catch
+for content that isn't itself a dated log entry. **Current, verified state as
+of 2026-08-23**: no admin-merge bypass exists on `18156473`; a *different*,
+narrower ruleset (`18259551`, "Lock default branch") does carry an
+`OrganizationAdmin` bypass actor, but GitHub enforces the intersection of all
+applicable rulesets, so that alone does not make `gh pr merge --admin` work
+end-to-end — confirmed by direct, failing attempt. The actual current
+merge blocker for every open PR in this repo is external and unrelated to
+any bypass: the org-wide OpenCode GitHub App installation token (ID
+`141441800`, shared 5,000 req/hr across every repo/workflow it serves) is
+saturated, so the central "Required PR Review Merge Scheduler" cannot
+dispatch the required approving review to anything queued. See "Status as of
+2026-08-23" below for full current evidence. **Do not attempt `gh pr merge
+--admin` expecting it to work** — verify the ruleset state fresh before
+trying, don't trust this file's older claim.
+
+**Standing authorizations originally granted, now partially stale** (kept
+for history — see the correction immediately above before acting on any of
+this): full autonomous merge authority; org-wide repo scope (every repo where
 `viewerPermission` is `ADMIN`); an `OrganizationAdmin` bypass actor added to
 this repo's and `.github`'s branch-protection rulesets, plus `enforce_admins`
 disabled on both repos' classic branch protection (both were independently
@@ -20,7 +47,8 @@ blocking *any* merge, even admin, before this) — `gh pr merge --admin --squash
 --delete-branch` is a real, working, authorized action now, not a bypass to
 ask permission for each time. PII-masking-removal (replace with purpose-
 limited authorization + encryption + audit, per `governance-risk-compliance`'s
-own stated policy) was also pre-authorized and partially delivered (ADR 0010).
+own stated policy) was also pre-authorized and partially delivered (ADR 0010,
+and its follow-up ADR 0024 is code-complete in PR #803 as of 2026-08-23).
 The one hard rule that is *not* relaxed: never weaken, skip, or bypass a real
 required CI check (tests/Semgrep/CodeQL/Strix/etc.) to force a merge through —
 only the redundant/unsatisfiable independent-human-review requirement is
@@ -65,9 +93,8 @@ the full convention.
 
 **Where things stand**: see the latest `## Status as of ...` entry below for
 the current numbers, the current highest-priority task, and exactly what to
-do next. As of iteration 10, the priority is resolving one large unmerged
-~47-PR feature chain (branches `feat/<slug>-http-honesty-<timestamp>`) that
-accounts for most of the open-PR backlog.
+do next — the iteration-10 note this paragraph used to end with is 66
+iterations and 3 days stale; the current entry (2026-08-23) supersedes it.
 
 **Convention going forward**: end every iteration by updating this section
 if the standing context has materially changed, and always add a dated
@@ -2635,3 +2662,105 @@ metadata-free pending count is zero at this observation.
    required contexts succeed, then verify both main branches and scheduler
    concurrency behavior live.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-23, iteration 77 — 3-day gap closed; root cause is a saturated shared token, not a ruleset problem
+
+This file was last updated 2026-08-20 (iteration 76); a fresh session ran
+this track continuously through 2026-08-23 using session-local memory
+(`goal.md`) instead of this file, which is the actual reason for the gap —
+noted so a future agent knows to check session-local state too, not just
+assume 3 quiet days meant no work happened.
+
+**Root-caused the actual current merge blocker, correcting the stale
+"admin-merge is authorized" claim at the top of this file** (see the
+inline correction above): `gh pr merge --admin` fails today; ruleset
+`18156473` has `bypass_actors: []`. The real, current, external blocker is
+the OpenCode GitHub App's installation-wide API rate limit (installation ID
+`141441800`, 5,000 req/hr shared across every repo/scheduled workflow it
+serves) — confirmed both by direct investigation and independent
+corroboration from a peer session working `RankWeave`. Mitigations
+`.github#1220`/`.github#1221` (a *different*, narrower review-dispatch-cadence
+bottleneck) were already merged and confirmed fixed; this installation-wide
+limit is separate and still open, with no workaround available from this
+repo.
+
+**Full backlog converged to clean while waiting**: picked up and fully
+resolved 5 PRs (#768, #794, #804, #818, #803) — real Devin/CodeRabbit
+findings triaged and either fixed with regression tests or resolved with a
+verified rationale (two self-caught process errors from earlier in the
+session are on record: a premature thread-resolution and a wrongly-dismissed
+finding, both caught and corrected transparently). All 5 are now
+checks-green, threads-resolved, `mergeable: MERGEABLE`. Then verified the
+*entire* remaining 24-PR backlog (surveyed all 29 open PRs, not a sample):
+every one already has zero unresolved threads and green checks. **100% of
+this repo's open-PR backlog is merge-ready**, blocked solely on the shared
+token above. Real fix landed on #803: `record_authorization_decision` fires
+on every pre-auth denial (401/429, reachable with zero credentials), which
+routed through `_StateStore.save()`'s synchronous, lock-serialized sqlite
+commit shared with durable `workflow_run`/`evaluation_run` persistence — an
+unauthenticated flood could contend with legitimate traffic's durable
+writes. Fixed by splitting stream-kind persistence (audit/authorization/
+analytics, already bounded/best-effort) onto a background queue, reusing the
+`NonBlockingLedgerStore` pattern already established in `cost_ledger.py`.
+
+**Closed a stale issue with direct evidence, not assumption**: #95 (Atheris
+interpreter-portable locking) — checked current `main` directly rather than
+trusting the issue's 2026-08-12 history; `pyproject.toml`'s `fuzz` extra now
+pins one version (`atheris==3.1.0; python_version >= '3.12'`) instead of the
+two-way marker split PR #96 (closed unmerged) attempted, because 3.0.0
+wheels are no longer available from PyPI for the runners in use. Closed with
+cited evidence. Investigated #123 (sole-collaborator last-push-approval
+deadlock) as a similar candidate — did NOT close it; the structural deadlock
+is still real (still exactly one collaborator, ruleset still requires 1
+approval + last-push-approval), unlike #95 where the evidence cleanly
+resolved.
+
+**Doc-accuracy sweep** (same repo, PR #773): found and fixed 6 real,
+independently-verified gaps by direct-checking documentation claims against
+code rather than trusting prose — `model_discovery.py` (a real, substantial
+module implementing auto-discovery across every KV-registered provider
+credential) was entirely undocumented in `CLAUDE.md`; 2 real docs
+(`docs/fuzzing.md`, this track's own gap-baseline doc) were orphaned from
+README's Design Artifacts index; `docs/architecture.md`'s implementation
+mapping named classes (`Agent`, `Orchestrator`) that don't exist in the
+source (`ModelAgent`, `TaskOrchestrator` are the real names); 2 working API
+routes (`/api/v1/provider_readiness/latest`,
+`/api/v1/analytics_snapshots/latest`) existed in `server.py` but were never
+listed in README's Architecture section; `CLAUDE.md`'s Atheris fuzzing note
+said "Python < 3.13" when the actual `pyproject.toml` marker is the opposite
+bound, `>= 3.12`; and this file's own stale admin-merge-bypass claim
+(corrected above). Also pinned `docs/planning/adrs/` as the canonical ADR
+location in `CLAUDE.md` after finding PR #818's branch had independently
+started using `docs/adr/` instead (no numeric collision, but no documented
+convention either — fixed the convention, did not touch #818's
+already-clean branch to rename its file). Wrote ADR 0011 recording the
+Storybook/`ui-ux-pro-max`/`Anti-Slop-UI` deferral for the admin console
+(cites the existing Figma file `vsZMd8WAv42HDRgcZuNcWk`), with three
+concrete, checkable conditions that would make adoption correct rather than
+optional.
+
+Two investigated leads were correctly declined after verification, not
+acted on: README's "Check" section under-lists directly-runnable test files
+relative to `CLAUDE.md`'s literal wording, but this is intentional (a
+curated contract-test highlight list, not an exhaustive registry — the full
+suite is `pytest tests -q`, documented separately); issue #123 above.
+
+### Next iteration checklist
+
+1. Keep light-checking #768/#794/#804/#818/#803/#773 merge status — nothing
+   to fix on this repo's side, only the external installation-wide rate
+   limit needs to clear (no fixed ETA; no workaround exists from here).
+2. If the mechanical doc-accuracy pattern above still has runway, prefer it
+   over speculative feature work: direct-verify a doc claim against code
+   (class/method names, module/file lists, version constraints, link
+   completeness in both directions) before asserting a gap, and decline
+   cleanly (as with the README Check-list and issue #123 leads) when the
+   evidence doesn't hold up rather than forcing a weak finding.
+3. Issue #86 (live NVIDIA NIM benchmark) and #102 (race-to-first-valid
+   endpoints) remain real, open, but need either live provider credentials
+   not present in a local/agent session, or meaningfully larger new-feature
+   scope than a single checkpoint — don't force either without the missing
+   prerequisite.
+4. Update *this* file going forward, not just session-local `goal.md` — the
+   3-day gap this entry closes is exactly the failure mode this file's own
+   "always add a dated Status entry" convention exists to prevent.
