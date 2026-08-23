@@ -56,8 +56,8 @@ guess, or consumer-side fallback.
    gateway returns `503 embedding_unavailable`; it never invents a model or
    produces a heuristic vector as a provider substitute.
 5. The resolved model is carried into internal batch requests, provider JSONL,
-   response metadata, and cost attribution so the selected deployment remains
-   deterministic and auditable. The standalone in-process backend remains a
+   pending and completed response metadata, and cost attribution so the selected
+   deployment remains deterministic and auditable. The standalone in-process backend remains a
    local test/development path; a configured provider path uses its injected
    embeddings backend and the resolved model.
 

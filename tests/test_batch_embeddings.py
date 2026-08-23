@@ -135,6 +135,15 @@ class _RecordingEmbeddingBackend:
         return list(self._results)
 
 
+class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
+    def submit(self, requests, metadata=None):
+        super().submit(requests, metadata)
+        return BatchJob("pending-embeddings", self.name, "in_progress", len(requests))
+
+    def poll(self, job):
+        return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
+
+
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
     server, port, token, coordinator = _serve()
     base = f"http://127.0.0.1:{port}"
@@ -219,6 +228,21 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         assert document["status"] == "completed"
     finally:
         server.shutdown()
+
+
+def test_pending_batch_preserves_resolved_model_identity() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_batch_backend=_PendingEmbeddingBackend(),
+    )
+
+    created = coordinator.complete_embeddings_batch(["alpha"], model="resolved-embedding")
+    polled = coordinator.embeddings_batch_document(created["batch_id"])
+
+    assert created["model"] == "resolved-embedding"
+    assert polled["model"] == "resolved-embedding"
 
 
 def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
