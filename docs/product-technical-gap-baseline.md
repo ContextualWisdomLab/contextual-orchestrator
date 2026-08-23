@@ -346,7 +346,7 @@ own fresh independent approvals, resolved-thread evidence, and required
 terminal workflows before a normal protected merge. No PR is described here as
 merge-ready while any of those facts are missing or unverified.
 
-**Shared Strix repair pending — 2026-08-23.** The current exact heads
+**Shared Strix repair blocked — 2026-08-23.** The current exact heads
 [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803)
 (`5c6670cb`) and [#824](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/824)
 (`a4219151`) both have a terminal failing `strix` check. Their archived reports
@@ -362,12 +362,17 @@ open at `5edaf36c`, stacked on central
 (`fix/organization-loop-oidc-fallback@dfb8e261`) rather than protected
 `.github/main`. It removes only the two complete clean advisory lines from
 console and non-symlink report logs, retains fail-closed handling for fatal,
-denied, timeout, and every other warning evidence, and has a current Strix run
-in progress. This is not protected-main evidence. Both target PRs remain
-blocked until #1213 reaches protected `.github/main` through normal stack
-integration and fresh Strix checks succeed on these exact unchanged heads,
-alongside the independent approval and terminal-check requirements already
-stated above.
+denied, timeout, and every other warning evidence. Its 2026-08-23 Strix run
+is terminally failed: `pull_request_target` executed the protected trusted
+source `.github/main@885f2cd` rather than #1213's unmerged gate, so it still
+misclassified the clean `MODEL QUALITY WARNING` banner and passed the raw
+`openai-direct/gpt-5.6-luna` alias to LiteLLM. That fail-closed result is
+correct under the current trust boundary, but cannot validate #1213's remedy.
+This is not protected-main evidence. A safe protected rollout path for the
+shared gate is required before a normal #1233 -> #1213 integration; both
+target PRs remain blocked until that occurs and fresh Strix checks succeed on
+their exact unchanged heads, alongside the independent approval and
+terminal-check requirements already stated above.
 
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
