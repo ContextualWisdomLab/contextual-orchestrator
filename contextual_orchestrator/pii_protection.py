@@ -18,10 +18,12 @@ from .credentials import get_credential
 
 
 ENCRYPTED_FIELDS_KEY = "__encrypted_fields__"
-ENCRYPTED_FIELDS_VERSION = 1
+LEGACY_ENCRYPTED_FIELDS_VERSION = 1
+ENCRYPTED_FIELDS_VERSION = 2
 ENCRYPTED_FIELDS_ALGORITHM = "AES-256-GCM"
 DEFAULT_PII_KEY_NAME = "CONTEXTUAL_ORCHESTRATOR_PII_ENCRYPTION_KEY"
 PASSPHRASE_PREFIX = "passphrase:"
+_FIELD_AAD_CONTEXT = "contextual-orchestrator:event-detail"
 PURPOSES_BY_SCOPE = {
     "inference": frozenset({"message_delivery"}),
     "admin": frozenset({"operator_read", "audit_replay"}),
@@ -111,6 +113,21 @@ def _field_names(fields: Iterable[str]) -> tuple[str, ...]:
     return tuple(names)
 
 
+def _field_aad(key_name: str, field: str, version: int) -> bytes:
+    """Bind an encrypted field to an unambiguous key context and field label."""
+    if not isinstance(key_name, str) or not key_name or not isinstance(field, str) or not field:
+        raise PiiProtectionError("PII encryption context is invalid")
+    if version == LEGACY_ENCRYPTED_FIELDS_VERSION:
+        if ":" in key_name or ":" in field:
+            raise PiiProtectionError("legacy encrypted PII context is ambiguous")
+        return f"{_FIELD_AAD_CONTEXT}:{key_name}:{field}".encode("utf-8")
+    if version == ENCRYPTED_FIELDS_VERSION:
+        return json.dumps(
+            [_FIELD_AAD_CONTEXT, key_name, field], ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+    raise PiiProtectionError("unsupported encrypted field version")
+
+
 @dataclass(frozen=True)
 class PiiFieldEncryptor:
     """Encrypt and decrypt explicitly declared event fields with AES-GCM."""
@@ -148,7 +165,7 @@ class PiiFieldEncryptor:
             except (TypeError, ValueError) as exc:
                 raise PiiProtectionError("PII field is not JSON serializable") from exc
             nonce = os.urandom(12)
-            aad = f"contextual-orchestrator:event-detail:{self.key_name}:{field}".encode()
+            aad = _field_aad(self.key_name, field, ENCRYPTED_FIELDS_VERSION)
             encrypted[field] = {
                 "nonce": _b64encode(nonce),
                 "ciphertext": _b64encode(cipher.encrypt(nonce, plaintext, aad)),
@@ -169,7 +186,11 @@ class PiiFieldEncryptor:
         metadata = detail.get(ENCRYPTED_FIELDS_KEY)
         if metadata is None:
             return dict(detail)
-        if not isinstance(metadata, dict) or metadata.get("version") != ENCRYPTED_FIELDS_VERSION:
+        version = metadata.get("version") if isinstance(metadata, dict) else None
+        if type(version) is not int or version not in {
+            LEGACY_ENCRYPTED_FIELDS_VERSION,
+            ENCRYPTED_FIELDS_VERSION,
+        }:
             raise PiiProtectionError("unsupported encrypted field version")
         if metadata.get("algorithm") != ENCRYPTED_FIELDS_ALGORITHM or metadata.get("key_name") != self.key_name:
             raise PiiProtectionError("encrypted field metadata does not match the configured key")
@@ -183,7 +204,7 @@ class PiiFieldEncryptor:
                 raise PiiProtectionError("encrypted field metadata is invalid")
             nonce = _b64decode(envelope.get("nonce"))
             ciphertext = _b64decode(envelope.get("ciphertext"))
-            aad = f"contextual-orchestrator:event-detail:{self.key_name}:{field}".encode()
+            aad = _field_aad(self.key_name, field, version)
             try:
                 value = cipher.decrypt(nonce, ciphertext, aad)
                 result[field] = json.loads(value.decode("utf-8"))

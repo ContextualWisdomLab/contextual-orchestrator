@@ -12,6 +12,7 @@ from unittest.mock import patch
 import urllib.error
 import urllib.request
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -62,6 +63,51 @@ def test_field_encryption_round_trip_and_key_formats() -> None:
     assert PiiFieldEncryptor.from_secret("k", f"passphrase:{OTHER_PASSPHRASE_SALT}:human-readable-secret").key != passphrase_key.key
     assert is_encrypted_detail(protected)
     assert not is_encrypted_detail(detail)
+
+
+def test_field_encryption_aad_keeps_colon_containing_contexts_distinct() -> None:
+    """Key and field labels cannot be recombined into another valid AEAD context."""
+    source = PiiFieldEncryptor("tenant:scope", KEY_BYTES)
+    target = PiiFieldEncryptor("tenant", KEY_BYTES)
+    protected = source.encrypt_fields({"email": "alice@example.com"}, ("email",))
+    metadata = protected[ENCRYPTED_FIELDS_KEY]
+    metadata["key_name"] = "tenant"
+    metadata["fields"]["scope:email"] = metadata["fields"].pop("email")
+
+    with pytest.raises(PiiProtectionError):
+        target.decrypt_fields(protected)
+
+    metadata["version"] = 1
+    with pytest.raises(PiiProtectionError):
+        target.decrypt_fields(protected)
+
+
+def test_safe_legacy_field_envelope_remains_readable() -> None:
+    """Version 1 records with unambiguous labels remain available during migration."""
+    nonce = b"123456789012"
+    plaintext = json.dumps("alice@example.com", separators=(",", ":")).encode("utf-8")
+    ciphertext = AESGCM(KEY_BYTES).encrypt(
+        nonce,
+        plaintext,
+        b"contextual-orchestrator:event-detail:legacy-key:email",
+    )
+    protected = {
+        ENCRYPTED_FIELDS_KEY: {
+            "version": 1,
+            "algorithm": "AES-256-GCM",
+            "key_name": "legacy-key",
+            "fields": {
+                "email": {
+                    "nonce": base64.urlsafe_b64encode(nonce).decode("ascii"),
+                    "ciphertext": base64.urlsafe_b64encode(ciphertext).decode("ascii"),
+                }
+            },
+        }
+    }
+
+    assert PiiFieldEncryptor("legacy-key", KEY_BYTES).decrypt_fields(protected) == {
+        "email": "alice@example.com"
+    }
 
 
 def test_encryptor_repr_does_not_expose_key() -> None:
@@ -148,6 +194,7 @@ def test_tampered_and_malformed_envelopes_fail_closed() -> None:
         {"version": 2},
         {"version": 1, "algorithm": "AES-256-GCM", "key_name": "wrong", "fields": {}},
         {"version": 1, "algorithm": "AES-256-GCM", "key_name": DEFAULT_PII_KEY_NAME, "fields": []},
+        {"version": True, "algorithm": "AES-256-GCM", "key_name": DEFAULT_PII_KEY_NAME, "fields": {}},
     ):
         with pytest.raises(PiiProtectionError):
             encryptor.decrypt_fields({ENCRYPTED_FIELDS_KEY: metadata})

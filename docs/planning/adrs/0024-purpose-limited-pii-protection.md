@@ -63,6 +63,13 @@ failures raise an error rather than storing or returning plaintext. Unmarked
 fields keep the existing behavior so the gateway does not guess at PII or mask
 usable content.
 
+Version 2 binds the AEAD associated data to a canonical JSON array containing
+the event context, key name, and field label, rather than joining these values
+with a delimiter. This prevents a key name and field label containing colons
+from being recombined into the same authenticated context. Safe version 1
+records remain readable for migration; a version 1 key name or field label with
+a colon is rejected because its legacy context is ambiguous.
+
 ## Consequences
 
 * The old OpenAI-compatible request and response shapes remain unchanged.
