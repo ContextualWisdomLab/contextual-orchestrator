@@ -37,7 +37,7 @@ python -m pytest tests/test_self_check.py -q
 # Hypothesis property tests (always-on fuzz seams)
 python -m pytest tests/fuzz -q
 
-# Atheris coverage-guided fuzzing (Python < 3.13, needs Clang/libFuzzer)
+# Atheris coverage-guided fuzzing (Python >= 3.12, needs Clang/libFuzzer)
 python fuzz/fuzz_request_body.py -max_total_time=60 fuzz/corpus/request_body
 
 # CLI one-shot completion (mock agents, fully offline)
