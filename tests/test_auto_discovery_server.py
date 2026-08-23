@@ -1,7 +1,5 @@
 """Server-startup model discovery activates discovered runtime agents."""
 
-import pytest
-
 from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
@@ -42,8 +40,8 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
 
 
-def test_auto_discovery_rejects_without_chat_capability_evidence(monkeypatch) -> None:
-    """Startup fails closed when discovery cannot prove a chat-capable model."""
+def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
+    """Startup fails closed without taking down an explicitly configured pool."""
     embedding = DiscoveredModel(
         provider_name="openai",
         model_id="embedding-capable-model",
@@ -57,5 +55,7 @@ def test_auto_discovery_rejects_without_chat_capability_evidence(monkeypatch) ->
         lambda: ([embedding], []),
     )
 
-    with pytest.raises(RuntimeError, match="automatic model discovery found no chat-capable models"):
-        _auto_discover_runtime_agents(TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")]))
+    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": [], "removed": []}
+    assert [agent.id for agent in orchestrator.agents] == ["bootstrap_agent"]

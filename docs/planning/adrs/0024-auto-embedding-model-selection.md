@@ -49,6 +49,10 @@ guess, or consumer-side fallback.
    and capability policy; disabled agents and provider exclusions are ignored.
    Discovery may attach that capability only from explicit provider or operator
    metadata; model-name guessing is not evidence of embedding support.
+   Startup discovery applies the same rule to chat: a provider source may declare
+   `chat` only when its listing endpoint is explicitly limited to chat/text LLMs.
+   Unclassified sources and non-chat deployments remain disabled, and an empty
+   eligible discovery result leaves the configured pool unchanged.
 3. An explicitly supplied model remains supported only when it matches an
    enabled embedding-capable agent. Unknown, disabled, or non-embedding models
    fail closed with the existing invalid-model contract.

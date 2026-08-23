@@ -69,20 +69,23 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openrouter",
         credential_name="OPENROUTER_API_KEY",
-        list_url="https://openrouter.ai/api/v1/models",
+        list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
         chat_base_url="https://openrouter.ai/api/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
         credential_name="NVIDIA_NIM_API_KEY",
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="nvidia_nim_sub",
         credential_name="NVIDIA_NIM_API_KEY_SUB",
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="bytez",

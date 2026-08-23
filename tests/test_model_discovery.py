@@ -22,6 +22,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 from contextual_orchestrator.cost_ledger import PriceBook  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
+    PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
@@ -132,6 +133,16 @@ def test_discovery_preserves_operator_declared_source_capabilities() -> None:
         discovered = discover_provider_models(EMBEDDING_SOURCE)
 
     assert discovered[0].capabilities == ("embedding",)
+
+
+def test_default_sources_activate_only_provider_filtered_chat_catalogs() -> None:
+    sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
+
+    assert sources["openai"].capabilities == ()
+    assert sources["openrouter"].capabilities == ("chat",)
+    assert sources["openrouter"].list_url.endswith("?output_modalities=text")
+    assert sources["nvidia_nim"].capabilities == ("chat",)
+    assert sources["nvidia_nim_sub"].capabilities == ("chat",)
 
 
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:

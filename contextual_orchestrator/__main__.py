@@ -253,12 +253,10 @@ def _discover_models_command(argv: list[str]) -> None:
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate only models with explicit chat capability evidence."""
-    discovered, errors = discover_all_models()
+    discovered, _errors = discover_all_models()
     chat_models = [model for model in discovered if "chat" in model.capabilities]
     if not chat_models:
-        detail = "; ".join(str(error) for error in errors)
-        suffix = f": {detail}" if detail else ""
-        raise RuntimeError(f"automatic model discovery found no chat-capable models{suffix}")
+        return {"added": [], "updated": [], "removed": []}
     agents = [replace(agent_from_discovered(model), disabled=False) for model in chat_models]
     return orchestrator.sync_discovered_agents(agents)
 
