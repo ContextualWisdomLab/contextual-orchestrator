@@ -357,8 +357,9 @@ either PR's source correctness. Initial central repair
 [.github#1254](https://github.com/ContextualWisdomLab/.github/pull/1254) was
 closed without merge as a duplicate. Its active successor
 [.github#1213](https://github.com/ContextualWisdomLab/.github/pull/1213) is
-open at `5edaf36c`, stacked on
-`fix/organization-loop-oidc-fallback@dfb8e261` rather than protected
+open at `5edaf36c`, stacked on central
+[#1233](https://github.com/ContextualWisdomLab/.github/pull/1233)
+(`fix/organization-loop-oidc-fallback@dfb8e261`) rather than protected
 `.github/main`. It removes only the two complete clean advisory lines from
 console and non-symlink report logs, retains fail-closed handling for fatal,
 denied, timeout, and every other warning evidence, and has a current Strix run
