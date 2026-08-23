@@ -42,6 +42,8 @@ def test_session_id_accepts_lineageweave_header_and_metadata():
         {"session_id": "metadata-session"},
     ) == "header-session"
     assert session_id_from_request({}, {"session_id": "metadata-session"}) == "metadata-session"
+    assert session_id_from_request({}, None, {"session_id": "later-session"}) == "later-session"
+    assert session_id_from_request({}) is None
 
 
 def test_session_and_attribute_boundaries_reject_unsafe_values():
@@ -51,6 +53,7 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
     for value in ("", "x" * 129, "line\nbreak"):
         assert telemetry_module._normalize_session_id(value) is None
     assert session_id_from_metadata(None) is None
+    assert telemetry_module._safe_attributes({"server.port": object()}) == {}
 
     token = set_session_id("session-safe")
     try:
@@ -126,6 +129,20 @@ def test_traced_preserves_provider_error():
     """Tracing records failure but never changes the provider contract."""
     try:
         with traced("contextual_orchestrator.test.failure"):
+            raise RuntimeError("provider failure")
+    except RuntimeError as exc:
+        assert str(exc) == "provider failure"
+    else:  # pragma: no cover
+        raise AssertionError("traced must preserve operation failures")
+
+
+def test_traced_preserves_errors_without_optional_status_types(monkeypatch):
+    """Tracing remains transparent when optional status helpers are unavailable."""
+    monkeypatch.setattr(telemetry_module, "Status", None)
+    monkeypatch.setattr(telemetry_module, "StatusCode", None)
+
+    try:
+        with traced("contextual_orchestrator.test.optional-status"):
             raise RuntimeError("provider failure")
     except RuntimeError as exc:
         assert str(exc) == "provider failure"

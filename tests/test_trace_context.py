@@ -61,3 +61,21 @@ def test_inject_trace_context_delegates_to_w3c_propagator(monkeypatch):
         "content-type": "application/json",
         "traceparent": "00-trace-span-01",
     }
+
+
+def test_provider_trace_context_does_not_forward_inbound_baggage():
+    """Provider egress carries trace context without caller-controlled baggage."""
+    traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    token = telemetry_module.attach_trace_context(
+        {
+            "traceparent": traceparent,
+            "baggage": "customer_record=private-value",
+        }
+    )
+    try:
+        carrier = {}
+        telemetry_module.inject_trace_context(carrier)
+    finally:
+        telemetry_module.detach_trace_context(token)
+
+    assert carrier == {"traceparent": traceparent}

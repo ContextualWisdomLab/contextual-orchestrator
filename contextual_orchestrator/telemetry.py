@@ -13,9 +13,14 @@ try:
     from opentelemetry import trace
     from opentelemetry.context import attach as _otel_attach
     from opentelemetry.context import detach as _otel_detach
-    from opentelemetry.propagate import extract as _otel_extract
-    from opentelemetry.propagate import inject as _otel_inject
     from opentelemetry.trace import SpanKind, Status, StatusCode
+    from opentelemetry.trace.propagation.tracecontext import (
+        TraceContextTextMapPropagator,
+    )
+
+    _trace_context = TraceContextTextMapPropagator()
+    _otel_extract = _trace_context.extract
+    _otel_inject = _trace_context.inject
 except ImportError:  # pragma: no cover - dependency is declared by the project
     trace = None  # type: ignore[assignment]
     _otel_attach = None

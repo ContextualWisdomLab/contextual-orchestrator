@@ -20,7 +20,7 @@
 | Concern | Implementation | Evidence boundary |
 | --- | --- | --- |
 | Service resource | `OTEL_SERVICE_NAME`, default `contextual-orchestrator` | One logical service name per deployment |
-| Request correlation | `X-LineageWeave-Session-Id` and compatible metadata | Correlation only; not identity or authorization |
+| Request correlation | `X-LineageWeave-Session-Id`, compatible metadata, and W3C Trace Context | Correlation only; not identity or authorization; inbound baggage is not forwarded to providers |
 | Provider calls | `ModelClient` chat/embedding CLIENT spans | Required GenAI operation/provider attributes, model and server destination; no prompt, answer, key, or response |
 | Export | Bootstrap OTEL_EXPORTER_OTLP_ENDPOINT into the process KV | Disabled by default; runtime reads KV and sends to the normalized /v1/traces signal |
 
