@@ -313,6 +313,7 @@ python tests/test_provider_bootstrap_secret_normalization.py
 python tests/test_provider_catalog_bootstrap.py
 python tests/test_provider_catalog_credential_promotion.py
 python tests/test_provider_catalog_store.py
+python tests/test_tool_execution_fallback.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py

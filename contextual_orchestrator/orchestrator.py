@@ -37,6 +37,16 @@ from .chat_capability import (
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .tool_fallback import (
+    MAX_TOOL_RETRY_ATTEMPTS,
+    ToolExecutionError,
+    ToolFailureDecision,
+    ToolFailureKind,
+    ToolFallbackAction,
+    ToolFallbackStoppedError,
+    classify_tool_failure,
+    downgrade_to_failover,
+)
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -83,6 +93,10 @@ class BudgetExceededError(RuntimeError):
     def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.detail = detail or {}
+
+
+class ProviderResponseError(RuntimeError):
+    """Raised for a provider response that cannot become a safe completion."""
 
 
 def estimate_tokens(text: str) -> int:
@@ -224,8 +238,8 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
 
     try:
         decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
-    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
-        raise ValueError("judge response is not valid JSON") from exc
+    except (json.JSONDecodeError, RecursionError, TypeError):
+        raise ValueError("judge response is not valid JSON") from None
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
@@ -409,6 +423,39 @@ class OrchestrationPolicy:
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
+    """Return whether an HTTP error carries the terminal tool-stop contract."""
+    cache_key = "_contextual_orchestrator_tool_execution_stopped"
+    cached = getattr(error, cache_key, None)
+    if isinstance(cached, bool):
+        return cached
+    try:
+        payload = json.loads(error.read(65536).decode("utf-8"))
+    except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        result = False
+    else:
+        details = payload.get("error") if isinstance(payload, dict) else None
+        result = isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
+    try:
+        setattr(error, cache_key, result)
+    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
+        pass
+    return result
+
+
+def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
+    """Convert the provider's terminal tool-stop contract to the public safe error."""
+    decision = classify_tool_failure(
+        ToolExecutionError(
+            "provider reported terminal tool execution state",
+            tool_name="provider_tool_runtime",
+            kind=ToolFailureKind.TRANSPORT_ERROR,
+            outcome_unknown=True,
+        )
+    )
+    return ToolFallbackStoppedError(agent.id, decision)
 
 
 def _is_local_provider_url(base_url: str) -> bool:
@@ -667,6 +714,8 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
 def is_transient_error(exc: BaseException) -> bool:
     """Return True when a provider call failure is worth retrying with backoff."""
     if isinstance(exc, urllib.error.HTTPError):
+        if _is_tool_execution_stopped(exc):
+            return False
         return exc.code in TRANSIENT_HTTP_STATUS
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
@@ -924,8 +973,11 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
+            raise _provider_tool_execution_stopped(agent) from None
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
+        raise RuntimeError(f"provider {agent.id} request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -976,11 +1028,11 @@ class ModelClient:
         if isinstance(content, str):
             return content
         if isinstance(message, dict) and message.get("reasoning"):
-            raise RuntimeError(
+            raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
                 "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
             )
-        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
 
     @staticmethod
     def _connect_validated(
@@ -1122,21 +1174,26 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
-            for raw in response:
-                line = raw.decode("utf-8").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-                if delta:
-                    yield delta
+        try:
+            with self._open_provider(request, destination) as response:
+                for raw in response:
+                    line = raw.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                    if delta:
+                        yield delta
+        except urllib.error.HTTPError as exc:
+            if _is_tool_execution_stopped(exc):
+                raise _provider_tool_execution_stopped(agent) from None
+            raise
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
@@ -1192,7 +1249,9 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
+        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
+            raise _provider_tool_execution_stopped(agent) from None
+        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
         self,
@@ -1700,6 +1759,8 @@ class TaskOrchestrator:
         agents_db: str | None = None,
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
+        tool_retry_attempts: int = 1,
+        tool_retry_backoff_seconds: float = 0.25,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -1712,6 +1773,31 @@ class TaskOrchestrator:
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
+        if (
+            isinstance(tool_retry_attempts, bool)
+            or not isinstance(tool_retry_attempts, int)
+            or tool_retry_attempts < 0
+            or tool_retry_attempts > MAX_TOOL_RETRY_ATTEMPTS
+        ):
+            raise ValueError(
+                "tool_retry_attempts must be a nonnegative integer at most "
+                f"{MAX_TOOL_RETRY_ATTEMPTS}"
+            )
+        self.tool_retry_attempts = tool_retry_attempts
+        if (
+            isinstance(tool_retry_backoff_seconds, bool)
+            or not isinstance(tool_retry_backoff_seconds, (int, float))
+            or not math.isfinite(float(tool_retry_backoff_seconds))
+            or tool_retry_backoff_seconds < 0
+        ):
+            raise ValueError(
+                "tool_retry_backoff_seconds must be a finite nonnegative number"
+            )
+        self.tool_retry_backoff_seconds = float(tool_retry_backoff_seconds)
+        # Injectable seams keep retry timing deterministic in tests while
+        # production uses full jitter to avoid synchronized retry bursts.
+        self._tool_retry_sleep = time.sleep
+        self._tool_retry_jitter = random.uniform
         self.policy = OrchestrationPolicy()
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
@@ -2014,8 +2100,8 @@ class TaskOrchestrator:
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
                     index = int(suffix)
-                except (AttributeError, ValueError) as exc:
-                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                except (AttributeError, ValueError):
+                    raise RuntimeError("batch provider returned an invalid request identifier") from None
                 if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
                     raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:
@@ -2568,28 +2654,80 @@ class TaskOrchestrator:
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
     ) -> tuple[str, str, dict[str, Any] | None]:
-        """Call the primary agent, failing over across capability-matched agents on error.
+        """Call an agent with bounded, safety-aware tool retry and failover.
 
-        Transient retry/backoff happens inside ``ModelClient``; this layer adds
-        cross-agent failover plus a per-agent circuit breaker, and returns
-        ``(output, served_agent_id, usage)`` — usage is the provider-reported token
-        usage when available (else None), so spend analytics can prefer it.
+        ``ModelClient`` handles provider transport retries. This layer classifies
+        agent/tool-runtime failures: missing tools move to a compatible agent,
+        explicitly idempotent transient calls retry the same agent, and ambiguous
+        side effects or policy/permission/argument errors fail closed.
         """
         candidates = self._failover_candidates(primary, text, role)
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
-        last_error: Exception | None = None
+        retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
-            try:
-                output = self.client.chat(agent, messages)
-            except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
-                last_error = exc
-                self._record_failure(agent.id)
-                continue
-            self._record_success(agent.id)
-            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
-            return output, agent.id, usage
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+            retry_attempt = 0
+            while True:
+                try:
+                    output = self.client.chat(agent, messages)
+                except Exception as exc:
+                    if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
+                        raise
+                    decision = classify_tool_failure(exc)
+                    action = decision.action
+                    if (
+                        action is ToolFallbackAction.RETRY_SAME_AGENT
+                        and retry_attempt < retry_limit
+                    ):
+                        retry_attempt += 1
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        if decision.circuit_failure:
+                            self._record_failure(agent.id)
+                        if self.tool_retry_backoff_seconds:
+                            retry_ceiling = min(
+                                self.tool_retry_backoff_seconds
+                                * (2.0 ** min(retry_attempt - 1, 16)),
+                                30.0,
+                            )
+                            retry_delay = self._tool_retry_jitter(0.0, retry_ceiling)
+                            self._tool_retry_sleep(retry_delay)
+                        continue
+                    if action is ToolFallbackAction.RETRY_SAME_AGENT:
+                        decision = downgrade_to_failover(decision)
+                        action = decision.action
+                    self._record_tool_fallback(agent.id, decision, retry_attempt)
+                    if decision.circuit_failure:
+                        self._record_failure(agent.id)
+                    if action is ToolFallbackAction.FAIL_CLOSED:
+                        raise ToolFallbackStoppedError(agent.id, decision) from None
+                    break
+                self._record_success(agent.id)
+                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                return output, agent.id, usage
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
+
+    def _record_tool_fallback(
+        self,
+        agent_id: str,
+        decision: ToolFailureDecision,
+        retry_attempt: int,
+    ) -> None:
+        """Record a secret-free audit event for one tool fallback decision."""
+        event_detail = {
+            "agent_id": agent_id,
+            "action": decision.action.value,
+            "failure_kind": decision.kind.value,
+            "reason_code": decision.reason_code,
+            "retry_attempt": retry_attempt,
+        }
+        observed_kind = (
+            decision.kind
+            if decision.observed_kind is None
+            else decision.observed_kind
+        )
+        if observed_kind is not decision.kind:
+            event_detail["observed_failure_kind"] = observed_kind.value
+        self._append_audit_event("tool_fallback_decision", event_detail)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
