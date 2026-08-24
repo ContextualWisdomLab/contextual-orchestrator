@@ -1418,7 +1418,7 @@ Summarize this research thread and verify claims.</textarea>
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
             const chip = row.status === "pass" ? "green" : row.status === "warn" ? "amber" : "red";
             return `<div class="readiness-row">
-              <span class="chip ${chip}">${escapeHtml(t(`readiness_${row.status}`))}</span>
+              <span class="chip ${chip}">${escapeHtml(t(`readiness_${{ pass: "ok", warn: "warning", fail: "failure" }[row.status]}`))}</span>
               <strong>${escapeHtml(t(row.criterion_name) || row.label)}</strong>
               <small>${escapeHtml(row.evidence)}</small>
               <small><b>${escapeHtml(t("readiness_remediation_label"))}:</b> ${escapeHtml(row.remediation || "")}</small>
