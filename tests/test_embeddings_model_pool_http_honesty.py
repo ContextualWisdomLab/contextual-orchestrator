@@ -171,6 +171,29 @@ def test_http_embeddings_auto_selection_fails_when_capability_is_missing() -> No
         thread.join(timeout=5)
 
 
+def test_http_embeddings_rejects_explicit_model_without_embedding_capability() -> None:
+    """An in-pool model without the ``embedding`` tag fails closed on /v1/embeddings.
+
+    Regression: capability gating must also bind when the caller names a pool
+    member explicitly; otherwise a reasoning-only deployment would silently
+    serve embedding traffic after an operator re-tags the pool.
+    """
+    server, thread, port = _server_without_embedding()
+    try:
+        status, body = _post(
+            port,
+            "/v1/embeddings",
+            {"model": "mock-planner", "input": "invoice search chunk"},
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_model" in blob
+        assert "agent pool" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_batch_embeddings_rejects_model_outside_agent_pool() -> None:
     server, thread, port = _server()
     try:

@@ -78,10 +78,15 @@ the runtime agent pool and leave unclassified models ineligible.
 
 LineageWeave, naruon, and other consumers can omit provider model selectors
 while retaining pool validation, provider routing, and cost attribution.
-Explicit OpenAI-compatible model requests remain backward compatible. The
-gateway still exposes a clear distinction between local standalone evidence
-and configured-provider evidence; local heuristic vectors are not production
-provider evidence.
+Explicit OpenAI-compatible model requests are capability-gated, not backward
+compatible: a named model must belong to the enabled agent pool **and** carry
+the requested capability tag (for example ``embedding``), otherwise the
+gateway returns ``400 invalid_model``. Operators migrating from earlier
+builds must re-tag pool agents before clients that address embedding models
+explicitly will resolve; omitted-model requests are unaffected because they
+auto-select through the same capability gate. The gateway still exposes a
+clear distinction between local standalone evidence and configured-provider
+evidence; local heuristic vectors are not production provider evidence.
 
 ## Research grounding
 
