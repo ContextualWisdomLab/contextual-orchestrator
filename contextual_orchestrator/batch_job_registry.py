@@ -19,8 +19,16 @@ so every call site keeps identical mapping semantics and the default
 deployment is unchanged.
 
 The Valkey URL is deployment configuration with credentials, so it is
-read from the config store's secret surface
-(``batch_job_registry_valkey_url``), never from ``os.getenv``.
+resolved through the KV credential registry
+(``get_credential("batch_job_registry_valkey_url")``, with the config
+store's secret surface as the injectable test fallback), never from
+``os.getenv``.
+
+The durable-row/registry split follows the transactional-outbox shape:
+the durable record is the source of truth and the queue entry is only a
+wake-up (Richardson, C. (2018). *Microservices patterns: With examples
+in Java*. Manning; Kleppmann, M. (2017). *Designing data-intensive
+applications*. O'Reilly).
 """
 
 from __future__ import annotations
@@ -86,6 +94,9 @@ class ValkeyJsonMapping(MutableMapping):
         raw = self._client.hget(self._key, job_id)
         if raw is None:
             raise KeyError(job_id)
+        # Reads refresh retention too: a registry that is only polled
+        # after submission must not expire mid-use.
+        self._client.expire(self._key, self._retention_seconds)
         return self._decode_document(raw)
 
     def __setitem__(self, job_id: str, value: Any) -> None:
@@ -130,14 +141,23 @@ class JobRegistryFactory:
 def build_job_registry(config_store: Any) -> JobRegistryFactory:
     """Build the registry factory from the config store's secret surface.
 
-    Reads the ``batch_job_registry_valkey_url`` secret. When it is unset,
+    Resolves ``batch_job_registry_valkey_url`` through the KV credential
+    registry first, then the config store's secret surface (the injectable
+    test path). When it is unset,
     or the ``redis`` client package is not installed (it ships in the
     ``queue`` extra), registries stay in-process dicts — exactly the
     pre-Valkey behavior — so nothing changes for deployments that have
     not opted in.
     """
-    get_secret = getattr(config_store, "get_secret", None)
-    url = get_secret("batch_job_registry_valkey_url", None) if callable(get_secret) else None
+    from .credentials import get_credential
+
+    try:
+        url = get_credential("batch_job_registry_valkey_url")
+    except Exception:  # noqa: BLE001 - no credential backend configured
+        url = None
+    if not url:
+        get_secret = getattr(config_store, "get_secret", None)
+        url = get_secret("batch_job_registry_valkey_url", None) if callable(get_secret) else None
     if not url:
         return JobRegistryFactory(None)
     try:

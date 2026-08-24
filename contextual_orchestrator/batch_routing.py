@@ -21,6 +21,7 @@ Config/thresholds come from KV, never ``os.getenv``.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import time
@@ -336,9 +337,14 @@ class PgLlmBatchBackend:
 
         job_payload = self._run(_submit())
         batch_id = job_payload["id"]
+        # Tracked requests are stored as JSON primitives (not dataclass
+        # instances) so the registry can be a JSON-backed Valkey mapping;
+        # retrieve() rebuilds the dataclass view it needs.
         self._jobs[batch_id] = {
             "endpoint_alias": self._endpoint_alias,
-            "requests": {request.custom_id: request for request in requests},
+            "requests": {
+                request.custom_id: dataclasses.asdict(request) for request in requests
+            },
         }
         return BatchJob(
             job_id=batch_id,
@@ -375,7 +381,8 @@ class PgLlmBatchBackend:
             body = (entry.get("response") or {}).get("body", {})
             answer = _extract_answer(body)
             usage = body.get("usage", {}) or {}
-            request = tracked.get(custom_id)
+            raw_request = tracked.get(custom_id)
+            request = BatchRequest(**raw_request) if raw_request else None
             items.append(
                 BatchResultItem(
                     custom_id=custom_id,
@@ -616,7 +623,11 @@ class PgLlmBatchEmbeddingBackend:
         batch_id = job_payload["id"]
         self._jobs[batch_id] = {
             "endpoint_alias": self._endpoint_alias,
-            "requests": {request.custom_id: request for request in requests},
+            # JSON primitives, not dataclass instances, so a Valkey-backed
+            # registry can serialize the tracked state (see PgLlmBatchBackend).
+            "requests": {
+                request.custom_id: dataclasses.asdict(request) for request in requests
+            },
             "order": [request.custom_id for request in requests],
         }
         return BatchJob(
@@ -657,7 +668,8 @@ class PgLlmBatchEmbeddingBackend:
             body = (entry.get("response") or {}).get("body", {})
             embedding = _extract_embedding(body)
             usage = body.get("usage", {}) or {}
-            tracked_request = tracked_requests.get(custom_id)
+            raw_request = tracked_requests.get(custom_id)
+            tracked_request = EmbeddingBatchRequest(**raw_request) if raw_request else None
             items.append(
                 EmbeddingBatchResultItem(
                     custom_id=custom_id,

@@ -10,7 +10,11 @@ their results.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any, Dict
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.batch_job_registry import (
     DEFAULT_RETENTION_SECONDS,
@@ -136,3 +140,10 @@ def test_jobs_submitted_before_a_restart_are_retrievable_after_it() -> None:
 def test_default_retention_is_a_week() -> None:
     """Documented default: abandoned jobs expire after seven days."""
     assert DEFAULT_RETENTION_SECONDS == 7 * 24 * 3600
+
+
+if __name__ == "__main__":
+    for name, value in sorted(globals().items()):
+        if name.startswith("test_") and callable(value):
+            value()
+    print("test_batch_job_registry: all direct-run checks passed")

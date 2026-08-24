@@ -70,24 +70,29 @@ class CostRoutingCoordinator:
             build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
         )
         self.policy = routing_policy or RoutingPolicy(self.config)
+        # Job registries live in Valkey when the credential registry carries
+        # batch_job_registry_valkey_url, so submitted jobs survive a process
+        # restart; otherwise they are the historical in-process dicts. Built
+        # before the backends so the default local backends share it and
+        # their results survive a restart too.
+        registry = job_registry if job_registry is not None else build_job_registry(self.config)
+        self.job_registry = registry
         if batch_backend is None:
             client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
             self.batch_backend = LocalBatchBackend(
                 runner=lambda messages, mode: orchestrator.complete(messages, mode=mode),
                 max_concurrency=local_concurrency,
+                job_registry=registry,
             )
         else:
             self.batch_backend = batch_backend
         self.embedding_batch_backend: EmbeddingBatchBackend = (
             embedding_batch_backend
-            or LocalEmbeddingBatchBackend(token_counter=self.token_counter)
+            or LocalEmbeddingBatchBackend(
+                token_counter=self.token_counter, job_registry=registry
+            )
         )
-        # Job registries live in Valkey when the config store carries the
-        # batch_job_registry_valkey_url secret, so submitted jobs survive a
-        # process restart; otherwise they are the historical in-process dicts.
-        registry = job_registry if job_registry is not None else build_job_registry(self.config)
-        self.job_registry = registry
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
         # embeddings batch state: job handle + submitted requests + cached doc,
