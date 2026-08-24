@@ -1155,6 +1155,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        stream_error: RuntimeError | None = None
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1171,10 +1172,21 @@ class ModelClient:
                     delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
                     if delta:
                         yield delta
-        except urllib.error.HTTPError as exc:
+        except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
+            # The gateway's own terminal tool-stop contract must survive the
+            # boundary: convert the provider HTTP shape into the package-owned
+            # stop error so callers keep the 409 semantics they rely on.
             if _is_tool_execution_stopped(exc):
                 raise _provider_tool_execution_stopped(agent) from None
-            raise
+            if isinstance(exc, ToolFallbackStoppedError):
+                raise
+            # A stream may already have emitted bytes, so it can neither be retried
+            # nor failed over to another provider. Keep the provider status, body,
+            # and exception cause inside the gateway; callers get one stable,
+            # package-owned error instead of raw provider diagnostics.
+            stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+        if stream_error is not None:
+            raise stream_error
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
@@ -1384,9 +1396,18 @@ class ModelClient:
             results = self._local_batch_chat(agent, requests, temperature)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
-            results = self._batch_run(  # pragma: no cover
-                agent, requests, temperature, poll_interval, poll_timeout, destination
-            )
+            batch_error: RuntimeError | None = None
+            try:
+                results = self._batch_run(  # pragma: no cover
+                    agent, requests, temperature, poll_interval, poll_timeout, destination
+                )
+            except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
+                # Batch upload, polling, and output retrieval all cross the same
+                # public gateway boundary; provider bodies and exception text stay
+                # inside the authorized provider observability system.
+                batch_error = RuntimeError(f"provider {agent.id} batch request failed")
+            if batch_error is not None:
+                raise batch_error
         return _validate_batch_results(requests, results)
 
     def _local_batch_chat(

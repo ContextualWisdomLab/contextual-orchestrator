@@ -74,6 +74,49 @@ def test_stream_send_parses_real_provider_sse() -> None:
     assert "".join(deltas) == "Hello streamed world"
 
 
+def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
+    """A mid-stream provider failure surfaces one package-owned error (CWE-209).
+
+    Regression: the raw ``HTTPError`` (provider URL, reason phrase, and body)
+    used to re-raise out of the streaming generator, leaking upstream
+    diagnostics to gateway callers and logs.
+    """
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("content-length", 0))
+            self.rfile.read(length)
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(b"upstream-secret-diagnostic http://10.0.0.9/internal")
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=f"http://127.0.0.1:{server.server_address[1]}",
+            api_key_env="UNSET_KEY_ENV",
+        )
+        try:
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+        except RuntimeError as error:
+            assert "streaming request failed" in str(error)
+            assert "http://" not in str(error)  # provider URL stays inside
+            assert "upstream-secret-diagnostic" not in str(error)
+            assert error.__cause__ is None
+        else:  # pragma: no cover
+            raise AssertionError("a failed stream must raise a package-owned error")
+    finally:
+        server.shutdown()
+
+
 def test_stream_chat_mock_yields_chunks() -> None:
     client = ModelClient()
     agent = ModelAgent("general_agent", "mock-model")  # base_url defaults to mock://local
