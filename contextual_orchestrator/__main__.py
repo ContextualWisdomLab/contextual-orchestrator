@@ -111,6 +111,8 @@ def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
         import fast_mlsirm
         from fast_mlsirm import (
             CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 as fast_contract,
+        )
+        from fast_mlsirm import (
             ContextualOrchestratorJudge,
             JudgeCriterion,
             JudgeFormatError,
@@ -264,6 +266,21 @@ def _discover_models_command(argv: list[str]) -> None:
         raise SystemExit(1)
 
 
+def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
+    """Discover and activate only models with explicit chat capability evidence."""
+    discovered, _errors = discover_all_models()
+    chat_models = [model for model in discovered if "chat" in model.capabilities]
+    existing_ids = {agent.id for agent in orchestrator.candidates}
+    agents = [
+        replace(agent_from_discovered(model), disabled=False)
+        for model in chat_models
+        if agent_id_for(model) not in existing_ids
+    ]
+    if not agents:
+        return {"added": [], "updated": []}
+    return orchestrator.sync_discovered_agents(agents)
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
@@ -333,6 +350,11 @@ def main() -> None:
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
+    parser.add_argument(
+        "--auto-discover-model-agents",
+        action="store_true",
+        help="discover source-declared chat-capable models at startup and activate them",
+    )
     args = parser.parse_args()
 
     client = ModelClient(
@@ -352,6 +374,8 @@ def main() -> None:
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
     )
+    if args.auto_discover_model_agents:
+        _auto_discover_runtime_agents(orchestrator)
 
     if args.conduct_hint_threshold is not None or args.route_text_length_threshold is not None:
         overrides: dict[str, int] = {}
