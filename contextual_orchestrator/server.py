@@ -4718,9 +4718,6 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
-                if path in ("/", "/admin"):
-                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
-                    return
                 if path == "/admin/state":
                     state = orchestrator.admin_state()
                     state["document_viewer"] = (
