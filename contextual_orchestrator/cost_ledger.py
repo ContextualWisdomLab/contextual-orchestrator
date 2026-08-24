@@ -604,12 +604,24 @@ _LEGACY_ATTRIBUTION_COLUMNS = (
     "group_name",
     "company_name",
 )
-_LEGACY_USAGE_SELECT_SQL = (
-    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, route_mode, "
-    "provider_name, model_name, prompt_tokens, completion_tokens, total_tokens, "
-    "cost_amount, currency_code, account_name, service_name, upstream_api, "
-    "team_name, group_name, company_name FROM llm_usage_records_legacy"
-)
+_LEGACY_USAGE_SELECT_SQL = {
+    "llm_usage_records": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, route_mode, "
+        "provider_name, model_name, prompt_tokens, completion_tokens, total_tokens, "
+        "cost_amount, currency_code, account_name, service_name, upstream_api, "
+        "team_name, group_name, company_name FROM llm_usage_records"
+    ),
+    "llm_usage_records_legacy": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, route_mode, "
+        "provider_name, model_name, prompt_tokens, completion_tokens, total_tokens, "
+        "cost_amount, currency_code, account_name, service_name, upstream_api, "
+        "team_name, group_name, company_name FROM llm_usage_records_legacy"
+    ),
+}
+_LEGACY_TABLE_DROP_SQL = {
+    "llm_usage_records": "DROP TABLE llm_usage_records",
+    "llm_usage_records_legacy": "DROP TABLE llm_usage_records_legacy",
+}
 _DIMENSION_SELECT_SQL = {
     "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
     "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
@@ -694,6 +706,7 @@ _USAGE_QUERY_SQL = {
 # interpolation seam even if a future caller passes an unexpected value.
 _QMARK_TABLE_INFO_SQL = {
     "llm_usage_records": "PRAGMA table_info(llm_usage_records)",
+    "llm_usage_records_legacy": "PRAGMA table_info(llm_usage_records_legacy)",
 }
 
 
@@ -764,23 +777,35 @@ class SqlLedgerStore:
             )
 
     def _migrate_legacy_usage_table(self) -> None:
-        """Move flattened legacy rows into the normalized schema transactionally."""
+        """Rename the flattened generation, rebuild normalized, copy, drop legacy."""
         cur = self._conn.cursor()
         try:
             cur.execute("ALTER TABLE llm_usage_records RENAME TO llm_usage_records_legacy")
         except Exception as exc:
             raise RuntimeError("legacy usage-table migration is ambiguous") from exc
         self._execute_schema()
-        cur.execute(_LEGACY_USAGE_SELECT_SQL)
-        legacy_rows = cur.fetchall()
-        for values in legacy_rows:
-            row = dict(zip((*_CORE_USAGE_COLUMNS, *_LEGACY_ATTRIBUTION_COLUMNS), values))
+        self._copy_flattened_usage_rows(cur, "llm_usage_records_legacy")
+        cur.execute(_LEGACY_TABLE_DROP_SQL["llm_usage_records_legacy"])
+
+    def _adopt_orphaned_legacy_usage_table(self) -> None:
+        """Rebuild the normalized generation from an orphaned legacy-only table."""
+        cur = self._conn.cursor()
+        self._execute_schema()
+        self._copy_flattened_usage_rows(cur, "llm_usage_records_legacy")
+        cur.execute(_LEGACY_TABLE_DROP_SQL["llm_usage_records_legacy"])
+
+    def _copy_flattened_usage_rows(self, cur: Any, source_table: str) -> None:
+        """Copy flattened rows from ``source_table`` into the normalized schema."""
+        cur.execute(_LEGACY_USAGE_SELECT_SQL[source_table])
+        for values in cur.fetchall():
+            row: dict[str, Any] = dict(
+                zip((*_CORE_USAGE_COLUMNS, *_LEGACY_ATTRIBUTION_COLUMNS), values)
+            )
             cur.execute(
                 _CORE_USAGE_INSERT_SQL[self._paramstyle],
                 tuple(row[column] for column in _CORE_USAGE_COLUMNS),
             )
             self._insert_normalized_attribution(cur, row)
-        cur.execute("DROP TABLE llm_usage_records_legacy")
 
     def _create_schema(self) -> None:
         """Create or migrate the ledger and roll back any partial DDL."""
@@ -811,14 +836,33 @@ class SqlLedgerStore:
         for statement in statements[:2]:
             cur.execute(statement)
         self._seed_dimension_catalog_in_transaction(cur)
-        columns = self._table_columns("llm_usage_records")
-        if not columns:
+        new_columns = self._table_columns("llm_usage_records")
+        legacy_columns = self._table_columns("llm_usage_records_legacy")
+        if new_columns and legacy_columns:
+            # Fail closed: two generations coexist, so which rows are
+            # authoritative is ambiguous. Silent adoption could strand or
+            # duplicate usage data; require manual resolution instead.
+            raise RuntimeError(
+                "both llm_usage_records and llm_usage_records_legacy exist; "
+                "reconcile or archive one generation manually before "
+                "constructing SqlLedgerStore"
+            )
+        if not new_columns and legacy_columns:
+            required = set(_CORE_USAGE_COLUMNS) | set(_LEGACY_ATTRIBUTION_COLUMNS)
+            missing = ", ".join(sorted(required - legacy_columns))
+            if missing:
+                raise RuntimeError(
+                    "orphaned llm_usage_records_legacy schema is unsupported; "
+                    f"missing columns: {missing}"
+                )
+            self._adopt_orphaned_legacy_usage_table()
+        elif not new_columns:
             for statement in statements[2:]:
                 cur.execute(statement)
-        elif "account_name" in columns:
+        elif "account_name" in new_columns:
             self._migrate_legacy_usage_table()
-        elif not set(_CORE_USAGE_COLUMNS).issubset(columns):
-            missing = ", ".join(sorted(set(_CORE_USAGE_COLUMNS) - columns))
+        elif not set(_CORE_USAGE_COLUMNS).issubset(new_columns):
+            missing = ", ".join(sorted(set(_CORE_USAGE_COLUMNS) - new_columns))
             raise RuntimeError(f"unsupported usage ledger schema; missing columns: {missing}")
         else:
             for statement in statements[2:]:
@@ -839,10 +883,19 @@ class SqlLedgerStore:
                 )
 
     def append(self, record: UsageRecord) -> None:
-        """Insert a usage record row."""
+        """Insert a usage record row and its attributions atomically.
+
+        On sqlite connections opened in autocommit mode an explicit ``BEGIN``
+        gates the usage-row and attribution inserts so a mid-append failure
+        cannot strand a usage row without its attribution children. Callers
+        that hand in an already-open transaction keep ownership of it: this
+        method's ``commit()`` will commit their outer transaction too.
+        """
         row = record.as_dict()
         cur = self._conn.cursor()
         try:
+            if self._paramstyle == "qmark" and not getattr(self._conn, "in_transaction", False):
+                cur.execute("BEGIN")
             cur.execute(
                 _CORE_USAGE_INSERT_SQL[self._paramstyle],
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),

@@ -568,7 +568,7 @@ def test_sql_ledger_rolls_back_seeded_catalog_legacy_migration() -> None:
 
 
 def test_sql_ledger_rejects_ambiguous_legacy_migration_without_renaming_source() -> None:
-    """Keep both legacy tables recoverable when migration targets collide."""
+    """Fail closed when both schema generations coexist; source stays intact."""
     connection = sqlite3.connect(":memory:")
     connection.execute(
         "CREATE TABLE llm_usage_records (usage_record_id TEXT, account_name TEXT)"
@@ -576,10 +576,156 @@ def test_sql_ledger_rejects_ambiguous_legacy_migration_without_renaming_source()
     connection.execute("CREATE TABLE llm_usage_records_legacy (legacy_id TEXT)")
     connection.commit()
 
-    with pytest.raises(RuntimeError, match="legacy usage-table migration is ambiguous"):
+    # Two generations coexisting is ambiguous about which rows are
+    # authoritative, so construction must fail closed before any rename.
+    with pytest.raises(RuntimeError, match="both llm_usage_records"):
         SqlLedgerStore(connection, paramstyle="qmark")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(llm_usage_records)")}
     assert "account_name" in columns
+
+
+def _guard_usage_record(**overrides: object):
+    """Build a full UsageRecord for ledger guard regression tests."""
+    from contextual_orchestrator.cost_ledger import AttributionDimensions, UsageRecord
+
+    defaults: dict = dict(
+        usage_record_id="usage_guard_t1",
+        created_at=1000,
+        workflow_run_id=None,
+        request_channel="sync",
+        route_mode=None,
+        provider_name="provider_one",
+        model_name="model_one",
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        cost_amount=0.5,
+        currency_code="USD",
+        attribution=AttributionDimensions(),
+    )
+    defaults.update(overrides)
+    return UsageRecord(**defaults)
+
+
+def test_dual_generation_coexistence_fails_closed() -> None:
+    """Both usage-table generations coexisting fails construction closed."""
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        "CREATE TABLE llm_usage_records ("
+        + ", ".join(
+            [
+                "usage_record_id",
+                "created_at",
+                "workflow_run_id",
+                "request_channel",
+                "route_mode",
+                "provider_name",
+                "model_name",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "cost_amount",
+                "currency_code",
+            ]
+        )
+        + ")"
+    )
+    connection.execute(
+        "CREATE TABLE llm_usage_records_legacy ("
+        + ", ".join(
+            [
+                "usage_record_id",
+                "created_at",
+                "workflow_run_id",
+                "request_channel",
+                "route_mode",
+                "provider_name",
+                "model_name",
+                "prompt_tokens",
+                "completion_tokens",
+                "total_tokens",
+                "cost_amount",
+                "currency_code",
+                "account_name",
+                "service_name",
+                "upstream_api",
+                "team_name",
+                "group_name",
+                "company_name",
+            ]
+        )
+        + ")"
+    )
+    with pytest.raises(RuntimeError, match="both llm_usage_records"):
+        SqlLedgerStore(connection, paramstyle="qmark")
+
+
+def test_orphaned_legacy_generation_is_adopted_and_dropped() -> None:
+    """A legacy-only table is rebuilt into the normalized schema, then dropped."""
+    connection = sqlite3.connect(":memory:")
+    legacy_columns = [
+        "usage_record_id",
+        "created_at",
+        "workflow_run_id",
+        "request_channel",
+        "route_mode",
+        "provider_name",
+        "model_name",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "cost_amount",
+        "currency_code",
+        "account_name",
+        "service_name",
+        "upstream_api",
+        "team_name",
+        "group_name",
+        "company_name",
+    ]
+    connection.execute(
+        "CREATE TABLE llm_usage_records_legacy (" + ", ".join(legacy_columns) + ")"
+    )
+    record = _guard_usage_record()
+    flat = record.as_dict()
+    connection.execute(
+        "INSERT INTO llm_usage_records_legacy VALUES (?" + ",?" * 17 + ")",
+        tuple(flat[column] for column in legacy_columns[:12])
+        + ("acme_corp", "gateway_service", "openai", "model_one", "team_alpha", "group_beta"),
+    )
+    connection.commit()
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    rows = store.query(None, None)
+    assert len(rows) == 1
+    assert rows[0]["usage_record_id"] == "usage_guard_t1"
+    legacy_tables = connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name='llm_usage_records_legacy'"
+    ).fetchone()[0]
+    assert legacy_tables == 0
+
+
+def test_append_is_atomic_on_autocommit_connection(monkeypatch) -> None:
+    """A mid-append failure on an autocommit sqlite connection leaves no partial row."""
+    connection = sqlite3.connect(":memory:", isolation_level=None)
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    original = store._insert_normalized_attribution
+    armed = [True]
+
+    def explode(cur, row):
+        original(cur, row)
+        if armed[0]:
+            raise RuntimeError("simulated mid-append failure")
+
+    monkeypatch.setattr(store, "_insert_normalized_attribution", explode)
+    with pytest.raises(RuntimeError, match="simulated mid-append failure"):
+        store.append(_guard_usage_record())
+    assert connection.execute("SELECT COUNT(*) FROM llm_usage_records").fetchone()[0] == 0
+    assert (
+        connection.execute("SELECT COUNT(*) FROM usage_record_attributions").fetchone()[0] == 0
+    )
+    armed[0] = False
+    store.append(_guard_usage_record(usage_record_id="usage_guard_t2"))
+    assert len(store.query(None, None)) == 1
 
 
 def test_sql_ledger_rejects_unknown_parameter_style() -> None:
