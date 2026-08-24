@@ -78,7 +78,6 @@ def test_http_responses_accepts_valid_tools_and_auto_choice() -> None:
         server.shutdown()
         thread.join(timeout=5)
 
-
 def test_http_responses_accepts_empty_tools_array_as_noop() -> None:
     """SDKs often send tools: [] when no tools are configured — honest no-op."""
     server, thread, port = _server()
