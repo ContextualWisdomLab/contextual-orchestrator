@@ -86,6 +86,7 @@ class CostRoutingCoordinator:
         # embeddings batch state: job handle + submitted requests + cached doc,
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
         self._embedding_jobs: Dict[str, BatchJob] = {}
+        self._embedding_models: Dict[str, str] = {}
         self._embedding_requests: Dict[str, List[EmbeddingBatchRequest]] = {}
         self._embedding_input_counts: Dict[str, int] = {}
         self._embedding_part_counts: Dict[str, List[int]] = {}
@@ -294,6 +295,7 @@ class CostRoutingCoordinator:
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
+        self._embedding_models[job.job_id] = model
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
@@ -475,17 +477,19 @@ class CostRoutingCoordinator:
             return cached
 
         job = self._require_embedding_job(batch_id)
+        requests = self._embedding_requests.get(batch_id, [])
+        model_name = self._embedding_models.get(batch_id, "contextual-orchestrator")
         status = self.embedding_batch_backend.poll(job)
         if not status.get("is_complete"):
             return {
                 "batch_id": batch_id,
                 "status": status.get("status") or job.status,
                 "backend": job.backend,
+                "model": model_name,
                 "embeddings": None,
             }
 
         items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
-        requests = self._embedding_requests.get(batch_id, [])
         request_by_custom_id = {request.custom_id: request for request in requests}
         input_count = self._embedding_input_counts.get(batch_id, len(requests))
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)
@@ -514,7 +518,6 @@ class CostRoutingCoordinator:
         token_counts: List[int] = []
         total_cost_amount = 0.0
         currency_code = "USD"
-        model_name = "contextual-orchestrator"
         for source_index in range(input_count):
             parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])
             if not parts:
