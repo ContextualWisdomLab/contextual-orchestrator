@@ -31,6 +31,19 @@ if TYPE_CHECKING:
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 
 
+def _provider_discovery_error_code(exc: Exception) -> str:
+    """Map provider failures to stable codes without retaining provider response text."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"http_status_{exc.code}"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, urllib.error.URLError):
+        return "transport_error"
+    if isinstance(exc, ValueError):
+        return "invalid_response"
+    return "provider_error"
+
+
 @dataclass(frozen=True)
 class ProviderModelSource:
     """Where and how to discover one provider's models."""
@@ -42,6 +55,7 @@ class ProviderModelSource:
     auth_scheme: str = "Bearer"
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
+    capabilities: tuple[str, ...] = ()
 
 
 # NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
@@ -56,20 +70,23 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openrouter",
         credential_name="OPENROUTER_API_KEY",
-        list_url="https://openrouter.ai/api/v1/models",
+        list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
         chat_base_url="https://openrouter.ai/api/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
         credential_name="NVIDIA_NIM_API_KEY",
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="nvidia_nim_sub",
         credential_name="NVIDIA_NIM_API_KEY_SUB",
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="bytez",
@@ -79,6 +96,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         auth_scheme="Key",
         style="bytez",
         task_filter="chat",
+        capabilities=("chat",),
     ),
 )
 
@@ -92,6 +110,7 @@ class DiscoveredModel:
     credential_name: str
     chat_base_url: str
     auth_scheme: str
+    capabilities: tuple[str, ...] = ()
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
@@ -100,9 +119,10 @@ class DiscoveredModel:
 class ProviderDiscoveryError(RuntimeError):
     """Raised when a provider's model list could not be fetched (network/auth failure)."""
 
-    def __init__(self, provider_name: str, detail: str) -> None:
+    def __init__(self, provider_name: str, error_code: str) -> None:
         self.provider_name = provider_name
-        super().__init__(f"model discovery failed for provider {provider_name!r}: {detail}")
+        self.error_code = error_code
+        super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
@@ -195,7 +215,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if type(model_id) is not str or not model_id or not is_general_chat_agent_model_id(model_id):
+        if not _source_model_id_is_allowed(model_id, source):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         discovered.append(
@@ -205,6 +225,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
+                capabilities=source.capabilities,
                 prompt_price_per_1k=_price_per_1k(pricing.get("prompt")),
                 completion_price_per_1k=_price_per_1k(pricing.get("completion")),
             )
@@ -219,7 +240,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if type(model_id) is not str or not model_id or not is_general_chat_agent_model_id(model_id):
+        if not _source_model_id_is_allowed(model_id, source):
             continue
         discovered.append(
             DiscoveredModel(
@@ -228,11 +249,21 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
+                capabilities=source.capabilities,
                 # Bytez prices by GPU-second (meterPrice), not per-token; leaving
                 # per-1k pricing unset is more honest than a misleading estimate.
             )
         )
     return _deduplicate_discovered_models(discovered)
+
+
+def _source_model_id_is_allowed(model_id: object, source: ProviderModelSource) -> bool:
+    """Admit explicit non-chat catalogs while keeping inferred catalogs chat-safe."""
+    if type(model_id) is not str or not model_id:
+        return False
+    if source.capabilities and "chat" not in source.capabilities:
+        return True
+    return is_general_chat_agent_model_id(model_id)
 
 
 def discover_provider_models(
@@ -248,7 +279,7 @@ def discover_provider_models(
     try:
         payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:  # pragma: no cover - network path
-        raise ProviderDiscoveryError(source.provider_name, str(exc)) from exc
+        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)
@@ -298,7 +329,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
-        tags=("discovered",),
+        tags=("discovered", *discovered.capabilities),
         priority=priority,
         disabled=True,
     )

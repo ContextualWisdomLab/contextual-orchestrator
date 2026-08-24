@@ -30,6 +30,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .tool_fallback import ToolFallbackStoppedError
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -141,6 +142,55 @@ class RequestError(Exception):
         self.code = code
         self.message = message
         self.detail = detail or {}
+
+
+def _request_body_size(headers: Any, max_body_bytes: int) -> int:
+    """Return a safe JSON body length or reject ambiguous HTTP framing.
+
+    The stdlib handler does not decode transfer codings for this API. A single
+    ASCII decimal ``Content-Length`` is therefore the only accepted framing
+    signal; duplicate, comma-joined, negative, malformed, oversized, or
+    transfer-coded requests fail closed before any body read.
+    """
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        transfer_values = get_all("transfer-encoding")
+        length_values = get_all("content-length")
+    else:  # pragma: no cover - production uses email.message.Message headers
+        transfer_value = headers.get("transfer-encoding")
+        length_value = headers.get("content-length")
+        transfer_values = None if transfer_value is None else [transfer_value]
+        length_values = None if length_value is None else [length_value]
+
+    if transfer_values is not None:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoding request framing is not supported",
+        )
+    if length_values is None:
+        return 0
+    if len(length_values) != 1 or "," in length_values[0]:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must appear exactly once",
+        )
+    value = length_values[0].strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must be a non-negative decimal value",
+        )
+    normalized = value.lstrip("0") or "0"
+    maximum = str(max_body_bytes)
+    if len(normalized) > len(maximum) or (
+        len(normalized) == len(maximum) and normalized > maximum
+    ):
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    body_size = int(normalized)
+    return body_size
 
 
 @dataclass
@@ -287,6 +337,27 @@ def _reject_excessive_json_nesting(payload: bytes, max_depth: int = MAX_JSON_NES
                 raise RequestError(400, "invalid_json", "request body JSON nesting exceeds the allowed depth")
         elif char in "}]":
             depth -= 1
+
+
+TOOL_FALLBACK_STOPPED_STATUS = 409
+TOOL_FALLBACK_STOPPED_CODE = "tool_execution_stopped"
+TOOL_FALLBACK_STOPPED_MESSAGE = (
+    "tool execution stopped because no safe retry or failover was available"
+)
+
+
+def _tool_fallback_error_detail(error: ToolFallbackStoppedError) -> dict[str, Any]:
+    """Return secret-free structured evidence for one fail-closed tool decision."""
+    decision = error.decision
+    detail = {
+        "action": decision.action.value,
+        "failure_kind": decision.kind.value,
+        "reason_code": decision.reason_code,
+    }
+    observed_kind = decision.observed_kind or decision.kind
+    if observed_kind is not decision.kind:
+        detail["observed_failure_kind"] = observed_kind.value
+    return detail
 
 
 def _coerce_json(payload: bytes) -> dict[str, Any]:
@@ -1785,7 +1856,9 @@ def _validate_mode(mode: Any) -> str:
 
 
 
-def _require_pool_model(orchestrator: Any, model_name: str) -> None:
+def _require_pool_model(
+    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
@@ -1795,7 +1868,9 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
-        if getattr(agent, "model", None) == model_name:
+        if getattr(agent, "model", None) == model_name and (
+            required_capability is None or required_capability in getattr(agent, "tags", ())
+        ):
             return
     raise RequestError(
         400,
@@ -4169,15 +4244,28 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
     return value
 
 
-def _validate_embeddings_model(body: dict[str, Any]) -> str:
-    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars.
+def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = None) -> str:
+    """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface.
+    form/JS model names bind to the pool id on every surface. An omitted model
+    is resolved by the orchestrator's explicit ``embedding`` capability pool;
+    no consumer-side sentinel model is accepted.
     """
+    if body.get("model") is None:
+        if orchestrator is None:
+            raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
+        try:
+            model = orchestrator.select_capability_agent("embedding").model
+        except (RuntimeError, ValueError) as exc:
+            raise RequestError(
+                503,
+                "embedding_unavailable",
+                "no enabled embedding-capable agent is available",
+            ) from exc
+        body["model"] = model
+        return model
     model = body.get("model")
-    if model is None:
-        raise RequestError(400, "invalid_model", "model is required")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -4419,7 +4507,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Handle authenticated orchestration, administration, and health routes."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -4769,6 +4860,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Apply an authenticated agent-pool worker update."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4792,6 +4884,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Delete an authenticated agent-pool worker resource."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4812,6 +4905,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -5216,10 +5310,10 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
-                    model_name = _validate_embeddings_model(body)
+                    model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5305,16 +5399,8 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    # Require model — silent default to contextual-orchestrator was an
-                    # honesty gap for naruon/batch clients that omit the field.
-                    if "model" not in body:
-                        raise RequestError(
-                            400,
-                            "invalid_model",
-                            "model is required on /v1/batch/embeddings",
-                        )
-                    model_name = _validate_embeddings_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5601,6 +5687,13 @@ def build_server(
                 self._send_error(404, "route_not_found", "not found")
             except json.JSONDecodeError:
                 self._send_error(400, "invalid_json", "request body is not valid JSON")
+            except ToolFallbackStoppedError as exc:
+                self._send_error(
+                    TOOL_FALLBACK_STOPPED_STATUS,
+                    TOOL_FALLBACK_STOPPED_CODE,
+                    TOOL_FALLBACK_STOPPED_MESSAGE,
+                    _tool_fallback_error_detail(exc),
+                )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except RequestError as exc:
@@ -5648,13 +5741,24 @@ def build_server(
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+            try:
+                body_size = _request_body_size(self.headers, security.max_body_bytes)
+            except RequestError:
+                # Do not let a peer reuse a connection after an ambiguous frame.
+                self.close_connection = True
+                raise
             raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                self.close_connection = True
+                raise RequestError(
+                    400,
+                    "invalid_request_framing",
+                    "request body ended before content-length",
+                )
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Suppress default request logging to keep service output structured."""
             return
 
         def _send_error(
@@ -5731,6 +5835,20 @@ def build_server(
                     for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
+                except ToolFallbackStoppedError as exc:
+                    detail = {
+                        "request_id": uuid.uuid4().hex,
+                        **_tool_fallback_error_detail(exc),
+                    }
+                    payload = _error_payload(
+                        TOOL_FALLBACK_STOPPED_CODE,
+                        TOOL_FALLBACK_STOPPED_MESSAGE,
+                        detail,
+                    )
+                    self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                    self._write_sse(frame({}, finish="error"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     self._write_sse(frame({}, finish="error"))
                 self._write_sse("data: [DONE]\n\n")

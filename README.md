@@ -307,6 +307,7 @@ python tests/test_chat_model_capability_isolation.py
 python tests/test_chat_transport_role_separation.py
 python tests/test_chat_capability_unknown_identifiers.py
 python tests/test_chat_passthrough_capability_isolation.py
+python tests/test_tool_execution_fallback.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py
