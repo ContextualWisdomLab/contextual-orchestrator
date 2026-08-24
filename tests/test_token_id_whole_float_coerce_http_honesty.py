@@ -8,16 +8,16 @@ still fails closed on bools, negatives, and non-integral floats.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import (  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import (
     SecurityConfig,
     _coerce_embedding_token_sequence,
     _coerce_token_id,
@@ -32,7 +32,7 @@ _TEST_AUTH_TOKEN = "token_id_whole_float_coerce_http_honesty_token"  # noqa: S10
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "embedding"))]
     )
 
 
