@@ -102,7 +102,6 @@ def test_http_responses_accepts_null_max_tool_calls_and_functions() -> None:
                 "input": "max tool null",
                 "max_tool_calls": None,
                 "function_call": None,
-                "functions": [],
             },
         )
         assert status == 200, body
