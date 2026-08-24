@@ -1,5 +1,5 @@
 ---
-id: "0011"
+id: "0025"
 title: "Keep the admin console inline stdlib HTML; defer Storybook/component tooling"
 status: accepted
 proposed_date: "2026-08-23"
@@ -142,7 +142,7 @@ decision, since it was never a code change.
 * contextual_orchestrator/admin.py (scope reference only — no change)
 * docs/figma_artifacts.md
 * docs/product-technical-gap-baseline.md
-* docs/planning/adrs/0011-admin-console-ui-tooling-boundary.md
+* docs/planning/adrs/0025-admin-console-ui-tooling-boundary.md
 
 ## More Information
 
