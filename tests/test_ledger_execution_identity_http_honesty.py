@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import (  # noqa: E402
+from contextual_orchestrator import (
     CostLedger,
     CostRoutingCoordinator,
     InMemoryConfigStore,
@@ -20,7 +20,7 @@ from contextual_orchestrator import (  # noqa: E402
     PriceEntry,
     TaskOrchestrator,
 )
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TEST_AUTH_TOKEN = "ledger_execution_identity_http_honesty_token"  # noqa: S105
 
@@ -32,7 +32,7 @@ def _serve():
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning", "coding", "writing"),
+            tags=("reasoning", "coding", "writing", "embedding"),
             priority=1,
         )
     ]
