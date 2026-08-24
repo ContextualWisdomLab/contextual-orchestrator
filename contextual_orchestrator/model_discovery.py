@@ -30,6 +30,19 @@ if TYPE_CHECKING:
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 
 
+def _provider_discovery_error_code(exc: Exception) -> str:
+    """Map provider failures to stable codes without retaining provider response text."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"http_status_{exc.code}"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, urllib.error.URLError):
+        return "transport_error"
+    if isinstance(exc, ValueError):
+        return "invalid_response"
+    return "provider_error"
+
+
 @dataclass(frozen=True)
 class ProviderModelSource:
     """Where and how to discover one provider's models."""
@@ -99,9 +112,10 @@ class DiscoveredModel:
 class ProviderDiscoveryError(RuntimeError):
     """Raised when a provider's model list could not be fetched (network/auth failure)."""
 
-    def __init__(self, provider_name: str, detail: str) -> None:
+    def __init__(self, provider_name: str, error_code: str) -> None:
         self.provider_name = provider_name
-        super().__init__(f"model discovery failed for provider {provider_name!r}: {detail}")
+        self.error_code = error_code
+        super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
@@ -191,7 +205,7 @@ def discover_provider_models(
     try:
         payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:  # pragma: no cover - network path
-        raise ProviderDiscoveryError(source.provider_name, str(exc)) from exc
+        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)
