@@ -1169,7 +1169,8 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                    choices = chunk.get("choices") or [{}]
+                    delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
