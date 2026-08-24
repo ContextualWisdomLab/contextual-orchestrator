@@ -5666,46 +5666,83 @@ def build_server(
         ) -> None:
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
+        def _write_response(self, writer: Callable[[], None]) -> None:
+            """Run a response-writing callback, swallowing a dead-peer disconnect.
+
+            A client that gave up waiting (e.g. on a slow orchestration run)
+            closes its end of the socket before this thread finishes writing.
+            The write then raises BrokenPipeError/ConnectionError/OSError --
+            there is nothing left to deliver, so this is not a server error.
+            Without this guard, that exception propagates out of do_POST's
+            try block into its own `except Exception: self._send_error(...)`
+            handler, which calls back into a send method on the same closed
+            socket and raises again -- uncaught this time, crashing the
+            request-handling thread (visible as a second, unhandled
+            BrokenPipeError in server logs after the first).
+            """
+            try:
+                writer()
+            except (BrokenPipeError, ConnectionError, OSError):
+                return
+
         def _send(self, payload: dict[str, Any], status: int = 200) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("content-type", "application/json; charset=utf-8")
-            self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
-            self.end_headers()
-            self.wfile.write(raw)
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", "application/json; charset=utf-8")
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(raw)
+
+            self._write_response(_write)
 
         def _send_text(self, payload: str, content_type: str, status: int = 200) -> None:
             raw = payload.encode("utf-8")
-            self.send_response(status)
-            self.send_header("content-type", content_type)
-            self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
-            self.end_headers()
-            self.wfile.write(raw)
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(raw)
+
+            self._write_response(_write)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
             raw = body.encode("utf-8")
-            self.send_response(status)
-            self.send_header("content-type", "text/event-stream; charset=utf-8")
-            self.send_header("cache-control", "no-cache")
-            self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
-            self.end_headers()
-            self.wfile.write(raw)
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", "text/event-stream; charset=utf-8")
+                self.send_header("cache-control", "no-cache")
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(raw)
+
+            self._write_response(_write)
 
         def _begin_sse(self) -> None:
             # Incremental SSE: no content-length; the connection close delimits the body.
-            self.send_response(200)
-            self.send_header("content-type", "text/event-stream; charset=utf-8")
-            self.send_header("cache-control", "no-cache")
-            self.send_header("connection", "close")
-            self._send_security_headers()
-            self.end_headers()
+            def _write() -> None:
+                self.send_response(200)
+                self.send_header("content-type", "text/event-stream; charset=utf-8")
+                self.send_header("cache-control", "no-cache")
+                self.send_header("connection", "close")
+                self._send_security_headers()
+                self.end_headers()
+
+            self._write_response(_write)
 
         def _write_sse(self, frame: str) -> None:
-            self.wfile.write(frame.encode("utf-8"))
-            self.wfile.flush()
+            def _write() -> None:
+                self.wfile.write(frame.encode("utf-8"))
+                self.wfile.flush()
+
+            self._write_response(_write)
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
