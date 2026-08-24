@@ -1,6 +1,12 @@
 # Atheris coverage-guided job deps. Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.12 --universal -o fuzz/requirements-atheris.txt
-# Atheris 3.1.0 has wheels for the Python 3.12 fuzz runner and the central
-# coverage-evidence image; 3.0.0 is no longer available to that image.
+# Atheris 3.1.0 is pinned to the repository's CPython 3.12 fuzz runner. Other
+# interpreters must skip this optional native fuzz dependency until a compatible
+# wheel is available.
 pip
-atheris==3.1.0
+# Atheris coverage-guided job deps. Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.12 --universal -o fuzz/requirements-atheris.txt
+# Atheris 3.1.0 is pinned to the repository's CPython 3.12 fuzz runner. Other
+# interpreters must skip this optional native fuzz dependency until a compatible
+# wheel is available.
+pip
+atheris==3.1.0; python_full_version == "3.12.*"
 cryptography>=43.0
