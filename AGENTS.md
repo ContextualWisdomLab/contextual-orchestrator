@@ -56,11 +56,13 @@ push or open a PR.
 - The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
-- **Known deviation to migrate:** this repo currently resolves provider API
-  keys from env — `ModelClient` reads `os.environ.get(agent.api_key_env)` in
-  `contextual_orchestrator/orchestrator.py` (and `CONTEXTUAL_ORCHESTRATOR_*`
-  tokens in `__main__.py`). Move these to KV-backed reads; keep env only as the
-  bootstrap path that seeds the KV.
+- Provider API keys are already resolved through the KV credential registry
+  (`get_credential`) in `contextual_orchestrator/orchestrator.py`, and server
+  bearer tokens are resolved the same way in `contextual_orchestrator/__main__.py`.
+  `api_key_env` is preserved as a legacy field whose string value is treated as
+  a KV credential name, not an environment variable to read. The only remaining
+  permitted environment use is bootstrap transport to select and unlock the KV
+  (see `docs/kv-credentials.md`).
 
 ### This repo: the org LLM gateway
 
@@ -68,9 +70,11 @@ push or open a PR.
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
-- Its `ModelClient` currently reads `os.environ.get(agent.api_key_env)` — this
-  is the KV-principle deviation above. Resolve the API key (including the org
-  `OPENAI_API_KEY`) from the **KV / credential registry**, not env.
+- Provider API keys and server bearer tokens are resolved from the **KV /
+  credential registry** (`get_credential`), not from `os.environ`. Ensure the
+  org `OPENAI_API_KEY` (and `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`) is seeded into the KV at
+  bootstrap time so auto-discovery and routing can use them.
 - **Policy change (2026-08-18, explicit org decision, supersedes the prior
   "stays on GitHub Models" rule):** OpenCode, Noema, and Strix — the org's
   three-stage CI review pipeline defined in `ContextualWisdomLab/.github`
