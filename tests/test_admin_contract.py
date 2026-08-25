@@ -59,6 +59,8 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'id="sessionToken"' in ADMIN_HTML
     assert 'credentials: "same-origin"' in ADMIN_HTML
     assert '"/admin/session"' in ADMIN_HTML
+    assert 'finally {\n        els.sessionToken.value = "";' in ADMIN_HTML
+    assert 'headers: {"origin": window.location.origin}' not in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
     assert "Mask email, phone" not in ADMIN_HTML
     assert "Field encryption and audited release" in ADMIN_HTML

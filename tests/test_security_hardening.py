@@ -102,6 +102,13 @@ def test_admin_session_is_opaque_scoped_and_revocable() -> None:
 
         status, state, _ = request_json(f"{base}/admin/state", "GET", headers={"cookie": cookie_pair})
         assert status == 200 and "agents" in state
+        status, evaluation, _ = request_json(
+            f"{base}/api/v1/evaluation_runs",
+            "POST",
+            body={"prompts": ["evaluate this"]},
+            headers={"cookie": cookie_pair, "origin": base},
+        )
+        assert status == 201 and evaluation["prompt_count"] == 1
         status, _, _ = request_json(f"{base}/v1/models", "GET", headers={"cookie": cookie_pair})
         assert status == 401
         status, body, _ = request_json(

@@ -1586,31 +1586,32 @@ Summarize this research thread and verify claims.</textarea>
       state.last = await res.json();
       state.recent_workflow_runs = [state.last, ...(state.recent_workflow_runs || [])].slice(0, 8);
       await refreshAnalytics();
-      await refreshReadiness();
       renderTrace(state.last);
       renderSecondaryViews();
     }
     async function startSession(event) {
       event.preventDefault();
       const token = els.sessionToken.value;
-      const res = await apiFetch("/admin/session", {
-        method: "POST",
-        headers: {"content-type": "application/json"},
-        body: JSON.stringify({token})
-      });
-      const result = await res.json();
-      if (res.ok) {
+      try {
+        const res = await apiFetch("/admin/session", {
+          method: "POST",
+          headers: {"content-type": "application/json"},
+          body: JSON.stringify({token})
+        });
+        const result = await res.json();
+        if (res.ok) {
+          els.sessionStatus.textContent = t("session_status_ready");
+          await load();
+        } else {
+          els.sessionStatus.textContent = result.error?.message || t("session_status_missing");
+        }
+      } finally {
         els.sessionToken.value = "";
-        els.sessionStatus.textContent = t("session_status_ready");
-        await load();
-      } else {
-        els.sessionStatus.textContent = result.error?.message || t("session_status_missing");
       }
     }
     async function endSession() {
       const res = await apiFetch("/admin/session", {
-        method: "DELETE",
-        headers: {"origin": window.location.origin}
+        method: "DELETE"
       });
       els.sessionStatus.textContent = res.ok ? t("session_status_missing") : "Session logout failed";
     }
@@ -1624,7 +1625,6 @@ Summarize this research thread and verify claims.</textarea>
       const result = await res.json();
       els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
       await refreshAnalytics();
-      await refreshReadiness();
       renderSecondaryViews();
     }
     els.agentSearch.addEventListener("input", renderAgents);

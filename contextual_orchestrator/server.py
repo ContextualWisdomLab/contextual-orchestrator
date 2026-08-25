@@ -5081,7 +5081,12 @@ def build_server(
                         extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
                     )
                     return
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
+                scope = (
+                    "admin"
+                    if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
+                    or path.startswith("/api/v1/agent_pools/")
+                    else "inference"
+                )
                 self._authorize(scope, state_changing=True)
                 body = self._read_json()
 
