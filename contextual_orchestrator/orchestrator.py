@@ -1992,9 +1992,12 @@ class TaskOrchestrator:
         model_name: str = "contextual-orchestrator",
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
-        if model_name != "contextual-orchestrator" or mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
+        if mode == "route" or (
+            mode == "auto"
+            and (model_name != "contextual-orchestrator" or not self._needs_workflow(text))
+        ):
             return self.route_once(messages, model_name=model_name)
-        return self.conduct(messages)
+        return self.conduct(messages, model_name=model_name)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
@@ -2016,9 +2019,17 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
-            parts.append(delta)
-            yield delta
+        started_at = time.perf_counter()
+        try:
+            for delta in self.client.stream_chat(agent, messages):
+                parts.append(delta)
+                yield delta
+        except Exception:
+            if agent.group_name:
+                self._group_router.observe_failure(agent.id)
+            raise
+        if agent.group_name:
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -2502,6 +2513,8 @@ class TaskOrchestrator:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        if agent.group_name:
+            self._group_router.register_member(agent.id)
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
@@ -2608,11 +2621,18 @@ class TaskOrchestrator:
             "trace": [row],
         }
 
-    def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def conduct(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
         plan_source = "template"
-        if self.policy.workflow_planning == "generated":
+        if model_name != "contextual-orchestrator":
+            steps = self._plan(task, model_name=model_name)
+        elif self.policy.workflow_planning == "generated":
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
@@ -2744,11 +2764,14 @@ class TaskOrchestrator:
             raise ValueError("final step must produce the answer")
         return steps
 
-    def _plan(self, task: str) -> list[WorkflowStep]:
-        thinker = self._select_agent(task, "thinker").id
-        worker = self._select_agent(task, "worker").id
-        verifier = self._select_agent(task, "verifier").id
-        synthesizer = self._select_agent(task, "synthesizer").id
+    def _plan(
+        self, task: str, *, model_name: str = "contextual-orchestrator"
+    ) -> list[WorkflowStep]:
+        requested = self._requested_agent(model_name)
+        thinker = (requested or self._select_agent(task, "thinker")).id
+        worker = (requested or self._select_agent(task, "worker")).id
+        verifier = (requested or self._select_agent(task, "verifier")).id
+        synthesizer = (requested or self._select_agent(task, "synthesizer")).id
         return [
             WorkflowStep(0, "thinker", thinker, "Decompose the task and identify the best execution strategy."),
             WorkflowStep(1, "worker", worker, "Execute the core task using the plan.", (0,)),
@@ -2956,6 +2979,8 @@ class TaskOrchestrator:
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
+        if primary.group_name:
+            ranked = [agent for agent in ranked if agent.group_name == primary.group_name]
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]

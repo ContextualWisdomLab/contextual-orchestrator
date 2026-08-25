@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
   issues: write
 
@@ -25,6 +25,10 @@ jobs:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest
     timeout-minutes: 55
+    permissions:
+      contents: write # required for reviewed branch fixes; scoped to this job
+      pull-requests: write
+      issues: write
     env:
       # Bootstrap transport only: these flow into the process-local KV registry
       # (see scripts/ci/serve_seeded_gateway.py); the gateway never reads them
@@ -35,8 +39,6 @@ jobs:
       BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
       NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
       NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-      GATEWAY_BEARER_TOKEN: ${{ secrets.GATEWAY_BEARER_TOKEN || format('loop-{0}', github.run_id) }}
-      OPENCODE_VERSION: "1.18.22"
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -54,17 +56,21 @@ jobs:
           node-version: "22"
 
       - name: Install pinned runtime dependencies
-        run: |
-          python -m pip install --require-hashes -r fuzz/requirements-property.txt
-          python -m pip install --no-deps .
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
 
       - name: Install OpenCode CLI
-        run: npm install --global "opencode-ai@${OPENCODE_VERSION}"
+        run: npm ci --ignore-scripts
+
+      - name: Generate ephemeral loopback gateway token
+        run: |
+          gateway_token=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+          echo "::add-mask::$gateway_token"
+          echo "GATEWAY_BEARER_TOKEN=$gateway_token" >> "$GITHUB_ENV"
 
       - name: Start the contextual-orchestrator gateway with auto-discovery
         run: |
           set -euo pipefail
-          nohup python scripts/ci/serve_seeded_gateway.py \
+          nohup python -m scripts.ci.serve_seeded_gateway \
             --serve \
             --agents examples/agents.mock.json \
             --auto-discover-model-agents \
@@ -109,7 +115,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          opencode run --model contextual_orchestrator_gateway/contextual-orchestrator \
+          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/contextual-orchestrator \
             "$(cat .github/opencode/hourly-loop-prompt.md)"
 
       - name: Dump gateway log on failure
