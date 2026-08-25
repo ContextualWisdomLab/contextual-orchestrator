@@ -23,8 +23,9 @@ post intermediate progress reports. Priorities, in order:
    open a focused fix PR (one concern per PR).
 
 3. Product gaps. If no PRs remain open, pick the highest-leverage gap from
-   docs/product-technical-gap-baseline.md, implement it with tests + docstrings,
-   and open a PR that updates the baseline file.
+   docs/product_planning.md only after reading it, then reconcile the choice
+   with docs/product-technical-gap-baseline.md. Implement it with tests +
+   docstrings and open a PR that updates the baseline file.
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.
@@ -32,6 +33,9 @@ Rules:
   snake_case two-word object names, 100% test/docstring coverage intent,
   paper-grounded decisions with APA citations in docs.
 - Never weaken security gates; never disable required workflows.
+- Web changes must preserve asynchronous responsiveness. Run the checked-in k6
+  end-to-end scenario, record the measured concurrency envelope and bottleneck,
+  and improve only bottlenecks demonstrated by before/after evidence.
 - Do not touch COPILOT_GITHUB_TOKEN or the existing review-agent key scheme.
 - Do not invent routing weights, heuristics, or rules of thumb. Preserve measured
   provider evidence and paper-grounded calibration; record missing evidence as a
