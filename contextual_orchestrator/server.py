@@ -5931,10 +5931,7 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    if body.get("stream") is True:
-                        self._send_sse(responses_sse_body(proxied))
-                    else:
-                        self._send(proxied)
+                    self._send(proxied)
                     return
 
                 if path == "/admin/simulate":
