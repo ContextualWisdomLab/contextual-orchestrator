@@ -2,10 +2,13 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+APA 7th citations (titles retained for paper-contract search):
+
+- Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+- Sakana AI. (2026). *Sakana Fugu Technical Report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://arxiv.org/abs/2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
+- Baker, F. B. (2001). *The basics of item response theory* (2nd ed.). ERIC Clearinghouse on Assessment and Evaluation. https://eric.ed.gov/?id=ED458219
 
 ## What The Architecture Is
 
@@ -50,6 +53,14 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.reasoning_effort_profile`: versioned per-role
+  compute profiles (issue #568). Fugu's latency-versus-quality split, TRINITY
+  roles, and Conductor steps/access lists become an explicit catalog. Sampling
+  temperature is not reasoning effort. Production route/conduct defaults stay
+  locked until `production_default_change_allowed` passes a true-θ RMSE gate.
+  The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
+  Buyer next action: run `python -m pytest -q tests/test_reasoning_effort_profile.py`
+  and keep live defaults unchanged while that gate is false.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses a deterministic capability-hint heuristic only for worker/role routing so the repo runs without training data, GPUs, or vendor credentials. It is never an answer-quality, verification, or accept/reject judgment: verifier decisions must use the structured model judge and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
 
