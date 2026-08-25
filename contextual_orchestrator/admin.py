@@ -207,7 +207,7 @@ ADMIN_TRANSLATIONS = {
         "model_header": "Model",
         "tags_header": "Tags",
         "status_header": "Status",
-        "capacity_header": "Capacity",
+        "capacity_header": "EWMA latency",
         "success_header": "Success",
         "status_healthy": "Healthy",
         "status_degraded": "Degraded",
@@ -441,7 +441,7 @@ ADMIN_TRANSLATIONS = {
         "model_header": "모델",
         "tags_header": "태그",
         "status_header": "상태",
-        "capacity_header": "용량",
+        "capacity_header": "EWMA 지연 시간",
         "success_header": "성공률",
         "status_healthy": "정상",
         "status_degraded": "저하",
@@ -865,7 +865,7 @@ ADMIN_HTML = r"""<!doctype html>
           </div>
           <table>
             <thead>
-              <tr><th data-i18n="agent_header">Agent</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Capacity</th><th data-i18n="success_header">Success</th></tr>
+              <tr><th data-i18n="agent_header">Agent</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">EWMA latency</th><th data-i18n="success_header">Success</th></tr>
             </thead>
             <tbody id="agents"></tbody>
           </table>

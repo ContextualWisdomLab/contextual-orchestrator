@@ -1948,22 +1948,28 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, mode, model_name)
+        key = self._cache_key(messages, mode, model_name)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, mode, model_name)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(self, messages: list[ChatMessage], mode: str, model_name: str) -> dict[str, Any]:
         text = self._latest_user_text(messages)
-        if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages)
+        if model_name != "contextual-orchestrator" or mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
+            return self.route_once(messages, model_name=model_name)
         return self.conduct(messages)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
@@ -1971,14 +1977,20 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        *,
+        model_name: str = "contextual-orchestrator",
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
         parts: list[str] = []
         for delta in self.client.stream_chat(agent, messages):
             parts.append(delta)
@@ -2010,17 +2022,33 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        model_name: str = "contextual-orchestrator",
+    ) -> str:
+        payload = json.dumps(
+            {"mode": mode, "model": model_name, "messages": messages},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(messages, mode=mode, model_name=model_name)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -2513,10 +2541,15 @@ class TaskOrchestrator:
         )
         return {"removed": worker_agent_id}
 
-    def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def route_once(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
         start = time.perf_counter()
         answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
         latency_ms = (time.perf_counter() - start) * 1000

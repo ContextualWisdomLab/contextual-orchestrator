@@ -64,6 +64,21 @@ def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> No
     assert orchestrator._ranked_agents("", "worker")[-1] == other
 
 
+def test_explicit_group_alias_routes_plain_completion_to_measured_member() -> None:
+    first = ModelAgent("provider_one_model", "vendor-one/model-a", group_name="shared_reasoning_model")
+    second = ModelAgent("provider_two_model", "vendor-two/model-b", group_name="shared_reasoning_model")
+    orchestrator = TaskOrchestrator([first, second])
+    orchestrator._group_router.observe_failure(first.id)
+    orchestrator._group_router.observe_success(second.id, 0.1)
+
+    result = orchestrator.complete(
+        [{"role": "user", "content": "route explicitly"}],
+        model_name="shared-reasoning-model",
+    )
+
+    assert result["trace"][0]["agent_id"] == second.id
+
+
 def test_group_ranking_keeps_role_excluded_members_after_eligible_members() -> None:
     eligible = _agent("eligible_member", "vendor/eligible")
     excluded = ModelAgent(

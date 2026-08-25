@@ -363,7 +363,7 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
     price_book.set_price(PriceEntry("openrouter", "known", 0.1, 0.1))
 
     assert select_cheapest_discovered_agent([unknown, known], price_book) is known
-    assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known, unknown]
+    assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known]
 
 
 def test_select_top_n_cheapest_discovered_agents_zero_limit_returns_empty() -> None:

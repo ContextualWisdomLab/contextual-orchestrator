@@ -172,6 +172,19 @@ def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
         status, listed = _call(base, "GET", token)
         assert status == 200 and listed["total_count"] == 1
 
+        status, _ = _call(f"{base}/vendor-neutral-example", "PATCH", token, {"member_agent_ids": ["general_agent"]})
+        assert status == 200
+        status, completion = _call(
+            base.replace("/api/v1/model_groups", "/v1/chat/completions"),
+            "POST",
+            token,
+            {
+                "model": "vendor-neutral-example",
+                "messages": [{"role": "user", "content": "route the logical model"}],
+            },
+        )
+        assert status == 200 and completion["model"] == "vendor-neutral-example"
+
         status, updated = _call(f"{base}/vendor-neutral-example", "PATCH", token, {"member_agent_ids": ["coding_agent"]})
         assert status == 200 and updated["member_agent_ids"] == ["coding_agent"]
 

@@ -166,7 +166,12 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(messages, mode=mode, workflow_run_id=workflow_run_id)
+        result = self.orchestrator.run(
+            messages,
+            mode=mode,
+            workflow_run_id=workflow_run_id,
+            model_name=model_name,
+        )
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),

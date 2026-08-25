@@ -31,6 +31,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .tool_fallback import ToolFallbackStoppedError
+from .model_group import canonical_group_name
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -1861,7 +1862,7 @@ def _validate_mode(mode: Any) -> str:
 
 def _require_pool_model(
     orchestrator: Any, model_name: str, *, required_capability: str | None = None
-) -> None:
+) -> str:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
@@ -1874,7 +1875,21 @@ def _require_pool_model(
         if getattr(agent, "model", None) == model_name and (
             required_capability is None or required_capability in getattr(agent, "tags", ())
         ):
-            return
+            return model_name
+    try:
+        group_name = canonical_group_name(model_name)
+    except (TypeError, ValueError):
+        group_name = ""
+    members = [
+        agent
+        for agent in agents
+        if getattr(agent, "group_name", "") == group_name
+        and (required_capability is None or required_capability in getattr(agent, "tags", ()))
+    ]
+    if members:
+        ranked_ids = orchestrator._group_router.ranked_member_ids([agent.id for agent in members])
+        by_id = {agent.id: agent for agent in members}
+        return by_id[ranked_ids[0]].model
     raise RequestError(
         400,
         "invalid_model",
@@ -4972,9 +4987,15 @@ def build_server(
                     try:
                         orchestrator.get_model_group(group_name)
                     except KeyError:
-                        self._send(orchestrator.set_model_group(group_name, body.get("member_agent_ids")), 201)
-                        return
-                    raise RequestError(409, "model_group_exists", "model group already exists; use PATCH")
+                        pass
+                    else:
+                        raise RequestError(409, "model_group_exists", "model group already exists; use PATCH")
+                    try:
+                        created_group = orchestrator.set_model_group(group_name, body.get("member_agent_ids"))
+                    except KeyError as exc:
+                        raise RequestError(404, "resource_not_found", str(exc)) from exc
+                    self._send(created_group, 201)
+                    return
 
                 if path == "/v1/completions":
                     # Legacy OpenAI Completions: prompt → route → text_completion.
@@ -5369,7 +5390,9 @@ def build_server(
                     model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
+                    upstream_model_name = _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5422,7 +5445,7 @@ def build_server(
                     started_at = time.perf_counter()
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
-                        model=model_name,
+                        model=upstream_model_name,
                         attribution=attribution,
                         metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                     ))
@@ -5456,7 +5479,9 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
                     model_name = _validate_embeddings_model(body, orchestrator)
-                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
+                    upstream_model_name = _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5477,7 +5502,7 @@ def build_server(
                         submit_metadata["endpoint_alias"] = endpoint_alias
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
-                        model=model_name,
+                        model=upstream_model_name,
                         attribution=attribution,
                         metadata=submit_metadata,
                     ))
@@ -5756,8 +5781,6 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
-            except KeyError as exc:
-                self._send_error(404, "resource_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -5890,7 +5913,9 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages, workflow_run_id=run_id, model_name=model_name
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except ToolFallbackStoppedError as exc:
