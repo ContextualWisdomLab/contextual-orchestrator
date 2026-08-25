@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import struct
 import threading
@@ -34,6 +35,18 @@ from .orchestrator import (
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
 from .tool_fallback import ToolFallbackStoppedError
+from .telemetry import (
+    attach_trace_context,
+    configure_telemetry,
+    current_session_id,
+    detach_trace_context,
+    reset_session_id,
+    session_id_from_headers,
+    session_id_from_request,
+    set_session_id,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -4732,6 +4745,7 @@ def build_server(
     security = security or SecurityConfig()
     security.check_bind(host)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
+    configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
         if parsed_viewer.scheme not in {"http", "https"} or not parsed_viewer.netloc:
@@ -4740,6 +4754,39 @@ def build_server(
 
     class Handler(BaseHTTPRequestHandler):
         """Handle authenticated orchestration, administration, and health routes."""
+        _session_token = None
+        _trace_token = None
+
+        def _bind_session(self, session_id: str | None) -> None:
+            """Bind validated request correlation to this handler context."""
+            if session_id is None:
+                return
+            if self._session_token is not None:
+                reset_session_id(self._session_token)
+            self._session_token = set_session_id(session_id)
+
+        def _reset_session(self) -> None:
+            """Release request correlation state before a keep-alive request."""
+            trace_token, self._trace_token = self._trace_token, None
+            if trace_token is not None:
+                detach_trace_context(trace_token)
+            session_token, self._session_token = self._session_token, None
+            if session_token is not None:
+                reset_session_id(session_token)
+
+        def handle_one_request(self) -> None:
+            """Prevent a keep-alive connection from carrying request state."""
+            try:
+                super().handle_one_request()
+            finally:
+                self._reset_session()
+
+        def finish(self) -> None:
+            """Finish the response and release request correlation state."""
+            try:
+                super().finish()
+            finally:
+                self._reset_session()
 
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
@@ -5184,6 +5231,14 @@ def build_server(
                 )
                 self._authorize(scope, state_changing=True)
                 body = self._read_json()
+                metadata_values = [
+                    value
+                    for key in ("metadata", "client_metadata")
+                    if isinstance((value := body.get(key)), dict)
+                ]
+                request_session_id = session_id_from_request(self.headers, *metadata_values)
+                if request_session_id != current_session_id():
+                    self._bind_session(request_session_id)
                 cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
                 cache_partition = self._cache_partition()
 
@@ -5971,6 +6026,8 @@ def build_server(
             (durable for replays), and browser-driven state-changing admin
             requests must pass the same-origin check.
             """
+            self._trace_token = attach_trace_context(self.headers)
+            self._bind_session(session_id_from_headers(self.headers))
             effective_purpose = purpose or DEFAULT_PURPOSE_BY_SCOPE.get(scope, "")
             try:
                 security.check_rate_limit(self.client_address[0])
@@ -6123,6 +6180,7 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
+            _LOGGER.warning("request_failed status=%s code=%s", status, code)
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
@@ -6143,6 +6201,7 @@ def build_server(
                 writer()
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
+                _LOGGER.debug("client_disconnected")
                 return False
 
         def _send(

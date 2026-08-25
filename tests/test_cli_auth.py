@@ -157,6 +157,7 @@ def test_local_http_session_cookie_requires_explicit_opt_in() -> None:
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient"),
         patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
         patch("contextual_orchestrator.__main__.serve") as serve,
     ):
         main()

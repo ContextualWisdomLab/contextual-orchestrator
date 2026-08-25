@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
@@ -36,6 +36,7 @@ from .chat_capability import (
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .telemetry import inject_trace_context, traced
 from .pii_protection import (
     DEFAULT_PII_KEY_NAME,
     ENCRYPTED_FIELDS_KEY,
@@ -928,7 +929,18 @@ class ModelClient:
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+        parsed_provider = urlparse(agent.base_url)
+        with traced(
+            f"chat {agent.model}",
+            {
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "server.address": parsed_provider.hostname or "",
+                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+            },
+        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
 
     def apply_effort_profile(
@@ -1080,6 +1092,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1244,8 +1257,19 @@ class ModelClient:
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)  # pragma: no cover
+        parsed_provider = urlparse(agent.base_url)
+        with traced(
+            f"stream_chat {agent.model}",
+            {
+                "gen_ai.operation.name": "stream_chat",
+                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "server.address": parsed_provider.hostname or "",
+                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+            },
+        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            yield from self._stream_send(agent, payload, destination)
 
     def _stream_send(
         self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
@@ -1255,6 +1279,7 @@ class ModelClient:
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1318,18 +1343,30 @@ class ModelClient:
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, normalized_endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
-            chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
-            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-                chat_payload["chat_template_kwargs"] = self.chat_template_args
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-                chat_response = self._send_raw_with_retry(
-                    agent, "chat/completions", chat_payload, destination
-                )
-            return _chat_to_responses_payload(chat_response, payload)
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
+        parsed_provider = urlparse(agent.base_url)
+        with traced(
+            f"passthrough {normalized_endpoint} {agent.model}",
+            {
+                "gen_ai.operation.name": "passthrough",
+                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "server.address": parsed_provider.hostname or "",
+                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+            },
+        ):
+            if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
+                chat_payload = _responses_to_chat_payload(payload)
+                chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
+                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+                    chat_payload["chat_template_kwargs"] = self.chat_template_args
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    chat_response = self._send_raw_with_retry(
+                        agent, "chat/completions", chat_payload, destination
+                    )
+                return _chat_to_responses_payload(chat_response, payload)
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+                return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
 
     def _send_raw_with_retry(
         self,
@@ -1365,6 +1402,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1537,7 +1575,7 @@ class ModelClient:
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
         temperature: float | None,
-        effort_profile: ReasoningEffortProfile | None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Run local OpenAI-compatible requests concurrently through mlx-lm."""
         request_settings = self.request_settings_snapshot()
@@ -1558,7 +1596,10 @@ class ModelClient:
         if self.local_concurrency == 1 or len(requests) <= 1:
             return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
         with ThreadPoolExecutor(max_workers=min(self.local_concurrency, len(requests))) as pool:
-            futures = [pool.submit(complete, custom_id, messages) for custom_id, messages in requests.items()]
+            futures = [
+                pool.submit(copy_context().run, complete, custom_id, messages)
+                for custom_id, messages in requests.items()
+            ]
             return dict(future.result() for future in futures)
 
     def _batch_run(
