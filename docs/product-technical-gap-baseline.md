@@ -728,3 +728,19 @@ head `e4f9865a1b06978324f006ee3861b84953877d8b`; its sole informational review
 thread was resolved and auto-merge is enabled, while central hosted gates remain
 queued. Until that protected merge lands, the queue-wide retired-smoke Strix
 failures remain central workflow evidence rather than individual source defects.
+
+### Adjacent PR remediation loop — 2026-08-25 11:31 KST
+
+The protected queue advanced without bypasses; every row below has auto-merge
+enabled and remains open until its fresh exact-head gates complete:
+
+| PR | Exact head | Remediation evidence |
+|---:|---|---|
+| #831 | `634fe03576d986794b121e0da05179f1663073f4` | Wrong-pool POST now matches GET/PATCH/DELETE with 404 `agent_not_found`; 8 focused tests passed. |
+| #830 | `d727c0897e94568539c22af19d88e055b88aaa56` | Current main merged; three remaining review notes verified as intentional provider-error boundary behavior and resolved. |
+| #828 | `bde1975c8c6e843b6339c6b7f3922dad1b0f07c5` | SSE disconnect now stops upstream token work and releases the run slot; 15 focused tests passed. |
+| #794 | `6efeacae06d7445d71991cb7faf970b5a3a1ab65` | SQLite SAVEPOINT preserves caller-owned transactions; direct test-file execution and 28 pytest cases passed. |
+| #788 | `1fc1ddc24ef8b0c5009c9212efb803a79d0deaef` | Opaque admin sessions now authorize evaluation runs, erase failed bearer input, and avoid duplicate readiness fan-out; 27 focused tests passed. |
+
+These are PR-head claims only. None is protected-main or release evidence until
+terminal Checks and required independent approvals cause a normal merge.
