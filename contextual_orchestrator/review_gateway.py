@@ -127,7 +127,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """Discover providers and serve the authenticated OpenAI-compatible sidecar."""
-    args = _build_parser().parse_args()
+    parser = _build_parser()
+    args = parser.parse_args()
+    if args.max_agents < 1:
+        parser.error("--max-agents must be a positive integer")
     register_review_credentials(os.environ)
     auth_token = args.auth_token or get_credential(args.auth_token_key)
     if not auth_token:

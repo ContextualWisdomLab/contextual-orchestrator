@@ -216,3 +216,12 @@ def test_main_requires_authentication(monkeypatch):
 
     with pytest.raises(SystemExit, match="CONTEXTUAL_ORCHESTRATOR_TOKEN"):
         review_gateway.main()
+
+
+def test_main_rejects_invalid_agent_limit_without_traceback(monkeypatch, capsys):
+    """Argparse reports an invalid routing-pool bound as a CLI usage error."""
+    monkeypatch.setattr(sys, "argv", ["review_gateway", "--max-agents", "0"])
+    with pytest.raises(SystemExit) as exc_info:
+        review_gateway.main()
+    assert exc_info.value.code == 2
+    assert "--max-agents must be a positive integer" in capsys.readouterr().err
