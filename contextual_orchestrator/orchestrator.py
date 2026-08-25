@@ -5397,7 +5397,7 @@ class TaskOrchestrator:
                 },
                 {
                     "procurement_status": "commercial_procurement_blocked",
-                    "rule": "missing packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks procurement",
+                    "rule": "missing packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks procurement",
                 },
             ],
             "review_process_policy": gap_register["review_process_policy"],
@@ -5600,7 +5600,7 @@ class TaskOrchestrator:
                 },
                 {
                     "contract_status": "commercial_contract_blocked",
-                    "rule": "missing contract packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks contract readiness",
+                    "rule": "missing contract packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks contract readiness",
                 },
             ],
             "review_process_policy": procurement["review_process_policy"],
@@ -5798,7 +5798,7 @@ class TaskOrchestrator:
                 },
                 {
                     "onboarding_status": "commercial_onboarding_blocked",
-                    "rule": "missing onboarding packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks onboarding",
+                    "rule": "missing onboarding packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks onboarding",
                 },
             ],
             "review_process_policy": contract["review_process_policy"],
@@ -6004,7 +6004,7 @@ class TaskOrchestrator:
                 },
                 {
                     "operations_status": "commercial_operations_blocked",
-                    "rule": "missing operations packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks operations handoff",
+                    "rule": "missing operations packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks operations handoff",
                 },
             ],
             "review_process_policy": onboarding["review_process_policy"],
