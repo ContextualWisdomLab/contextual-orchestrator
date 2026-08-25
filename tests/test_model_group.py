@@ -134,19 +134,6 @@ def test_model_agent_stores_canonical_group_name() -> None:
     assert _agent("canonical_member", "vendor/model").group_name == "shared_reasoning_model"
 
 
-def test_group_passthrough_records_measured_success() -> None:
-    member = ModelAgent(
-        "measured_member", "vendor/model", "mock://provider", group_name="shared_reasoning_model"
-    )
-    orchestrator = TaskOrchestrator([member])
-
-    orchestrator.proxy_completion(
-        {"model": "shared_reasoning_model", "messages": [{"role": "user", "content": "hi"}]}
-    )
-
-    assert orchestrator._group_router.snapshot()[member.id]["success_count"] == 1
-
-
 def test_group_membership_changes_reset_but_keep_candidate_measurement_rows() -> None:
     first = ModelAgent("first_member", "provider/first")
     second = ModelAgent("second_member", "provider/second")

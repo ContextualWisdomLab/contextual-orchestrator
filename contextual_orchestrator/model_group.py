@@ -13,12 +13,18 @@ endpoint actually serves each request using only measured evidence:
   Bernoulli observation.
 - **Speed** is an exponentially weighted moving average of the observed
   end-to-end request latency with smoothing gain 1/8 -- the SRTT estimator of
-  Jacobson (1988), *Congestion Avoidance and Control*, SIGCOMM '88.
-- **Score** is their ratio, ``P(success | data) / EWMA_latency_seconds``:
-  the expected number of successful responses per second. It has physical
-  units, uses no hand-tuned weights, and degenerates gracefully -- members
-  without any observation share one identical neutral score, so ordering
-  falls back to the caller's static ranking until real evidence exists.
+  Jacobson (1988), *Congestion Avoidance and Control*, SIGCOMM '88. The same
+  EWMA form is applied to observed generation throughput: when a provider
+  reports completion token counts, tokens-per-second samples are averaged;
+  otherwise latency-only evidence yields responses-per-second. Both are
+  measured physical quantities; no scaling constants are introduced.
+- **Score** is their product, ``P(success | data) * throughput``: the expected
+  number of successful output units per second, where an output unit is one
+  completion token when token evidence exists for the member and one response
+  otherwise. It has physical units, uses no hand-tuned weights, and
+  degenerates gracefully -- members without any observation share one
+  identical neutral score, so ordering falls back to the caller's static
+  ranking until real evidence exists.
 """
 
 from __future__ import annotations
@@ -82,20 +88,24 @@ class ModelGroupRouter:
         self._ewma_gain = float(ewma_gain)
         self._min_latency_seconds = float(min_latency_seconds)
         self._lock = threading.Lock()
-        # member_id -> {"alpha": float, "beta": float, "ewma": float | None}
+        # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
+        # None until the first observation of each kind arrives.
         self._members: dict[str, dict[str, float | None]] = {}
 
     def register_member(self, member_id: str) -> None:
         """Ensure a member exists in the ledger (idempotent, keeps history)."""
         with self._lock:
-            self._members.setdefault(
-                member_id,
-                {
-                    "alpha": BETA_PRIOR_SUCCESS_COUNT,
-                    "beta": BETA_PRIOR_FAILURE_COUNT,
-                    "ewma": None,
-                },
-            )
+            self._members.setdefault(member_id, self._blank_state())
+
+    @staticmethod
+    def _blank_state() -> dict[str, float | None]:
+        """Fresh per-member ledger row: Laplace prior counts, no speed samples."""
+        return {
+            "alpha": BETA_PRIOR_SUCCESS_COUNT,
+            "beta": BETA_PRIOR_FAILURE_COUNT,
+            "ewma": None,
+            "ewma_tps": None,
+        }
 
     def forget_members(self, keep_member_ids: set[str]) -> None:
         """Drop ledger rows for members that left every group."""
@@ -110,8 +120,20 @@ class ModelGroupRouter:
             for member_id in member_ids:
                 self._members.pop(member_id, None)
 
-    def observe_success(self, member_id: str, latency_seconds: float) -> None:
-        """Record one successful attempt with its measured wall-clock latency."""
+    def observe_success(
+        self,
+        member_id: str,
+        latency_seconds: float,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Record one successful attempt with its measured wall-clock latency.
+
+        ``output_tokens`` carries the provider-reported completion token count
+        for the same attempt. When supplied it also feeds the tokens-per-second
+        EWMA (Jacobson 1988 estimator applied to throughput samples); when
+        omitted only latency evidence is recorded and no token count is ever
+        inferred or invented.
+        """
         if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):
             raise TypeError("latency_seconds must be a real number")
         latency = float(latency_seconds)
@@ -119,6 +141,12 @@ class ModelGroupRouter:
             raise ValueError("latency_seconds must be finite")
         if latency < 0:
             raise ValueError("latency_seconds must be nonnegative")
+        if output_tokens is not None and (
+            isinstance(output_tokens, bool)
+            or not isinstance(output_tokens, int)
+            or output_tokens <= 0
+        ):
+            raise ValueError("output_tokens must be a positive integer when provided")
         with self._lock:
             state = self._ensure_locked(member_id)
             state["alpha"] = float(state["alpha"]) + 1.0
@@ -129,6 +157,14 @@ class ModelGroupRouter:
                 if ewma is None
                 else (1.0 - self._ewma_gain) * float(ewma) + self._ewma_gain * clamped
             )
+            if output_tokens is not None:
+                sample = float(output_tokens) / clamped
+                tps = state["ewma_tps"]
+                state["ewma_tps"] = (
+                    sample
+                    if tps is None
+                    else (1.0 - self._ewma_gain) * float(tps) + self._ewma_gain * sample
+                )
 
     def observe_failure(self, member_id: str) -> None:
         """Record one failed attempt (stability evidence only; no latency)."""
@@ -137,9 +173,19 @@ class ModelGroupRouter:
             state["beta"] = float(state["beta"]) + 1.0
 
     def member_score(self, member_id: str) -> float:
-        """Return the expected successful responses per second for a member."""
+        """Return the expected successful output units per second for a member."""
         with self._lock:
             return self._score_locked(member_id)
+
+    def member_observation_count(self, member_id: str) -> int:
+        """Total completed attempts recorded for one member (success + failure)."""
+        with self._lock:
+            state = self._members.get(member_id)
+            if state is None:
+                return 0
+            alpha = float(state["alpha"]) - BETA_PRIOR_SUCCESS_COUNT
+            beta = float(state["beta"]) - BETA_PRIOR_FAILURE_COUNT
+            return int(max(alpha, 0.0)) + int(max(beta, 0.0))
 
     def ranked_member_ids(self, member_ids: list[str] | tuple[str, ...]) -> list[str]:
         """Order member ids best-first by measured score, preserving input ties."""
@@ -159,14 +205,7 @@ class ModelGroupRouter:
     # --- internal helpers (callers must hold ``self._lock``) ---------------
 
     def _ensure_locked(self, member_id: str) -> dict[str, float | None]:
-        return self._members.setdefault(
-            member_id,
-            {
-                "alpha": BETA_PRIOR_SUCCESS_COUNT,
-                "beta": BETA_PRIOR_FAILURE_COUNT,
-                "ewma": None,
-            },
-        )
+        return self._members.setdefault(member_id, self._blank_state())
 
     def _score_locked(self, member_id: str) -> float:
         state = self._members.get(member_id)
@@ -175,6 +214,10 @@ class ModelGroupRouter:
         alpha = float(state["alpha"])
         beta = float(state["beta"])
         stability = alpha / (alpha + beta)
+        ewma_tps = state["ewma_tps"]
+        if ewma_tps is not None:
+            # Token evidence exists: score in expected successful tokens/second.
+            return stability * float(ewma_tps)
         ewma = state["ewma"]
         if ewma is None:
             # Unobserved members share one neutral reference latency so their
@@ -188,6 +231,7 @@ class ModelGroupRouter:
             return {
                 "success_posterior_mean": UNOBSERVED_MEMBER_SCORE,
                 "ewma_latency_seconds": None,
+                "ewma_tokens_per_second": None,
                 "success_count": 0,
                 "failure_count": 0,
                 "score": UNOBSERVED_MEMBER_SCORE,
@@ -195,9 +239,13 @@ class ModelGroupRouter:
         alpha = float(state["alpha"])
         beta = float(state["beta"])
         ewma = state["ewma"]
+        ewma_tps = state["ewma_tps"]
         return {
             "success_posterior_mean": round(alpha / (alpha + beta), 6),
             "ewma_latency_seconds": None if ewma is None else round(float(ewma), 6),
+            "ewma_tokens_per_second": (
+                None if ewma_tps is None else round(float(ewma_tps), 6)
+            ),
             "success_count": int(alpha - BETA_PRIOR_SUCCESS_COUNT),
             "failure_count": int(beta - BETA_PRIOR_FAILURE_COUNT),
             "score": round(self._score_locked(member_id), 9),

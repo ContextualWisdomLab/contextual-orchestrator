@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 import copy
+import hashlib
 from dataclasses import dataclass, replace
 from functools import wraps
 import http.client
@@ -257,6 +258,36 @@ class _FastMLSIJudgeAdapter:
         return self.orchestrator._agent(self.judge)
 
 
+def _parse_triage_reply(reply: str) -> bool:
+    """Parse one exact ``{"workflow_required": bool}`` triage verdict.
+
+    Rejects oversize replies, duplicate object keys, extra fields, and any
+    non-boolean value so a chatty model can never smuggle a decision through.
+    Raises ``ValueError`` on every violation; callers fail closed to the
+    orchestrated path.
+    """
+    if not isinstance(reply, str) or len(reply) > MAX_MODEL_JUDGE_REPLY_CHARACTERS:
+        raise ValueError("triage response is missing or exceeds the maximum size")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("triage response contains duplicate object keys")
+            result[key] = value
+        return result
+
+    try:
+        parsed = json.loads(reply, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as exc:
+        raise ValueError("triage response is not valid JSON") from exc
+    if not isinstance(parsed, dict) or set(parsed) != {"workflow_required"}:
+        raise ValueError("triage response must contain exactly workflow_required")
+    if type(parsed["workflow_required"]) is not bool:
+        raise ValueError("workflow_required must be a boolean")
+    return parsed["workflow_required"]
+
+
 def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
     """Parse one exact, duplicate-free model-judge verdict."""
     if not isinstance(reply, str) or len(reply) > MAX_MODEL_JUDGE_REPLY_CHARACTERS:
@@ -431,11 +462,18 @@ class WorkflowStep:
 
 @dataclass(frozen=True)
 class OrchestrationPolicy:
-    """Policy knobs that govern routing, verification, and admin visibility."""
+    """Policy knobs that govern routing, verification, and admin visibility.
+
+    Route-vs-conduct selection is evidence-based: one exact-schema model
+    triage call (cached by content hash) replaces the former keyword-hint and
+    character-length rules, which were hand-tuned heuristics with no
+    literature or measured grounding.
+    """
 
     route_p95_seconds: float = 2.5
-    conduct_hint_threshold: int = 2
-    route_text_length_threshold: int = 700
+    # Real-time answer judging on single-shot route paths. Verdicts feed the
+    # quality ledger so measured accuracy steers subsequent routing.
+    realtime_judge: bool = True
     verifier_required: bool = True
     # Conductor-style planning (arXiv:2512.04388): "generated" asks the planner model to
     # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
@@ -449,15 +487,14 @@ class OrchestrationPolicy:
     def __post_init__(self) -> None:
         if self.verifier_judge != "model":
             raise ValueError("keyword-based verifier_judge modes are unsupported; use 'model'")
-        if type(self.route_text_length_threshold) is not int or self.route_text_length_threshold < 1:
-            raise ValueError("route_text_length_threshold must be a positive integer")
+        if isinstance(self.realtime_judge, bool) is False:
+            raise ValueError("realtime_judge must be a boolean")
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
         return {
             "route_p95_seconds": self.route_p95_seconds,
-            "conduct_hint_threshold": self.conduct_hint_threshold,
-            "route_text_length_threshold": self.route_text_length_threshold,
+            "realtime_judge": self.realtime_judge,
             "verifier_required": self.verifier_required,
             "workflow_planning": self.workflow_planning,
             "verifier_judge": self.verifier_judge,
@@ -891,6 +928,51 @@ class ModelClient:
                 del self._local.request_settings
             else:
                 self._local.request_settings = previous
+
+    #: Deterministic vector dimension for mock-provider embeddings (test fixture
+    #: only; production providers always return their own dimensionality).
+    MOCK_EMBEDDING_DIMENSION = 8
+
+    def embed(self, agent: ModelAgent, texts: list[str]) -> list[list[float]]:
+        """Return one embedding vector per input string from an OpenAI-compatible endpoint.
+
+        Real providers receive a standard ``/embeddings`` request. The
+        ``mock://`` transport derives a deterministic BLAKE2b-based unit-sphere
+        vector so unit tests can exercise cosine ordering without network
+        access; this fixture is never used against production traffic.
+        """
+        if not isinstance(texts, list) or not texts:
+            raise ValueError("texts must be a non-empty list of strings")
+        for item in texts:
+            if not isinstance(item, str) or not item:
+                raise ValueError("texts entries must be non-empty strings")
+        if agent.base_url.startswith("mock://"):
+            vectors: list[list[float]] = []
+            for item in texts:
+                digest = hashlib.blake2b(item.encode("utf-8"), digest_size=16).digest()
+                raw = [byte for byte in digest[: self.MOCK_EMBEDDING_DIMENSION]]
+                centered = [(value / 255.0) * 2.0 - 1.0 for value in raw]
+                vectors.append(centered)
+            return vectors
+        destination = self._validate_provider(agent)  # pragma: no cover
+        payload = {"model": agent.model, "input": texts}  # pragma: no cover
+        response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
+        data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
+        if not isinstance(data, list) or len(data) != len(texts):  # pragma: no cover
+            raise RuntimeError(  # pragma: no cover
+                f"provider {agent.id} returned an invalid embeddings payload"
+            )
+        vectors = []  # pragma: no cover
+        for entry in data:  # pragma: no cover
+            vector = entry.get("embedding") if isinstance(entry, dict) else None  # pragma: no cover
+            if not isinstance(vector, list) or not all(  # pragma: no cover
+                isinstance(value, (int, float)) and math.isfinite(float(value)) for value in vector
+            ):
+                raise RuntimeError(  # pragma: no cover
+                    f"provider {agent.id} returned a non-numeric embedding vector"
+                )
+            vectors.append([float(value) for value in vector])  # pragma: no cover
+        return vectors  # pragma: no cover
 
     def chat(
         self,
@@ -2002,8 +2084,20 @@ class _ResponseCache:
 
 
 class TaskOrchestrator:
-    """Coordinate model routing, conducted workflows, governance, and audit state."""
+    """Coordinate model routing, conducted workflows, governance, and audit state.
 
+    Routing evidence policy (ADR 0027): ordering inputs are limited to
+    (a) operator-declared configuration -- ``priority``, capability tags,
+    provider exclusions, model groups, (b) literature-standard similarity --
+    cosine similarity between task and agent-metadata embeddings
+    (Karpukhin et al., 2020; Ong et al., 2024), and (c) measured evidence --
+    the Beta-Bernoulli stability posterior (Laplace rule of succession) and
+    Jacobson-style EWMA throughput ledgers in :mod:`.model_group`. Keyword
+    hint tables and hand-tuned integer weights are intentionally absent.
+    """
+
+    # Role-to-capability-tag mapping over operator-maintained agent tags. Used
+    # as a binary eligibility preference (fit / no fit), never weighted.
     ROLE_TAGS = {
         "thinker": ("planning", "reasoning", "research"),
         "worker": ("coding", "implementation", "reasoning"),
@@ -2012,32 +2106,12 @@ class TaskOrchestrator:
         "synthesizer": ("writing", "reasoning", "planning"),
         "embedding": ("embedding",),
     }
-    DOMAIN_HINTS = {
-        "coding": ("code", "bug", "debug", "implement", "repository", "test", "코드", "구현"),
-        "security": ("security", "vulnerability", "xss", "sqli", "auth", "보안"),
-        "research": ("paper", "research", "literature", "architecture", "논문", "분석"),
-        "planning": ("plan", "design", "workflow", "orchestr", "아키텍처"),
-        "verification": ("verify", "review", "risk", "check", "검증", "리뷰"),
-    }
-    COMPLEX_HINTS = (
-        "analyze",
-        "architecture",
-        "develop",
-        "implement",
-        "verify",
-        "security",
-        "research",
-        "paper",
-        "multi-step",
-        "workflow",
-        "분석",
-        "개발",
-        "구현",
-        "검증",
-        "논문",
-    )
     AUTO_MODEL = "orchestrator/auto"
     FREE_MODEL = "orchestrator/free"
+
+    #: Bound on cached task/descriptor embedding vectors and triage verdicts.
+    #: Operational memory bound mirroring ``cache_max_entries``; not a routing weight.
+    EVIDENCE_CACHE_MAX_ENTRIES = 512
 
     def __init__(
         self,
@@ -2071,8 +2145,23 @@ class TaskOrchestrator:
         # process-local by design: it reflects this instance's observed traffic
         # and resets on restart, never carrying stale evidence across pools.
         self._group_router = ModelGroupRouter()
+        # Quality ledger: identical estimator family as the transport ledger but
+        # fed by real-time fast-mlsirm judge verdicts on final answers, so
+        # measured accuracy -- not transport success -- steers future routing.
+        self._quality_router = ModelGroupRouter()
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
+            self._quality_router.register_member(grouped.id)
+        # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
+        # task text and agent metadata, plus strict triage verdicts keyed by
+        # content hash. Bounds are operational memory limits, never weights.
+        self._evidence_lock = threading.Lock()
+        self._task_vector_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._descriptor_vector_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._triage_cache: OrderedDict[str, bool] = OrderedDict()
+        # Strict structured verdict parser seam; tests may substitute it, and
+        # production always uses the exact-schema implementation below.
+        self._triage_fn = self._triage_workflow_required
         self.client = client or ModelClient()
         if (
             isinstance(tool_retry_attempts, bool)
@@ -2101,7 +2190,7 @@ class TaskOrchestrator:
         self._tool_retry_jitter = random.uniform
         self.policy = OrchestrationPolicy()
         # Opt-in issue #568 catalog. None keeps production answers and payload
-        # keys unchanged. Buyer next action: pass default_role_effort_catalog()
+        # keys unchanged. Operator next action: pass default_role_effort_catalog()
         # to attach a replayable snapshot; do not treat that as a default change.
         self.role_effort_catalog = role_effort_catalog
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
@@ -2417,6 +2506,19 @@ class TaskOrchestrator:
         if agent.group_name or model_name == self.FREE_MODEL:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
+        # Real-time judging after the stream: already-sent bytes cannot be
+        # recalled, so the verdict never changes this response -- it feeds the
+        # quality ledger so measured accuracy steers future member ordering,
+        # and it is persisted for audit.
+        latency_seconds = time.perf_counter() - started_at
+        verification = self._realtime_route_judge(
+            text=text,
+            answer=answer,
+            served_id=agent.id,
+            latency_seconds=latency_seconds,
+            usage=None,
+            free_only=model_name == self.FREE_MODEL,
+        )
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -2430,7 +2532,7 @@ class TaskOrchestrator:
                      "access": [], "output": answer}
                 ],
                 "policy_snapshot": self.policy.as_dict(),
-                "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+                "verification": {**verification, "verifier_output": answer},
             }
         )
         self._workflow_runs[record["workflow_run_id"]] = record
@@ -2795,11 +2897,11 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = updated_agents
         if patched.group_name != current.group_name:
-            self._group_router.reset_members({worker_agent_id})
+            self._routers_reset_members({worker_agent_id})
         candidate_ids = {agent.id for agent in updated_candidates}
         for agent_id in candidate_ids:
-            self._group_router.register_member(agent_id)
-        self._group_router.forget_members(candidate_ids)
+            self._routers_register_member(agent_id)
+        self._routers_forget_members(candidate_ids)
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self._append_audit_event(
@@ -2841,7 +2943,7 @@ class TaskOrchestrator:
         members = [agent for agent in self.candidates if agent.group_name and canonical_group_name(agent.group_name) == name]
         if not members:
             raise KeyError(name)
-        ranked_ids = self._group_router.ranked_member_ids([agent.id for agent in members])
+        ranked_ids = self._measured_member_order([agent.id for agent in members])
         return {
             "group_name": name,
             "member_agent_ids": ranked_ids,
@@ -2887,16 +2989,16 @@ class TaskOrchestrator:
             for before, after in zip(previous_candidates, updated)
             if before.group_name != after.group_name
         }
-        self._group_router.reset_members(changed)
+        self._routers_reset_members(changed)
         for agent_id in changed:
-            self._group_router.register_member(agent_id)
+            self._routers_register_member(agent_id)
         for agent in updated:
             if agent.id in requested:
                 if self._pool_store is not None:
                     self._pool_store.save(agent)
             elif agent.id in previous and self._pool_store is not None:
                 self._pool_store.save(agent)
-        self._group_router.forget_members({agent.id for agent in updated})
+        self._routers_forget_members({agent.id for agent in updated})
         self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
         return self.get_model_group(name)
 
@@ -2905,16 +3007,16 @@ class TaskOrchestrator:
         current = self.get_model_group(group_name)
         name = current["group_name"]
         member_ids = set(current["member_agent_ids"])
-        self._group_router.reset_members(member_ids)
+        self._routers_reset_members(member_ids)
         for agent_id in member_ids:
-            self._group_router.register_member(agent_id)
+            self._routers_register_member(agent_id)
         self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if self._pool_store is not None:
             for agent in self.candidates:
                 if agent.id in member_ids:
                     self._pool_store.save(agent)
-        self._group_router.forget_members({agent.id for agent in self.candidates})
+        self._routers_forget_members({agent.id for agent in self.candidates})
         self._append_audit_event("model_group_deleted", {"group_name": name})
         return {"group_name": name, "deleted": True}
 
@@ -2935,7 +3037,7 @@ class TaskOrchestrator:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
-        self._group_router.register_member(agent.id)
+        self._routers_register_member(agent.id)
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
@@ -2979,7 +3081,7 @@ class TaskOrchestrator:
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         for agent in discovered_agents:
-            self._group_router.register_member(agent.id)
+            self._routers_register_member(agent.id)
         if added or updated:
             self._append_audit_event(
                 "agents_discovered",
@@ -2999,7 +3101,7 @@ class TaskOrchestrator:
             raise ValueError("cannot remove the last enabled agent")
         self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
-        self._group_router.forget_members({agent.id for agent in self.candidates})
+        self._routers_forget_members({agent.id for agent in self.candidates})
         if self._pool_store is not None:
             # Disabled tombstone (not a row delete): it overlays the seed file on restart
             # and startup drops disabled agents, so removal survives even for seed agents.
@@ -3020,43 +3122,153 @@ class TaskOrchestrator:
         *,
         model_name: str = "contextual-orchestrator",
     ) -> dict[str, Any]:
-        """Route a prompt to one selected worker agent and return a single-step trace."""
+        """Route a prompt to one selected worker agent and return a single-step trace.
+
+        When ``policy.realtime_judge`` is on, every candidate answer is judged
+        in real time by the fast-mlsirm judge before it is returned; rejected
+        answers fail over to the next measured candidate within the configured
+        tool-retry budget, and every verdict updates the quality ledger so
+        measured accuracy steers future routing. Speed is explicitly not a
+        design constraint here -- correctness is.
+        """
         text = self._latest_user_text(messages)
-        agent = self._requested_agent(model_name) or self._select_agent(
-            text, "worker", free_only=model_name == self.FREE_MODEL
-        )
-        start = time.perf_counter()
+        free_only = model_name == self.FREE_MODEL
+        requested = self._requested_agent(model_name)
+        ranked_pool: list[ModelAgent] = (
+            [requested] if requested is not None else []
+        ) or self._ranked_agents(text, "worker", free_only=free_only)
         free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
-        answer, served_id, usage = self._invoke(
-            agent,
-            messages,
-            text=text,
-            role="worker",
-            allowed_agent_ids=free_ids if model_name == self.FREE_MODEL else None,
-        )
-        latency_ms = (time.perf_counter() - start) * 1000
-        row = {
+        allowed_agent_ids = free_ids if free_only else None
+
+        max_attempts = 1 + min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        trace_rows: list[dict[str, Any]] = []
+        answer = ""
+        served_id = ""
+        usage: dict[str, Any] | None = None
+        verification: dict[str, Any] = {
+            "accepted": False,
+            "reason": "no candidate attempted",
+            "verifier_output": "",
+            "judge": "model",
+        }
+        tried_ids: set[str] = set()
+        for attempt_index, candidate in enumerate(ranked_pool):
+            if len(tried_ids) >= max_attempts:
+                break
+            tried_ids.add(candidate.id)
+            start = time.perf_counter()
+            attempt_answer, attempt_served_id, attempt_usage = self._invoke(
+                candidate,
+                messages,
+                text=text,
+                role="worker",
+                allowed_agent_ids=allowed_agent_ids,
+            )
+            latency_seconds = time.perf_counter() - start
+            row = {
+                "id": attempt_index,
+                "role": "worker",
+                "agent_id": candidate.id,
+                "subtask": "Direct route",
+                "access": [],
+                "latency_ms": round(latency_seconds * 1000, 2),
+                "output": attempt_answer,
+            }
+            if attempt_usage is not None:
+                row["usage"] = attempt_usage
+            if attempt_served_id != candidate.id:
+                row["served_agent_id"] = attempt_served_id
+                row["failover_from"] = candidate.id
+            answer, served_id, usage = attempt_answer, attempt_served_id, attempt_usage
+            verification = self._realtime_route_judge(
+                text=text,
+                answer=answer,
+                served_id=served_id,
+                latency_seconds=latency_seconds,
+                usage=attempt_usage,
+                free_only=free_only,
+            )
+            row["realtime_judge"] = {
+                "accepted": verification["accepted"],
+                "reason": verification["reason"],
+            }
+            trace_rows.append(row)
+            if verification["accepted"]:
+                break
+            # Rejected answers already recorded a quality-ledger failure in
+            # _realtime_route_judge; keep the last (best-available) answer but
+            # fail over to the next measured candidate while budget remains.
+
+        final_row = trace_rows[-1] if trace_rows else {
             "id": 0,
             "role": "worker",
-            "agent_id": agent.id,
+            "agent_id": "",
             "subtask": "Direct route",
             "access": [],
-            "latency_ms": round(latency_ms, 2),
-            "output": answer,
+            "latency_ms": None,
+            "output": "",
         }
-        if usage is not None:
-            row["usage"] = usage
-        if served_id != agent.id:  # pragma: no cover
-            row["served_agent_id"] = served_id
-            row["failover_from"] = agent.id
         return self._with_effort_snapshot(
             {
                 "mode": "route",
                 "answer": answer,
-                "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
-                "trace": [row],
+                "verification": {**verification, "verifier_output": answer},
+                "trace": [final_row],
             }
         )
+
+    def _realtime_route_judge(
+        self,
+        *,
+        text: str,
+        answer: str,
+        served_id: str,
+        latency_seconds: float,
+        usage: dict[str, Any] | None,
+        free_only: bool,
+    ) -> dict[str, Any]:
+        """Judge one direct-route answer now and feed the quality ledger.
+
+        Accepted answers record one success observation (with provider token
+        counts when reported); rejected or unjudgeable answers record one
+        failure, so measured accuracy -- not just transport success -- steers
+        subsequent member ordering inside model groups.
+        """
+        output_tokens = self._usage_completion_tokens(usage)
+
+        def _record(accepted: bool) -> None:
+            if accepted:
+                self._quality_router.observe_success(
+                    served_id, latency_seconds, output_tokens=output_tokens
+                )
+            else:
+                self._quality_router.observe_failure(served_id)
+
+        if not self.policy.realtime_judge:
+            _record(True)
+            return {
+                "accepted": True,
+                "reason": "single route path",
+                "verifier_output": answer,
+                "judge": "model",
+            }
+        fallback_report = {"verifier_output": answer}
+        base = self._model_judge_verification(
+            text, fallback_report, free_only=free_only
+        )
+        accepted = bool(base.get("accepted"))
+        _record(accepted)
+        return base
+
+    @staticmethod
+    def _usage_completion_tokens(usage: dict[str, Any] | None) -> int | None:
+        """Provider-reported completion token count, or None when absent/invalid."""
+        if not isinstance(usage, dict):
+            return None
+        tokens = usage.get("completion_tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            return None
+        return tokens
 
     def conduct(
         self,
@@ -3292,69 +3504,115 @@ class TaskOrchestrator:
             WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
         ]
 
-    def _score_agent(self, agent: ModelAgent, role: str, lowered: str) -> tuple[int, int, str]:
-        if agent.disabled:
-            return (-20_000, len(agent.tags), agent.id)
-        if role in agent.provider_exclusions:
-            return (-10_000, len(agent.tags), agent.id)
-        role_score = sum(3 for tag in agent.tags if tag in self.ROLE_TAGS.get(role, ()))
-        domain_score = 0
-        for tag, hints in self.DOMAIN_HINTS.items():
-            if tag in agent.tags and any(hint in lowered for hint in hints):
-                domain_score += 2
-        return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
-
-    def _ranked_agents(
+    def _static_rank_key(
         self,
-        text: str,
+        agent: ModelAgent,
         role: str,
-        *,
-        free_only: bool = False,
-        chat_only: bool = True,
-    ) -> list[ModelAgent]:
-        """Rank logical model groups, then measured provider members within each group."""
-        lowered = text.lower()
-        candidates = [
-            agent
-            for agent in self.agents
-            if (not chat_only or is_general_chat_agent_model_id(agent.model))
-            and (not free_only or self._is_free_agent(agent))
-        ]
+        affinity: float | None,
+    ) -> tuple[int, int, int, float, str]:
+        """Operator-declared static ordering key (ascending sort = best first).
+
+        Inputs are exclusively operator configuration and literature-standard
+        semantic similarity -- no invented weights:
+
+        1. ``-role_fit``: agents whose operator-maintained capability tags
+           include a tag declared for the role lead their tier; a high
+           ``priority`` never promotes a capability-mismatched agent over a
+           matching one.
+        2. ``-priority``: the operator's explicit per-agent ranking.
+        3. Semantic bucket + ``-cosine``: cosine similarity between task and
+           agent-metadata embeddings (Karpukhin et al., 2020; Ong et al.,
+           2024). Agents without an affinity vector sort after all measured
+           ones within the same declaration tier.
+        4. ``agent.id``: deterministic final tiebreak.
+        """
+        role_fit = 1 if set(agent.tags) & set(self.ROLE_TAGS.get(role, ())) else 0
+        priority = agent.priority
+        if isinstance(priority, bool) or not isinstance(priority, (int, float)):
+            priority = 0
+        has_affinity = 0 if affinity is None else 1
+        negated_affinity = 0.0 if affinity is None else -float(affinity)
+        return (-role_fit, -int(priority), has_affinity, negated_affinity, agent.id)
+
+    def _ranked_agents(self, text: str, role: str, *, free_only: bool = False) -> list[ModelAgent]:
+        """Rank logical model groups, then measured provider members within each group.
+
+        Ordering ladder, all evidence-based:
+        1. Role-ineligible members (operator ``provider_exclusions``) always
+           follow every eligible one.
+        2. Within a partition, operator declarations order statically via
+           :meth:`_static_rank_key` (priority -> capability fit -> cosine).
+        3. Inside one logical model group, measured ledgers refine member
+           order (:meth:`_measured_member_order`: judged quality first, then
+           transport throughput/stability).
+        """
+        candidates = [agent for agent in self.agents if not free_only or self._is_free_agent(agent)]
         if not candidates:
-            if free_only:
-                raise RuntimeError("no enabled zero-cost model is available")
-            raise RuntimeError("no chat-compatible agent available")
-        static = sorted(candidates, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
-        if free_only:
-            eligible = [agent for agent in static if role not in agent.provider_exclusions]
-            excluded = [agent for agent in static if role in agent.provider_exclusions]
-            ranked_free: list[ModelAgent] = []
-            for partition in (eligible, excluded):
-                score_buckets: dict[tuple[int, int], list[ModelAgent]] = {}
-                for agent in partition:
-                    score_buckets.setdefault(self._score_agent(agent, role, lowered)[:2], []).append(agent)
-                for members in score_buckets.values():
-                    by_id = {agent.id: agent for agent in members}
-                    ranked_free.extend(
-                        by_id[agent_id]
-                        for agent_id in self._group_router.ranked_member_ids(list(by_id))
-                    )
-            return ranked_free
+            raise RuntimeError("no enabled zero-cost model is available")
+        affinities = self._semantic_affinities(text, candidates)
+        static = sorted(
+            candidates,
+            key=lambda agent: self._static_rank_key(agent, role, affinities.get(agent.id)),
+        )
+        eligible = [agent for agent in static if role not in agent.provider_exclusions]
+        excluded = [agent for agent in static if role in agent.provider_exclusions]
+        return self._refine_partition(eligible, role) + self._refine_partition(excluded, role)
+
+    def _refine_partition(self, partition: list[ModelAgent], role: str) -> list[ModelAgent]:
+        """Group-refine one role-partition with measured intra-group ordering."""
         groups: dict[str, list[ModelAgent]] = {}
-        for agent in static:
+        for agent in partition:
             key = canonical_group_name(agent.group_name) if agent.group_name else f"agent:{agent.id}"
             groups.setdefault(key, []).append(agent)
-        ranked: list[ModelAgent] = []
+        ordered: list[ModelAgent] = []
         for members in groups.values():
             if not members[0].group_name:
-                ranked.extend(members)
+                ordered.extend(members)
                 continue
             eligible = [member for member in members if role not in member.provider_exclusions]
             excluded = [member for member in members if role in member.provider_exclusions]
-            for partition in (eligible, excluded):
-                by_id = {member.id: member for member in partition}
-                ranked.extend(by_id[member_id] for member_id in self._group_router.ranked_member_ids(list(by_id)))
-        return ranked
+            for sub_partition in (eligible, excluded):
+                by_id = {member.id: member for member in sub_partition}
+                ordered.extend(
+                    by_id[member_id] for member_id in self._measured_member_order(list(by_id))
+                )
+        return ordered
+
+    def _measured_member_order(self, member_ids: list[str]) -> list[str]:
+        """Order same-declaration members by measured evidence, quality first.
+
+        Evidence ladder: judged-answer observations (real-time fast-mlsirm
+        verdicts) govern when any member has them; otherwise the transport
+        throughput/stability ledger decides; with no evidence at all the
+        caller's input order survives untouched. No synthetic scores.
+        """
+        if any(
+            self._quality_router.member_observation_count(member_id) > 0
+            for member_id in member_ids
+        ):
+            return self._quality_router.ranked_member_ids(member_ids)
+        return self._group_router.ranked_member_ids(member_ids)
+
+    # --- dual-ledger membership maintenance ---------------------------------
+
+    def _routing_ledgers(self) -> tuple[ModelGroupRouter, ModelGroupRouter]:
+        """Both measured ledgers (transport throughput and judged quality)."""
+        return self._group_router, self._quality_router
+
+    def _routers_register_member(self, member_id: str) -> None:
+        """Register one member in every routing ledger (idempotent)."""
+        for router in self._routing_ledgers():
+            router.register_member(member_id)
+
+    def _routers_reset_members(self, member_ids: set[str]) -> None:
+        """Drop ledger rows whose group context changed in every ledger."""
+        for router in self._routing_ledgers():
+            router.reset_members(member_ids)
+
+    def _routers_forget_members(self, member_ids: set[str]) -> None:
+        """Forget members that left the pool in every ledger."""
+        for router in self._routing_ledgers():
+            router.forget_members(member_ids)
 
     def _is_free_agent(self, agent: ModelAgent) -> bool:
         """Return true only for explicitly zero-priced configured models."""
@@ -3364,8 +3622,171 @@ class TaskOrchestrator:
             candidate.model == agent.model for candidate in self.candidates
         ) == 1
 
+    # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
+
+    @staticmethod
+    def _agent_descriptor_text(agent: ModelAgent) -> str:
+        """Operator-declared metadata joined as the agent's embedding document."""
+        return " ".join([agent.model, *sorted(agent.tags)])
+
+    @staticmethod
+    def _cosine_similarity(
+        vector_a: list[float], vector_b: list[float]
+    ) -> float | None:
+        """Cosine of two equal-length vectors; None when either norm is zero."""
+        if len(vector_a) != len(vector_b) or not vector_a:
+            return None
+        dot = sum(a * b for a, b in zip(vector_a, vector_b))
+        norm_a = math.sqrt(sum(a * a for a in vector_a))
+        norm_b = math.sqrt(sum(b * b for b in vector_b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return None
+        return dot / (norm_a * norm_b)
+
+    def _cache_put(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
+        """Insert into one bounded LRU evidence cache under the evidence lock."""
+        with self._evidence_lock:
+            cache[key] = value
+            cache.move_to_end(key)
+            while len(cache) > self.EVIDENCE_CACHE_MAX_ENTRIES:
+                cache.popitem(last=False)
+
+    def _embedding_agent_id(self) -> str | None:
+        """First measured embedding-capable member id, or None when unconfigured."""
+        try:
+            return self.select_capability_agent("embedding").id
+        except (RuntimeError, ValueError):
+            return None
+
+    def _embed_cached(self, text: str) -> list[float] | None:
+        """Embedding vector for text via the configured embedding member; None on failure."""
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        with self._evidence_lock:
+            cached = self._task_vector_cache.get(digest)
+        if cached is not None:
+            return cached
+        embedding_member = self._embedding_agent_id()
+        if embedding_member is None:
+            return None
+        try:
+            vectors = self.client.embed(self._agent(embedding_member), [text])
+        except Exception:  # noqa: BLE001 - similarity is best-effort evidence
+            return None
+        vector = vectors[0] if vectors else None
+        if vector is not None:
+            self._cache_put(self._task_vector_cache, digest, vector)
+        return vector
+
+    def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
+        """Cached embedding of one agent's operator-declared metadata document."""
+        fingerprint = hashlib.sha256(
+            "\x1f".join([agent.id, self._agent_descriptor_text(agent)]).encode("utf-8")
+        ).hexdigest()
+        with self._evidence_lock:
+            cached = self._descriptor_vector_cache.get(fingerprint)
+        if cached is not None:
+            return cached
+        embedding_member = self._embedding_agent_id()
+        if embedding_member is None:
+            return None
+        try:
+            vectors = self.client.embed(
+                self._agent(embedding_member), [self._agent_descriptor_text(agent)]
+            )
+        except Exception:  # noqa: BLE001 - similarity is best-effort evidence
+            return None
+        vector = vectors[0] if vectors else None
+        if vector is not None:
+            self._cache_put(self._descriptor_vector_cache, fingerprint, vector)
+        return vector
+
+    def _semantic_affinities(
+        self, text: str, agents: list[ModelAgent]
+    ) -> dict[str, float | None]:
+        """Cosine similarity between task text and every agent's metadata document.
+
+        Returns ``{agent_id: float|None}``; all values are None whenever there
+        is no task text, no embedding-capable member, or embedding transport
+        fails -- callers then fall back to declaration-only ordering.
+        """
+        stripped = text.strip() if isinstance(text, str) else ""
+        if not stripped or not agents:
+            return {agent.id: None for agent in agents}
+        task_vector = self._embed_cached(stripped)
+        if task_vector is None:
+            return {agent.id: None for agent in agents}
+        affinities: dict[str, float | None] = {}
+        for agent in agents:
+            descriptor_vector = self._descriptor_vector_cached(agent)
+            affinities[agent.id] = (
+                None
+                if descriptor_vector is None
+                else self._cosine_similarity(task_vector, descriptor_vector)
+            )
+        return affinities
+
+    # --- structured complexity triage (replaces keyword hint tables) -------
+
+    #: Exact-schema instruction for the single structured triage call.
+    TRIAGE_SYSTEM_PROMPT = (
+        "You classify whether a user task requires an orchestrated multi-step "
+        "workflow (planning plus verification across steps) or one direct answer. "
+        'Reply with exactly one JSON object {"workflow_required": true} or '
+        '{"workflow_required": false} and nothing else.'
+    )
+
+    def _triage_workflow_required(self, text: str) -> bool:
+        """Decide route-vs-conduct with one strict JSON verdict; fail to conduct.
+
+        Evidence policy: the decision is made by a model under an exact output
+        schema, never by keyword matching. Any failure of the triage call or
+        parse fails closed toward the orchestrated path, which carries verifier
+        assurance; an absent triage agent degrades to the direct path because
+        no evidence source exists at all. Verdicts are cached by content hash.
+        """
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        with self._evidence_lock:
+            cached = self._triage_cache.get(digest)
+        if cached is not None:
+            return cached
+        verdict = self._compute_triage_verdict(text)
+        self._cache_put(self._triage_cache, digest, verdict)
+        return verdict
+
+    def _compute_triage_verdict(self, text: str) -> bool:
+        """One uncached triage decision for :meth:`_triage_workflow_required`."""
+        try:
+            candidates = self._ranked_agents(text, "worker", free_only=True)
+        except RuntimeError:
+            candidates = []
+        if not candidates:
+            candidates = list(self.agents)
+        if not candidates:
+            return False
+        triage_agent = candidates[0]
+        messages: list[ChatMessage] = [
+            {"role": "system", "content": self.TRIAGE_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ]
+        try:
+            reply = self.client.chat(triage_agent, messages, temperature=0.0)
+            return _parse_triage_reply(reply)
+        except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
+            return True
+
     def _select_agent(self, text: str, role: str, *, free_only: bool = False) -> ModelAgent:
-        ranked = self._ranked_agents(text, role, free_only=free_only)
+        """Select one general-chat agent for a conversational role.
+
+        Non-chat discovery rows (embeddings, rerank, transcription, ...) are
+        excluded by the capability contract enforced by
+        :func:`is_general_chat_agent_model_id`; this is an endpoint-compatibility
+        gate, not a task-keyword heuristic.
+        """
+        ranked = [
+            agent
+            for agent in self._ranked_agents(text, role, free_only=free_only)
+            if is_general_chat_agent_model_id(agent.model)
+        ]
         if not ranked:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         selected = ranked[0]
@@ -3401,9 +3822,7 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {model_name!r} is not configured")
         ranked = [
             agent
-            for agent in self._ranked_agents(
-                "", capability, free_only=free_only, chat_only=False
-            )
+            for agent in self._ranked_agents("", capability, free_only=free_only)
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions
@@ -3535,14 +3954,19 @@ class TaskOrchestrator:
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
                     break
-                # Success: one Bernoulli observation plus the measured latency
-                # feeding the group router's EWMA (Jacobson 1988 gain).
+                # Success: one Bernoulli observation plus measured latency, and
+                # provider-reported completion tokens when available feeding the
+                # tokens-per-second EWMA (Jacobson 1988 estimator). Token counts
+                # are never inferred from text length or chunk counts.
+                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                output_tokens = self._usage_completion_tokens(usage)
                 if agent.group_name or allowed_agent_ids is not None:
                     self._group_router.observe_success(
-                        agent.id, time.perf_counter() - attempt_start
+                        agent.id,
+                        time.perf_counter() - attempt_start,
+                        output_tokens=output_tokens,
                     )
                 self._record_success(agent.id)
-                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
@@ -3638,9 +4062,15 @@ class TaskOrchestrator:
         return self._agent(worker_agent_id)
 
     def _needs_workflow(self, text: str) -> bool:
-        lowered = text.lower()
-        hits = sum(1 for hint in self.COMPLEX_HINTS if hint in lowered)
-        return hits >= self.policy.conduct_hint_threshold or len(text) > self.policy.route_text_length_threshold
+        """Route-vs-conduct decision from a strict structured triage verdict.
+
+        Keyword hint tables are intentionally absent: keyword matching cannot
+        handle negation, mixed language, or tasks that quote trigger words, and
+        hand-tuned thresholds are not evidence. The verdict comes from one
+        exact-schema model call (cached by content hash) and fails closed to
+        the orchestrated path on any uncertainty.
+        """
+        return bool(self._triage_fn(text))
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         for message in reversed(messages):
@@ -10216,7 +10646,10 @@ class TaskOrchestrator:
             "policy": {
                 **self.policy.as_dict(),
                 "roles": list(self.ROLE_TAGS),
-                "complex_hints": list(self.COMPLEX_HINTS),
+            },
+            "routing_evidence": {
+                "transport": self._group_router.snapshot(),
+                "quality": self._quality_router.snapshot(),
             },
             "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
             "recent_audit_events": self.list_recent_audit_events(role=role, purpose=purpose),

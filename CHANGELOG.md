@@ -12,6 +12,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Anti-heuristic routing evidence ladder (ADR 0027): `DOMAIN_HINTS` and
+  `COMPLEX_HINTS` keyword tables are deleted; ordering is now
+  eligibility contracts -> declaration priority/capability fit/cosine
+  affinity over operator-declared metadata (cached dense embeddings) ->
+  measured intra-group quality then tokens-per-second. Workflow triage is
+  a strict structured call that fails closed to conducted orchestration;
+  verdicts are memoized by content hash. Real-time fast-mlsirm judging on
+  direct routes feeds a second Beta-Bernoulli quality ledger and drives
+  failover within the retry budget; `--no-realtime-judge` preserves the
+  legacy verification shape. APA 7 references live in
+  `docs/doctoring/measured-routing-evidence.md`.
+- Product & technical gap baseline (`docs/product-technical-gap-baseline.md`)
+  indexing buyer-visible gaps against open PRs/issues with update protocol.
 - Citation-backed `docs/adr` set: APA 7th references on the tool-execution fallback policy, plus accepted control-plane, cost-aware sync-versus-batch, and MSA-leaf composition ADRs, indexed from `docs/adr/README.md`.
 - Structured tool failure categories, stable fallback actions, and public
   adapter exceptions.

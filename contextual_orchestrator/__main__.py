@@ -342,10 +342,8 @@ def main(argv: list[str] | None = None) -> None:
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
                         help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
-    parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
-                        help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
-    parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
-                        help="Auto-mode hint-count minimum that can trigger conduct instead of route.")
+    parser.add_argument("--no-realtime-judge", action="store_true", default=False,
+                        help="Disable real-time fast-mlsirm answer judging on direct route paths.")
     parser.add_argument("--chat-template-args", type=_json_object, default={},
                         help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
@@ -383,13 +381,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.auto_discover_model_agents:
         _auto_discover_runtime_agents(orchestrator)
 
-    if args.conduct_hint_threshold is not None or args.route_text_length_threshold is not None:
-        overrides: dict[str, int] = {}
-        if args.conduct_hint_threshold is not None:
-            overrides["conduct_hint_threshold"] = args.conduct_hint_threshold
-        if args.route_text_length_threshold is not None:
-            overrides["route_text_length_threshold"] = args.route_text_length_threshold
-        orchestrator.policy = replace(orchestrator.policy, **overrides)
+    if args.no_realtime_judge:
+        orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
 
     if args.eval:
         print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))
