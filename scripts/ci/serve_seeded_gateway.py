@@ -19,11 +19,8 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from contextual_orchestrator.credentials import (  # noqa: E402
+from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     register_credential,
     set_backend,
