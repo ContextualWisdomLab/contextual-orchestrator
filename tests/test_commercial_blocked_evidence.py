@@ -105,7 +105,9 @@ def test_readiness_and_scorecards_surface_concrete_blockers() -> None:
     assert completion["completion_status"].endswith("blocked")
     # The blocker identifiers inherited from saleability must be hashable
     # strings (regression: unhashable dicts crashed dict.fromkeys dedupe).
-    assert all(isinstance(b, str) for b in completion["concrete_blockers"])
+    blockers = completion["concrete_blockers"]
+    assert blockers
+    assert all(isinstance(b, str) for b in blockers)
 
 
 if __name__ == "__main__":  # pragma: no cover

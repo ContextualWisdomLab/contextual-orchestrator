@@ -139,6 +139,7 @@ class CostRoutingCoordinator:
         workflow_run_id: Optional[str] = None,
         cache_bypass: bool = False,
         cache_partition: Optional[str] = None,
+        owner_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -170,7 +171,7 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        run_kwargs = {"mode": mode, "workflow_run_id": workflow_run_id}
+        run_kwargs = {"mode": mode, "workflow_run_id": workflow_run_id, "owner_id": owner_id}
         if model_name != "contextual-orchestrator":
             run_kwargs["model_name"] = model_name
         if cache_bypass:

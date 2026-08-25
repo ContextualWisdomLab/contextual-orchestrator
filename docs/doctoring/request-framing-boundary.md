@@ -30,4 +30,3 @@ negative-length raw sockets, chunked raw sockets, and a short declared body.
 
 Internet Engineering Task Force. (2022). *HTTP/1.1* (RFC 9112). RFC Editor.
 https://www.rfc-editor.org/rfc/rfc9112.html
-

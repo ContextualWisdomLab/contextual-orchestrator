@@ -284,7 +284,8 @@ def test_refresh_price_book_writes_complete_evidence_and_skips_overflow() -> Non
     assert written == 1
     assert book.get_price("openrouter", "good-model") is not None
     assert book.get_price("openrouter", "overflow-model") is None
-    assert book.get_price("openrouter", "guard-model") is None
+    assert book.get_price("openrouter", "safety-guard-model") is None
+    assert book.get_price("openrouter", "partial-model") is None
 
 
 def test_bootstrap_rejects_non_positive_limits_and_empty_catalogs() -> None:

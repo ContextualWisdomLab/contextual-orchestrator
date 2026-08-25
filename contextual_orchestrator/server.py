@@ -224,6 +224,7 @@ class SecurityConfig:
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
     _admin_sessions: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _admin_session_principals: dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _session_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -297,12 +298,37 @@ class SecurityConfig:
                 expected = self.admin_token or self.auth_token
             elif scope == "inference":
                 expected = self.inference_token or self.auth_token
+            elif scope == "trace":
+                # Static single-token mode is a local escape hatch. Production
+                # deployments should use bearer_verifier for a separate purpose claim.
+                expected = self.auth_token
             else:
                 expected = ""
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         return effective_purpose
+
+    def principal_id(self, headers: Any) -> str:
+        """Return a stable non-secret owner key for the authenticated deployment principal."""
+        raw = headers.get("authorization", "")
+        token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+        if not token:
+            session_id = self._extract_admin_session_cookie(headers)
+            if self._admin_session_is_active(session_id):
+                with self._session_lock:
+                    principal = self._admin_session_principals.get(session_id)
+                if principal:
+                    return principal
+            raise RequestError(401, "unauthorized", "authenticated principal is required")
+        if self.bearer_verifier is None:
+            if self.admin_token and self.inference_token:
+                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
+            else:
+                principal_material = f"single:{self.auth_token}"
+        else:
+            principal_material = f"bearer:{token}"
+        return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _extract_bearer_token(headers: Any) -> str:
@@ -338,13 +364,23 @@ class SecurityConfig:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         session_id = secrets.token_urlsafe(32)
         expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
+        if self.bearer_verifier is None:
+            if self.admin_token and self.inference_token:
+                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
+            else:
+                principal_material = f"single:{self.auth_token}"
+        else:
+            principal_material = f"bearer:{presented_token}"
+        principal = hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
         with self._session_lock:
             self._purge_expired_admin_sessions_locked(time.monotonic())
             overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
             if overflow > 0:
                 for session_key, _ in sorted(self._admin_sessions.items(), key=lambda item: item[1])[:overflow]:
                     self._admin_sessions.pop(session_key, None)
+                    self._admin_session_principals.pop(session_key, None)
             self._admin_sessions[session_id] = expires_at
+            self._admin_session_principals[session_id] = principal
         return session_id
 
     def _admin_session_is_active(self, session_id: str) -> bool:
@@ -357,6 +393,7 @@ class SecurityConfig:
                 return False
             if time.monotonic() >= expires_at:
                 self._admin_sessions.pop(session_id, None)
+                self._admin_session_principals.pop(session_id, None)
                 return False
             return True
 
@@ -365,11 +402,14 @@ class SecurityConfig:
         for session_id, expires_at in list(self._admin_sessions.items()):
             if now >= expires_at:
                 self._admin_sessions.pop(session_id, None)
+                self._admin_session_principals.pop(session_id, None)
 
     def revoke_admin_session(self, session_id: str) -> bool:
         """Revoke one opaque admin session without retaining the bearer."""
         with self._session_lock:
-            return self._admin_sessions.pop(session_id, None) is not None if session_id else False
+            removed = self._admin_sessions.pop(session_id, None) is not None if session_id else False
+            self._admin_session_principals.pop(session_id, None)
+            return removed
 
     def admin_session_cookie_header(self, session_id: str, *, max_age: int | None = None) -> str:
         """Return a secure-by-default HttpOnly, same-origin session cookie header."""
@@ -4582,11 +4622,77 @@ def _strip_trace(payload: Any) -> Any:
     return payload
 
 
+_INTERNAL_PAYLOAD_KEYS = frozenset({"owner_id", "principal_id"})
+
+
+def _strip_internal_fields(value: Any) -> Any:
+    """Drop gateway-owned metadata without rewriting nested provider output."""
+    if isinstance(value, dict):
+        public = {key: item for key, item in value.items() if key not in _INTERNAL_PAYLOAD_KEYS}
+        if isinstance(public.get("items"), list):
+            public["items"] = [
+                {key: item for key, item in row.items() if key not in _INTERNAL_PAYLOAD_KEYS}
+                if isinstance(row, dict)
+                else row
+                for row in public["items"]
+            ]
+        return public
+    return value
+
+
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
+    public_payload = _strip_internal_fields(safe_payload)
     if include_trace:
-        return safe_payload
-    return _strip_trace(safe_payload)
+        return public_payload
+    return _strip_trace(public_payload)
+
+
+def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, Any], int]:
+    """Build secret-free operator readiness without probing external providers."""
+    checks: dict[str, dict[str, Any]] = {}
+    try:
+        enabled_agents = len(orchestrator.agents)
+        checks["orchestration"] = {
+            "status": "ready" if enabled_agents else "not_ready",
+            "enabled_agent_count": enabled_agents,
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["orchestration"] = {"status": "not_ready"}
+
+    try:
+        checks["sync_routing"] = {
+            "status": "ready" if orchestrator.client is not None else "not_ready",
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["sync_routing"] = {"status": "not_ready"}
+
+    for check_name, backend_name in (
+        ("batch_routing", "batch_backend"),
+        ("embedding_batch", "embedding_batch_backend"),
+    ):
+        try:
+            backend = getattr(coordinator, backend_name)
+            # Backend identifiers may contain URLs, tenant names, or deployment
+            # secrets. Readiness exposes only a server-controlled status.
+            backend_id = getattr(backend, "name", None)
+            checks[check_name] = {
+                "status": "ready" if isinstance(backend_id, str) and backend_id else "degraded"
+            }
+        except Exception:  # noqa: BLE001 - optional outage is safe to report generically
+            checks[check_name] = {"status": "degraded"}
+
+    required = ("orchestration", "sync_routing")
+    required_ready = all(checks[name]["status"] == "ready" for name in required)
+    optional_degraded = any(
+        checks[name]["status"] == "degraded" for name in ("batch_routing", "embedding_batch")
+    )
+    status = "ready_with_degraded_optional_dependencies" if required_ready and optional_degraded else (
+        "ready" if required_ready else "not_ready"
+    )
+    return {"status": status, "service": "contextual-orchestrator", "checks": checks}, (
+        200 if required_ready else 503
+    )
 
 
 def responses_sse_body(response: dict[str, Any]) -> str:
@@ -4700,18 +4806,13 @@ def build_server(
                     self._send(OPENAPI_SPEC)
                     return
                 if path == "/healthz":
-                    # Unauthenticated liveness probe for containers/orchestrators.
-                    self._send({
-                        "status": "ok",
-                        "service": "contextual-orchestrator",
-                        "agent_count": len(orchestrator.agents),
-                        "candidate_count": len(orchestrator.candidates),
-                        "enabled_agent_count": len(orchestrator.agents),
-                        "batch_backend": coordinator.batch_backend.name,
-                        "embedding_batch_backend": coordinator.embedding_batch_backend.name,
-                        "provider_readiness": "unprobed",
-                        "usage_record_count": len(coordinator.ledger.records()),
-                    })
+                    # Unauthenticated process liveness; do not traverse runtime state.
+                    self._send({"status": "ok", "service": "contextual-orchestrator"})
+                    return
+                if path == "/readyz":
+                    self._authorize("admin")
+                    readiness, status = _readiness_payload(orchestrator, coordinator)
+                    self._send(readiness, status)
                     return
                 if path in ("/", "/admin"):
                     # The shell is public so an operator can establish a session;
@@ -4777,12 +4878,15 @@ def build_server(
                     return
                 if path == "/admin/state":
                     state = orchestrator.admin_state(
+                        owner_id=security.principal_id(self.headers),
                         role=getattr(self, "_authorized_role", None),
                         purpose=getattr(self, "_authorized_purpose", None),
                     )
                     state["document_viewer"] = (
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
+                    if security.expose_trace_by_default:
+                        self._authorize_trace_access("/admin/state")
                     self._send(_response_payload(state, security.expose_trace_by_default))
                     return
                 if path == "/api/v1/agent_pools":
@@ -4962,9 +5066,12 @@ def build_server(
                     return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
+                    owner_id = security.principal_id(self.headers)
+                    if security.expose_trace_by_default:
+                        self._authorize_trace_access("/api/v1/workflow_runs")
                     self._send(_response_payload({
-                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size),
-                        "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
+                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size, owner_id=owner_id),
+                        "total_count": orchestrator.count_workflow_runs(owner_id=owner_id),
                         "page_number": page_number,
                         "page_size": page_size,
                     }, security.expose_trace_by_default))
@@ -4972,7 +5079,9 @@ def build_server(
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access("/api/v1/workflow_runs/{workflow_run_id}")
+                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -4980,6 +5089,8 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access("/api/v1/access_reports/{workflow_run_id}")
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
                             {
@@ -4989,18 +5100,20 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
                         return
                 if path.startswith("/api/v1/evaluation_runs/"):
                     evaluation_run_id = path.rsplit("/", 1)[-1]
-                    runs = getattr(orchestrator, "_evaluation_runs", {})
-                    if evaluation_run_id in runs:
-                        self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
+                    try:
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access("/api/v1/evaluation_runs/{evaluation_run_id}")
+                        self._send(_response_payload(orchestrator.get_evaluation_run(evaluation_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
                         return
-                    self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
+                    except KeyError:
+                        self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
                     return
                 if path.startswith("/api/v1/agent_pools/"):
                     segments = [part for part in path.split("/") if part]
@@ -5399,20 +5512,7 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    if "include_orchestration_trace" in body:
-                        # Null/empty omit; bool, int 0/1, and "true"/"false"/"0"/"1"
-                        # strings coerce (SDK form/query parity with stream/store).
-                        coerced_trace = _coerce_optional_bool(
-                            body.get("include_orchestration_trace"),
-                            error_code="invalid_include_orchestration_trace",
-                            message="include_orchestration_trace must be a boolean",
-                        )
-                        if coerced_trace is None:
-                            include_trace = bool(security.expose_trace_by_default)
-                        else:
-                            include_trace = coerced_trace
-                    else:
-                        include_trace = bool(security.expose_trace_by_default)
+                    include_trace = self._trace_requested(body, "/v1/chat/completions")
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
@@ -5661,6 +5761,7 @@ def build_server(
                     return
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
+                    self._authorize_trace_access("/api/v1/batch_routing_jobs/{job_id}/results")
                     try:
                         retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
                     except KeyError:
@@ -5855,8 +5956,8 @@ def build_server(
                     if not isinstance(prompt, str):
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    include_trace = self._trace_requested(body, "/admin/simulate")
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -5865,8 +5966,8 @@ def build_server(
                     if not isinstance(prompt, str) or not prompt:
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    include_trace = self._trace_requested(body, "/api/v1/workflow_runs")
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -5877,8 +5978,8 @@ def build_server(
                     if not isinstance(prompts, list) or not prompts:
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
+                    include_trace = self._trace_requested(body, "/api/v1/evaluation_runs")
+                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -5965,16 +6066,58 @@ def build_server(
             self._authorized_purpose = effective_purpose
 
         def _cache_partition(self) -> str:
-            """Return a non-secret cache partition for the authenticated bearer or admin session."""
+            """Return a non-secret cache partition for the authenticated principal.
+
+            Bearer-authenticated callers partition by their bearer token.
+            Browser admin sessions authenticate without a bearer header, so an
+            active opaque session id partitions those requests instead — the
+            session id is random per login, so cross-session cache reuse stays
+            impossible while cookie-authenticated operators still get hits
+            within their own session.
+            """
             raw = self.headers.get("authorization", "")
             token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
             if not token:
-                # Opaque admin sessions are valid credentials for POST routes;
-                # partition their cache entries per session instead of failing.
-                token = security._extract_admin_session_cookie(self.headers)
-            if not token:  # pragma: no cover - _authorize rejects this first
+                session_id = security._extract_admin_session_cookie(self.headers)
+                if session_id and security._admin_session_is_active(session_id):
+                    return hashlib.sha256(f"admin-session:{session_id}".encode("utf-8")).hexdigest()
                 raise RequestError(401, "unauthorized", "bearer token is required")
             return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+        def _authorize_trace_access(self, endpoint_path: str) -> None:
+            """Authorize and durably record a trace-purpose access decision."""
+            self._authorize("trace")
+            try:
+                orchestrator._append_audit_event(  # noqa: SLF001 - server owns the release gate
+                    "orchestration_trace_access_granted",
+                    {
+                        "endpoint_path": endpoint_path,
+                        "purpose": "trace.read",
+                        "actor_scope": "trace",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 - release no trace if audit is unavailable
+                raise RequestError(
+                    503,
+                    "trace_audit_unavailable",
+                    "trace access audit is unavailable",
+                ) from exc
+
+        def _trace_requested(self, body: dict[str, Any], endpoint_path: str) -> bool:
+            """Validate and authorize an explicit trace disclosure request."""
+            if "include_orchestration_trace" not in body:
+                include_trace = security.expose_trace_by_default
+            elif type(body["include_orchestration_trace"]) is not bool:
+                raise RequestError(
+                    400,
+                    "invalid_include_orchestration_trace",
+                    "include_orchestration_trace must be a boolean",
+                )
+            else:
+                include_trace = body["include_orchestration_trace"]
+            if include_trace:
+                self._authorize_trace_access(endpoint_path)
+            return include_trace
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()

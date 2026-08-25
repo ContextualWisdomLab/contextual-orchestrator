@@ -306,13 +306,10 @@ def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> Non
     assert served == "planner_agent"
     assert usage is None
     assert len(sleeps) == 1
-    health = [event for event in orch._audit_events]
-    assert health  # circuit/fallback bookkeeping recorded audit events
-
-    # The agent circuit breaker observed one failure.
-    assert any(
-        step.get("agent_id") == "planner_agent" for step in []
-    ) is False
+    fallback = orch.list_recent_audit_events()[0]
+    assert fallback["event_type"] == "tool_fallback_decision"
+    assert fallback["event_detail"]["agent_id"] == "planner_agent"
+    assert "planner_agent" not in orch._circuit
 
 
 def test_model_judge_irt_projection_failure_fails_closed() -> None:
