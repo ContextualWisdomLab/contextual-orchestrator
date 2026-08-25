@@ -4,8 +4,23 @@
 
 | PR | Exact head/base | Current evidence and decision |
 | --- | --- | --- |
-| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `69cc674a88bb3023348232c8ad712aaa343095f4`, base `main` `e22c826ab16e41aff83016a0fc0f97978b2f34e3` | Open and protected-review blocked with zero unresolved threads at the snapshot; replacement hosted Checks and independent exact-head approval remain pending. The normal main merge resolves prior conflicts and preserves operator groups across discovery, output-directed modality capability, honest discovered-price ranking, group-bounded judge/failover, model-aware batch routing, measured passthrough/embedding routing, endpoint-specific OpenAPI, Responses duplicate-role summary completion, KV bootstrap secret removal, a fork-safe hourly workflow split, Compose password separation, and release metadata consistency. Exact predecessor `40e00f8d` passed the full `1872`-test suite in `682.97s`; exact head `69cc674a` passed the focused `17`-test Compose/Responses/security suite, `docker compose config --quiet`, actionlint, compile, and diff checks. Decision: `WAIT_AND_REMEDIATE`; predecessor full-suite evidence does not replace same-head hosted gates. |
-| [#844](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/844) | head `3ca50633` on current protected main | Focused session-security coverage is `22 passed`; the actionable server-thread review finding is fixed and all current threads are resolved. Hosted Checks and independent approval remain pending. This focused PR may land before #834; if it does, #834 must merge the new main and regenerate exact-head evidence rather than duplicate or overwrite it. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `5492f8046f2d072735ec722773d4bb4ccf7a8d4a`, base `main` `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Open with normal auto-merge enabled. The current head includes the merged session-cache fix and the disconnect-safe binary speech response repair; all review threads were resolved at this snapshot. Hosted Checks and independent exact-head approval remain authoritative. Exact predecessor `40e00f8d` passed the full `1872`-test suite; exact current-head focused response-write evidence is `4 passed`, and predecessor evidence does not transfer across later commits. Decision: `WAIT_AND_REMEDIATE`. |
+| [#844](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/844) | head `3ca50633b8fa8f639754a5a5dcc8aaa0f2b2bf9f`, merge `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Merged normally to protected `main` on 2026-08-25. It partitions cached admin-session responses by an active opaque session and contains the thread-termination regression repair. This merge is protected-main evidence for that bounded fix only. |
+
+Current open-queue exact-head inventory at this continuation:
+
+| PR | Head | Base | Gate state |
+| ---: | --- | --- | --- |
+| #762 | `1047bfab5986160146309911c242b7a174382f21` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, changes requested, auto-merge enabled |
+| #765 | `b70540420f0f86132cc5911baaf55a26ad0084fa` | `50014ef9f87623c6dfd529116297c5d180743125` | `DIRTY`, changes requested |
+| #773 | self-reference; refetch live | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required |
+| #780 | `1e2c42415a378f5f4cee2c8d7e49699874ab27ab` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, changes requested, auto-merge enabled |
+| #782 | `c4b7a322dd71d7bc6f9214cdfdb447988e5eb0b5` | `52dfa448417953ebf6e0c7b295e92b4d81cf9420` | `DIRTY`, changes requested |
+| #790 | `ee216d0e4588cd23d4d7bcb93e6864e4db4a4461` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, changes requested, auto-merge enabled |
+| #794 | `486266de81d9eeec1abd90f31cb6179192476a2e` | `87c6c66a7f049e725b417b8fa16f99b886062845` | `DIRTY`, review required |
+| #818 | `d286f51f8fe2ae24c62234c191994c81045cb79e` | `50014ef9f87623c6dfd529116297c5d180743125` | `DIRTY`, review required |
+| #821 | `4f61158ddf878c3359d6b3f409e9ac114fc80f42` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required, auto-merge enabled |
+| #834 | `5492f8046f2d072735ec722773d4bb4ccf7a8d4a` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, auto-merge enabled |
 
 The remaining customer-visible routing gap is durable, multi-replica observation
 aggregation with an explicit time horizon. The current in-process Beta-Bernoulli
