@@ -4,7 +4,9 @@
 
 | PR | Exact head/base | Current evidence and decision |
 | --- | --- | --- |
-| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `098de8acf6056b84c44f11020145e1f383878eb5`, base `main` `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | Open with normal auto-merge enabled. Zen availability is joined to Models.dev structured cost/modality evidence without name inference. Normalized catalog reload now distinguishes provider-declared `capability:*` evidence from generic serving-role tags and preserves cost/modality evidence. Explicitly excluded embedding deployments fail closed at the pool boundary. Exact-head focused evidence is `92 passed`; hosted Checks and independent exact-head approval remain authoritative. Decision: `WAIT_AND_REMEDIATE`. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `f9dc08b5112c75a2cc05ada0bc3af8d9e0d25f92`, base `main` `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | Open with normal auto-merge enabled. Zen availability is joined to Models.dev structured cost/modality evidence without name inference. Normalized catalog reload distinguishes provider-declared `capability:*` evidence from generic serving-role tags and preserves cost/modality evidence. Explicitly excluded embedding deployments fail closed; operator-declared Bytez endpoint capabilities survive discovery without model-name inference. Focused evidence includes `92 passed` plus the subsequent `59 passed`; hosted Checks and independent exact-head approval remain authoritative. Decision: `WAIT_AND_REMEDIATE`. |
+| [#818](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/818) | head `07a820bdba8315c4c8be43576f87edc699946c8e`, base `main` `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | The OpenTelemetry slice is reconciled with current-main request, streaming, batch, dependency-lock, and session-security paths. Reauthorization replaces inbound trace context instead of stacking it. Focused exact-head evidence is `40 passed`; full-suite verification is in progress and protected checks remain authoritative. Decision: `WAIT_AND_REMEDIATE`. |
+| [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | closed head `b70540420f0f86132cc5911baaf55a26ad0084fa` | Closed unmerged on 2026-08-25 after exact-head decomposition. Its only tip-only Bytez capability repair moved to #834 with regression coverage; merging the conflict-heavy historical stack would duplicate already delivered component PRs and stale ADR history. |
 | [#844](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/844) | head `3ca50633b8fa8f639754a5a5dcc8aaa0f2b2bf9f`, merge `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Merged normally to protected `main` on 2026-08-25. It partitions cached admin-session responses by an active opaque session and contains the thread-termination regression repair. This merge is protected-main evidence for that bounded fix only. |
 | [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762), [#821](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/821), [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | merge commits `2b4a2ff3787d19da7240f5647a05c1a9091d0097`, `38d211665b0d0022e689086db0cc7bc5dc29fcbe`, `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | Normally merged to protected `main` on 2026-08-25. The resulting main exact head is `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424`; this is bounded release evidence for the PII design, token-count strategy coverage, and liveness/readiness boundary only. |
 
@@ -12,13 +14,12 @@ Current open-queue exact-head inventory at this continuation:
 
 | PR | Head | Base | Gate state |
 | ---: | --- | --- | --- |
-| #765 | `b70540420f0f86132cc5911baaf55a26ad0084fa` | `50014ef9f87623c6dfd529116297c5d180743125` | `DIRTY`, changes requested |
 | #773 | self-reference; refetch live | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, auto-merge enabled |
 | #782 | `d631d7f37d93613235e92f62a93b3ab69df6fd93` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, changes requested, auto-merge enabled; HTTP owner isolation repaired and `42 passed` after current-main merge |
 | #790 | `13bc93985d7d2b9800a05e6a7dc6059ab0b59845` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, changes requested, auto-merge enabled |
 | #794 | `426c633cf144fecd219607fcd570b9915ff9da93` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, review required, auto-merge enabled |
-| #818 | `d286f51f8fe2ae24c62234c191994c81045cb79e` | `50014ef9f87623c6dfd529116297c5d180743125` | `DIRTY`, review required |
-| #834 | `098de8acf6056b84c44f11020145e1f383878eb5` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, review required, auto-merge enabled |
+| #818 | `07a820bdba8315c4c8be43576f87edc699946c8e` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, review required, auto-merge enabled |
+| #834 | `f9dc08b5112c75a2cc05ada0bc3af8d9e0d25f92` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, review required, auto-merge enabled |
 
 The remaining customer-visible routing gap is durable, multi-replica observation
 aggregation with an explicit time horizon. The current in-process Beta-Bernoulli
