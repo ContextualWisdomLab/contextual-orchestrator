@@ -3,6 +3,7 @@
 - Status: Proposed on the active feature head
 - Date: 2026-08-25
 - Figma file ID: `vsZMd8WAv42HDRgcZuNcWk`; this change reuses the existing Agent Pool table rather than introducing a new visual pattern.
+- Product/technical specification: [`docs/model-group-product-technical-spec.md`](../../model-group-product-technical-spec.md)
 
 ## Product requirement
 
