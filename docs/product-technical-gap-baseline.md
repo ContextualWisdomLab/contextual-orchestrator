@@ -573,7 +573,7 @@ permitted; otherwise the canonical citation and link are retained.
   for this backend-only baseline.
 - Existing FigJam architecture board is also recorded in that file.
 - Storybook/`ui-ux-pro-max`/`Anti-Slop-UI` are deliberately deferred, not
-  skipped: [ADR 0025](planning/adrs/0025-admin-console-ui-tooling-boundary.md)
+  skipped: [ADR 0033](planning/adrs/0033-admin-console-ui-tooling-boundary.md)
   records the decision, cites the Figma File ID above, and states the three
   concrete conditions (a second reusable screen family, a second consuming
   repository, or a new component-based frontend) that make adoption the
