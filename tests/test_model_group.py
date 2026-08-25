@@ -127,6 +127,18 @@ def test_model_agent_stores_canonical_group_name() -> None:
     assert _agent("canonical_member", "vendor/model").group_name == "shared_reasoning_model"
 
 
+def test_group_membership_changes_reset_but_keep_candidate_measurement_rows() -> None:
+    first = ModelAgent("first_member", "provider/first")
+    second = ModelAgent("second_member", "provider/second")
+    orchestrator = TaskOrchestrator([first, second])
+
+    orchestrator.set_model_group("shared-model", [first.id])
+    assert set(orchestrator._group_router._members) == {first.id, second.id}
+
+    orchestrator.delete_model_group("shared-model")
+    assert set(orchestrator._group_router._members) == {first.id, second.id}
+
+
 @pytest.mark.parametrize(
     "capability",
     ["text", "image", "video", "speech", "transcription", "embeddings", "rerank", "audio"],

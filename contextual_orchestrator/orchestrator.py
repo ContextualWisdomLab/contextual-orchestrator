@@ -2642,9 +2642,10 @@ class TaskOrchestrator:
             if before.group_name != after.group_name
         }
         self._group_router.reset_members(changed)
+        for agent_id in changed:
+            self._group_router.register_member(agent_id)
         for agent in updated:
             if agent.id in requested:
-                self._group_router.register_member(agent.id)
                 if self._pool_store is not None:
                     self._pool_store.save(agent)
             elif agent.id in previous and self._pool_store is not None:
@@ -2659,6 +2660,8 @@ class TaskOrchestrator:
         name = current["group_name"]
         member_ids = set(current["member_agent_ids"])
         self._group_router.reset_members(member_ids)
+        for agent_id in member_ids:
+            self._group_router.register_member(agent_id)
         self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if self._pool_store is not None:
