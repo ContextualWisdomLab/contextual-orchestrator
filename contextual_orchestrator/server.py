@@ -6996,7 +6996,7 @@ def build_server(
                 security.release_run_slot()
 
         def _send_security_headers(self) -> None:
-            if self.close_connection:
+            if getattr(self, "close_connection", False):
                 self.send_header("connection", "close")
             self.send_header("x-content-type-options", "nosniff")
             self.send_header("referrer-policy", "no-referrer")
