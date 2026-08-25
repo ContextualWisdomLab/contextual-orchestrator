@@ -4323,8 +4323,11 @@ class TaskOrchestrator:
             locale_bundles=locale_bundles,
             security_profile=security_profile,
         )
+        # Blockers must be hashable, operator-readable identifiers: downstream
+        # readiness reports deduplicate inherited blocker lists via
+        # ``dict.fromkeys``, which crashes on unhashable evidence-item dicts.
         concrete_blockers = [
-            item
+            item["item_name"]
             for item in handoff["included_artifacts"]
             if item["completion_state"] == "blocked"
         ]
