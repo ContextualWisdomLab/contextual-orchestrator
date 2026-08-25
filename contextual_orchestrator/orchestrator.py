@@ -2819,6 +2819,11 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
         task = self._latest_user_text(messages)
+        caller_instructions = "\n\n".join(
+            message["content"]
+            for message in messages
+            if message.get("role") == "system" and isinstance(message.get("content"), str)
+        )
         plan_source = "template"
         if model_name not in {"contextual-orchestrator", self.AUTO_MODEL}:
             steps = self._plan(task, model_name=model_name)
@@ -2847,6 +2852,7 @@ class TaskOrchestrator:
                         f"Role: {step.role}\n"
                         "Use only the original task and the accessed prior steps. "
                         "Return concise, directly useful work."
+                        + (f"\n\nCaller instructions:\n{caller_instructions}" if caller_instructions else "")
                     ),
                 },
                 {

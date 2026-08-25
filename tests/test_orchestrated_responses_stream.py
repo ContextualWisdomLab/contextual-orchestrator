@@ -86,6 +86,30 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         )["trace"]} == {"free_worker"}
 
 
+def test_conduct_preserves_responses_instructions_for_every_stage() -> None:
+    orchestrator = TaskOrchestrator([
+        ModelAgent("workflow_agent", "mock-model", base_url="mock://provider"),
+    ])
+    original_chat = orchestrator.client.chat
+    observed_system_messages: list[str] = []
+
+    def recording_chat(agent: ModelAgent, messages: list[dict], *args, **kwargs) -> str:
+        observed_system_messages.append(messages[0]["content"])
+        return original_chat(agent, messages, *args, **kwargs)
+
+    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
+    orchestrator.complete(
+        [
+            {"role": "system", "content": "Answer in Korean."},
+            {"role": "user", "content": "Research, implement, and verify the design."},
+        ],
+        mode="conduct",
+    )
+
+    assert observed_system_messages
+    assert all("Caller instructions:\nAnswer in Korean." in message for message in observed_system_messages)
+
+
 def test_free_virtual_model_fails_closed_without_zero_cost_candidate() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("paid_worker", "paid-model")])
     with pytest.raises(RuntimeError, match="no enabled zero-cost model"):
@@ -178,4 +202,5 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
         if event["event_name"] == "responses_orchestrated"
     )
     assert event["event_detail"]["status_code"] == 500
+    assert event["event_detail"]["transport_status_code"] == 200
     assert event["event_detail"]["response_status"] == "failed"

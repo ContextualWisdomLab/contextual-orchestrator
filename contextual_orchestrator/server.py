@@ -6066,6 +6066,7 @@ def build_server(
                                 "endpoint_path": "/v1/responses",
                                 "actor_scope": "inference",
                                 "status_code": 200 if stream_succeeded else 500,
+                                "transport_status_code": 200,
                                 "response_status": "completed" if stream_succeeded else "failed",
                                 "model_name": model_name,
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
