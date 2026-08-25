@@ -120,6 +120,18 @@ def test_persisted_price_row_missing_one_component_remains_unknown() -> None:
     assert price_book.get_price("partial_vendor", "partial-model") is None
 
 
+def test_persisted_boolean_price_row_remains_unknown() -> None:
+    """Do not coerce corrupt KV booleans into zero-cost price evidence."""
+    store = InMemoryConfigStore()
+    store.set(
+        "llm_price_entries",
+        "broken_vendor:broken-model",
+        {"prompt_price_per_1k": False, "completion_price_per_1k": False},
+    )
+
+    assert PriceBook(store).get_price("broken_vendor", "broken-model") is None
+
+
 def test_invalid_catalog_prices_are_unknown_not_trusted_cost_evidence() -> None:
     """Reject negative, non-finite, and boolean provider price values."""
     assert model_discovery._price_per_1k("-0.000001") is None
