@@ -1690,6 +1690,7 @@ class TaskOrchestrator:
         "worker": ("coding", "implementation", "reasoning"),
         "verifier": ("verification", "security", "review", "debugging"),
         "synthesizer": ("writing", "reasoning", "planning"),
+        "embedding": ("embedding",),
     }
     DOMAIN_HINTS = {
         "coding": ("code", "bug", "debug", "implement", "repository", "test", "코드", "구현"),
@@ -2600,6 +2601,22 @@ class TaskOrchestrator:
         if role in selected.provider_exclusions:  # pragma: no cover
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
+
+    def select_capability_agent(self, capability: str) -> ModelAgent:
+        """Select an enabled agent carrying an explicit capability tag."""
+        capability = capability.strip().lower()
+        if not capability:
+            raise ValueError("capability must be a non-empty string")
+        ranked = [
+            agent
+            for agent in self._ranked_agents("", capability)
+            if not agent.disabled
+            and capability in agent.tags
+            and capability not in agent.provider_exclusions
+        ]
+        if not ranked:
+            raise RuntimeError(f"no enabled agent available for capability={capability}")
+        return ranked[0]
 
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
