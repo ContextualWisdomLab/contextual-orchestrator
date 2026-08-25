@@ -204,7 +204,8 @@ def test_orchestrator_uses_distributed_cache_and_honors_bypass() -> None:
     assert first["cache_status"] == "miss"
     assert second["cache_status"] == "hit"
     assert client.calls == calls_after_first
-    assert orchestrator.complete(messages, model_name="another-model") != first
+    changed_model = orchestrator.complete(messages, model_name="another-model")
+    assert changed_model["cache_status"] == "miss"
     assert client.calls > calls_after_first
     calls_after_model_change = client.calls
     bypassed = orchestrator.complete(messages, bypass_cache=True)

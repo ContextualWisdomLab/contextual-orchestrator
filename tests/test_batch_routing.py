@@ -19,6 +19,11 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
 )
 from contextual_orchestrator.cost_ledger import PriceBook, PriceEntry  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
+from contextual_orchestrator.telemetry import (  # noqa: E402
+    current_session_id,
+    reset_session_id,
+    set_session_id,
+)
 
 # ---------------------------------------------------------------------------
 # Sync-vs-batch decision
@@ -120,6 +125,28 @@ def test_local_backend_honors_bounded_concurrency() -> None:
 
     job = backend.submit(requests)
     assert [item.custom_id for item in backend.retrieve(job)] == ["a", "b"]
+
+
+def test_local_backend_workers_inherit_session_id() -> None:
+    """Batch workers retain the caller session for provider telemetry."""
+    observed: list[str | None] = []
+
+    def runner(messages, mode):
+        observed.append(current_session_id())
+        return {"answer": messages[-1]["content"], "mode": mode}
+
+    backend = LocalBatchBackend(runner, max_concurrency=2)
+    requests = [
+        BatchRequest(messages=[{"role": "user", "content": "one"}], custom_id="a"),
+        BatchRequest(messages=[{"role": "user", "content": "two"}], custom_id="b"),
+    ]
+    token = set_session_id("post-session")
+    try:
+        backend.submit(requests)
+    finally:
+        reset_session_id(token)
+
+    assert observed == ["post-session", "post-session"]
 
 
 # ---------------------------------------------------------------------------
