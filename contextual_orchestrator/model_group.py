@@ -145,23 +145,29 @@ class ModelGroupRouter:
             or output_tokens <= 0
         ):
             raise ValueError("output_tokens must be a positive integer when provided")
+        clamped = max(latency, self._min_latency_seconds)
+        try:
+            throughput_sample = None if output_tokens is None else float(output_tokens) / clamped
+        except OverflowError:
+            raise ValueError("output_tokens must be representable as a finite float") from None
+        if throughput_sample is not None and not math.isfinite(throughput_sample):
+            raise ValueError("output_tokens must be representable as a finite float")
         with self._lock:
             state = self._ensure_locked(member_id)
             state["alpha"] = float(state["alpha"]) + 1.0
             ewma = state["ewma"]
-            clamped = max(latency, self._min_latency_seconds)
             state["ewma"] = (
                 clamped
                 if ewma is None
                 else (1.0 - self._ewma_gain) * float(ewma) + self._ewma_gain * clamped
             )
-            if output_tokens is not None:
-                sample = float(output_tokens) / clamped
+            if throughput_sample is not None:
                 tps = state["ewma_tps"]
                 state["ewma_tps"] = (
-                    sample
+                    throughput_sample
                     if tps is None
-                    else (1.0 - self._ewma_gain) * float(tps) + self._ewma_gain * sample
+                    else (1.0 - self._ewma_gain) * float(tps)
+                    + self._ewma_gain * throughput_sample
                 )
 
     def observe_failure(self, member_id: str) -> None:
@@ -171,7 +177,7 @@ class ModelGroupRouter:
             state["beta"] = float(state["beta"]) + 1.0
 
     def member_score(self, member_id: str) -> float:
-        """Return the expected successful output units per second for a member."""
+        """Return the expected successful responses per second for a member."""
         with self._lock:
             return self._score_locked(member_id)
 

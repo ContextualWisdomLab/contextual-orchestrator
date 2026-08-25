@@ -58,6 +58,14 @@ def test_group_router_validates_inputs_and_forgets_departed_members() -> None:
     assert router.snapshot() == {}
 
 
+def test_group_router_rejects_unrepresentable_throughput_before_mutation() -> None:
+    """An overflowing token sample cannot partially record a success."""
+    router = ModelGroupRouter()
+    with pytest.raises(ValueError, match="representable"):
+        router.observe_success("member_one", 1.0, output_tokens=10**10000)
+    assert router.member_observation_count("member_one") == 0
+
+
 def test_group_reassignment_discards_old_group_measurements() -> None:
     member = _agent("member_one", "vendor/model")
     orchestrator = TaskOrchestrator([member])

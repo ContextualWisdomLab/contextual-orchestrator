@@ -85,7 +85,7 @@ without a judge-capable member.
 
 ```mermaid
 flowchart LR
-  Req[request] --> Tri{triage gas<br/>structured JSON}
+  Req[request] --> Tri{triage gate<br/>structured JSON}
   Tri -- workflow_required=true --> Cond[multi-agent conduct]
   Tri -- false / cache hit --> Rank[evidence ladder]
   Rank --> E1[eligibility partition]

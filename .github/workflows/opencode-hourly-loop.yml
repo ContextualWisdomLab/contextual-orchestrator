@@ -43,6 +43,7 @@ jobs:
           while IFS=$'\t' read -r pr_number head_sha; do
             [ -n "$pr_number" ] || continue
             git fetch --no-tags origin "pull/${pr_number}/head:refs/review/external-${pr_number}"
+            test "$(git rev-parse "refs/review/external-${pr_number}")" = "$head_sha"
             git diff --check "origin/main...refs/review/external-${pr_number}"
             printf 'PR #%s head %s: diff integrity passed\n' "$pr_number" "$head_sha" >> "$GITHUB_STEP_SUMMARY"
           done

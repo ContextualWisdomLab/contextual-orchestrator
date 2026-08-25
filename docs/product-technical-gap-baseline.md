@@ -24,7 +24,7 @@ kept for audit lineage only.
 
 | Gap | Buyer impact | State | Evidence |
 | --- | --- | --- | --- |
-| G-01 Logical model groups + measured routing | One model name across providers; routing decisions auditable via measured ledgers instead of folklore. | in-flight — PR #834 (ADR 0026) | `tests/test_model_group.py`, Admin routing-evidence table |
+| G-01 Logical model groups + measured routing | One model name across providers; routing decisions auditable via measured ledgers instead of folklore. | in-flight — PR #834 (normative ADR 0032; ADR 0026 is historical lineage) | `tests/test_model_group.py`, Admin routing-evidence table |
 | G-02 Anti-heuristic evidence ladder | "Why this model?" answers cite declarations, cosine affinity over declared metadata, and measured quality/throughput — no keyword tables to rot. | in-flight — ADR 0034 branch (stacked on #834) | `tests/test_measured_routing_evidence.py` |
 | G-03 Token-counting correctness | Billing estimates match provider accounting per strategy; buyers trust cost reports. | in-flight — PR #821 | `tests/test_token_counting*.py` |
 | G-04 Session correlation across services | OTel traces join gateway sessions with caller systems for incident forensics. | in-flight — PR #818 (**conflicting**, needs rebase) | `tests/*otel*` |
@@ -60,7 +60,7 @@ kept for audit lineage only.
 ## 5. Buyer-experienced gaps not yet ticketed (next loop candidates)
 
 1. **Multi-instance ledger persistence** — observation ledgers reset on
-   restart by design (ADR 0026); buyers running HA fleets need a
+   restart by design (normative ADR 0032; ADR 0026 is historical lineage); buyers running HA fleets need a
    time-windowed shared table with explicit decay policy before they can
    trust routing evidence across instances.
 2. **Reasoning-effort production defaults** — catalog ships but route/

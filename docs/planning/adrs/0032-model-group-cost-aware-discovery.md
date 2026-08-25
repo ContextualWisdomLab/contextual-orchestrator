@@ -74,7 +74,7 @@ erDiagram
 
 - Contract tests cover canonical aliases, static tie behavior, measured reordering, snapshot safety, DB/API group persistence, full-catalog discovery, free classification, and the absence of implicit grouping.
 - Capability tests cover all eight requested model surfaces, group-scoped measured selection, binary speech preservation, and OpenRouter modality metadata without paid inference. An opt-in live test may use a currently free model, but the deterministic contract suite never assumes that a transient free model will remain listed.
-- OpenCode Zen `/models` availability is joined to Models.dev cost/modality metadata; if either catalog lacks matching structured cost evidence, retain `unknown` rather than infer a price.
+- OpenCode Zen `/zen/v1/models` availability is joined to Models.dev cost/modality metadata; if either catalog lacks matching structured cost evidence, retain `unknown` rather than infer a price.
 - Gap: response quality is not yet in this intra-model score. Distinct-model composition must use calibrated evaluation evidence (for example fast-mlsirm), not a hand-authored weight.
 - Gap: multi-replica telemetry needs a time-windowed durable store and concurrency-safe aggregation before production horizontal scaling.
 - Gap: final answer deltas for conducted workflows begin after synthesis; true
