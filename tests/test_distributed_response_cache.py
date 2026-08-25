@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -13,6 +15,7 @@ from contextual_orchestrator import (
     build_response_cache_key,
 )
 from contextual_orchestrator.server import RequestError, _cache_bypass_header
+from contextual_orchestrator.orchestrator import ModelClient
 
 
 class _FakeRedis:
@@ -84,6 +87,27 @@ def test_key_is_order_stable_but_model_and_mode_specific() -> None:
     )
     with pytest.raises(ValueError, match="partition"):
         build_response_cache_key(messages, "route", partition=" ")
+
+
+def test_request_scoped_sampling_produces_thread_isolated_cache_keys() -> None:
+    client = ModelClient(temperature=0.4)
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "mock", tags=("reasoning", "writing"))],
+        client=client,
+    )
+    messages = [{"role": "user", "content": "same prompt"}]
+    barrier = threading.Barrier(2)
+
+    def cache_key(temperature: float) -> str:
+        with client.request_settings(temperature=temperature):
+            barrier.wait()
+            return orchestrator._cache_key(messages, "route")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        keys = list(executor.map(cache_key, (0.1, 0.9)))
+
+    assert keys[0] != keys[1]
+    assert client.request_settings_snapshot()["temperature"] == 0.4
 
 
 def test_redis_compatible_provider_round_trips_json_with_ttl_and_namespace() -> None:
