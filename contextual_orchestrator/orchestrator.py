@@ -123,6 +123,17 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
+def _step_output_token_count(step: dict[str, Any]) -> int:
+    """Return provider-reported output tokens or the existing text estimate."""
+    usage = step.get("usage")
+    if isinstance(usage, dict):
+        for key in ("completion_tokens", "output_tokens"):
+            reported = usage.get(key)
+            if type(reported) is int and reported >= 0:
+                return reported
+    return estimate_tokens(step.get("output", ""))
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -629,7 +640,33 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
                 role = "system"
             if role not in {"system", "user", "assistant"}:
                 raise ValueError(f"unsupported local Responses message role: {role}")
-            content = _responses_text(item.get("content"))
+            raw_content = item.get("content")
+            content: str | list[dict[str, Any]] = _responses_text(raw_content)
+            if isinstance(raw_content, list):
+                parts: list[dict[str, Any]] = []
+                for part in raw_content:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = part.get("type")
+                    if part_type in {"input_text", "output_text", "text"} and isinstance(
+                        part.get("text"), str
+                    ):
+                        parts.append({"type": "text", "text": part["text"]})
+                    elif part_type in {"input_image", "image_url"}:
+                        image_url = part.get("image_url")
+                        if isinstance(image_url, str):
+                            image_url = {
+                                "url": image_url,
+                                **(
+                                    {"detail": part["detail"]}
+                                    if isinstance(part.get("detail"), str)
+                                    else {}
+                                ),
+                            }
+                        if isinstance(image_url, dict):
+                            parts.append({"type": "image_url", "image_url": image_url})
+                if any(part.get("type") == "image_url" for part in parts):
+                    content = parts
             if content:
                 messages.append({"role": role, "content": content})
         elif item_type == "function_call_output":
@@ -671,8 +708,14 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     if "max_output_tokens" in request and "max_tokens" not in payload:
         payload["max_tokens"] = request["max_output_tokens"]
 
+    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
+    if response_format is None and isinstance(request.get("response_format"), dict):
+        response_format = request["response_format"]
+    if response_format is not None:
+        payload["response_format"] = response_format
+
     tools: list[dict[str, Any]] = []
-    for tool in request.get("tools", []):
+    for tool in request.get("tools") or []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
         function = {
@@ -691,6 +734,43 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             "function": {"name": tool_choice.get("name", "")},
         }
     return payload
+
+
+def _responses_text_format_to_chat_response_format(
+    text: Any,
+) -> dict[str, Any] | None:
+    """Translate a validated Responses text format for workflow evidence calls."""
+    if not isinstance(text, dict) or not isinstance(text.get("format"), dict):
+        return None
+    fmt = text["format"]
+    if fmt.get("type") in {"text", "json_object"}:
+        return {"type": fmt["type"]}
+    if fmt.get("type") != "json_schema":
+        return None
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            key: fmt[key]
+            for key in ("name", "schema", "description", "strict")
+            if key in fmt
+        },
+    }
+
+
+def _canonical_provider_usage(
+    usage: dict[str, Any], *, responses: bool
+) -> dict[str, Any]:
+    """Copy provider usage with aliases consumed by existing spend accounting."""
+    canonical = dict(usage)
+    if responses:
+        for responses_key, chat_key in (
+            ("input_tokens", "prompt_tokens"),
+            ("output_tokens", "completion_tokens"),
+        ):
+            value = canonical.get(responses_key)
+            if type(value) is int and value >= 0:
+                canonical.setdefault(chat_key, value)
+    return canonical
 
 
 def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
@@ -2187,14 +2267,33 @@ class TaskOrchestrator:
         *,
         endpoint: str = "chat/completions",
         effort_profile: ReasoningEffortProfile | None = None,
+        single_agent: bool = True,
     ) -> dict[str, Any]:
-        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+        """Serve provider-shaped requests through orchestration or explicit passthrough.
 
-        Requests carrying provider features the multi-agent verifier cannot merge
-        (``response_format``, ``tools``, or the Responses API) are handled by a
-        single selected agent so the full provider response shape survives; the
-        orchestration path stays reserved for plain-text routing/verification.
+        Structured and Responses requests conduct the normal evidence workflow
+        when the HTTP boundary opts in. Direct callers retain the established
+        single-provider passthrough contract.
         """
+        normalized_endpoint = endpoint.strip("/")
+        if not single_agent and (
+            normalized_endpoint == "responses"
+            or any(
+                key in body and body.get(key) is not None
+                for key in (
+                    "response_format",
+                    "tools",
+                    "tool_choice",
+                    "functions",
+                    "function_call",
+                )
+            )
+        ):
+            return self._orchestrated_provider_completion(
+                body,
+                endpoint=normalized_endpoint,
+                effort_profile=effort_profile,
+            )
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
@@ -2277,6 +2376,209 @@ class TaskOrchestrator:
         raise RuntimeError(
             f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
         ) from last_error
+
+    def _orchestrated_provider_completion(
+        self,
+        body: dict[str, Any],
+        *,
+        endpoint: str,
+        effort_profile: ReasoningEffortProfile | None,
+    ) -> dict[str, Any]:
+        """Conduct evidence work, then preserve the caller's provider contract."""
+        response_request = endpoint == "responses"
+        chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
+        messages = chat_body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("structured completion requires non-empty messages")
+        task = self._latest_user_text(messages)
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        requested_model = body.get("model")
+        final_agent = self._requested_agent(requested_model)
+        if final_agent is None:
+            final_agent = self._select_agent(
+                task,
+                "synthesizer",
+                required_tags=required_tags,
+            )
+        elif any(tag not in final_agent.tags for tag in required_tags):
+            raise RuntimeError(
+                f"requested model {requested_model!r} lacks required tags: "
+                + ", ".join(required_tags)
+            )
+        if final_agent.disabled:
+            raise RuntimeError(f"requested model {requested_model!r} is disabled")
+
+        self._raise_if_spend_budget_exceeded()
+        workflow = self.conduct(messages)
+        in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        in_flight_cost = sum(
+            _step_output_token_count(step)
+            / 1_000_000
+            * self.price_per_million[model]
+            for step in workflow["trace"]
+            if (
+                model := model_by_agent.get(
+                    step.get("served_agent_id") or step.get("agent_id")
+                )
+            )
+            in self.price_per_million
+        )
+        self._raise_if_spend_budget_exceeded(
+            additional_output_tokens=in_flight_tokens,
+            additional_cost_usd=round(in_flight_cost, 6),
+        )
+
+        evidence = "\n\n".join(
+            f"Workflow step {step['id']} ({step['role']}):\n{step['output']}"
+            for step in workflow["trace"]
+        )
+        guidance = (
+            "You are the final synthesizer in a multi-agent workflow. "
+            "Use the original request and verified workflow evidence. Return only "
+            "the requested provider response; do not mention the workflow or invent "
+            f"evidence.\n\nVerified workflow evidence:\n{evidence}"
+        )
+        if response_request:
+            upstream = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
+            }
+            upstream.pop("max_tokens", None)
+            upstream.pop("max_completion_tokens", None)
+            original_instructions = _responses_text(body.get("instructions")).strip()
+            upstream["instructions"] = (
+                f"{original_instructions}\n\n{guidance}"
+                if original_instructions
+                else guidance
+            )
+            upstream["model"] = final_agent.model
+            upstream["stream"] = False
+        else:
+            synthesis_messages = copy.deepcopy(messages)
+            guidance_index = next(
+                (
+                    index
+                    for index in range(len(synthesis_messages) - 1, -1, -1)
+                    if synthesis_messages[index].get("role") == "user"
+                ),
+                None,
+            )
+            if guidance_index is None:
+                synthesis_messages.insert(0, {"role": "system", "content": guidance})
+            else:
+                content = synthesis_messages[guidance_index].get("content")
+                if isinstance(content, list):
+                    synthesis_messages[guidance_index]["content"] = [
+                        *content,
+                        {"type": "text", "text": guidance},
+                    ]
+                else:
+                    synthesis_messages[guidance_index]["content"] = (
+                        f"{content}\n\n{guidance}" if isinstance(content, str) else guidance
+                    )
+            upstream = {
+                key: value
+                for key, value in chat_body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS
+                and key not in {"model", "messages"}
+            }
+            upstream.update(
+                {
+                    "model": final_agent.model,
+                    "messages": synthesis_messages,
+                    "stream": False,
+                }
+            )
+        active_profile = effort_profile or self._role_effort_profile("synthesizer")
+        if active_profile is not None:
+            upstream = self.client.apply_effort_profile(
+                final_agent,
+                upstream,
+                active_profile,
+            )
+        synthesis_started = time.perf_counter()
+        raw = self.client.proxy_send(final_agent, endpoint, upstream)
+        echo = raw.get("echo")
+        if isinstance(echo, dict):
+            if response_request:
+                original_instructions = body.get("instructions")
+                if isinstance(original_instructions, str) and original_instructions.strip():
+                    echo["instructions"] = original_instructions
+                else:
+                    echo.pop("instructions", None)
+            elif "messages" in echo:
+                echo["messages"] = copy.deepcopy(messages)
+        synthesis_output = ""
+        if response_request:
+            synthesis_output = raw.get("output_text")
+            if not isinstance(synthesis_output, str):
+                synthesis_output = "".join(
+                    _responses_text(item.get("content"))
+                    for item in raw.get("output", [])
+                    if isinstance(item, dict) and item.get("type") == "message"
+                )
+            raw.setdefault("output_text", synthesis_output)
+        else:
+            try:
+                synthesis_output = ModelClient._response_content(final_agent, raw)
+            except RuntimeError:
+                pass
+        synthesis_step: dict[str, Any] = {
+            "id": len(workflow["trace"]),
+            "role": "synthesizer",
+            "agent_id": final_agent.id,
+            "subtask": "Provider-facing structured synthesis",
+            "access": [step["id"] for step in workflow["trace"]],
+            "latency_ms": round((time.perf_counter() - synthesis_started) * 1000, 2),
+            "output": synthesis_output,
+        }
+        if isinstance(raw.get("usage"), dict):
+            synthesis_step["usage"] = _canonical_provider_usage(
+                raw["usage"], responses=response_request
+            )
+        workflow_run_id = f"run_{uuid.uuid4().hex}"
+        trace = [*workflow["trace"], synthesis_step]
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id,
+                "created_at": int(time.time()),
+                "mode": "conduct",
+                "policy_mode": "conduct",
+                "prompt_text": task,
+                "answer": synthesis_output,
+                "cache_status": "bypass",
+                "trace": trace,
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": workflow.get("verification"),
+            }
+        )
+        self._workflow_runs[workflow_run_id] = record
+        self._run_order.appendleft(workflow_run_id)
+        if self._store is not None:
+            self._store.save("workflow_run", workflow_run_id, record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "run_mode": "conduct",
+                "policy_mode": "conduct",
+                "trace_step_count": len(trace),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        raw["orchestration"] = {
+            "workflow_run_id": workflow_run_id,
+            "mode": "conduct",
+            "agent_count": len(trace),
+            "plan_source": workflow.get("plan_source"),
+        }
+        return raw
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
@@ -2502,6 +2804,29 @@ class TaskOrchestrator:
                 },
             )
         return record
+
+    def _raise_if_spend_budget_exceeded(
+        self,
+        *,
+        additional_output_tokens: int = 0,
+        additional_cost_usd: float = 0.0,
+    ) -> None:
+        """Fail before another provider call would cross an operator budget."""
+        budget = self.budget_status()
+        spent_tokens = budget["spent_output_tokens"] + additional_output_tokens
+        spent_cost = budget["spent_cost_usd"]
+        effective_cost = (
+            spent_cost + additional_cost_usd if spent_cost is not None else None
+        )
+        if budget["exceeded"] or (
+            budget["max_output_tokens"] is not None
+            and spent_tokens >= budget["max_output_tokens"]
+        ) or (
+            budget["max_cost_usd"] is not None
+            and effective_cost is not None
+            and effective_cost >= budget["max_cost_usd"]
+        ):
+            raise BudgetExceededError("spend budget exceeded", detail=budget)
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -2926,6 +3251,8 @@ class TaskOrchestrator:
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
+        source_images = self._source_image_parts(messages)
+        required_tags = ("vision",) if source_images else ()
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
             try:
@@ -2941,7 +3268,25 @@ class TaskOrchestrator:
 
         for step in steps:
             agent = self._agent(step.agent_id)
+            if any(tag not in agent.tags for tag in required_tags):
+                capable = self._ranked_agents(
+                    step.subtask,
+                    step.role,
+                    required_tags=required_tags,
+                )
+                if capable:
+                    agent = capable[0]
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
+            instruction = (
+                f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\n"
+                f"Subtask:\n{step.subtask}"
+            )
+            user_content: str | list[dict[str, Any]] = instruction
+            if source_images:
+                user_content = [
+                    {"type": "text", "text": instruction},
+                    *copy.deepcopy(source_images),
+                ]
             step_messages = [
                 {
                     "role": "system",
@@ -2953,7 +3298,7 @@ class TaskOrchestrator:
                 },
                 {
                     "role": "user",
-                    "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
+                    "content": user_content,
                 },
             ]
             start = time.perf_counter()
@@ -2961,6 +3306,7 @@ class TaskOrchestrator:
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
+            row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
             row["output"] = output
             if usage is not None:
@@ -3116,7 +3462,13 @@ class TaskOrchestrator:
                 domain_score += 2
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
-    def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
+    def _ranked_agents(
+        self,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+    ) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
         return [
@@ -3127,10 +3479,17 @@ class TaskOrchestrator:
                 reverse=True,
             )
             if is_general_chat_agent_model_id(agent.model)
+            and all(tag in agent.tags for tag in required_tags)
         ]
 
-    def _select_agent(self, text: str, role: str) -> ModelAgent:
-        ranked = self._ranked_agents(text, role)
+    def _select_agent(
+        self,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+    ) -> ModelAgent:
+        ranked = self._ranked_agents(text, role, required_tags=required_tags)
         if not ranked:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         selected = ranked[0]
@@ -3179,7 +3538,19 @@ class TaskOrchestrator:
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
         """
-        candidates = self._failover_candidates(primary, text, eligibility_role or role)
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        candidates = self._failover_candidates(
+            primary,
+            text,
+            eligibility_role or role,
+            required_tags=required_tags,
+        )
+        if not candidates and required_tags:
+            candidates = self._failover_candidates(
+                primary,
+                text,
+                eligibility_role or role,
+            )
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
@@ -3252,12 +3623,20 @@ class TaskOrchestrator:
             event_detail["observed_failure_kind"] = observed_kind.value
         self._append_audit_event("tool_fallback_decision", event_detail)
 
-    def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role)
+    def _failover_candidates(
+        self,
+        primary: ModelAgent,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+    ) -> list[ModelAgent]:
+        ranked = self._ranked_agents(text, role, required_tags=required_tags)
         ordered = [
             agent
             for agent in [primary] + [agent for agent in ranked if agent.id != primary.id]
             if is_general_chat_agent_model_id(agent.model)
+            and all(tag in agent.tags for tag in required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
@@ -3317,6 +3696,17 @@ class TaskOrchestrator:
             if text:
                 return text
         return ""  # pragma: no cover
+
+    @staticmethod
+    def _source_image_parts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        """Copy validated image parts so evidence steps receive source pixels."""
+        return [
+            copy.deepcopy(part)
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+            if isinstance(part, dict) and part.get("type") == "image_url"
+        ]
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
