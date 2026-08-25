@@ -48,6 +48,18 @@ def test_group_router_validates_inputs_and_forgets_departed_members() -> None:
     router.observe_success("member_one", 0.5)
     router.forget_members({"member_one"})
     assert set(router.snapshot()) == {"member_one"}
+    router.reset_members({"member_one"})
+    assert router.snapshot() == {}
+
+
+def test_group_reassignment_discards_old_group_measurements() -> None:
+    member = _agent("member_one", "vendor/model")
+    orchestrator = TaskOrchestrator([member])
+    orchestrator._group_router.observe_success(member.id, 0.1)
+
+    orchestrator.patch_agent("default", member.id, {"group_name": "different_group"})
+
+    assert orchestrator._group_router.member_report(member.id)["success_count"] == 0
 
 
 def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> None:

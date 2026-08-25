@@ -102,6 +102,12 @@ class ModelGroupRouter:
                 if member_id not in keep_member_ids:
                     del self._members[member_id]
 
+    def reset_members(self, member_ids: set[str]) -> None:
+        """Discard measurements whose group context changed."""
+        with self._lock:
+            for member_id in member_ids:
+                self._members.pop(member_id, None)
+
     def observe_success(self, member_id: str, latency_seconds: float) -> None:
         """Record one successful attempt with its measured wall-clock latency."""
         if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):

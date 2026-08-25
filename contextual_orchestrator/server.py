@@ -1883,7 +1883,8 @@ def _require_pool_model(
     members = [
         agent
         for agent in agents
-        if getattr(agent, "group_name", "") == group_name
+        if group_name
+        and getattr(agent, "group_name", "") == group_name
         and (required_capability is None or required_capability in getattr(agent, "tags", ()))
     ]
     if members:

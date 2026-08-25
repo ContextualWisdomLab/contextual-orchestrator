@@ -2350,6 +2350,8 @@ class TaskOrchestrator:
             raise ValueError("cannot disable the last enabled agent")
         self.candidates = updated_candidates
         self.agents = updated_agents
+        if patched.group_name != current.group_name:
+            self._group_router.reset_members({worker_agent_id})
         grouped_ids = {agent.id for agent in updated_candidates if agent.group_name}
         for agent_id in grouped_ids:
             self._group_router.register_member(agent_id)
@@ -2420,6 +2422,7 @@ class TaskOrchestrator:
         missing = sorted(requested - known)
         if missing:
             raise KeyError(",".join(missing))
+        previous_candidates = self.candidates
         updated = [
             replace(agent, group_name=name)
             if agent.id in requested
@@ -2430,6 +2433,12 @@ class TaskOrchestrator:
         ]
         self.candidates = updated
         self.agents = [agent for agent in updated if not agent.disabled]
+        changed = {
+            before.id
+            for before, after in zip(previous_candidates, updated)
+            if before.group_name != after.group_name
+        }
+        self._group_router.reset_members(changed)
         for agent in updated:
             if agent.id in requested:
                 self._group_router.register_member(agent.id)
@@ -2446,6 +2455,7 @@ class TaskOrchestrator:
         current = self.get_model_group(group_name)
         name = current["group_name"]
         member_ids = set(current["member_agent_ids"])
+        self._group_router.reset_members(member_ids)
         self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if self._pool_store is not None:

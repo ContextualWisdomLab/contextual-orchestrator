@@ -185,6 +185,14 @@ def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
         )
         assert status == 200 and completion["model"] == "vendor-neutral-example"
 
+        status, invalid = _call(
+            base.replace("/api/v1/model_groups", "/v1/chat/completions"),
+            "POST",
+            token,
+            {"model": "not.a.valid.group", "messages": [{"role": "user", "content": "reject"}]},
+        )
+        assert status == 400 and invalid["error"]["code"] == "invalid_model"
+
         status, updated = _call(f"{base}/vendor-neutral-example", "PATCH", token, {"member_agent_ids": ["coding_agent"]})
         assert status == 200 and updated["member_agent_ids"] == ["coding_agent"]
 
