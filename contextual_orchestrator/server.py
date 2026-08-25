@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import secrets
+import socket
 import struct
 import threading
 import time
@@ -34,6 +35,19 @@ from .orchestrator import (
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
 from .tool_fallback import ToolFallbackStoppedError
+
+
+class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
+    """Serve slow upstream calls concurrently without a five-connection backlog.
+
+    ``ThreadingHTTPServer`` already isolates each request in a daemon thread,
+    which is appropriate for the gateway's blocking provider transports.  Its
+    inherited five-connection listen backlog is not: a burst of slow provider
+    calls can leave even ``/healthz`` waiting to connect.  Use the operating
+    system's native maximum backlog rather than an application guess.
+    """
+
+    request_queue_size = socket.SOMAXCONN
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -4741,6 +4755,10 @@ def build_server(
     class Handler(BaseHTTPRequestHandler):
         """Handle authenticated orchestration, administration, and health routes."""
 
+        # All non-SSE responses carry Content-Length; HTTP/1.1 therefore lets
+        # browsers and API clients reuse connections while provider calls run.
+        protocol_version = "HTTP/1.1"
+
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
@@ -6267,7 +6285,7 @@ def build_server(
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
 
-    return ThreadingHTTPServer((host, port), Handler)
+    return ResponsiveThreadingHTTPServer((host, port), Handler)
 
 
 def serve(
