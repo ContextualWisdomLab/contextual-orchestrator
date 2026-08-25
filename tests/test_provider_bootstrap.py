@@ -63,6 +63,7 @@ def test_fixed_inventory_matches_all_five_organization_secrets():
         "NVIDIA_NIM_API_KEY_SUB",
         "BYTEZ_API_KEY",
         "OPENROUTER_API_KEY",
+        "OPENCODE_ZEN_API_KEY",
         "OPENAI_API_KEY",
     }
 

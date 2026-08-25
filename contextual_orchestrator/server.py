@@ -6295,9 +6295,10 @@ def build_server(
             self._authorized_purpose = effective_purpose
 
         def _cache_partition(self) -> str:
-            """Return a non-secret cache partition for the authenticated bearer."""
+            """Return a non-secret cache partition for the authenticated principal."""
             raw = self.headers.get("authorization", "")
             token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+            token = token or security._extract_admin_session_cookie(self.headers)
             if not token:  # pragma: no cover - _authorize rejects this first
                 raise RequestError(401, "unauthorized", "bearer token is required")
             return hashlib.sha256(token.encode("utf-8")).hexdigest()
