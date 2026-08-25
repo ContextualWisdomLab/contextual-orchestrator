@@ -29,6 +29,14 @@ production SLO. Its candidate inference p95 remains provider-delay dominated at
 about 1.06 seconds; no unmeasured concurrency target or heuristic tuning is
 claimed.
 
+The re-read PRD exposes a separate commercial-semantics gap: its
+`KRW 2,000,000,000` prospective contract-review anchor is not the user's
+USD 20 billion strategic sale-confidence bar. They are different quantities,
+not values to convert with an arbitrary exchange rate. Keep the existing
+contract-review API truthful until a separately authorized strategic valuation
+evidence model defines currency, valuation date, comparable transactions,
+revenue/retention assumptions, and uncertainty; never relabel one as the other.
+
 ## 2026-08-25 exact-head review continuation
 
 | PR | Exact head/base | Current evidence and decision |
