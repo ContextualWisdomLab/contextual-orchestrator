@@ -5866,10 +5866,11 @@ def build_server(
                         messages.append({"role": "user", "content": _coerce_input_text(input_value)})
                         started_at = time.perf_counter()
                         if stream:
-                            self._stream_orchestrated_response(
+                            stream_succeeded = self._stream_orchestrated_response(
                                 orchestrator, security, messages, model_name
                             )
                         else:
+                            stream_succeeded = True
                             result = self._run(
                                 lambda: orchestrator.complete(
                                     messages, mode="auto", model_name=model_name
@@ -5893,7 +5894,8 @@ def build_server(
                             {
                                 "endpoint_path": "/v1/responses",
                                 "actor_scope": "inference",
-                                "status_code": 200,
+                                "status_code": 200 if stream_succeeded else 500,
+                                "response_status": "completed" if stream_succeeded else "failed",
                                 "model_name": model_name,
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                                 "response_streamed": stream,
@@ -6092,7 +6094,7 @@ def build_server(
             security: Any,
             messages: Any,
             model_name: str,
-        ) -> None:
+        ) -> bool:
             """Stream orchestration as native Responses reasoning-summary events."""
             response_id = f"resp_{uuid.uuid4().hex}"
             reasoning_id = f"rs_{uuid.uuid4().hex}"
@@ -6192,7 +6194,7 @@ def build_server(
                     }
                     emit("response.failed", response=failed)
                     self._write_sse("data: [DONE]\n\n")
-                    return
+                    return False
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",
@@ -6254,6 +6256,7 @@ def build_server(
                 )
                 emit("response.completed", response=completed)
                 self._write_sse("data: [DONE]\n\n")
+                return True
             finally:
                 security.release_run_slot()
 

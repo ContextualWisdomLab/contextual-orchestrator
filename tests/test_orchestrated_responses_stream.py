@@ -150,3 +150,9 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     assert "secret failure" not in stream
     assert stream.endswith("data: [DONE]\n\n")
     assert "HTTP/1.0 500" not in stream
+    event = next(
+        event for event in orchestrator._analytics_events
+        if event["event_name"] == "responses_orchestrated"
+    )
+    assert event["event_detail"]["status_code"] == 500
+    assert event["event_detail"]["response_status"] == "failed"
