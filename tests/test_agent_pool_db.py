@@ -227,10 +227,10 @@ def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
         assert status == 409 and duplicate["error"]["code"] == "model_group_exists"
 
         status, missing = _call(base, "POST", token, {"group_name": "missing-member", "member_agent_ids": ["ghost_agent"]})
-        assert status == 404 and missing["error"]["code"] == "resource_not_found"
+        assert status == 404 and missing["error"]["code"] == "agent_not_found"
 
         status, missing = _call(f"{base}/missing-group", "PATCH", token, {"member_agent_ids": ["coding_agent"]})
-        assert status == 404 and missing["error"]["code"] == "resource_not_found"
+        assert status == 404 and missing["error"]["code"] == "agent_not_found"
 
         status, listed = _call(base, "GET", token)
         assert status == 200 and listed["total_count"] == 1
