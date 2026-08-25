@@ -704,7 +704,7 @@ def test_orphaned_legacy_generation_is_adopted_and_dropped() -> None:
     assert legacy_tables == 0
 
 
-def test_append_is_atomic_on_autocommit_connection(monkeypatch) -> None:
+def test_append_is_atomic_on_autocommit_connection() -> None:
     """A mid-append failure on an autocommit sqlite connection leaves no partial row."""
     connection = sqlite3.connect(":memory:", isolation_level=None)
     store = SqlLedgerStore(connection, paramstyle="qmark")
@@ -716,9 +716,10 @@ def test_append_is_atomic_on_autocommit_connection(monkeypatch) -> None:
         if armed[0]:
             raise RuntimeError("simulated mid-append failure")
 
-    monkeypatch.setattr(store, "_insert_normalized_attribution", explode)
-    with pytest.raises(RuntimeError, match="simulated mid-append failure"):
-        store.append(_guard_usage_record())
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(store, "_insert_normalized_attribution", explode)
+        with pytest.raises(RuntimeError, match="simulated mid-append failure"):
+            store.append(_guard_usage_record())
     assert connection.execute("SELECT COUNT(*) FROM llm_usage_records").fetchone()[0] == 0
     assert (
         connection.execute("SELECT COUNT(*) FROM usage_record_attributions").fetchone()[0] == 0
@@ -726,6 +727,18 @@ def test_append_is_atomic_on_autocommit_connection(monkeypatch) -> None:
     armed[0] = False
     store.append(_guard_usage_record(usage_record_id="usage_guard_t2"))
     assert len(store.query(None, None)) == 1
+
+
+def test_append_preserves_caller_owned_sqlite_transaction() -> None:
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    connection.execute("BEGIN")
+
+    store.append(_guard_usage_record())
+
+    assert connection.in_transaction is True
+    connection.rollback()
+    assert store.query(None, None) == []
 
 
 def test_sql_ledger_rejects_unknown_parameter_style() -> None:

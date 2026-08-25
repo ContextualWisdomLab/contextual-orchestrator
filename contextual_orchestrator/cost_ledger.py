@@ -892,25 +892,35 @@ class SqlLedgerStore:
 
         On sqlite connections opened in autocommit mode an explicit ``BEGIN``
         gates the usage-row and attribution inserts so a mid-append failure
-        cannot strand a usage row without its attribution children. Callers
-        that hand in an already-open transaction keep ownership of it: this
-        method's ``commit()`` will commit their outer transaction too.
+        cannot strand a usage row without its attribution children. An existing
+        caller-owned sqlite transaction is isolated with a savepoint and remains
+        open for the caller to commit or roll back.
         """
         row = record.as_dict()
         cur = self._conn.cursor()
+        outer_transaction = self._paramstyle == "qmark" and bool(
+            getattr(self._conn, "in_transaction", False)
+        )
         try:
-            if self._paramstyle == "qmark" and not getattr(self._conn, "in_transaction", False):
-                cur.execute("BEGIN")
+            if self._paramstyle == "qmark":
+                cur.execute("SAVEPOINT usage_record_append" if outer_transaction else "BEGIN")
             cur.execute(
                 _CORE_USAGE_INSERT_SQL[self._paramstyle],
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
             )
             self._insert_normalized_attribution(cur, row)
-            self._conn.commit()
+            if outer_transaction:
+                cur.execute("RELEASE SAVEPOINT usage_record_append")
+            else:
+                self._conn.commit()
         except Exception:
-            rollback = getattr(self._conn, "rollback", None)
-            if callable(rollback):
-                rollback()
+            if outer_transaction:
+                cur.execute("ROLLBACK TO SAVEPOINT usage_record_append")
+                cur.execute("RELEASE SAVEPOINT usage_record_append")
+            else:
+                rollback = getattr(self._conn, "rollback", None)
+                if callable(rollback):
+                    rollback()
             raise
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
