@@ -28,9 +28,9 @@ from .orchestrator import (
 )
 from .server import SecurityConfig, serve
 
-DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
-DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
-DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
+DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
 
 
 def _positive_int(value: str) -> int:
@@ -392,17 +392,17 @@ def main(argv: list[str] | None = None) -> None:
             )
         try:
             auth_token = (
-                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_TOKEN_KEY)
+                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)
                 if not split_requested
                 else ""
             )
             admin_token = (
-                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_TOKEN_KEY)
+                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_CREDENTIAL_NAME)
                 if split_requested
                 else ""
             )
             inference_token = (
-                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_TOKEN_KEY)
+                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_CREDENTIAL_NAME)
                 if split_requested
                 else ""
             )
