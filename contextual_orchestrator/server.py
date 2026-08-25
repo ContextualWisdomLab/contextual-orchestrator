@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import secrets
+import socket
 import struct
 import threading
 import time
@@ -47,6 +48,19 @@ from .telemetry import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
+    """Serve slow upstream calls concurrently without a five-connection backlog.
+
+    ``ThreadingHTTPServer`` already isolates each request in a daemon thread,
+    which is appropriate for the gateway's blocking provider transports.  Its
+    inherited five-connection listen backlog is not: a burst of slow provider
+    calls can leave even ``/healthz`` waiting to connect.  Use the operating
+    system's native maximum backlog rather than an application guess.
+    """
+
+    request_queue_size = socket.SOMAXCONN
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -249,6 +263,8 @@ class SecurityConfig:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
+        if type(self.rate_limit_window_seconds) is not int or self.rate_limit_window_seconds < 1:
+            raise ValueError("rate_limit_window_seconds must be an integer >= 1")
         if type(self.admin_session_ttl_seconds) is not int or self.admin_session_ttl_seconds < 1:
             raise ValueError("admin_session_ttl_seconds must be an integer >= 1")
         if type(self.max_admin_sessions) is not int or self.max_admin_sessions < 1:
@@ -4849,12 +4865,28 @@ def build_server(
             finally:
                 self._reset_session()
 
-        # HTTP/1.1 keep-alive: every response sets Content-Length, so connections
-        # are reusable. The HTTP/1.0 default forces a TCP handshake + TIME_WAIT
-        # socket per request — k6 evidence (loadtests/k6_gateway_smoke.js): at
-        # 200 req/s the CLIENT exhausted local ephemeral ports ("dial: i/o
-        # timeout") long before server capacity was reached.
+        # Bound inactive request/header reads to the operator-configured abuse
+        # accounting window. StreamRequestHandler applies this to the socket;
+        # BaseHTTPRequestHandler then closes timed-out persistent connections.
+        timeout = float(security.rate_limit_window_seconds)
+
+        # All non-SSE responses carry Content-Length; HTTP/1.1 therefore lets
+        # browsers and API clients reuse connections while provider calls run.
         protocol_version = "HTTP/1.1"
+
+        def handle_one_request(self) -> None:
+            """Reset body-consumption state before parsing each persistent request."""
+            self._request_body_consumed = False
+            super().handle_one_request()
+            if (
+                self._request_body_consumed is False
+                and hasattr(self, "headers")
+                and (
+                    self.headers.get("Content-Length") not in (None, "0")
+                    or self.headers.get("Transfer-Encoding")
+                )
+            ):
+                self.close_connection = True
 
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
@@ -6237,6 +6269,7 @@ def build_server(
                     "invalid_request_framing",
                     "request body ended before content-length",
                 )
+            self._request_body_consumed = True
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
@@ -6267,6 +6300,16 @@ def build_server(
             request-handling thread (visible as a second, unhandled
             BrokenPipeError in server logs after the first).
             """
+            # A rejection can happen before _read_json (authentication, rate
+            # limiting, or media type). Reusing that HTTP/1.1 connection would
+            # parse the unread body as the next request. Close instead of
+            # attempting to drain attacker-controlled bytes at an error path.
+            if not getattr(self, "_request_body_consumed", True):
+                content_lengths = self.headers.get_all("content-length", [])
+                if any(value.strip() != "0" for value in content_lengths) or self.headers.get_all(
+                    "transfer-encoding", []
+                ):
+                    self.close_connection = True
             try:
                 writer()
                 return True
@@ -6288,8 +6331,6 @@ def build_server(
                 self.send_header("content-type", "application/json; charset=utf-8")
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 for name, value in (extra_headers or {}).items():
                     self.send_header(name, value)
                 self.end_headers()
@@ -6305,8 +6346,6 @@ def build_server(
                 self.send_header("content-type", content_type)
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 self.end_headers()
                 self.wfile.write(raw)
 
@@ -6321,8 +6360,6 @@ def build_server(
                 self.send_header("cache-control", "no-cache")
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 self.end_headers()
                 self.wfile.write(raw)
 
@@ -6330,14 +6367,13 @@ def build_server(
 
         def _begin_sse(self) -> bool:
             # Incremental SSE: no content-length; the connection close delimits the body.
+            self.close_connection = True
+
             def _write() -> None:
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream; charset=utf-8")
                 self.send_header("cache-control", "no-cache")
-                self.send_header("connection", "close")
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 self.end_headers()
 
             return self._write_response(_write)
@@ -6399,24 +6435,14 @@ def build_server(
                 security.release_run_slot()
 
         def _send_security_headers(self) -> None:
+            if self.close_connection:
+                self.send_header("connection", "close")
             self.send_header("x-content-type-options", "nosniff")
             self.send_header("referrer-policy", "no-referrer")
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
 
-    class GatewayHTTPServer(ThreadingHTTPServer):
-        """Threading server with a listen backlog sized for concurrent bursts.
-
-        ``socketserver.TCPServer.request_queue_size`` defaults to 5, so bursty
-        clients (health probes, fan-out SDK retries) overflow the accept queue
-        and see connection resets before any handler runs. k6 evidence
-        (loadtests/k6_gateway_smoke.js): healthz error rate 7.8% at 200 req/s
-        with the default backlog; raising it to 128 removes the resets.
-        """
-
-        request_queue_size = 128
-
-    return GatewayHTTPServer((host, port), Handler)
+    return ResponsiveThreadingHTTPServer((host, port), Handler)
 
 
 def serve(

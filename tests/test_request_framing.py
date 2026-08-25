@@ -140,8 +140,7 @@ def test_unbounded_digit_content_length_is_rejected_and_connection_is_closed() -
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
-    assert b" 413 " in response
-    assert b"HTTP/1.1" in response.split(b"\r\n", 1)[0] or b"HTTP/1.0" in response.split(b"\r\n", 1)[0]
+    assert b"HTTP/1.1 413 " in response
     assert b"request_too_large" in response
     # The framing guard must still terminate the connection, not just reject.
     assert b"connection: close" in response.lower() or b"Connection: close" in response
