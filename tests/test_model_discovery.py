@@ -26,6 +26,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _price_per_1k,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -147,6 +148,13 @@ def test_default_sources_activate_only_provider_filtered_chat_catalogs() -> None
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
 
 
+def test_price_per_1k_rejects_underflowing_positive_value() -> None:
+    """A nonzero per-token price that underflows to 0.0 in float stays unknown."""
+    assert _price_per_1k("1e-10000") is None
+    assert _price_per_1k(0) == 0.0
+    assert _price_per_1k(0.000001) == pytest.approx(0.001)
+
+
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     payload = {
@@ -192,6 +200,30 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].error_code == "transport_error"
     assert "connection refused" not in str(errors[0])
     assert errors[0].__cause__ is None
+
+
+def test_discovery_boundary_contains_raw_connection_reset() -> None:
+    """A raw ConnectionResetError (not a URLError) still fails inside the boundary.
+
+    Regression: ``ConnectionError``/``OSError`` subclasses that are not
+    ``URLError`` used to escape ``discover_provider_models`` uncaught, leaking
+    provider transport diagnostics to discovery callers.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+
+    def urlopen(request, timeout=None):
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+        try:
+            discover_provider_models(OPENAI_SOURCE)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "openai"
+            assert error.error_code == "transport_error"
+            assert "reset" not in str(error)
+            assert error.__cause__ is None
+        else:  # pragma: no cover
+            raise AssertionError("a raw connection reset must become a ProviderDiscoveryError")
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:

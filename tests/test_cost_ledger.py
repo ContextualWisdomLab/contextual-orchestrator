@@ -113,6 +113,56 @@ def test_provider_wildcard_price_entry() -> None:
     assert record.cost_amount == 2.0
 
 
+def test_corrupt_specific_row_still_falls_back_to_wildcard_price() -> None:
+    """A malformed provider:model row must not shadow a valid provider:* row."""
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("openai", "*", prompt_price_per_1k=1.0, completion_price_per_1k=1.0))
+    config.set("llm_price_entries", "openai:broken-model", {"prompt_price_per_1k": "not-a-number"})
+
+    entry = price_book.get_price("openai", "broken-model")
+
+    assert entry is not None
+    assert entry.prompt_price_per_1k == 1.0
+    assert entry.completion_price_per_1k == 1.0
+
+
+def test_underflowing_positive_price_row_falls_back_to_wildcard() -> None:
+    """A nonzero KV price that underflows to 0.0 must not be treated as free."""
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("openai", "*", prompt_price_per_1k=1.0, completion_price_per_1k=1.0))
+    config.set(
+        "llm_price_entries",
+        "openai:underflow-model",
+        {"prompt_price_per_1k": "1e-10000", "completion_price_per_1k": "1e-10000"},
+    )
+
+    entry = price_book.get_price("openai", "underflow-model")
+
+    assert entry is not None
+    assert entry.prompt_price_per_1k == 1.0
+    assert entry.completion_price_per_1k == 1.0
+
+
+def test_overflowing_price_row_falls_back_to_wildcard() -> None:
+    """A Decimal-finite KV price whose float() conversion overflows to inf must not be treated as valid."""
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("openai", "*", prompt_price_per_1k=1.0, completion_price_per_1k=1.0))
+    config.set(
+        "llm_price_entries",
+        "openai:overflow-model",
+        {"prompt_price_per_1k": "1e10000", "completion_price_per_1k": "1e10000"},
+    )
+
+    entry = price_book.get_price("openai", "overflow-model")
+
+    assert entry is not None
+    assert entry.prompt_price_per_1k == 1.0
+    assert entry.completion_price_per_1k == 1.0
+
+
 def test_writes_carry_full_attribution() -> None:
     ledger = _priced_ledger()
     record = ledger.record_usage(
