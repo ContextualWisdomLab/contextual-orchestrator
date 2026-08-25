@@ -5039,11 +5039,20 @@ def build_server(
                 if path in capability_routes:
                     _validate_capability_request(path, body)
                     capability, endpoint, binary = capability_routes[path]
-                    result = self._run(
-                        lambda: orchestrator.proxy_capability(
-                            body, capability=capability, endpoint=endpoint, binary=binary
+                    try:
+                        result = self._run(
+                            lambda: orchestrator.proxy_capability(
+                                body, capability=capability, endpoint=endpoint, binary=binary
+                            )
                         )
-                    )
+                    except ValueError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
+                    except RuntimeError as exc:
+                        raise RequestError(
+                            503,
+                            "capability_unavailable",
+                            f"no enabled {capability}-capable model group member is available",
+                        ) from exc
                     if binary:
                         raw, content_type = result
                         self._send_bytes(raw, content_type)
@@ -5373,7 +5382,7 @@ def build_server(
                     if frequency_penalty is not None:
                         model_client.default_frequency_penalty = frequency_penalty
                     try:
-                        if stream and orchestrator.would_route(messages, mode):
+                        if stream and orchestrator.would_route(messages, mode, model_name):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",

@@ -392,6 +392,9 @@ def select_top_n_cheapest_discovered_agents(
     known_price = [
         model
         for model in discovered
-        if model.is_free or price_book.get_price(model.provider_name, model.model_id) is not None
+        if model.is_free
+        or model.prompt_price_per_1k is not None
+        or model.completion_price_per_1k is not None
+        or price_book.get_price(model.provider_name, model.model_id) is not None
     ]
     return sorted(known_price, key=_cost)[:limit]

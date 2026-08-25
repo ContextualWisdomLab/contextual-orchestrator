@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
 import urllib.request
 
 import pytest
@@ -23,6 +24,14 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, bytes, str]:
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         return response.status, response.read(), response.headers.get_content_type()
+
+
+def _post_error(port: int, path: str, payload: dict) -> tuple[int, dict]:
+    try:
+        _post(port, path, payload)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+    raise AssertionError("request unexpectedly succeeded")
 
 
 @pytest.mark.parametrize(
@@ -101,3 +110,22 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
     )
 
     assert observed == ["images"]
+
+
+def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
+    server = build_server(
+        TaskOrchestrator([ModelAgent("text_member", "provider/text", tags=("text",))]),
+        port=0,
+        security=SecurityConfig(auth_token=TOKEN),
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        status, body = _post_error(port, "/v1/videos", {"prompt": "demo"})
+        assert status == 503 and body["error"]["code"] == "capability_unavailable"
+        status, body = _post_error(
+            port, "/v1/videos", {"model": "missing-group", "prompt": "demo"}
+        )
+        assert status == 400 and body["error"]["code"] == "invalid_model"
+    finally:
+        server.shutdown()
