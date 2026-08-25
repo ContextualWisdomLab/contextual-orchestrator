@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-25 20:55 KST exact-head continuation
+## 2026-08-25 22:22 KST exact-head continuation
 
 Protected `main` is `838b3de160c341a6f36bf588ae9fcc09989c040c`.
 PRs #782 and #790 merged normally as `ba70855cd0f63654feca3a5925c673fb1bf39072`
@@ -13,13 +13,14 @@ tokens-per-second remains diagnostic evidence rather than an arbitrary weight.
 
 | PR | Exact head | Current gate and customer consequence |
 | --- | --- | --- |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `fbee9f27b15853bc427d5b56927385f4772535c0` | Recovers only the current-main passthrough-failover slice from #846. Virtual-model tools, structured-output, and Responses payloads advance once across capability-ranked providers after 404/410/429/5xx failures, while concrete model requests remain sticky and caller errors fail closed. Exact head passed all `1886` tests plus the focused `39 passed`; independent review and protected checks remain pending with auto-merge enabled. |
 | [#850](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/850) | `05af334a87fb9d5a68f6e459c86b7ca779fb025b` | Constant-time budget status preserves exact randomized analytics parity, replacement semantics, provider/estimated usage, per-model price rounding, restart recovery, and rare agent-pool mutation reconciliation. The predecessor tree passed all `1879` tests; exact-head focused evidence is `49 passed`, so hosted full-suite evidence remains required. Independent review and protected checks are pending with auto-merge enabled. |
 | [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `1addd42c24e911febd43c34d2dac8ea80f5bc9bf` | k6 measured 64 concurrent inference requests: 128/128 inference and 100/100 health requests succeeded with 0/228 HTTP failures at 25.068 inference req/s and 10.85 ms health p99. HTTP/1.1 persistence plus native `socket.SOMAXCONN` raised the initial measured inference rate by 54.61%; rejected unread bodies close the connection, zero-length requests preserve keep-alive, and incomplete headers expire within the configured abuse-accounting window. Independent review and protected checks remain pending with auto-merge enabled. |
 | [#848](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/848) | `9632a682644516b784e77b253cd47583b74ff7a3` | Latest-main merge applied; independent exact-head review and required checks are pending with auto-merge enabled. Until this lands, planning ADR identifiers are not mechanically unique. |
 | [#845](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/845) | `6353dfb5027af27ed5fdfd15172a9c841efccf0d` | The preceding hosted full suite reached 1876 passes before one cache test compared identical deterministic payloads instead of the cache contract. The exact-head repair asserts the model-key cache miss and provider-call increment directly (`15 passed` focused); replacement protected checks and independent review are pending with auto-merge enabled. Until this lands, hourly provider-catalog refresh cannot claim reliable run-scoped KV fallback. |
 | [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | `7fa07ac22c0482a8f7770df90b9813396e2d86bf` | Contains the reviewed #847 remediation, validates throughput evidence before mutating routing state, binds external-PR validation to the fetched exact head, and removes the last CLI claim that model-name suffixes prove free cost. The exact-tree model-group/REST/DB/eight-capability/Responses-stream suite is `119 passed`; `docker compose -f compose.yaml config --quiet` renders successfully with required bootstrap inputs. Independent exact-head review and protected checks are pending with auto-merge enabled. This is not protected-main evidence yet. |
 | [#818](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/818) | `9888b33d108d3eb030572f8e7e89f8fa47366bd2` | Streaming and passthrough spans now use the OpenTelemetry well-known `chat`, `text_completion`, and `generate_content` operation names; independent approval and exact-head checks remain pending with auto-merge enabled. Telemetry correlation is not release evidence yet. |
-| [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | `ca3b3283617ae66a6a08a2a476e20343210758d6` | Shared DB-API connection access is serialized, concurrent SQLite writes have a regression test, and incomplete flattened schemas fail with named missing columns before rename; exact-head checks are queued and auto-merge enabled. Database naming/persistence migrations remain unreleased. |
+| [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | `ca3b3283efdcbd03942157fc39e10ac952a6f853` | Shared DB-API connection access is serialized, concurrent SQLite writes have a regression test, and incomplete flattened schemas fail with named missing columns before rename; exact-head checks are queued and auto-merge enabled. Database naming/persistence migrations remain unreleased. |
 | [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | this commit supersedes `b6d1f1958338a5fb8162ebd3d5e16a365b8cb61a` | This baseline refresh must pass exact-head checks before it becomes protected-main product evidence. |
 
 PR #849 closes the first measurable asynchronous web-capacity slice with a
@@ -41,9 +42,10 @@ revenue/retention assumptions, and uncertainty; never relabel one as the other.
 Issue [#846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846)
 records fixes stranded on the closed #765 stack. PR #850 recovers only the
 constant-time budget-status slice on current main with randomized numerical
-parity and no-scan timing-shape evidence. The remaining passthrough failover and
-structured-provider fixes require separate current-main PRs; stale stack review
-or check evidence does not transfer.
+parity and no-scan timing-shape evidence; PR #851 independently recovers the
+passthrough provider-failover slice with current-main full-suite evidence. The
+remaining structured-provider fix requires its own current-main PR; stale stack
+review or check evidence does not transfer.
 
 ## 2026-08-25 exact-head review continuation
 
