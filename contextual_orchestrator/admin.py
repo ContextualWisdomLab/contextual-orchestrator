@@ -1070,11 +1070,11 @@ Summarize this research thread and verify claims.</textarea>
       els.agents.innerHTML = rows.map(({agent, index, status}) => `
         <tr>
           <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.id)}</strong><br><small>${escapeHtml(agent.base_url)}</small></td>
-          <td>${escapeHtml(agent.model)}</td>
+          <td>${escapeHtml(agent.model)}${agent.group_name ? `<br><span class="chip">${escapeHtml(agent.group_name)}</span>` : ""}</td>
           <td>${tags(agent.tags)}</td>
           <td><span class="chip ${status.chip}">${status.label}</span></td>
-          <td><div>${72 - index * 8}%</div><div class="bar"><span style="width:${72 - index * 8}%"></span></div></td>
-          <td>${(99.2 - index * .4).toFixed(1)}%</td>
+          <td>${agent.group_routing?.ewma_latency_seconds == null ? "—" : `${escapeHtml(agent.group_routing.ewma_latency_seconds)}s`}</td>
+          <td>${agent.group_routing ? `${(agent.group_routing.success_posterior_mean * 100).toFixed(1)}%` : "—"}</td>
         </tr>`).join("") || `<tr><td colspan="6" class="empty" data-i18n="no_agents_match">${t("no_agents_match")}</td></tr>`;
     }
     function renderTrace(result) {

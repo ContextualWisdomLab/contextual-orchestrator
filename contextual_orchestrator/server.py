@@ -118,7 +118,7 @@ ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
-ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
+ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions", "group_name"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
     "model",
@@ -130,7 +130,10 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "disabled",
     "provider_name",
     "provider_exclusions",
+    "group_name",
 }
+ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
+ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
 
 
 class RequestError(Exception):
@@ -4632,6 +4635,16 @@ def build_server(
                         "page_size": page_size,
                     })
                     return
+                if path == "/api/v1/model_groups":
+                    items = orchestrator.list_model_groups()
+                    self._send({"items": items, "total_count": len(items)})
+                    return
+                if path.startswith("/api/v1/model_groups/"):
+                    try:
+                        self._send(orchestrator.get_model_group(urllib.parse.unquote(path.rsplit("/", 1)[-1])))
+                    except KeyError:
+                        self._send_error(404, "model_group_not_found", "model group not found")
+                    return
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
                     return
@@ -4896,6 +4909,12 @@ def build_server(
                     updated = orchestrator.patch_agent(segments[3], segments[-1], body)
                     self._send(updated, 200)
                     return
+                if path.startswith("/api/v1/model_groups/"):
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_PATCH_KEYS)
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    self._send(orchestrator.set_model_group(name, body.get("member_agent_ids")))
+                    return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
@@ -4917,6 +4936,10 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent delete path missing worker agent")
                     self._send(orchestrator.remove_agent(segments[3], segments[-1]), 200)
                     return
+                if path.startswith("/api/v1/model_groups/"):
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    self._send(orchestrator.delete_model_group(name), 200)
+                    return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
@@ -4931,7 +4954,7 @@ def build_server(
             """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
+                scope = "admin" if path == "/admin/simulate" or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups")) else "inference"
                 self._authorize(scope)
                 body = self._read_json()
 
@@ -4941,6 +4964,10 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
                     _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
                     self._send(orchestrator.add_agent(segments[3], body), 201)
+                    return
+                if path == "/api/v1/model_groups":
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_KEYS)
+                    self._send(orchestrator.set_model_group(body.get("group_name"), body.get("member_agent_ids")), 201)
                     return
 
                 if path == "/v1/completions":

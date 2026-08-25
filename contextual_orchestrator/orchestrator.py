@@ -33,6 +33,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .model_group import ModelGroupRouter, canonical_group_name
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -270,9 +271,16 @@ class ModelAgent:
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
     auth_scheme: str = "Bearer"
+    # Optional measured-routing group: agents sharing a canonical group name are
+    # one logical model whose members are ordered by observed speed/stability
+    # (see model_group.ModelGroupRouter and planning ADR 0026).
+    # Empty string means the agent is ungrouped.
+    group_name: str = ""
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        if self.group_name:
+            canonical_group_name(self.group_name)
         if type(self.local_credential_key) is not str:
             raise TypeError("local_credential_key must be a string")
         if self.local_credential_key and urlparse(self.base_url).scheme != "local":
@@ -295,6 +303,7 @@ class ModelAgent:
             "provider_exclusions": list(self.provider_exclusions),
             "local_credential_key": self.local_credential_key,
             "auth_scheme": self.auth_scheme,
+            "group_name": self.group_name,
         }
 
     @property
@@ -324,6 +333,7 @@ class ModelAgent:
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
             auth_scheme=value.get("auth_scheme", "Bearer"),
+            group_name=value.get("group_name", ""),
         )
 
 
@@ -1740,6 +1750,14 @@ class TaskOrchestrator:
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
+        # Measured speed/stability routing inside model groups (global: every
+        # selection path below funnels through _ranked_agents). Ledger state is
+        # process-local by design: it reflects this instance's observed traffic
+        # and resets on restart, never carrying stale evidence across pools.
+        self._group_router = ModelGroupRouter()
+        for grouped in self.candidates:
+            if grouped.group_name:
+                self._group_router.register_member(grouped.id)
         self.client = client or ModelClient()
         if (
             isinstance(tool_retry_attempts, bool)
@@ -1915,6 +1933,17 @@ class TaskOrchestrator:
         if type(requested_model) is not str or not requested_model:
             raise ValueError("requested model must be a configured non-empty string")
         matches = [candidate for candidate in self.candidates if candidate.model == requested_model]
+        if not matches:
+            try:
+                requested_group = canonical_group_name(requested_model)
+            except ValueError:
+                requested_group = ""
+            matches = [
+                candidate
+                for candidate in self._ranked_agents("", "worker")
+                if candidate.group_name
+                and canonical_group_name(candidate.group_name) == requested_group
+            ]
         if not matches:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
@@ -2278,6 +2307,9 @@ class TaskOrchestrator:
             patched = replace(patched, tags=tuple(patch["tags"]))
         if "provider_exclusions" in patch:
             patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
+        if "group_name" in patch:
+            group_name = str(patch["group_name"])
+            patched = replace(patched, group_name=canonical_group_name(group_name) if group_name else "")
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -2285,6 +2317,10 @@ class TaskOrchestrator:
             raise ValueError("cannot disable the last enabled agent")
         self.candidates = updated_candidates
         self.agents = updated_agents
+        grouped_ids = {agent.id for agent in updated_candidates if agent.group_name}
+        for agent_id in grouped_ids:
+            self._group_router.register_member(agent_id)
+        self._group_router.forget_members(grouped_ids)
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self._append_audit_event(
@@ -2314,6 +2350,78 @@ class TaskOrchestrator:
                 },
             )
         return self._agent_to_admin_payload(patched)
+
+    def list_model_groups(self) -> list[dict[str, Any]]:
+        """Return operator-defined logical models and measured member evidence."""
+        names = sorted({canonical_group_name(agent.group_name) for agent in self.candidates if agent.group_name})
+        return [self.get_model_group(name) for name in names]
+
+    def get_model_group(self, group_name: str) -> dict[str, Any]:
+        """Return one logical model group or raise ``KeyError`` when absent."""
+        name = canonical_group_name(group_name)
+        members = [agent for agent in self.candidates if agent.group_name and canonical_group_name(agent.group_name) == name]
+        if not members:
+            raise KeyError(name)
+        ranked_ids = self._group_router.ranked_member_ids([agent.id for agent in members])
+        return {
+            "group_name": name,
+            "member_agent_ids": ranked_ids,
+            "enabled_member_count": sum(1 for agent in members if not agent.disabled),
+            "members": [self._agent_to_admin_payload(self._agent(agent_id)) for agent_id in ranked_ids],
+        }
+
+    def set_model_group(self, group_name: str, member_agent_ids: list[str]) -> dict[str, Any]:
+        """Create or replace a group membership using configured agent identifiers."""
+        name = canonical_group_name(group_name)
+        if not member_agent_ids or any(type(agent_id) is not str for agent_id in member_agent_ids):
+            raise ValueError("member_agent_ids must be a non-empty list of strings")
+        if len(member_agent_ids) != len(set(member_agent_ids)):
+            raise ValueError("member_agent_ids must not contain duplicates")
+        requested = set(member_agent_ids)
+        known = {agent.id for agent in self.candidates}
+        previous = {
+            agent.id
+            for agent in self.candidates
+            if agent.group_name and canonical_group_name(agent.group_name) == name
+        }
+        missing = sorted(requested - known)
+        if missing:
+            raise KeyError(",".join(missing))
+        updated = [
+            replace(agent, group_name=name)
+            if agent.id in requested
+            else replace(agent, group_name="")
+            if agent.group_name and canonical_group_name(agent.group_name) == name
+            else agent
+            for agent in self.candidates
+        ]
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
+        for agent in updated:
+            if agent.id in requested:
+                self._group_router.register_member(agent.id)
+                if self._pool_store is not None:
+                    self._pool_store.save(agent)
+            elif agent.id in previous and self._pool_store is not None:
+                self._pool_store.save(agent)
+        self._group_router.forget_members({agent.id for agent in updated if agent.group_name})
+        self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
+        return self.get_model_group(name)
+
+    def delete_model_group(self, group_name: str) -> dict[str, Any]:
+        """Delete a logical group while retaining its provider agents."""
+        current = self.get_model_group(group_name)
+        name = current["group_name"]
+        member_ids = set(current["member_agent_ids"])
+        self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
+        if self._pool_store is not None:
+            for agent in self.candidates:
+                if agent.id in member_ids:
+                    self._pool_store.save(agent)
+        self._group_router.forget_members({agent.id for agent in self.candidates if agent.group_name})
+        self._append_audit_event("model_group_deleted", {"group_name": name})
+        return {"group_name": name, "deleted": True}
 
     def add_agent(self, agent_pool_id: str, value: dict[str, Any]) -> dict[str, Any]:
         """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""
@@ -2594,9 +2702,21 @@ class TaskOrchestrator:
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
-        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
+        """Rank logical model groups, then measured provider members within each group."""
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        static = sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        groups: dict[str, list[ModelAgent]] = {}
+        for agent in static:
+            key = canonical_group_name(agent.group_name) if agent.group_name else f"agent:{agent.id}"
+            groups.setdefault(key, []).append(agent)
+        ranked: list[ModelAgent] = []
+        for members in groups.values():
+            if not members[0].group_name:
+                ranked.extend(members)
+                continue
+            by_id = {member.id: member for member in members}
+            ranked.extend(by_id[member_id] for member_id in self._group_router.ranked_member_ids(list(by_id)))
+        return ranked
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:
         selected = self._ranked_agents(text, role)[0]
@@ -2638,12 +2758,17 @@ class TaskOrchestrator:
             retry_attempt = 0
             while True:
                 try:
+                    attempt_start = time.perf_counter()
                     output = self.client.chat(agent, messages)
                 except Exception as exc:
+                    if agent.group_name:
+                        self._group_router.observe_failure(agent.id)
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
                     decision = classify_tool_failure(exc)
                     action = decision.action
+                    # A failed attempt is one Bernoulli stability observation
+                    # for measured group routing regardless of what happens next.
                     if (
                         action is ToolFallbackAction.RETRY_SAME_AGENT
                         and retry_attempt < retry_limit
@@ -2670,6 +2795,12 @@ class TaskOrchestrator:
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
                     break
+                # Success: one Bernoulli observation plus the measured latency
+                # feeding the group router's EWMA (Jacobson 1988 gain).
+                if agent.group_name:
+                    self._group_router.observe_success(
+                        agent.id, time.perf_counter() - attempt_start
+                    )
                 self._record_success(agent.id)
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 return output, agent.id, usage
@@ -2890,6 +3021,8 @@ class TaskOrchestrator:
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
+            "group_name": agent.group_name,
+            "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
 
     def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
@@ -2922,6 +3055,23 @@ class TaskOrchestrator:
             }
         ]
         seen: set[str] = {"contextual-orchestrator"}
+        # Model-group aliases are addressable model ids (model="ox-alpha" routes
+        # to the best measured member), so advertise them like real models.
+        for group in self.list_model_groups():
+            if not group.get("enabled_member_count"):
+                continue
+            group_alias = str(group["group_name"])
+            if group_alias in seen:
+                continue
+            seen.add(group_alias)
+            data.append(
+                {
+                    "id": group_alias,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": "model_group",
+                }
+            )
         for agent in self.agents:
             if agent.disabled:
                 continue

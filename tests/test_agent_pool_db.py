@@ -43,6 +43,7 @@ def test_add_patch_remove_survive_restart() -> None:
         first = TaskOrchestrator(_seed(), agents_db=db)
         first.add_agent("default", NEW_AGENT)
         first.patch_agent("default", "general_agent", {"priority": 9})
+        first.set_model_group("example-logical-model", ["general_agent", "coding_agent"])
         assert {a.id for a in first.agents} == {"general_agent", "coding_agent"}
 
         second = TaskOrchestrator(_seed(), agents_db=db)  # restart with the same seed file
@@ -50,6 +51,7 @@ def test_add_patch_remove_survive_restart() -> None:
         assert set(by_id) == {"general_agent", "coding_agent"}  # added agent restored
         assert by_id["general_agent"].priority == 9  # patch restored over the seed
         assert by_id["coding_agent"].model == "gpt-5.5"
+        assert {a.group_name for a in by_id.values()} == {"example_logical_model"}
 
         second.remove_agent("default", "coding_agent")
         third = TaskOrchestrator(_seed(), agents_db=db)
@@ -143,6 +145,32 @@ def test_http_create_and_delete_worker_agents() -> None:
     finally:
         server.shutdown()
     assert {a.id for a in orchestrator.agents} == {"general_agent"}
+
+
+def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
+    token = "pool_token"
+    orchestrator = TaskOrchestrator(_seed())
+    orchestrator.add_agent("default", NEW_AGENT)
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/model_groups"
+    try:
+        status, created = _call(base, "POST", token, {"group_name": "vendor-neutral-example", "member_agent_ids": ["general_agent", "coding_agent"]})
+        assert status == 201 and created["group_name"] == "vendor_neutral_example"
+        assert set(created["member_agent_ids"]) == {"general_agent", "coding_agent"}
+
+        status, listed = _call(base, "GET", token)
+        assert status == 200 and listed["total_count"] == 1
+
+        status, updated = _call(f"{base}/vendor-neutral-example", "PATCH", token, {"member_agent_ids": ["coding_agent"]})
+        assert status == 200 and updated["member_agent_ids"] == ["coding_agent"]
+
+        status, deleted = _call(f"{base}/vendor-neutral-example", "DELETE", token)
+        assert status == 200 and deleted["deleted"] is True
+        assert orchestrator.list_model_groups() == []
+    finally:
+        server.shutdown()
 
 
 if __name__ == "__main__":

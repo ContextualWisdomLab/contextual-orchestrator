@@ -30,6 +30,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     agent_id_for,
     discover_all_models,
     discover_provider_models,
+    free_discovered_models,
     refresh_price_book,
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
@@ -137,12 +138,47 @@ def test_discovery_preserves_operator_declared_source_capabilities() -> None:
     assert discovered[0].capabilities == ("embedding",)
 
 
+def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {"id": "stealth/ox-alpha", "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "paid/model", "pricing": {"prompt": "0.000001", "completion": "0.000002"}},
+            {"id": "request-fee/model", "pricing": {"prompt": "0", "completion": "0", "request": "0.01"}},
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert [model.model_id for model in discovered] == ["stealth/ox-alpha", "paid/model", "request-fee/model"]
+    assert [model.model_id for model in free_discovered_models(discovered)] == ["stealth/ox-alpha"]
+    assert agent_from_discovered(discovered[0]).group_name == ""
+
+
+def test_opencode_zen_free_suffix_and_ox_alpha_alias_are_discovered() -> None:
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"data": [{"id": "openai/x-preview-f-free"}, {"id": "paid-model"}]}),
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is True
+    assert discovered[1].is_free is False
+    assert agent_from_discovered(discovered[0]).group_name == ""
+
+
 def test_default_sources_activate_only_provider_filtered_chat_catalogs() -> None:
     sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
 
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=text")
+    assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
 
@@ -304,6 +340,18 @@ def test_select_top_n_cheapest_discovered_agents_orders_by_cost() -> None:
 
     top_two = select_top_n_cheapest_discovered_agents([priciest, middle, cheapest], price_book, 2)
     assert top_two == [cheapest, middle]
+
+
+def test_unknown_price_is_not_silently_ranked_as_free() -> None:
+    from contextual_orchestrator.cost_ledger import PriceEntry
+
+    price_book = PriceBook(InMemoryConfigStore())
+    known = DiscoveredModel("openrouter", "known", "KEY_NAME", "https://openrouter.ai/api/v1", "Bearer")
+    unknown = DiscoveredModel("bytez", "unknown", "KEY_NAME", "https://api.bytez.com/v1", "Key")
+    price_book.set_price(PriceEntry("openrouter", "known", 0.1, 0.1))
+
+    assert select_cheapest_discovered_agent([unknown, known], price_book) is known
+    assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known, unknown]
 
 
 def test_select_top_n_cheapest_discovered_agents_zero_limit_returns_empty() -> None:
