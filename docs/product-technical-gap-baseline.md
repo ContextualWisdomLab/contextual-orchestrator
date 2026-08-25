@@ -1,5 +1,22 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-25 23:38 KST structured-provider continuation
+
+Protected `main` remains `838b3de160c341a6f36bf588ae9fcc09989c040c`;
+the following stack integration is not protected-main release evidence.
+
+| PR | Exact head / merge | Current evidence and customer consequence |
+| --- | --- | --- |
+| [#853](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/853) | merged normally into #851 as `7841f15ba42a97c5e8b4b5134f716b87c1c24d71` | Structured Chat and non-tool Responses requests now conduct the existing workflow before provider-native synthesis; schemas, native Responses input, multimodal evidence, caller-visible echo privacy, and one-run cost provenance are covered. Tool requests retain the OpenAI-compatible single-provider response because the client owns tool state. The pre-stack exact tree passed `1894` tests in `589.00s`; the reviewed #851 stack integration passed `51` focused tests. ADR `0034` records the decision. This is stack evidence only. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `71022d6c` | Includes #853 plus the reviewed provider-failover repair. Effort-capable aliases are filtered before provider deduplication, so a lower-ranked supported deployment is not hidden by an unsupported alias. The ADR identifier was moved from conflicting `0027` to reserved `0034`. Auto-merge and all hosted checks must be re-established at this exact head before protected delivery. |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `43372c2f58b36466eba4934e50a9f945fffacac9` | The HTTP/1.1 handler now closes unsupported method requests with unread bodies, preventing the stdlib `501` path from interpreting payload bytes as another request. The raw-socket regression and the complete unread-body slice pass (`6 passed`). Idle keep-alive threads remain bounded by the configured timeout; production TLS/proxy/soak evidence remains a deployment acceptance gap. |
+
+Issue [#846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846)
+now has current-main replacements for constant-time spend gates, provider
+failover, and structured-provider orchestration. It remains open until those
+replacement heads are normally delivered to protected `main`; closed-stack
+checks do not transfer.
+
 ## 2026-08-25 22:22 KST exact-head continuation
 
 Protected `main` is `838b3de160c341a6f36bf588ae9fcc09989c040c`.
@@ -44,8 +61,9 @@ records fixes stranded on the closed #765 stack. PR #850 recovers only the
 constant-time budget-status slice on current main with randomized numerical
 parity and no-scan timing-shape evidence; PR #851 independently recovers the
 passthrough provider-failover slice with current-main full-suite evidence. The
-remaining structured-provider fix requires its own current-main PR; stale stack
-review or check evidence does not transfer.
+structured-provider fix was subsequently recovered through #853 and merged
+normally into #851; stale historical review or check evidence still does not
+transfer to the resulting #851 exact head.
 
 ## 2026-08-25 exact-head review continuation
 
