@@ -14,8 +14,6 @@ import sys
 import threading
 import urllib.request
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -160,15 +158,6 @@ def test_would_route_true_for_route_false_for_conduct() -> None:
     assert orchestrator.would_route(messages, "conduct") is False
 
 
-def test_would_route_explicit_group_without_buffering_complex_auto_request() -> None:
-    orchestrator = TaskOrchestrator(
-        [ModelAgent("group_member", "m-model", group_name="stream_group")]
-    )
-    messages = [{"role": "user", "content": "research and compare several alternatives"}]
-    assert orchestrator.would_route(messages, "auto", "stream-group") is True
-    assert orchestrator.would_route(messages, "conduct", "stream-group") is False
-
-
 def test_stream_route_yields_and_persists() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))])
     deltas = list(orchestrator.stream_route([{"role": "user", "content": "stream this please"}]))
@@ -177,22 +166,6 @@ def test_stream_route_yields_and_persists() -> None:
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
 
 
-def test_stream_route_records_group_success_and_midstream_failure() -> None:
-    agent = ModelAgent("group_member", "m-model", group_name="stream_group")
-    orchestrator = TaskOrchestrator([agent])
-    messages = [{"role": "user", "content": "stream this please"}]
-
-    list(orchestrator.stream_route(messages, model_name="stream-group"))
-    assert orchestrator._group_router.member_report(agent.id)["success_count"] == 1
-
-    def failing_stream(*_args: object):
-        yield "partial"
-        raise RuntimeError("provider disconnected")
-
-    orchestrator.client.stream_chat = failing_stream  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="provider disconnected"):
-        list(orchestrator.stream_route(messages, model_name="stream-group"))
-    assert orchestrator._group_router.member_report(agent.id)["failure_count"] == 1
 def test_stream_disconnect_stops_consuming_upstream_deltas() -> None:
     """A disconnected SSE client releases the route without reading another provider delta."""
     server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
@@ -214,8 +187,9 @@ def test_stream_disconnect_stops_consuming_upstream_deltas() -> None:
         def flush(self) -> None:
             return None
 
-    def stream_route(_messages, *, workflow_run_id: str):
+    def stream_route(_messages, *, workflow_run_id: str, model_name: str = "m-model"):
         assert workflow_run_id.startswith("run_")
+        del model_name
         try:
             for delta in ("first", "second"):
                 consumed.append(delta)

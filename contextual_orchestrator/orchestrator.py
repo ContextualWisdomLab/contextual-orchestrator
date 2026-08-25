@@ -3507,7 +3507,7 @@ class TaskOrchestrator:
         answers fail over to the next measured candidate within the configured
         tool-retry budget, and every verdict updates the quality ledger so
         measured accuracy steers future routing. Speed is explicitly not a
-        design constraint here -- correctness is.
+        design constraint at this layer -- correctness is.
         """
         text = self._latest_user_text(messages)
         free_only = model_name == self.FREE_MODEL

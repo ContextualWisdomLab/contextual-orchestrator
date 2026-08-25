@@ -26,6 +26,31 @@ def _normalize_sql_identifier(value: str) -> str:
     return value
 
 
+def _sql_literals(path: Path) -> list[str]:
+    """Return every string constant in a Python file (SQL lives in strings).
+
+    Scanning raw source lets ``\\s+`` in the pattern cross newlines from
+    comments and docstrings, producing false identifiers from prose (e.g. the
+    word after CREATE in an unrelated sentence). Restricting the scan to real
+    string constants keeps the contract strict without prose false positives.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except SyntaxError:
+        return []
+    literals: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            literals.append(node.value)
+        elif isinstance(node, ast.JoinedStr):
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    literals.append(value.value)
+    return literals
+
+
 def _extract_object_names(text: str) -> list[str]:
     """Extract final object components from supported SQL declaration forms."""
     return [_normalize_sql_identifier(match.group("object_name")) for match in CREATE_OBJECT_PATTERN.finditer(text)]
@@ -42,14 +67,18 @@ def test_application_database_objects_use_descriptive_names() -> None:
     """Keep application-owned tables, indexes, views, and constraints consistent."""
     violations: list[str] = []
     for path in _application_sql_sources():
-        text = path.read_text(encoding="utf-8")
-        for object_name in _extract_object_names(text):
-            # Dynamic SQL may interpolate the identifier after this literal
-            # prefix; there is no object name to validate in the source text.
-            if object_name.upper() in SQL_CONTROL_WORDS:
-                continue
-            if not is_two_word_snake_case(object_name):
-                violations.append(f"{path.relative_to(ROOT)}:{object_name}")
+        if path.suffix != ".py":
+            texts = [path.read_text(encoding="utf-8")]
+        else:
+            texts = _sql_literals(path)
+        for text in texts:
+            for object_name in _extract_object_names(text):
+                # Dynamic SQL may interpolate the identifier after this literal
+                # prefix; there is no object name to validate in the source text.
+                if object_name.upper() in SQL_CONTROL_WORDS:
+                    continue
+                if not is_two_word_snake_case(object_name):
+                    violations.append(f"{path.relative_to(ROOT)}:{object_name}")
     assert violations == []
 
 

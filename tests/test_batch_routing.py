@@ -131,7 +131,7 @@ def test_local_backend_workers_inherit_session_id() -> None:
     """Batch workers retain the caller session for provider telemetry."""
     observed: list[str | None] = []
 
-    def runner(messages, mode):
+    def runner(messages, mode, model):
         observed.append(current_session_id())
         return {"answer": messages[-1]["content"], "mode": mode}
 

@@ -57,8 +57,8 @@ def test_add_patch_remove_survive_restart() -> None:
         assert by_id["coding_agent"].model == "gpt-5.5"
         assert {a.group_name for a in by_id.values()} == {"example_logical_model"}
         with sqlite3.connect(db) as conn:
-            payloads = [json.loads(row[0]) for row in conn.execute("SELECT payload FROM agent_pool")]
-            assert all("group_name" not in payload for payload in payloads)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_pool)")}
+            assert "payload" not in columns  # normalized schema, no JSON shadow
             assert conn.execute("SELECT group_name FROM model_group").fetchall() == [
                 ("example_logical_model",)
             ]
@@ -84,7 +84,17 @@ def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
 
         assert restored.candidates[0].group_name == "legacy_group"
         with sqlite3.connect(db) as conn:
-            assert "group_name" not in json.loads(conn.execute("SELECT payload FROM agent_pool").fetchone()[0])
+            # The normalized pool has no payload column; membership lives in its
+            # own relation and the legacy payload table is dropped after promotion.
+            tables = {
+                row[0]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            assert "agent_pool_legacy_payloads" not in tables
+            member = conn.execute(
+                "SELECT group_name FROM model_group_member WHERE agent_id = 'legacy_agent'"
+            ).fetchone()
+            assert member is not None and member[0] == "legacy_group"
 
 
 def test_seed_agent_removal_tombstones_across_restart() -> None:
