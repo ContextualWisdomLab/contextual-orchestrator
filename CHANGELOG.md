@@ -49,6 +49,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Security
 
+  - HTTP/1.1 responses now close the connection when authentication, rate
+    limiting, media-type validation, or another boundary rejects a request
+    before its declared body is consumed, preventing response-stream desync.
   - Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
   - Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
   - Worker-agent pool boundaries are enforced beside object lookup so a

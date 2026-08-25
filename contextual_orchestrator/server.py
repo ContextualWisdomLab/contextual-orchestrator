@@ -4814,6 +4814,11 @@ def build_server(
         # browsers and API clients reuse connections while provider calls run.
         protocol_version = "HTTP/1.1"
 
+        def handle_one_request(self) -> None:
+            """Reset body-consumption state before parsing each persistent request."""
+            self._request_body_consumed = False
+            super().handle_one_request()
+
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
@@ -6185,6 +6190,7 @@ def build_server(
                     "invalid_request_framing",
                     "request body ended before content-length",
                 )
+            self._request_body_consumed = True
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
@@ -6214,6 +6220,15 @@ def build_server(
             request-handling thread (visible as a second, unhandled
             BrokenPipeError in server logs after the first).
             """
+            # A rejection can happen before _read_json (authentication, rate
+            # limiting, or media type). Reusing that HTTP/1.1 connection would
+            # parse the unread body as the next request. Close instead of
+            # attempting to drain attacker-controlled bytes at an error path.
+            if not getattr(self, "_request_body_consumed", False) and (
+                self.headers.get_all("content-length", [])
+                or self.headers.get_all("transfer-encoding", [])
+            ):
+                self.close_connection = True
             try:
                 writer()
                 return True
@@ -6270,11 +6285,12 @@ def build_server(
 
         def _begin_sse(self) -> bool:
             # Incremental SSE: no content-length; the connection close delimits the body.
+            self.close_connection = True
+
             def _write() -> None:
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream; charset=utf-8")
                 self.send_header("cache-control", "no-cache")
-                self.send_header("connection", "close")
                 self._send_security_headers()
                 self.end_headers()
 
@@ -6337,6 +6353,8 @@ def build_server(
                 security.release_run_slot()
 
         def _send_security_headers(self) -> None:
+            if self.close_connection:
+                self.send_header("connection", "close")
             self.send_header("x-content-type-options", "nosniff")
             self.send_header("referrer-policy", "no-referrer")
             self.send_header("cache-control", "no-store")

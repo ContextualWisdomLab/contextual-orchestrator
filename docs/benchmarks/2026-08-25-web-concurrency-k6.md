@@ -68,6 +68,13 @@ The throughput percentage is derived directly from the two measured scenario
 rates: `(25.021239 / 16.183192 - 1) * 100 = 54.61%`. It is not a weight used by
 routing or production configuration.
 
+After the HTTP/1.1 unread-body security repair, the same command was rerun:
+128/128 delayed inference checks and 100/100 liveness checks passed, all 228
+HTTP requests succeeded, inference rate was 25.07 req/s, and liveness p99 was
+10.85 ms. Raw-socket tests additionally prove authentication, rate-limit, and
+non-JSON rejections send `Connection: close` and exactly one response rather
+than parsing the unread body as another request.
+
 ## Remaining bottlenecks and next measurement
 
 - The stdlib server uses one daemon thread per connection. The admission
