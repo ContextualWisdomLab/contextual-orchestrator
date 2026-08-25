@@ -234,12 +234,10 @@ uses (`TaskOrchestrator.sync_discovered_agents`, an idempotent upsert of
 added **disabled**, so a newly found model never starts serving traffic
 before an operator opts it in.
 
-Cost-based auto-optimization reuses the existing price-table selector rather
-than adding a new one: `model_discovery.refresh_price_book` writes any
-provider-reported per-token pricing into `PriceBook`, and
-`model_discovery.select_cheapest_discovered_agent` calls
-`batch_routing.cheapest_upstream` to pick the lowest-cost candidate among
-discovered models for a representative request shape.
+Cost-based auto-optimization uses `model_discovery.refresh_price_book` to write
+provider-reported per-token pricing into `PriceBook`. Discovery selectors rank
+complete, valid price evidence first and keep unknown-priced candidates as a
+deterministic fallback.
 
 ## Gateway direction
 
