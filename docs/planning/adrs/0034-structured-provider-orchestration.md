@@ -1,5 +1,5 @@
 ---
-id: "0027"
+id: "0034"
 title: "Keep structured provider responses inside orchestration"
 status: accepted
 proposed_date: "2026-08-25"
