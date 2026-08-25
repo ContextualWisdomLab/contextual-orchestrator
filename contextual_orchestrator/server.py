@@ -5186,7 +5186,9 @@ def build_server(
                     try:
                         created_group = orchestrator.set_model_group(group_name, body.get("member_agent_ids"))
                     except KeyError as exc:
-                        raise RequestError(404, "resource_not_found", str(exc)) from exc
+                        # Unknown members reference agents, so the canonical
+                        # not-found code matches the worker-agent surface (#831).
+                        raise RequestError(404, "agent_not_found", str(exc)) from exc
                     self._send(created_group, 201)
                     return
 
