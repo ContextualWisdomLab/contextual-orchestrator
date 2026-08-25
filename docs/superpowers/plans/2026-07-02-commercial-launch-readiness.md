@@ -96,7 +96,7 @@ Expected: PASS.
 - Modify: `tests/test_plugin_driven_artifacts.py`
 
 **Interfaces:**
-- Produces: launch readiness doc, analytics metric `commercial_launch_external_input_count`, FigJam artifact note `KRW 2B Commercial Launch Readiness`
+- Produces: launch readiness doc, analytics field `launch_summary.external_input_group_count`, FigJam artifact note `KRW 2B Commercial Launch Readiness`
 
 - [ ] **Step 1: Add docs**
 
