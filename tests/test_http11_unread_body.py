@@ -136,6 +136,21 @@ def test_rate_limit_rejection_closes_connection_with_unread_body() -> None:
     _assert_single_closed_response(response, b"429 ")
 
 
+def test_zero_length_health_request_keeps_connection_alive() -> None:
+    """Content-Length zero declares no unread bytes and preserves keep-alive."""
+    server, thread, port = _start()
+    try:
+        response = _pipeline(
+            port,
+            b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    assert response.count(b"HTTP/1.1 200 ") == 2
+
+
 def test_incomplete_request_headers_time_out_within_abuse_window() -> None:
     """A slow client cannot pin a request thread beyond the configured window."""
     server, thread, port = _start(rate_limit_window_seconds=1)
