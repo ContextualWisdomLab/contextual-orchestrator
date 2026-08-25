@@ -57,52 +57,88 @@ def post_json(url: str, payload: dict[str, object], token: str | None = None) ->
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def get_json(url: str, token: str | None = None) -> tuple[int, dict[str, object]]:
-    headers = {"connection": "close"}
-    if token:
-        headers["authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers, method="GET")
+def request_json(
+    url: str,
+    method: str,
+    *,
+    body: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, object], object]:
+    """Make a JSON request and retain response headers for cookie assertions."""
+    request_headers = {"content-type": "application/json", "connection": "close", **(headers or {})}
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8") if body is not None else None,
+        headers=request_headers,
+        method=method,
+    )
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+            return response.status, json.loads(response.read().decode("utf-8")), response.headers
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read().decode("utf-8"))
+        return exc.code, json.loads(exc.read().decode("utf-8")), exc.headers
 
 
-def test_split_scope_tokens_share_deployment_owner_for_evidence_reads() -> None:
-    server = build_server(
-        build(),
-        port=0,
-        security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"),
-    )
+def test_admin_session_is_opaque_scoped_and_revocable() -> None:
+    """A browser cookie replaces, but never becomes, the long-lived bearer."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    port = server.server_address[1]
-    payload = {"model": "mock-generalist", "messages": [{"role": "user", "content": "hello"}]}
-
+    base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
-        created_status, created_body = post_json(
-            f"http://127.0.0.1:{port}/v1/chat/completions",
-            payload,
-            token="inference_secret",
+        status, body, headers = request_json(
+            f"{base}/admin/session",
+            "POST",
+            body={"token": "secret_token"},
         )
-        run_id = created_body["orchestration"]["workflow_run_id"]
-        admin_status, admin_body = get_json(
-            f"http://127.0.0.1:{port}/api/v1/workflow_runs/{run_id}",
-            token="admin_secret",
+        set_cookie = headers.get("set-cookie") or headers.get("Set-Cookie") or ""
+        cookie_pair = set_cookie.split(";", 1)[0]
+        session_id = cookie_pair.split("=", 1)[1]
+        assert status == 200
+        assert body == {"session_status": "established"}
+        assert "secret_token" not in set_cookie
+        assert "HttpOnly" in set_cookie and "SameSite=Strict" in set_cookie and "Secure" in set_cookie
+        assert session_id != "secret_token"
+
+        status, state, _ = request_json(f"{base}/admin/state", "GET", headers={"cookie": cookie_pair})
+        assert status == 200 and "agents" in state
+        status, evaluation, _ = request_json(
+            f"{base}/api/v1/evaluation_runs",
+            "POST",
+            body={"prompts": ["evaluate this"]},
+            headers={"cookie": cookie_pair, "origin": base},
         )
-        inference_status, _ = get_json(
-            f"http://127.0.0.1:{port}/api/v1/workflow_runs/{run_id}",
-            token="inference_secret",
+        assert status == 201 and evaluation["prompt_count"] == 1
+        status, _, _ = request_json(f"{base}/v1/models", "GET", headers={"cookie": cookie_pair})
+        assert status == 401
+        status, body, _ = request_json(
+            f"{base}/admin/simulate",
+            "POST",
+            body={"prompt": "cross-origin must fail"},
+            headers={"cookie": cookie_pair, "origin": "https://evil.example"},
         )
+        assert status == 403 and body["error"]["code"] == "csrf_origin_rejected"
+
+        status, body, _ = request_json(
+            f"{base}/admin/session",
+            "DELETE",
+            headers={"cookie": cookie_pair, "origin": "https://evil.example"},
+        )
+        assert status == 403 and body["error"]["code"] == "csrf_origin_rejected"
+
+        status, body, clear_headers = request_json(
+            f"{base}/admin/session",
+            "DELETE",
+            headers={"cookie": cookie_pair, "origin": base},
+        )
+        clear_cookie = clear_headers.get("set-cookie") or clear_headers.get("Set-Cookie") or ""
+        assert status == 200 and body == {"session_status": "cleared", "session_revoked": True}
+        assert "Max-Age=0" in clear_cookie
+        status, _, _ = request_json(f"{base}/admin/state", "GET", headers={"cookie": cookie_pair})
+        assert status == 401
     finally:
         server.shutdown()
         thread.join(timeout=5)
-
-    assert created_status == 200
-    assert admin_status == 200
-    assert admin_body["workflow_run_id"] == run_id
-    assert inference_status == 401
 
 
 def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:

@@ -194,6 +194,30 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].__cause__ is None
 
 
+def test_discovery_boundary_contains_raw_connection_reset() -> None:
+    """A raw ConnectionResetError (not a URLError) still fails inside the boundary.
+
+    Regression: ``ConnectionError``/``OSError`` subclasses that are not
+    ``URLError`` used to escape ``discover_provider_models`` uncaught, leaking
+    provider transport diagnostics to discovery callers.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+
+    def urlopen(request, timeout=None):
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+        try:
+            discover_provider_models(OPENAI_SOURCE)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "openai"
+            assert error.error_code == "transport_error"
+            assert "reset" not in str(error)
+            assert error.__cause__ is None
+        else:  # pragma: no cover
+            raise AssertionError("a raw connection reset must become a ProviderDiscoveryError")
+
+
 def test_agent_id_for_is_two_word_snake_case() -> None:
     discovered = DiscoveredModel(
         provider_name="openrouter",

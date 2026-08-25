@@ -18,6 +18,7 @@
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
+| `GET` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Read a worker only when it belongs to the addressed pool |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
 | `GET` | `/api/v1/provider_readiness/latest` | Read or explicitly refresh bounded provider chat readiness |
 | `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |
@@ -52,6 +53,7 @@
 | `GET` | `/api/v1/workflow_runs/{workflow_run_id}` | Inspect one run and trace |
 | `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list evidence |
 | `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status/priority/tags/provider exclusions |
+| `DELETE` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Remove a worker only when it belongs to the addressed pool |
 | `POST` | `/api/v1/evaluation_runs` | Replay prompts and return a reproducible evaluation run |
 | `GET` | `/api/v1/evaluation_runs/{evaluation_run_id}` | Review replay output |
 | `GET` | `/api/v1/locale_bundles/{locale_code}` | Read i18n bundle |

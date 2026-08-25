@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
-import hashlib
 import json
+import hashlib
 import secrets
 import struct
 import threading
@@ -119,6 +120,7 @@ ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
+ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -132,6 +134,9 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_name",
     "provider_exclusions",
 }
+ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
+DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
+DEFAULT_MAX_ADMIN_SESSIONS = 256
 
 
 class RequestError(Exception):
@@ -207,6 +212,9 @@ class SecurityConfig:
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    admin_session_ttl_seconds: int = DEFAULT_ADMIN_SESSION_TTL_SECONDS
+    max_admin_sessions: int = DEFAULT_MAX_ADMIN_SESSIONS
+    admin_session_secure_cookie: bool = True
     # Deployment may inject a real OIDC/JWT verifier (for example a Keyverse
     # relying-party adapter). The core deliberately does not decode JWTs with
     # an unsafe hand-rolled parser or own Keycloak admin credentials.
@@ -214,6 +222,8 @@ class SecurityConfig:
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
+    _admin_sessions: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _session_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.auth_token and (self.admin_token or self.inference_token):
@@ -224,7 +234,23 @@ class SecurityConfig:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
+        if type(self.admin_session_ttl_seconds) is not int or self.admin_session_ttl_seconds < 1:
+            raise ValueError("admin_session_ttl_seconds must be an integer >= 1")
+        if type(self.max_admin_sessions) is not int or self.max_admin_sessions < 1:
+            raise ValueError("max_admin_sessions must be an integer >= 1")
+        if type(self.admin_session_secure_cookie) is not bool:
+            raise ValueError("admin_session_secure_cookie must be a boolean")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+
+    @staticmethod
+    def _constant_time_token_match(presented: str, expected: str) -> bool:
+        """Compare UTF-8 secret bytes without leaking non-ASCII failures."""
+        if not isinstance(presented, str) or not isinstance(expected, str):
+            return False
+        try:
+            return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+        except (TypeError, ValueError):
+            return False
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
@@ -232,9 +258,11 @@ class SecurityConfig:
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin or inference scope."""
+        """Validate a bearer token or an opaque, server-side admin session cookie."""
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
+        if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
+            return
         raw = headers.get("authorization", "")
         if not raw.lower().startswith("bearer "):
             raise RequestError(401, "unauthorized", "bearer token is required")
@@ -269,6 +297,100 @@ class SecurityConfig:
         else:
             principal_material = f"bearer:{token}"
         return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _extract_bearer_token(headers: Any) -> str:
+        """Return the bearer value when the Authorization header has the expected shape."""
+        raw = headers.get("authorization", "") or ""
+        return raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+
+    @staticmethod
+    def _extract_admin_session_cookie(headers: Any) -> str:
+        """Return the opaque admin session id from the request cookie, if present."""
+        raw = headers.get("cookie", "") or ""
+        if not raw:
+            return ""
+        jar = SimpleCookie()
+        try:
+            jar.load(raw)
+        except CookieError:
+            return ""
+        morsel = jar.get(ADMIN_SESSION_COOKIE)
+        return morsel.value if morsel is not None else ""
+
+    def establish_admin_session(self, presented_token: str) -> str:
+        """Mint a bounded opaque session after validating the admin credential."""
+        if self.bearer_verifier is not None:
+            try:
+                valid = bool(self.bearer_verifier(presented_token, "admin"))
+            except Exception:  # noqa: BLE001 - auth adapter failures deny establishment
+                valid = False
+        else:
+            expected = self.admin_token or self.auth_token
+            valid = bool(expected) and self._constant_time_token_match(presented_token, expected)
+        if not valid:
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        session_id = secrets.token_urlsafe(32)
+        expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
+        with self._session_lock:
+            self._purge_expired_admin_sessions_locked(time.monotonic())
+            overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
+            if overflow > 0:
+                for session_key, _ in sorted(self._admin_sessions.items(), key=lambda item: item[1])[:overflow]:
+                    self._admin_sessions.pop(session_key, None)
+            self._admin_sessions[session_id] = expires_at
+        return session_id
+
+    def _admin_session_is_active(self, session_id: str) -> bool:
+        """Return whether an opaque session exists and has not expired."""
+        if not session_id:
+            return False
+        with self._session_lock:
+            expires_at = self._admin_sessions.get(session_id)
+            if expires_at is None:
+                return False
+            if time.monotonic() >= expires_at:
+                self._admin_sessions.pop(session_id, None)
+                return False
+            return True
+
+    def _purge_expired_admin_sessions_locked(self, now: float) -> None:
+        """Remove expired sessions while the caller holds the session lock."""
+        for session_id, expires_at in list(self._admin_sessions.items()):
+            if now >= expires_at:
+                self._admin_sessions.pop(session_id, None)
+
+    def revoke_admin_session(self, session_id: str) -> bool:
+        """Revoke one opaque admin session without retaining the bearer."""
+        with self._session_lock:
+            return self._admin_sessions.pop(session_id, None) is not None if session_id else False
+
+    def admin_session_cookie_header(self, session_id: str, *, max_age: int | None = None) -> str:
+        """Return a secure-by-default HttpOnly, same-origin session cookie header."""
+        age = self.admin_session_ttl_seconds if max_age is None else max_age
+        parts = [
+            f"{ADMIN_SESSION_COOKIE}={session_id}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+            f"Max-Age={int(age)}",
+        ]
+        if self.admin_session_secure_cookie:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def admin_session_clear_cookie_header(self) -> str:
+        """Return the deletion cookie for an opaque admin session."""
+        return self.admin_session_cookie_header("", max_age=0)
+
+    def validate_admin_session_origin(self, headers: Any) -> None:
+        """Reject cross-origin state changes authenticated only by a session cookie."""
+        if not self._extract_admin_session_cookie(headers):
+            return
+        origin = (headers.get("origin", "") or "").strip()
+        host = (headers.get("host", "") or "").strip()
+        if not origin or origin == "null" or urllib.parse.urlparse(origin).netloc != host:
+            raise RequestError(403, "csrf_origin_rejected", "browser session origin is not allowed")
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -307,6 +429,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "max_admin_sessions": self.max_admin_sessions,
+            "admin_session_secure_cookie": self.admin_session_secure_cookie,
         }
 
 
@@ -4442,23 +4566,9 @@ def _strip_trace(payload: Any) -> Any:
 
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
-    safe_payload = _strip_internal_fields(safe_payload)
     if include_trace:
         return safe_payload
     return _strip_trace(safe_payload)
-
-
-def _strip_internal_fields(value: Any) -> Any:
-    """Remove server-only ownership metadata from every public response shape."""
-    if isinstance(value, list):
-        return [_strip_internal_fields(item) for item in value]
-    if isinstance(value, dict):
-        return {
-            key: _strip_internal_fields(item)
-            for key, item in value.items()
-            if key != "owner_id"
-        }
-    return value
 
 
 def responses_sse_body(response: dict[str, Any]) -> str:
@@ -4585,6 +4695,11 @@ def build_server(
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
                     return
+                if path in ("/", "/admin"):
+                    # The shell is public so an operator can establish a session;
+                    # all data and mutation routes remain admin-authorized.
+                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
+                    return
                 if path == "/v1/models" or path.startswith("/v1/models/"):
                     # OpenAI model discovery is inference-scope (same bearer as chat).
                     self._authorize("inference")
@@ -4642,11 +4757,8 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
-                if path in ("/", "/admin"):
-                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
-                    return
                 if path == "/admin/state":
-                    state = orchestrator.admin_state(owner_id=self._principal_id)
+                    state = orchestrator.admin_state()
                     state["document_viewer"] = (
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
@@ -4830,12 +4942,8 @@ def build_server(
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
                     self._send(_response_payload({
-                        "items": orchestrator.list_recent_runs(
-                            page_number=page_number,
-                            page_size=page_size,
-                            owner_id=self._principal_id,
-                        ),
-                        "total_count": orchestrator.count_workflow_runs(owner_id=self._principal_id),
+                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size),
+                        "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
                         "page_number": page_number,
                         "page_size": page_size,
                     }, security.expose_trace_by_default))
@@ -4843,7 +4951,7 @@ def build_server(
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id, owner_id=self._principal_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -4860,7 +4968,7 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id, owner_id=self._principal_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -4868,7 +4976,7 @@ def build_server(
                 if path.startswith("/api/v1/evaluation_runs/"):
                     evaluation_run_id = path.rsplit("/", 1)[-1]
                     runs = getattr(orchestrator, "_evaluation_runs", {})
-                    if evaluation_run_id in runs and runs[evaluation_run_id].get("owner_id") == self._principal_id:
+                    if evaluation_run_id in runs:
                         self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
                         return
                     self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
@@ -4878,11 +4986,10 @@ def build_server(
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
-                        if agent_pool_id != "default":
-                            self._send_error(404, "agent_not_found", f"agent {worker_agent_id} not found")
-                            return
                         try:
-                            payload = orchestrator._agent_to_admin_payload(orchestrator._agent(worker_agent_id))
+                            payload = orchestrator._agent_to_admin_payload(
+                                orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
+                            )
                             payload["agent_pool_id"] = agent_pool_id
                             self._send(payload)
                             return
@@ -4922,7 +5029,7 @@ def build_server(
         def do_PATCH(self) -> None:  # noqa: N802
             """Apply an authenticated agent-pool worker update."""
             try:
-                self._authorize("admin")
+                self._authorize("admin", state_changing=True)
                 path = urllib.parse.urlparse(self.path).path
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
@@ -4939,15 +5046,24 @@ def build_server(
             except (ValueError, TypeError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
-                self._send_error(404, "resource_not_found", str(exc))
+                self._send_error(404, "agent_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
             """Delete an authenticated agent-pool worker resource."""
             try:
-                self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
+                if path == "/admin/session":
+                    security.check_rate_limit(self.client_address[0])
+                    security.validate_admin_session_origin(self.headers)
+                    session_id = security._extract_admin_session_cookie(self.headers)
+                    self._send(
+                        {"session_status": "cleared", "session_revoked": security.revoke_admin_session(session_id)},
+                        extra_headers={"set-cookie": security.admin_session_clear_cookie_header()},
+                    )
+                    return
+                self._authorize("admin", state_changing=True)
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
                     if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
@@ -4960,7 +5076,7 @@ def build_server(
             except (ValueError, TypeError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
-                self._send_error(404, "resource_not_found", str(exc))
+                self._send_error(404, "agent_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -4968,8 +5084,28 @@ def build_server(
             """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
-                self._authorize(scope)
+                if path == "/admin/session":
+                    security.check_rate_limit(self.client_address[0])
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_SESSION_KEYS)
+                    presented = body.get("token")
+                    if not isinstance(presented, str) or not presented.strip():
+                        presented = security._extract_bearer_token(self.headers)
+                    session_id = security.establish_admin_session(
+                        presented.strip() if isinstance(presented, str) else ""
+                    )
+                    self._send(
+                        {"session_status": "established"},
+                        extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
+                    )
+                    return
+                scope = (
+                    "admin"
+                    if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
+                    or path.startswith("/api/v1/agent_pools/")
+                    else "inference"
+                )
+                self._authorize(scope, state_changing=True)
                 body = self._read_json()
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
@@ -4977,7 +5113,11 @@ def build_server(
                     if len(segments) != 5 or segments[:3] != ["api", "v1", "agent_pools"]:
                         raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
                     _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
-                    self._send(orchestrator.add_agent(segments[3], body), 201)
+                    try:
+                        created_agent = orchestrator.add_agent(segments[3], body)
+                    except KeyError as exc:
+                        raise RequestError(404, "agent_not_found", str(exc)) from exc
+                    self._send(created_agent, 201)
                     return
 
                 if path == "/v1/completions":
@@ -5065,7 +5205,6 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            owner_id=self._principal_id,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5324,7 +5463,6 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            owner_id=self._principal_id,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5721,13 +5859,7 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(
-                        lambda: orchestrator.run(
-                            [{"role": "user", "content": prompt}],
-                            mode=mode,
-                            owner_id=self._principal_id,
-                        )
-                    )
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -5737,13 +5869,7 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(
-                        lambda: orchestrator.run(
-                            [{"role": "user", "content": prompt}],
-                            mode=mode,
-                            owner_id=self._principal_id,
-                        )
-                    )
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -5755,13 +5881,7 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    evaluation_run = self._run(
-                        lambda: orchestrator.run_evaluation(
-                            [str(item) for item in prompts],
-                            mode=mode,
-                            owner_id=self._principal_id,
-                        )
-                    )
+                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -5783,10 +5903,11 @@ def build_server(
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
-        def _authorize(self, scope: str) -> None:
+        def _authorize(self, scope: str, *, state_changing: bool = False) -> None:
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
-            self._principal_id = security.principal_id(self.headers)
+            if state_changing and scope == "admin":
+                security.validate_admin_session_origin(self.headers)
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
@@ -5851,12 +5972,20 @@ def build_server(
         ) -> None:
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
-        def _send(self, payload: dict[str, Any], status: int = 200) -> None:
+        def _send(
+            self,
+            payload: dict[str, Any],
+            status: int = 200,
+            *,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(raw)))
             self._send_security_headers()
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(raw)
 
@@ -5913,11 +6042,7 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(
-                        messages,
-                        workflow_run_id=run_id,
-                        owner_id=self._principal_id,
-                    ):
+                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except ToolFallbackStoppedError as exc:
