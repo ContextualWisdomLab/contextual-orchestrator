@@ -517,3 +517,90 @@ permitted; otherwise the canonical citation and link are retained.
 **Customer next action:** approve the next exact-head PR only when its row above
 has a concrete proof link, then use the next highest-priority unresolved gap to
 create the following stacked change.
+
+### Live exact-head continuation — 2026-08-25 09:40 KST
+
+This continuation supersedes older rows for the re-listed PRs only; every
+earlier snapshot row remains historical evidence for its own head. The 2026-08-25
+session shipped two product changes and one scheduler change, recorded below,
+and re-inventoried the whole open queue at the listed heads.
+
+**Shipped this session (pending protected-main merge):**
+
+- [#833](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/833)
+  `fix(security): rename credential-name constants and readiness label keys…`
+  root-causes the Strix B105 false-positive class: `DEFAULT_*_TOKEN_KEY`
+  constants were KV credential *names*, not secrets, and `readiness_pass/warn/fail`
+  were locale label keys. Renames are semantics-first (no suppression files, no
+  scanner configuration change). This unblocks ~12 PRs whose diffs intersected
+  `__main__.py`/`admin.py`.
+- [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834)
+  `feat(routing): add operator-managed model groups` implements ADR 0026:
+  `ModelAgent.group_name`, measured intra-group routing
+  (`P(success | Beta(1,1) data) / EWMA_latency_seconds`, Jacobson-gain 1/8, no
+  arbitrary cross-metric weight), group alias resolution in
+  `_requested_agent`, `/api/v1/model_groups` CRUD with agent-pool persistence,
+  OpenCode Zen discovery source, zero-price/`-free` free-tier classification,
+  and the admin table's measured group evidence replacing fabricated
+  capacity/success percentages.
+- [#835](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/835)
+  `ci: hourly OpenCode maintenance agent routed through this gateway` stacks on
+  #834: a `23 * * * *` UTC job seeds the five provider secrets into the
+  process-local KV (bootstrap transport only), auto-discovers chat models,
+  assigns the ox-alpha group, and runs the pinned OpenCode CLI against
+  `http://127.0.0.1:8000/v1` with model `ox-alpha` so scheduled maintenance
+  traffic itself exercises measured group routing.
+
+| PR | Exact head (2026-08-25 09:30 KST) | Base / mergeability | Decision |
+|---:|---|---|---|
+| #835 | `1d6abde4e673` | stacked on #834; MERGEABLE | `WAIT_AND_REMEDIATE` — hosted Checks + approval |
+| #834 | `6b069a059b67` | main; MERGEABLE | `WAIT_AND_REMEDIATE` — hosted Checks + approval |
+| #833 | `88112e49f13e` | main; MERGEABLE | `WAIT_AND_REMEDIATE` — strix rerun + approval |
+| #831 | `d7efa634a1f1` | main; MERGEABLE | IDOR boundary fix; awaiting terminal Checks + approval |
+| #830 | `76c18f13c2ff` | main; MERGEABLE | streaming/batch error boundary; same gate set |
+| #828 | `42b6e4cb0851` | main; MERGEABLE | response-write crash fix; same gate set |
+| #823 | `0a9a1932cf79` | main; MERGEABLE | LineageWeave CLI argv contract; same gate set |
+| #822 | `9729ad7b85cf` | main; MERGEABLE | credential backend tests; same gate set |
+| #821 | `577570ab4671` | main; MERGEABLE | token-counting tests; same gate set |
+| #820 | `a185eedf7572` | main; **CONFLICTING** | rebase onto current main, then gate set |
+| #819 | `5971bdcb0b68` | main; MERGEABLE | config storage tests; same gate set |
+| #818 | `4cd295c2b2ab` | main; MERGEABLE | OTel session correlation; same gate set |
+| #807 | `7703916f7ab1` | main; **CONFLICTING** | superseded in part by #830; rebase or close as duplicate |
+| #803 | `641b2d1f078e` | main; MERGEABLE | PII purpose-limited protection per ADR 0010; gate set |
+| #794 | `225271583612` | main; MERGEABLE | DB naming migration; gate set |
+| #790 | `17a5e42b44f1` | main; MERGEABLE | review gateway bootstrap; gate set |
+| #788 | `d5ebe735a9ee` | main; MERGEABLE | opaque admin sessions; gate set |
+| #785 | `ec609fa7b526` | main; **CONFLICTING** | reasoning-effort profiles; rebase required |
+| #782 | `5ab3acc5aba6` | main; MERGEABLE | workflow object authorization; gate set |
+| #780 | `e4e6b7cf27f0` | main; **CONFLICTING** | liveness/readiness split; rebase required |
+| #773 | `e084c289e912` | main; MERGEABLE | this document; self-referential row, refetch live head |
+| #772 | `8e51ddb3036f` | main; MERGEABLE | distributed response cache; unit-suite fix landed upstream; gate set |
+| #768 | `2a6c54636693` | main; MERGEABLE | embedding/chat isolation; gate set |
+| #765 | `d19e3492192e` | main; **CONFLICTING** | paper-grounded reasoning contract; rebase required |
+| #762 | `78aa5be10c58` | main; MERGEABLE | PII design ADR; merge after #803 sequencing decision |
+
+**Gap register updates (2026-08-25):**
+
+1. **Closed by #834:** model-group composition (per-model → per-group), measured
+   speed/stability member ordering, group alias addressing, OpenCode Zen
+   discovery, free-tier classification.
+2. **Open — Zen pricing honesty:** OpenCode Zen `/zen/v1/models` omits prices;
+   free classification currently relies on explicit `-free`/`:free` suffixes.
+   Keep `unknown ≠ $0`; adopt provider-reported pricing when available.
+3. **Open — quality dimension:** intra-group score is reliability×speed only.
+   Cross-model quality routing must use calibrated evaluation (fast-mlsirm /
+   RouteLLM-style learned router) with ablation, not hand weights (RouteLLM;
+   FrugalGPT citations in ADR 0026).
+4. **Open — multi-instance telemetry:** observation ledger is process-local by
+   design; durable time-windowed aggregation is required before horizontal
+   scaling (ADR 0026 boundary).
+5. **Open — scheduler pinning:** #835 pins actions and pip requirements but
+   leaves `OPENCODE_VERSION=latest`; pin an exact version after the first run
+   reports one, and add actionlint to its self-check path.
+6. **Open — conflicting stack:** five PRs (#820, #807, #785, #780, #765) need
+   rebases before their gate sets can complete; #807 may be closed as
+   functionally superseded by #830 if review confirms full coverage overlap.
+
+**Customer next action:** merge order is #833 → #834 → #835 (stack), then work
+the table top-down; each row needs terminal Checks plus independent approval on
+its exact head before a normal protected merge.
