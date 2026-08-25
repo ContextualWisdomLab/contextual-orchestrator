@@ -12,3 +12,4 @@ tempcred.txt
 
 # hypothesis fuzzing DB
 .hypothesis/
+.secrets/

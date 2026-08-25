@@ -7,7 +7,7 @@ Work autonomously for at most 45 minutes, then stop with a short summary. Never
 post intermediate progress reports. Priorities, in order:
 
 1. PR merge loop. For every OPEN pull request in this repository:
-   a. Read reviewer comments (CodeRabbit, Strix, noema-review, humans) and fix
+   a. Read reviewer comments (OpenCode, Devin, CodeRabbit, Strix, Noema, humans) and fix
       valid findings on the branch; push fixes.
    b. Re-check GitHub Checks. Retry transient provider/rate-limit failures
       once before investigating.
@@ -30,3 +30,6 @@ Rules:
   paper-grounded decisions with APA citations in docs.
 - Never weaken security gates; never disable required workflows.
 - Do not touch COPILOT_GITHUB_TOKEN or the existing review-agent key scheme.
+- Do not invent routing weights, heuristics, or rules of thumb. Preserve measured
+  provider evidence and paper-grounded calibration; record missing evidence as a
+  gap instead of guessing.
