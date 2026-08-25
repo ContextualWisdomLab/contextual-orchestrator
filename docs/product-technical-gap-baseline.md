@@ -1,5 +1,16 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 00:33 KST exact-head continuation
+
+Protected `main` remains `838b3de160c341a6f36bf588ae9fcc09989c040c`;
+none of the following evidence is a protected-main release claim.
+
+| PR | Exact head | Current evidence and customer consequence |
+| --- | --- | --- |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | `7fa07ac22c0482a8f7770df90b9813396e2d86bf` | Every hosted Check, including the rerun Strix and OpenCode review, is terminal and successful with zero unresolved threads. Independent approval remains absent, so the arbitrary model-group, cost-aware discovery, eight-modality routing, Responses reasoning-summary stream, Compose, and hourly-loop stack is still not delivered to protected `main`; auto-merge remains enabled. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `e47432b9` | New review found that a mixed provider-usage workflow omitted usage-less evidence calls from the cost ledger. Every trace step now records one row under the same workflow lineage, preserving valid provider counts and applying the existing synchronous token counter only to calls whose provider omitted usage. All three new threads are resolved; `69` focused tests and the full exact tree (`1901 passed in 569.84s`) pass. Replacement hosted Checks and independent review are required; auto-merge remains enabled. |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `43372c2f58b36466eba4934e50a9f945fffacac9` | The checked-in k6 E2E scenario was rerun on this exact head: 64 concurrent delayed inference users completed 128/128 inference checks while 101/101 liveness checks completed, with 0/229 HTTP failures, 25.07 inference requests/s, and 1.09 ms liveness p99. This remains loopback synthetic-delay evidence, not a production TLS/provider/soak SLO. |
+
 ## 2026-08-25 23:38 KST structured-provider continuation
 
 Protected `main` remains `838b3de160c341a6f36bf588ae9fcc09989c040c`;
