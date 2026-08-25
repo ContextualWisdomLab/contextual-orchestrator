@@ -14,6 +14,8 @@ import sys
 import threading
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -96,6 +98,24 @@ def test_stream_route_yields_and_persists() -> None:
     answer = "".join(deltas)
     assert answer.startswith("[general_agent:worker]")
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
+
+
+def test_stream_route_records_group_success_and_midstream_failure() -> None:
+    agent = ModelAgent("group_member", "m-model", group_name="stream_group")
+    orchestrator = TaskOrchestrator([agent])
+    messages = [{"role": "user", "content": "stream this please"}]
+
+    list(orchestrator.stream_route(messages, model_name="stream-group"))
+    assert orchestrator._group_router.member_report(agent.id)["success_count"] == 1
+
+    def failing_stream(*_args: object):
+        yield "partial"
+        raise RuntimeError("provider disconnected")
+
+    orchestrator.client.stream_chat = failing_stream  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="provider disconnected"):
+        list(orchestrator.stream_route(messages, model_name="stream-group"))
+    assert orchestrator._group_router.member_report(agent.id)["failure_count"] == 1
 
 
 def test_http_route_stream_pipes_live_deltas() -> None:

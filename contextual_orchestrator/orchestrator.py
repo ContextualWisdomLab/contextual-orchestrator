@@ -2000,9 +2000,17 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
-            parts.append(delta)
-            yield delta
+        started_at = time.perf_counter()
+        try:
+            for delta in self.client.stream_chat(agent, messages):
+                parts.append(delta)
+                yield delta
+        except Exception:
+            if agent.group_name:
+                self._group_router.observe_failure(agent.id)
+            raise
+        if agent.group_name:
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
