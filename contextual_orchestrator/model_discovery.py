@@ -54,6 +54,7 @@ class ProviderModelSource:
     auth_scheme: str = "Bearer"
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
+    capabilities: tuple[str, ...] = ()
 
 
 # NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
@@ -68,20 +69,23 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openrouter",
         credential_name="OPENROUTER_API_KEY",
-        list_url="https://openrouter.ai/api/v1/models",
+        list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
         chat_base_url="https://openrouter.ai/api/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
         credential_name="NVIDIA_NIM_API_KEY",
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="nvidia_nim_sub",
         credential_name="NVIDIA_NIM_API_KEY_SUB",
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
     ),
     ProviderModelSource(
         provider_name="bytez",
@@ -91,6 +95,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         auth_scheme="Key",
         style="bytez",
         task_filter="chat",
+        capabilities=("chat",),
     ),
 )
 
@@ -104,6 +109,7 @@ class DiscoveredModel:
     credential_name: str
     chat_base_url: str
     auth_scheme: str
+    capabilities: tuple[str, ...] = ()
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
@@ -162,6 +168,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
+                capabilities=source.capabilities,
                 prompt_price_per_1k=_price_per_1k(pricing.get("prompt")),
                 completion_price_per_1k=_price_per_1k(pricing.get("completion")),
             )
@@ -185,6 +192,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
+                capabilities=source.capabilities,
                 # Bytez prices by GPU-second (meterPrice), not per-token; leaving
                 # per-1k pricing unset is more honest than a misleading estimate.
             )
@@ -253,7 +261,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
-        tags=("discovered",),
+        tags=("discovered", *discovered.capabilities),
         priority=priority,
         disabled=True,
     )

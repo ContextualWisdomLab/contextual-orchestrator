@@ -38,6 +38,14 @@ from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .reasoning_effort_profile import (
+    EffortProfileError,
+    ReasoningEffortProfile,
+    apply_request_profile,
+    default_role_effort_catalog,
+    parse_reasoning_effort_profile,
+    snapshot_role_effort_catalog,
+)
 from .token_counting import HeuristicTokenCounter, build_token_counter
 from .response_cache import (
     RedisResponseCacheProvider,
@@ -50,6 +58,12 @@ __all__ = [
     "TaskOrchestrator",
     "WorkflowStep",
     "load_agents",
+    "ReasoningEffortProfile",
+    "EffortProfileError",
+    "apply_request_profile",
+    "default_role_effort_catalog",
+    "parse_reasoning_effort_profile",
+    "snapshot_role_effort_catalog",
     "get_credential",
     "register_credential",
     "NotConfigured",
