@@ -318,6 +318,7 @@ python tests/test_chat_transport_role_separation.py
 python tests/test_chat_capability_unknown_identifiers.py
 python tests/test_chat_passthrough_capability_isolation.py
 python tests/test_discovery_bootstrap_selection.py
+python tests/test_chat_capability.py
 python tests/test_review_gateway.py
 python tests/test_provider_bootstrap.py
 python tests/test_provider_bootstrap_secret_normalization.py
