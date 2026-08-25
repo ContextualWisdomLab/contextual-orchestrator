@@ -812,6 +812,32 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    def request_settings_snapshot(self) -> dict[str, Any]:
+        """Return this thread's effective request-scoped provider settings."""
+        scoped = getattr(self._local, "request_settings", {})
+        return {
+            "temperature": scoped.get("temperature", self.default_temperature),
+            "top_p": scoped.get("top_p", self.default_top_p),
+            "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
+            "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
+            "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
+        }
+
+    @contextmanager
+    def request_settings(self, **overrides: Any):
+        """Apply provider settings to only the current server request thread."""
+        previous = getattr(self._local, "request_settings", None)
+        current = self.request_settings_snapshot()
+        current.update({key: value for key, value in overrides.items() if value is not None})
+        self._local.request_settings = current
+        try:
+            yield
+        finally:
+            if previous is None:
+                del self._local.request_settings
+            else:
+                self._local.request_settings = previous
+
     def chat(
         self,
         agent: ModelAgent,
@@ -827,10 +853,11 @@ class ModelClient:
         """
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        settings = self.request_settings_snapshot()
+        effective_temperature = settings["temperature"] if temperature is None else temperature
+        effective_top_p = settings["top_p"] if top_p is None else top_p
+        effective_presence = settings["presence_penalty"]
+        effective_frequency = settings["frequency_penalty"]
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -851,7 +878,7 @@ class ModelClient:
             "messages": messages,
             "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": settings["max_output_tokens"],
         }
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
@@ -1129,12 +1156,13 @@ class ModelClient:
             return
 
         destination = self._validate_provider(agent)  # pragma: no cover
+        settings = self.request_settings_snapshot()
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
+            "temperature": settings["temperature"] if temperature is None else temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": settings["max_output_tokens"],
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
@@ -1191,7 +1219,7 @@ class ModelClient:
         destination = self._validate_provider(agent)  # pragma: no cover
         if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
             if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                 chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -1416,6 +1444,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
+        settings = self.request_settings_snapshot()
         lines = [
             json.dumps({
                 "custom_id": custom_id,
@@ -1424,8 +1453,8 @@ class ModelClient:
                 "body": {
                     "model": agent.model,
                     "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
+                    "temperature": settings["temperature"] if temperature is None else temperature,
+                    "max_tokens": settings["max_output_tokens"],
                 },
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
@@ -2030,7 +2059,8 @@ class TaskOrchestrator:
         model_name: str = "contextual-orchestrator",
         cache_partition: str | None = None,
     ) -> str:
-        parameters = {
+        snapshot = getattr(self.client, "request_settings_snapshot", None)
+        parameters = snapshot() if callable(snapshot) else {
             "temperature": getattr(self.client, "default_temperature", None),
             "top_p": getattr(self.client, "default_top_p", None),
             "presence_penalty": getattr(self.client, "default_presence_penalty", None),

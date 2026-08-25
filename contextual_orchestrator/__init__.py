@@ -44,12 +44,28 @@ from .response_cache import (
     ResponseCacheProvider,
     build_response_cache_key,
 )
+from .tool_fallback import (
+    MAX_TOOL_RETRY_ATTEMPTS,
+    ToolExecutionError,
+    ToolFallbackAction,
+    ToolFallbackStoppedError,
+    ToolFailureDecision,
+    ToolFailureKind,
+    classify_tool_failure,
+)
 
 __all__ = [
     "ModelAgent",
     "TaskOrchestrator",
     "WorkflowStep",
     "load_agents",
+    "MAX_TOOL_RETRY_ATTEMPTS",
+    "ToolExecutionError",
+    "ToolFallbackAction",
+    "ToolFallbackStoppedError",
+    "ToolFailureDecision",
+    "ToolFailureKind",
+    "classify_tool_failure",
     "get_credential",
     "register_credential",
     "NotConfigured",
