@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
-import hashlib
 import http.client
 import io
 import ipaddress
@@ -51,6 +50,7 @@ from .tool_fallback import (
     classify_tool_failure,
     downgrade_to_failover,
 )
+from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .reasoning_effort_profile import (
     ReasoningEffortProfile,
     apply_request_profile,
@@ -778,7 +778,7 @@ class ModelClient:
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.default_temperature = 0.2
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -844,6 +844,32 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    def request_settings_snapshot(self) -> dict[str, Any]:
+        """Return this thread's effective request-scoped provider settings."""
+        scoped = getattr(self._local, "request_settings", {})
+        return {
+            "temperature": scoped.get("temperature", self.default_temperature),
+            "top_p": scoped.get("top_p", self.default_top_p),
+            "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
+            "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
+            "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
+        }
+
+    @contextmanager
+    def request_settings(self, **overrides: Any):
+        """Apply provider settings to only the current server request thread."""
+        previous = getattr(self._local, "request_settings", None)
+        current = self.request_settings_snapshot()
+        current.update({key: value for key, value in overrides.items() if value is not None})
+        self._local.request_settings = current
+        try:
+            yield
+        finally:
+            if previous is None:
+                del self._local.request_settings
+            else:
+                self._local.request_settings = previous
+
     def chat(
         self,
         agent: ModelAgent,
@@ -860,10 +886,11 @@ class ModelClient:
         """
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        settings = self.request_settings_snapshot()
+        effective_temperature = settings["temperature"] if temperature is None else temperature
+        effective_top_p = settings["top_p"] if top_p is None else top_p
+        effective_presence = settings["presence_penalty"]
+        effective_frequency = settings["frequency_penalty"]
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -884,7 +911,7 @@ class ModelClient:
             "messages": messages,
             "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": settings["max_output_tokens"],
         }
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
@@ -1187,12 +1214,13 @@ class ModelClient:
             return
 
         destination = self._validate_provider(agent)  # pragma: no cover
+        settings = self.request_settings_snapshot()
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
+            "temperature": settings["temperature"] if temperature is None else temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": settings["max_output_tokens"],
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
@@ -1263,7 +1291,7 @@ class ModelClient:
         destination = self._validate_provider(agent)  # pragma: no cover
         if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
             if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                 chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -1479,18 +1507,20 @@ class ModelClient:
         effort_profile: ReasoningEffortProfile | None,
     ) -> dict[str, dict[str, Any]]:
         """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        request_settings = self.request_settings_snapshot()
+
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
-            content = (
-                self.chat(
-                    agent,
-                    messages,
-                    temperature=temperature,
-                    effort_profile=effort_profile,
-                )
-                if effort_profile is not None
-                else self.chat(agent, messages, temperature=temperature)
-            )
-            return custom_id, {"content": content, "usage": self.take_usage()}
+            with self.request_settings(**request_settings):
+                if effort_profile is not None:
+                    content = self.chat(
+                        agent,
+                        messages,
+                        temperature=temperature,
+                        effort_profile=effort_profile,
+                    )
+                else:
+                    content = self.chat(agent, messages, temperature=temperature)
+                return custom_id, {"content": content, "usage": self.take_usage()}
 
         if self.local_concurrency == 1 or len(requests) <= 1:
             return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
@@ -1509,6 +1539,7 @@ class ModelClient:
         effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
+        settings = self.request_settings_snapshot()
         lines = [
             json.dumps({
                 "custom_id": custom_id,
@@ -1517,7 +1548,8 @@ class ModelClient:
                 "body": self.apply_effort_profile(agent, {
                     "model": agent.model,
                     "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
+                    "temperature": settings["temperature"] if temperature is None else temperature,
+                    "max_tokens": settings["max_output_tokens"],
                 }, effort_profile),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
@@ -1898,6 +1930,7 @@ class TaskOrchestrator:
         cache_max_entries: int = 256,
         tool_retry_attempts: int = 1,
         tool_retry_backoff_seconds: float = 0.25,
+        cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
     ) -> None:
@@ -1961,6 +1994,9 @@ class TaskOrchestrator:
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
+        if cache_provider is not None and cache_ttl:
+            raise ValueError("cache_provider and cache_ttl cannot both be configured")
+        self._cache_provider = cache_provider
         self._cache = _ResponseCache(cache_ttl, cache_max_entries) if cache_ttl and cache_ttl > 0 else None
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
@@ -2107,16 +2143,54 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        bypass_cache: bool = False,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
-        if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
+        if not isinstance(bypass_cache, bool):
+            raise TypeError("bypass_cache must be a boolean")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError("model_name must be a non-empty string")
+        if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
+            raise ValueError("cache_partition must be a non-empty string when provided")
+        cache = self._cache_provider if self._cache_provider is not None else self._cache
+        if cache is None or bypass_cache:
+            result = self._dispatch(messages, mode)
+            result["cache_status"] = "bypass" if bypass_cache else "disabled"
+            return result
+        try:
+            key = self._cache_key(messages, mode, model_name, cache_partition)
+        except (TypeError, ValueError):
+            # Cache key serialization is an optimization boundary; unusual but
+            # valid caller objects must still reach the live provider path.
+            result = self._dispatch(messages, mode)
+            result["cache_status"] = "miss"
+            return result
+        try:
+            cached = cache.get(key)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            cached = None
+        if (
+            isinstance(cached, Mapping)
+            and isinstance(cached.get("mode"), str)
+            and isinstance(cached.get("answer"), str)
+            and isinstance(cached.get("trace"), list)
+        ):
+            result = copy.deepcopy(dict(cached))
+            result["cache_status"] = "hit"
+            return result
         result = self._dispatch(messages, mode)
-        self._cache.put(key, result)
+        try:
+            cache.put(key, result)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            pass
+        result["cache_status"] = "miss"
         return result
 
     def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
@@ -2177,17 +2251,51 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> str:
+        snapshot = getattr(self.client, "request_settings_snapshot", None)
+        parameters = snapshot() if callable(snapshot) else {
+            "temperature": getattr(self.client, "default_temperature", None),
+            "top_p": getattr(self.client, "default_top_p", None),
+            "presence_penalty": getattr(self.client, "default_presence_penalty", None),
+            "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
+            "max_output_tokens": getattr(self.client, "max_output_tokens", None),
+        }
+        return build_response_cache_key(
+            messages,
+            mode,
+            model=model_name,
+            parameters=parameters,
+            partition=cache_partition,
+        )
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        bypass_cache: bool = False,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(
+            messages,
+            mode=mode,
+            bypass_cache=bypass_cache,
+            model_name=model_name,
+            cache_partition=cache_partition,
+        )
         prompt = self._latest_user_text(messages)
         record = self._with_effort_snapshot(
             {
@@ -2197,6 +2305,7 @@ class TaskOrchestrator:
                 "policy_mode": mode,
                 "prompt_text": prompt,
                 "answer": result["answer"],
+                "cache_status": result.get("cache_status", "disabled"),
                 "trace": result["trace"],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": result.get("verification"),
