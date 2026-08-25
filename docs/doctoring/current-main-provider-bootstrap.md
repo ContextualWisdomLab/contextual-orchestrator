@@ -75,9 +75,9 @@ later discovery run.
 
 `.github/workflows/provider-catalog-sync.yml` runs hourly on protected `main` and may
 also be dispatched manually. It is intentionally absent from pull-request secret
-execution. Cross-run production persistence requires:
+execution. Every sync requires the five provider secrets above. Cross-run
+production persistence additionally requires:
 
-- the five provider secrets above;
 - `CONTEXTUAL_ORCHESTRATOR_KV_DSN`; and
 - `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE`.
 
