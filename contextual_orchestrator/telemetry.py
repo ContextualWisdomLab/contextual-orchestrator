@@ -32,6 +32,25 @@ except ImportError:  # pragma: no cover - dependency is declared by the project
     StatusCode = None  # type: ignore[assignment,misc]
 
 _LOGGER = logging.getLogger(__name__)
+_SENSITIVE_ATTRIBUTE_TOKENS = frozenset(
+    {
+        "answer",
+        "authorization",
+        "body",
+        "content",
+        "cookie",
+        "credential",
+        "input",
+        "key",
+        "message",
+        "output",
+        "password",
+        "prompt",
+        "secret",
+        "text",
+        "token",
+    }
+)
 _CURRENT_SESSION: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_session_id", default=None
 )

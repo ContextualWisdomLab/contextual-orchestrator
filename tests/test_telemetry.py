@@ -69,6 +69,11 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
                 "server.port": 2,
                 "gen_ai.operation.name": "chat",
                 "gen_ai.request.model": "model-x",
+                "gen_ai.input.messages": "do not export",
+                "long": "x" * 300,
+                "enabled": True,
+                "attempt": 2,
+                "ratio": 0.5,
                 "object": object(),
             }
         ) == {
