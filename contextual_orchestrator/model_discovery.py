@@ -367,7 +367,11 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
         model_id = row.get("modelId")
         if type(model_id) is not str or not model_id:
             continue
-        if not source.capabilities and not is_general_chat_agent_model_id(model_id):
+        declares_non_chat = any(
+            capability not in {"chat", "text"}
+            for capability in source.capabilities
+        )
+        if not declares_non_chat and not is_general_chat_agent_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(

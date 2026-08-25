@@ -312,6 +312,7 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
         "error": None,
         "output": [
             {"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat", "meterPrice": "0.0006 / sec"},
+            {"modelId": "provider/llama-guard", "task": "chat"},
         ],
     }
     seen_requests = []
