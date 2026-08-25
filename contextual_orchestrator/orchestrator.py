@@ -1259,9 +1259,9 @@ class ModelClient:
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
         with traced(
-            f"stream_chat {agent.model}",
+            f"chat {agent.model}",
             {
-                "gen_ai.operation.name": "stream_chat",
+                "gen_ai.operation.name": "chat",
                 "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
                 "gen_ai.request.model": agent.model,
                 "contextual_orchestrator.agent_id": agent.id,
@@ -1344,10 +1344,15 @@ class ModelClient:
             return self._mock_raw(agent, normalized_endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
         parsed_provider = urlparse(agent.base_url)
+        operation_name = {
+            "chat/completions": "chat",
+            "completions": "text_completion",
+            "responses": "generate_content",
+        }.get(normalized_endpoint, "generate_content")
         with traced(
-            f"passthrough {normalized_endpoint} {agent.model}",
+            f"{operation_name} {agent.model}",
             {
-                "gen_ai.operation.name": "passthrough",
+                "gen_ai.operation.name": operation_name,
                 "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
                 "gen_ai.request.model": agent.model,
                 "contextual_orchestrator.agent_id": agent.id,

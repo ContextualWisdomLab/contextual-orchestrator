@@ -378,11 +378,11 @@ def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):
 
 def test_stream_and_passthrough_provider_calls_create_client_spans(monkeypatch):
     """Every non-mock provider transport is represented in the trace."""
-    captured: list[str] = []
+    captured: list[tuple[str, str]] = []
 
     @contextmanager
-    def capture(name, _attributes):
-        captured.append(name)
+    def capture(name, attributes):
+        captured.append((name, attributes["gen_ai.operation.name"]))
         yield None
 
     client = ModelClient()
@@ -400,7 +400,10 @@ def test_stream_and_passthrough_provider_calls_create_client_spans(monkeypatch):
 
     assert list(client.stream_chat(agent, [{"role": "user", "content": "x"}])) == ["delta"]
     assert client.proxy_send(agent, "responses", {"input": "x"}) == {"ok": True}
-    assert captured == ["stream_chat model-x", "passthrough responses model-x"]
+    assert captured == [
+        ("chat model-x", "chat"),
+        ("generate_content model-x", "generate_content"),
+    ]
 
 
 def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(monkeypatch, caplog):
