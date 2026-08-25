@@ -4827,9 +4827,14 @@ def build_server(
                     if path == "/v1/models":
                         self._send(orchestrator.list_openai_models())
                         return
-                    model_id = urllib.parse.unquote(path[len("/v1/models/") :])
-                    if not model_id or "/" in model_id:
-                        raise RequestError(400, "invalid_model", "model id path must be a single segment")
+                    raw_model_id = path[len("/v1/models/") :]
+                    if not raw_model_id or "/" in raw_model_id:
+                        raise RequestError(
+                            400,
+                            "invalid_model",
+                            "model id must be one URL-encoded path segment",
+                        )
+                    model_id = urllib.parse.unquote(raw_model_id)
                     try:
                         self._send(orchestrator.get_openai_model(model_id))
                     except KeyError:
