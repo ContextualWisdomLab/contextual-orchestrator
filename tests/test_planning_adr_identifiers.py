@@ -16,6 +16,10 @@ def test_planning_adr_identifiers_are_unique_and_match_content() -> None:
         content = path.read_text(encoding="utf-8")
         frontmatter_id = re.search(r'^id: "(\d{4})"$', content, re.MULTILINE)
         heading_id = re.search(r"^# ADR (\d{4})(?::|\b)", content, re.MULTILINE)
-        declared = frontmatter_id or heading_id
-        assert declared is not None, f"{path} has no ADR identifier"
-        assert declared.group(1) == identifier
+        declared_ids = {
+            match.group(1)
+            for match in (frontmatter_id, heading_id)
+            if match is not None
+        }
+        assert declared_ids, f"{path} has no ADR identifier"
+        assert declared_ids == {identifier}
