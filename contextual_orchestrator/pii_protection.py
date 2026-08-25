@@ -62,10 +62,11 @@ def _decode_secret(secret: str, *, key_name: str = "") -> bytes:
             return hashlib.scrypt(
                 passphrase.encode("utf-8"),
                 salt=salt,
-                n=2**14,
+                n=2**17,
                 r=8,
                 p=1,
                 dklen=32,
+                maxmem=256 * 1024 * 1024,
             )
         except (TypeError, ValueError):
             raise PiiProtectionError("PII encryption passphrase could not be derived") from None
