@@ -140,6 +140,19 @@ def test_free_virtual_model_fails_closed_without_zero_cost_media_models() -> Non
         )
 
 
+def test_ungrouped_capability_routes_record_measured_outcomes() -> None:
+    agent = ModelAgent("free_video", "provider/free", tags=("video", "cost:free"))
+    orchestrator = TaskOrchestrator([agent])
+
+    orchestrator.proxy_capability(
+        {"model": orchestrator.FREE_MODEL, "prompt": "demo"},
+        capability="video",
+        endpoint="videos",
+    )
+
+    assert orchestrator._group_router.member_report(agent.id)["success_count"] == 1
+
+
 def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
     server = build_server(
         TaskOrchestrator([ModelAgent("text_member", "provider/text", tags=("text",))]),

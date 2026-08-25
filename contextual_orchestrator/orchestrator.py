@@ -3092,7 +3092,11 @@ class TaskOrchestrator:
 
     def _is_free_agent(self, agent: ModelAgent) -> bool:
         """Return true only for explicitly zero-priced configured models."""
-        return "cost:free" in agent.tags or self.price_per_million.get(agent.model) == 0
+        if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
+            return True
+        return self.price_per_million.get(agent.model) == 0 and sum(
+            candidate.model == agent.model for candidate in self.candidates
+        ) == 1
 
     def _select_agent(self, text: str, role: str, *, free_only: bool = False) -> ModelAgent:
         selected = self._ranked_agents(text, role, free_only=free_only)[0]
@@ -3177,11 +3181,9 @@ class TaskOrchestrator:
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
                 last_error = exc
-                if agent.group_name:
-                    self._group_router.observe_failure(agent.id)
+                self._group_router.observe_failure(agent.id)
                 continue
-            if agent.group_name:
-                self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
@@ -3296,7 +3298,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
     ) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role)
+        ranked = self._ranked_agents(text, role, free_only=allowed_agent_ids is not None)
         if allowed_agent_ids is not None:
             ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
         if primary.group_name:

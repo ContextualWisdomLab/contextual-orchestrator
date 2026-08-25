@@ -141,6 +141,17 @@ def test_free_measurements_survive_unrelated_pool_edits() -> None:
     assert after == before
 
 
+def test_zero_price_override_is_agent_specific_when_model_ids_are_shared() -> None:
+    first = ModelAgent("first_provider", "shared-model")
+    second = ModelAgent("second_provider", "shared-model")
+    orchestrator = TaskOrchestrator(
+        [first, second], price_per_million={"shared-model": 0, first.id: 0}
+    )
+
+    assert orchestrator._is_free_agent(first)
+    assert not orchestrator._is_free_agent(second)
+
+
 def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",), priority=10),
