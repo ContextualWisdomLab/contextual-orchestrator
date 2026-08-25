@@ -37,6 +37,14 @@ contract-review API truthful until a separately authorized strategic valuation
 evidence model defines currency, valuation date, comparable transactions,
 revenue/retention assumptions, and uncertainty; never relabel one as the other.
 
+Issue [#846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846)
+records fixes stranded on the closed #765 stack. Recover them as separate
+current-main PRs, beginning with constant-time budget status because every
+request-facing budget check must not rescan the growing usage ledger. Acceptance
+requires exact numerical parity with `spend_analytics()["budget"]` over
+randomized recorded runs plus a timing-shape regression; do not reuse the stale
+stack's review or check evidence.
+
 ## 2026-08-25 exact-head review continuation
 
 | PR | Exact head/base | Current evidence and decision |
