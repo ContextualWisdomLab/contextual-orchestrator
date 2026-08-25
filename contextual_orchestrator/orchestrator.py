@@ -2783,7 +2783,11 @@ class TaskOrchestrator:
             raise ValueError("capability must be a non-empty string")
         ranked = [
             agent
-            for agent in self._ranked_agents("", capability)
+            for agent in sorted(
+                self.agents,
+                key=lambda candidate: self._score_agent(candidate, capability, ""),
+                reverse=True,
+            )
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions

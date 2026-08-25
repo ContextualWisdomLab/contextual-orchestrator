@@ -224,7 +224,14 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if type(model_id) is not str or not model_id or not is_general_chat_agent_model_id(model_id):
+        if (
+            type(model_id) is not str
+            or not model_id
+            or (
+                not any(capability != "chat" for capability in source.capabilities)
+                and not is_general_chat_agent_model_id(model_id)
+            )
+        ):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         discovered.append(
@@ -319,8 +326,10 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
-    """Build a disabled general-chat agent or reject an ineligible record."""
-    if not is_general_chat_agent_model_id(discovered.model_id):
+    """Build a disabled capability agent or reject a chat-ineligible record."""
+    if not any(capability != "chat" for capability in discovered.capabilities) and not (
+        is_general_chat_agent_model_id(discovered.model_id)
+    ):
         raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),
