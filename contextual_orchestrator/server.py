@@ -6651,12 +6651,12 @@ def build_server(
             # limiting, or media type). Reusing that HTTP/1.1 connection would
             # parse the unread body as the next request. Close instead of
             # attempting to drain attacker-controlled bytes at an error path.
-            content_lengths = self.headers.get_all("content-length", [])
-            if not getattr(self, "_request_body_consumed", False) and (
-                any(value.strip() != "0" for value in content_lengths)
-                or self.headers.get_all("transfer-encoding", [])
-            ):
-                self.close_connection = True
+            if not getattr(self, "_request_body_consumed", True):
+                content_lengths = self.headers.get_all("content-length", [])
+                if any(value.strip() != "0" for value in content_lengths) or self.headers.get_all(
+                    "transfer-encoding", []
+                ):
+                    self.close_connection = True
             try:
                 writer()
                 return True
