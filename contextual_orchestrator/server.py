@@ -1938,11 +1938,12 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
 def _validate_responses_stream_options(body: dict[str, Any]) -> None:
     """Responses ``stream_options`` — not supported (Responses streaming is off).
 
-    OpenAI pairs stream_options with stream=true. This gateway rejects
-    stream=true on /v1/responses, so any present stream_options would be a
-    silent no-op; fail closed instead. Explicit JSON null (object or *allowed*
-    flag values) is treat-as-omit. Unknown keys fail closed even when null so
-    clients cannot smuggle unsupported flags past the allow-list via nulls.
+    OpenAI pairs stream_options with stream=true. Virtual models can stream,
+    but this gateway does not implement usage aggregation or obfuscation flags;
+    fail closed on enabled flags rather than silently ignoring them. Explicit
+    JSON null (object or *allowed* flag values) is treat-as-omit. Unknown keys
+    fail closed even when null so clients cannot smuggle unsupported flags past
+    the allow-list via nulls.
     """
     if "stream_options" not in body:
         return
@@ -1971,7 +1972,7 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
     raise RequestError(
         400,
         "invalid_stream_options",
-        "stream_options is not supported on /v1/responses (stream is not supported)",
+        "stream_options flags are not supported on /v1/responses",
     )
 
 
