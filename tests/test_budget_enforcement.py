@@ -140,6 +140,27 @@ def test_budget_meter_rebuilds_from_persisted_runs(tmp_path: Path) -> None:
         restored.close()
 
 
+def test_budget_meter_reconciles_after_agent_status_change() -> None:
+    """Rare pool mutations preserve parity with analytics' active-agent view."""
+    priced = ModelAgent("priced_agent", "priced-model")
+    fallback = ModelAgent("fallback_agent", "fallback-model")
+    orchestrator = TaskOrchestrator(
+        [priced, fallback],
+        price_per_million={"priced-model": 10.0},
+        budget_max_cost_usd=1.0,
+    )
+    orchestrator._replace_workflow_run(
+        {
+            "workflow_run_id": "run_before_disable",
+            "prompt_text": "",
+            "trace": [{"agent_id": priced.id, "output": "priced output"}],
+        }
+    )
+    orchestrator.patch_agent("default", priced.id, {"status": "disabled"})
+
+    assert orchestrator.budget_status() == orchestrator.spend_analytics()["budget"]
+
+
 def test_http_over_budget_returns_429() -> None:
     token = "budget_token"
     orchestrator = TaskOrchestrator([_agent()], budget_max_output_tokens=1)

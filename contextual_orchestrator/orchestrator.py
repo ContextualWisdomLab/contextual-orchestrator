@@ -2675,6 +2675,7 @@ class TaskOrchestrator:
             raise ValueError("cannot disable the last enabled agent")
         self.candidates = updated_candidates
         self.agents = updated_agents
+        self._rebuild_budget_meter()
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self._append_audit_event(
@@ -2722,6 +2723,7 @@ class TaskOrchestrator:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        self._rebuild_budget_meter()
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
@@ -2760,6 +2762,7 @@ class TaskOrchestrator:
                 self._pool_store.save(agent)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        self._rebuild_budget_meter()
         if added or updated:
             self._append_audit_event(
                 "agents_discovered",
@@ -2779,6 +2782,7 @@ class TaskOrchestrator:
             raise ValueError("cannot remove the last enabled agent")
         self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
+        self._rebuild_budget_meter()
         if self._pool_store is not None:
             # Disabled tombstone (not a row delete): it overlays the seed file on restart
             # and startup drops disabled agents, so removal survives even for seed agents.
@@ -3598,6 +3602,21 @@ class TaskOrchestrator:
                         self._budget_model_output_tokens.pop(model, None)
                     self._budget_spent_output_tokens += sign * output_tokens
             self._workflow_runs[run_id] = record
+
+    def _rebuild_budget_meter(self) -> None:
+        """Reconcile the meter after a rare agent-pool identity change."""
+        with self._budget_spend_lock:
+            output_by_model: dict[str, int] = {}
+            for run in self._workflow_runs.values():
+                for model, output_tokens in self._run_budget_output_by_model(run).items():
+                    output_by_model[model] = output_by_model.get(model, 0) + output_tokens
+            self._budget_model_output_tokens = output_by_model
+            self._budget_spent_output_tokens = sum(output_by_model.values())
+            self._budget_spent_cost_usd = sum(
+                round(output_tokens / 1_000_000 * self.price_per_million[model], 6)
+                for model, output_tokens in output_by_model.items()
+                if model in self.price_per_million
+            )
 
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
