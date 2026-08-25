@@ -5793,7 +5793,7 @@ def build_server(
         ) -> None:
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
-        def _write_response(self, writer: Callable[[], None]) -> None:
+        def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
 
             A client that gave up waiting (e.g. on a slow orchestration run)
@@ -5809,8 +5809,9 @@ def build_server(
             """
             try:
                 writer()
+                return True
             except (BrokenPipeError, ConnectionError, OSError):
-                return
+                return False
 
         def _send(self, payload: dict[str, Any], status: int = 200) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -5852,7 +5853,7 @@ def build_server(
 
             self._write_response(_write)
 
-        def _begin_sse(self) -> None:
+        def _begin_sse(self) -> bool:
             # Incremental SSE: no content-length; the connection close delimits the body.
             def _write() -> None:
                 self.send_response(200)
@@ -5862,14 +5863,14 @@ def build_server(
                 self._send_security_headers()
                 self.end_headers()
 
-            self._write_response(_write)
+            return self._write_response(_write)
 
-        def _write_sse(self, frame: str) -> None:
+        def _write_sse(self, frame: str) -> bool:
             def _write() -> None:
                 self.wfile.write(frame.encode("utf-8"))
                 self.wfile.flush()
 
-            self._write_response(_write)
+            return self._write_response(_write)
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
@@ -5889,12 +5890,14 @@ def build_server(
 
             security.acquire_run_slot()
             try:
-                self._begin_sse()
-                self._write_sse(frame({"role": "assistant"}))
+                if not self._begin_sse() or not self._write_sse(frame({"role": "assistant"})):
+                    return
                 try:
                     for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
-                        self._write_sse(frame({"content": delta}))
-                    self._write_sse(frame({}, finish="stop"))
+                        if not self._write_sse(frame({"content": delta})):
+                            return
+                    if not self._write_sse(frame({}, finish="stop")):
+                        return
                 except ToolFallbackStoppedError as exc:
                     detail = {
                         "request_id": uuid.uuid4().hex,
@@ -5905,12 +5908,15 @@ def build_server(
                         TOOL_FALLBACK_STOPPED_MESSAGE,
                         detail,
                     )
-                    self._write_sse(
+                    if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                    )
-                    self._write_sse(frame({}, finish="error"))
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
-                    self._write_sse(frame({}, finish="error"))
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
                 self._write_sse("data: [DONE]\n\n")
             finally:
                 security.release_run_slot()

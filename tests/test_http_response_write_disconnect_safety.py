@@ -39,12 +39,55 @@ def test_write_response_swallows_a_broken_pipe_from_a_disconnected_client() -> N
 
         # Must return quietly, not raise -- self is unused by the method,
         # so a dummy stands in for a real connected-handler instance.
-        handler_cls._write_response(object(), _disconnected_write)
+        assert handler_cls._write_response(object(), _disconnected_write) is False
 
         def _reset_by_peer() -> None:
             raise ConnectionResetError("simulated peer reset")
 
-        handler_cls._write_response(object(), _reset_by_peer)
+        assert handler_cls._write_response(object(), _reset_by_peer) is False
+    finally:
+        server.server_close()
+
+
+def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
+    """A dead SSE peer must stop paid upstream work and release concurrency."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    yielded: list[str] = []
+
+    class Orchestrator:
+        def stream_route(self, messages, workflow_run_id):
+            for delta in ("first", "second"):
+                yielded.append(delta)
+                yield delta
+
+    class Security:
+        acquired = 0
+        released = 0
+
+        def acquire_run_slot(self):
+            self.acquired += 1
+
+        def release_run_slot(self):
+            self.released += 1
+
+    class Handler:
+        writes = 0
+
+        def _begin_sse(self):
+            return True
+
+        def _write_sse(self, _frame):
+            self.writes += 1
+            return self.writes < 2
+
+    try:
+        security = Security()
+        handler = Handler()
+        server.RequestHandlerClass._stream_route_completion(
+            handler, Orchestrator(), security, [], "model-group"
+        )
+        assert yielded == ["first"]
+        assert security.acquired == security.released == 1
     finally:
         server.server_close()
 
