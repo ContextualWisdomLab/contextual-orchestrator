@@ -93,6 +93,7 @@ def test_seed_agent_removal_tombstones_across_restart() -> None:
         ]
         first = TaskOrchestrator(list(seed), agents_db=db)
         first.remove_agent("default", "backup_worker")
+        assert "backup_worker" not in first._group_router._members
 
         second = TaskOrchestrator(list(seed), agents_db=db)  # seed still lists backup_worker
         assert {a.id for a in second.agents} == {"general_agent"}  # tombstone wins over seed

@@ -2748,6 +2748,7 @@ class TaskOrchestrator:
             raise ValueError("cannot remove the last enabled agent")
         self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
+        self._group_router.forget_members({agent.id for agent in self.candidates})
         if self._pool_store is not None:
             # Disabled tombstone (not a row delete): it overlays the seed file on restart
             # and startup drops disabled agents, so removal survives even for seed agents.
