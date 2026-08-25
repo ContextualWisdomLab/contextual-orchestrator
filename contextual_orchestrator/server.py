@@ -2895,7 +2895,10 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = str(body.get("model", "contextual-orchestrator"))
+    default_model = body.get("model", "contextual-orchestrator")
+    if not isinstance(default_model, str) or not default_model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    default_model = default_model.strip()
     batch: list[BatchRequest] = []
     seen_custom_ids: set[str] = set()
     for item in raw_requests:
@@ -2905,9 +2908,12 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
         attribution = _validate_attribution(item.get("attribution"))
         merged = {**default_attribution, **(attribution or {})}
         mode = _validate_mode(item.get("mode", "auto"))
+        model = item.get("model", default_model)
+        if not isinstance(model, str) or not model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
         kwargs: dict[str, Any] = {
             "messages": messages,
-            "model": str(item.get("model", default_model)),
+            "model": model.strip(),
             "attribution": merged,
             "mode": mode,
         }
