@@ -645,3 +645,23 @@ Buyer-visible gaps now prioritized:
 5. Protected main, not a feature-stack merge, remains the release boundary; do
    not bump or publish a version until #834 has exact terminal gates and an
    independent current-head approval.
+
+### Capability routing contract remediation — 2026-08-25 10:46 KST
+
+[#839](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/839)
+head `852fc1eeb2f30f212694702fe96afba216eddee9` normally merged into #834's
+feature branch. The resulting #834 exact head is
+`19ab869094a8b877fe70397ff6de55c357654efe`, tree
+`c92e2c90a14d9e8f296c536cb0172da92eaa35b6`; auto-merge is enabled, but it is
+still blocked on replacement hosted Checks and independent review. The patch
+closes three exact review findings: unavailable capability pools now honor the
+documented 503 contract, unknown explicit model/group names return 400, explicit
+groups retain true streaming in auto mode, and top-N discovery honors
+provider-reported prices before price-book refresh. The focused regression set
+passed 41 tests; the full exact-tree suite is running. This stack merge remains
+non-release evidence until protected `main` contains the tree.
+
+PR #773 is currently `ebf397e03c6c69a214a015c39efade6f78c603e1`, with
+auto-merge enabled, several successful security/review contexts, and remaining
+full-suite/fuzz/security contexts in progress or queued; `REVIEW_REQUIRED`
+therefore remains the honest decision boundary.
