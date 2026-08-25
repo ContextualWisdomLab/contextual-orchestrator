@@ -5293,7 +5293,12 @@ def build_server(
                     body = self._read_json()
                     _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_PATCH_KEYS)
                     name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
-                    orchestrator.get_model_group(name)
+                    try:
+                        orchestrator.get_model_group(name)
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_group_not_found", "model group not found"
+                        ) from exc
                     self._send(orchestrator.set_model_group(name, body.get("member_agent_ids")))
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -5328,7 +5333,13 @@ def build_server(
                     return
                 if path.startswith("/api/v1/model_groups/"):
                     name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
-                    self._send(orchestrator.delete_model_group(name), 200)
+                    try:
+                        deleted = orchestrator.delete_model_group(name)
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_group_not_found", "model group not found"
+                        ) from exc
+                    self._send(deleted, 200)
                     return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:

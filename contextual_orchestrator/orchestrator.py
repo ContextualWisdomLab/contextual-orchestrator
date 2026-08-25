@@ -310,7 +310,7 @@ class ModelAgent:
     auth_scheme: str = "Bearer"
     # Optional measured-routing group: agents sharing a canonical group name are
     # one logical model whose members are ordered by observed speed/stability
-    # (see model_group.ModelGroupRouter and planning ADR 0026).
+    # (see model_group.ModelGroupRouter and planning ADR 0027).
     # Empty string means the agent is ungrouped.
     group_name: str = ""
     # ``None`` means provider support is unproven. Opt-in effort profiles then
