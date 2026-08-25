@@ -203,27 +203,6 @@ class PriceBook:
         completion_price = _decimal_safe_price(raw["completion_price_per_1k"])
         if prompt_price is None or completion_price is None:
             return None
-        if not isinstance(raw, dict):
-            return None
-        try:
-            if (
-                "prompt_price_per_1k" not in raw
-                or "completion_price_per_1k" not in raw
-                or isinstance(raw["prompt_price_per_1k"], bool)
-                or isinstance(raw["completion_price_per_1k"], bool)
-            ):
-                return None
-            prompt_price = float(raw["prompt_price_per_1k"])
-            completion_price = float(raw["completion_price_per_1k"])
-        except (OverflowError, TypeError, ValueError):
-            return None
-        if (
-            not math.isfinite(prompt_price)
-            or not math.isfinite(completion_price)
-            or prompt_price < 0
-            or completion_price < 0
-        ):
-            return None
         return PriceEntry(
             provider_name=raw.get("provider_name", provider),
             model_name=raw.get("model_name", model),
