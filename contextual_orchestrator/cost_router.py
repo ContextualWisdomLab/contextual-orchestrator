@@ -203,12 +203,10 @@ class CostRoutingCoordinator:
                 if not isinstance(step, dict):
                     continue
                 counts = self._provider_usage(step.get("usage"))
-                if counts is None:
-                    continue
                 records.append(
                     self._record_completion(
-                        messages=[],
-                        answer="",
+                        messages=messages if counts is None else [],
+                        answer=step.get("output", "") if counts is None else "",
                         route_mode=result.get("mode"),
                         request_channel="sync",
                         attribution=attribution,
@@ -217,8 +215,8 @@ class CostRoutingCoordinator:
                             {"trace": [step]}, model_name
                         ),
                         workflow_run_id=result.get("workflow_run_id"),
-                        prompt_tokens=counts[0],
-                        completion_tokens=counts[1],
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
                     )
                 )
             if not records:

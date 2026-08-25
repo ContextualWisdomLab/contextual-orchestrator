@@ -26,6 +26,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Mixed structured workflows now retain a cost-ledger row for calls whose
+  provider omitted usage, using the existing token-counting fallback while
+  preserving reported counts for the other calls in the same workflow.
 - Virtual-model tools, structured-output, and Responses passthrough requests now
   advance once across distinct capability-ranked providers after explicit
   upstream rejection, stale-model responses, or temporary pre-request DNS

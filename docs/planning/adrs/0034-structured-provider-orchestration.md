@@ -20,7 +20,7 @@ success_criteria:
     target: "non-null response_format and non-tool Responses requests retain conducted workflow lineage"
     source: "tests/test_openai_passthrough.py"
   - metric: "provider usage provenance"
-    target: "every provider-reported workflow call is recorded under one workflow_run_id"
+    target: "every workflow call is recorded under one workflow_run_id, using provider counts when valid and the existing token counter otherwise"
     source: "tests/test_cost_router.py"
 ---
 
@@ -39,9 +39,11 @@ Validated structured Chat and non-tool Responses requests use the existing
 conducted workflow, followed by one provider-native synthesis call. The final
 call retains the caller's endpoint, schema, tools, metadata, message order, and
 multimodal parts. Internal evidence is not returned through mock/provider echo
-fields. Provider-reported usage for each evidence and synthesis call is written
-to the existing cost ledger under one workflow run; costs are summed only when
-their currencies match.
+fields. Every evidence and synthesis call is written to the existing cost
+ledger under one workflow run. Valid provider-reported usage is preserved;
+calls whose provider omits usage use the same token-counting fallback as a
+normal synchronous completion instead of disappearing from the ledger. Costs
+are summed only when their currencies match.
 
 Tool requests remain a single-provider exception because the client owns tool
 execution state and OpenAI-compatible clients do not send a proprietary opt-in

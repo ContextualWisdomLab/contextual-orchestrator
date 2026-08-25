@@ -91,6 +91,37 @@ def test_structured_provider_workflow_records_each_reported_call() -> None:
     }
 
 
+def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
+    """Mixed provider usage still leaves one cost-ledger row per workflow call."""
+    coordinator = _coordinator()
+    calls = iter(
+        [
+            {"prompt_tokens": 2, "completion_tokens": 1},
+            None,
+            {"prompt_tokens": 3, "completion_tokens": 2},
+            None,
+        ]
+    )
+    coordinator.orchestrator.client.take_usage = lambda: next(calls, None)
+
+    result = coordinator.complete(
+        [{"role": "user", "content": "return mixed usage JSON"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "return mixed usage JSON"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    trace = coordinator.orchestrator.get_workflow_run(
+        result["orchestration"]["workflow_run_id"]
+    )["trace"]
+    records = coordinator.ledger.records()
+    assert len(result["usage_record_ids"]) == len(records) == len(trace)
+    assert records[1]["total_tokens"] > 0
+    assert records[3]["total_tokens"] > 0
+
+
 def test_sync_completion_survives_usage_persistence_failure() -> None:
     sink = InMemoryUsageTelemetrySink()
     config = InMemoryConfigStore()
