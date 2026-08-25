@@ -1,5 +1,29 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 08:55 KST protected-main and open-queue baseline
+
+Protected `main` is `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+Its latest full Tests run reached `2148 passed` before the remaining persistence
+assertion queried the removed legacy `records` table. PR #855 fixes only that
+post-merge test regression at exact head `f2e66db7acc05d8077e58f735b640af23906b336`;
+it is not protected-main evidence until its exact-head checks and independent
+review complete.
+
+| PR | Exact head | Current evidence and next acceptance action |
+| --- | --- | --- |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | `62015641ed3afe979a24fcafcfa2d0d17cfef6ef` | Current-main integration resolves model-judge and model-list conflicts while preserving arbitrary operator groups, explicit cost evidence, all eight model capabilities, `orchestrator/auto` and `orchestrator/free`, Responses reasoning-summary streaming, Compose, and the hourly loop. The exact integrated focused suite is `96 passed`; protected checks and independent review remain required. |
+| [#845](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/845) | `3cd57d46ddc3cb3ad2786e548922e501b18f0dca` | Current-main integration retains the PostgreSQL service fallback when both durable KV secrets are absent and fails closed on partial KV configuration. The focused contract is `4 passed` and `actionlint` is clean; a successful scheduled run after protected merge remains required runtime evidence. |
+| [#848](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/848) | `359ab9a9a08a59edc749f6ffa2268d5c8f4baf6d` | Current-main integration preserves unique planning ADR identifiers; the exact focused contract is `1 passed`. |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `fecc7b017fc822077811a76e0c4b34291054c046` | The stacked k6 work is incorporated; HTTP/1.1 keep-alive now reuses connections, bounds idle reads, uses the native listen backlog, closes unread request bodies, and clears trace/session state after every persistent request. The latest focused server slice is `35 passed`; production TLS/provider/soak capacity remains unproven. |
+| [#850](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/850) | `d230c00279fcce1bbd2c8d77cd7220bc2aeb0e9f` | Constant-time budget gating remains reconciled after current-main integration; the exact focused budget suite is `9 passed`. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `b089f9e1adc94875da41854791fbdf5e8db1c810` | Structured requests no longer conduct on empty `response_format`, empty `tools`, or omit-equivalent `tool_choice`. Provider-reported and token-counter fallback usage now persist `measured` versus `estimated` provenance in normalized `usage_measurements`, cost responses expose it, and conducted structured Chat has a distinct analytics event. Focused cost/schema/control evidence is `107 passed`; protected checks and independent review remain required. |
+| [#855](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/855) | `f2e66db7acc05d8077e58f735b640af23906b336` | Repairs the sole observed protected-main test failure by asserting the production `orchestration_records` table; `29 passed` locally. Merge this root repair before treating a later green main run as release evidence. |
+
+Every open PR above has normal auto-merge enabled. At this snapshot their
+required hosted jobs are queued and no failed exact-head result is present;
+queued jobs and absent independent approval are not success evidence and must
+not be bypassed.
+
 ## 2026-08-26 00:33 KST exact-head continuation
 
 Protected `main` remains `838b3de160c341a6f36bf588ae9fcc09989c040c`;
