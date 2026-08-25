@@ -702,3 +702,29 @@ boundary remains: research supports modality-aware and learned cost/quality
 routing, but does not establish provider-alias identity. OpenCode's own mutable
 catalog currently demonstrates why transient free model identifiers must stay
 out of the production contract.
+
+### Release-candidate exact tree — 2026-08-25 11:18 KST
+
+[#840](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/840)
+was reordered as a stack prerequisite instead of an independently mergeable
+main release: feature head `4e0cbca934e7e82cbed56de347853dbc40971f20`
+was merged into release head `fd6dde7e8f06a1d3b67400355f6223c2a653aa3d`,
+the PR base was changed to #834's feature branch, and its resulting three-file
+diff (`CHANGELOG.md`, `pyproject.toml`, `uv.lock`) normally merged. This removes
+the risk of publishing version `0.2.0` before its implementation. It also
+restores the pre-existing tool-fallback changelog entries and synchronizes the
+lockfile package version.
+
+#834 is now exact head `6f494131774f38b78bdc3b104451e2133edb5318`,
+tree `52fdbdcb96bbe0a7617a4573e9c01cd5355db350`. That exact release-candidate
+tree passed the complete local suite (`1612 passed in 724.94s`) and produced
+both the `0.2.0` sdist and wheel. Protected-main publication remains unproven:
+hosted jobs are queued, independent review is required, and no tag or package
+has been published.
+
+The shared Strix contract repair is
+[.github#1316](https://github.com/ContextualWisdomLab/.github/pull/1316) exact
+head `e4f9865a1b06978324f006ee3861b84953877d8b`; its sole informational review
+thread was resolved and auto-merge is enabled, while central hosted gates remain
+queued. Until that protected merge lands, the queue-wide retired-smoke Strix
+failures remain central workflow evidence rather than individual source defects.
