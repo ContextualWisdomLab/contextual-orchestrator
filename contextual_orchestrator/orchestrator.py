@@ -2062,7 +2062,9 @@ class TaskOrchestrator:
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
         if agent is None:
-            agent = self._select_agent(text, "worker")
+            agent = self._select_agent(
+                text, "worker", free_only=requested_model == self.FREE_MODEL
+            )
         upstream = {
             key: value
             for key, value in body.items()
