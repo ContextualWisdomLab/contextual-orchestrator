@@ -156,6 +156,26 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
 
 
+def test_discovery_treats_null_modality_arrays_as_unspecified() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(
+            {
+                "data": [
+                    {
+                        "id": "provider/unspecified",
+                        "architecture": {"input_modalities": None, "output_modalities": None},
+                    }
+                ]
+            }
+        ),
+    ):
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert discovered[0].capabilities == ("chat",)
+
+
 def test_discovery_preserves_operator_declared_source_capabilities() -> None:
     register_credential("EMBEDDING_API_KEY", "registered-secret")
     with patch(
