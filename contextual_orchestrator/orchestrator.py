@@ -955,6 +955,7 @@ class ModelClient:
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         retry_limit = self._retry_limit(agent)
+        last_error: Exception | None = None
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
                 return (
@@ -963,11 +964,13 @@ class ModelClient:
                     else self._send(agent, payload, destination, timeout=timeout)
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
+                last_error = exc
                 if isinstance(exc, ProviderResponseError):
                     raise
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
+        assert last_error is not None  # the loop only falls through on a failure
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
@@ -1237,13 +1240,16 @@ class ModelClient:
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
         retry_limit = self._retry_limit(agent)
+        last_error: Exception | None = None
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
+                last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
+        assert last_error is not None  # the loop only falls through on a failure
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
