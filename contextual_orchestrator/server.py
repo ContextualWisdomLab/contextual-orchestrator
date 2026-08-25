@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import json
@@ -118,6 +119,7 @@ ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
+ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -131,6 +133,9 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_name",
     "provider_exclusions",
 }
+ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
+DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
+DEFAULT_MAX_ADMIN_SESSIONS = 256
 
 
 class RequestError(Exception):
@@ -142,6 +147,55 @@ class RequestError(Exception):
         self.code = code
         self.message = message
         self.detail = detail or {}
+
+
+def _request_body_size(headers: Any, max_body_bytes: int) -> int:
+    """Return a safe JSON body length or reject ambiguous HTTP framing.
+
+    The stdlib handler does not decode transfer codings for this API. A single
+    ASCII decimal ``Content-Length`` is therefore the only accepted framing
+    signal; duplicate, comma-joined, negative, malformed, oversized, or
+    transfer-coded requests fail closed before any body read.
+    """
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        transfer_values = get_all("transfer-encoding")
+        length_values = get_all("content-length")
+    else:  # pragma: no cover - production uses email.message.Message headers
+        transfer_value = headers.get("transfer-encoding")
+        length_value = headers.get("content-length")
+        transfer_values = None if transfer_value is None else [transfer_value]
+        length_values = None if length_value is None else [length_value]
+
+    if transfer_values is not None:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoding request framing is not supported",
+        )
+    if length_values is None:
+        return 0
+    if len(length_values) != 1 or "," in length_values[0]:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must appear exactly once",
+        )
+    value = length_values[0].strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must be a non-negative decimal value",
+        )
+    normalized = value.lstrip("0") or "0"
+    maximum = str(max_body_bytes)
+    if len(normalized) > len(maximum) or (
+        len(normalized) == len(maximum) and normalized > maximum
+    ):
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    body_size = int(normalized)
+    return body_size
 
 
 @dataclass
@@ -157,6 +211,9 @@ class SecurityConfig:
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    admin_session_ttl_seconds: int = DEFAULT_ADMIN_SESSION_TTL_SECONDS
+    max_admin_sessions: int = DEFAULT_MAX_ADMIN_SESSIONS
+    admin_session_secure_cookie: bool = True
     # Deployment may inject a real OIDC/JWT verifier (for example a Keyverse
     # relying-party adapter). The core deliberately does not decode JWTs with
     # an unsafe hand-rolled parser or own Keycloak admin credentials.
@@ -164,6 +221,8 @@ class SecurityConfig:
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
+    _admin_sessions: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _session_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.auth_token and (self.admin_token or self.inference_token):
@@ -174,7 +233,23 @@ class SecurityConfig:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
+        if type(self.admin_session_ttl_seconds) is not int or self.admin_session_ttl_seconds < 1:
+            raise ValueError("admin_session_ttl_seconds must be an integer >= 1")
+        if type(self.max_admin_sessions) is not int or self.max_admin_sessions < 1:
+            raise ValueError("max_admin_sessions must be an integer >= 1")
+        if type(self.admin_session_secure_cookie) is not bool:
+            raise ValueError("admin_session_secure_cookie must be a boolean")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+
+    @staticmethod
+    def _constant_time_token_match(presented: str, expected: str) -> bool:
+        """Compare UTF-8 secret bytes without leaking non-ASCII failures."""
+        if not isinstance(presented, str) or not isinstance(expected, str):
+            return False
+        try:
+            return secrets.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
+        except (TypeError, ValueError):
+            return False
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
@@ -182,9 +257,11 @@ class SecurityConfig:
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin or inference scope."""
+        """Validate a bearer token or an opaque, server-side admin session cookie."""
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
+        if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
+            return
         raw = headers.get("authorization", "")
         if not raw.lower().startswith("bearer "):
             raise RequestError(401, "unauthorized", "bearer token is required")
@@ -204,6 +281,100 @@ class SecurityConfig:
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+
+    @staticmethod
+    def _extract_bearer_token(headers: Any) -> str:
+        """Return the bearer value when the Authorization header has the expected shape."""
+        raw = headers.get("authorization", "") or ""
+        return raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+
+    @staticmethod
+    def _extract_admin_session_cookie(headers: Any) -> str:
+        """Return the opaque admin session id from the request cookie, if present."""
+        raw = headers.get("cookie", "") or ""
+        if not raw:
+            return ""
+        jar = SimpleCookie()
+        try:
+            jar.load(raw)
+        except CookieError:
+            return ""
+        morsel = jar.get(ADMIN_SESSION_COOKIE)
+        return morsel.value if morsel is not None else ""
+
+    def establish_admin_session(self, presented_token: str) -> str:
+        """Mint a bounded opaque session after validating the admin credential."""
+        if self.bearer_verifier is not None:
+            try:
+                valid = bool(self.bearer_verifier(presented_token, "admin"))
+            except Exception:  # noqa: BLE001 - auth adapter failures deny establishment
+                valid = False
+        else:
+            expected = self.admin_token or self.auth_token
+            valid = bool(expected) and self._constant_time_token_match(presented_token, expected)
+        if not valid:
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        session_id = secrets.token_urlsafe(32)
+        expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
+        with self._session_lock:
+            self._purge_expired_admin_sessions_locked(time.monotonic())
+            overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
+            if overflow > 0:
+                for session_key, _ in sorted(self._admin_sessions.items(), key=lambda item: item[1])[:overflow]:
+                    self._admin_sessions.pop(session_key, None)
+            self._admin_sessions[session_id] = expires_at
+        return session_id
+
+    def _admin_session_is_active(self, session_id: str) -> bool:
+        """Return whether an opaque session exists and has not expired."""
+        if not session_id:
+            return False
+        with self._session_lock:
+            expires_at = self._admin_sessions.get(session_id)
+            if expires_at is None:
+                return False
+            if time.monotonic() >= expires_at:
+                self._admin_sessions.pop(session_id, None)
+                return False
+            return True
+
+    def _purge_expired_admin_sessions_locked(self, now: float) -> None:
+        """Remove expired sessions while the caller holds the session lock."""
+        for session_id, expires_at in list(self._admin_sessions.items()):
+            if now >= expires_at:
+                self._admin_sessions.pop(session_id, None)
+
+    def revoke_admin_session(self, session_id: str) -> bool:
+        """Revoke one opaque admin session without retaining the bearer."""
+        with self._session_lock:
+            return self._admin_sessions.pop(session_id, None) is not None if session_id else False
+
+    def admin_session_cookie_header(self, session_id: str, *, max_age: int | None = None) -> str:
+        """Return a secure-by-default HttpOnly, same-origin session cookie header."""
+        age = self.admin_session_ttl_seconds if max_age is None else max_age
+        parts = [
+            f"{ADMIN_SESSION_COOKIE}={session_id}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+            f"Max-Age={int(age)}",
+        ]
+        if self.admin_session_secure_cookie:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def admin_session_clear_cookie_header(self) -> str:
+        """Return the deletion cookie for an opaque admin session."""
+        return self.admin_session_cookie_header("", max_age=0)
+
+    def validate_admin_session_origin(self, headers: Any) -> None:
+        """Reject cross-origin state changes authenticated only by a session cookie."""
+        if not self._extract_admin_session_cookie(headers):
+            return
+        origin = (headers.get("origin", "") or "").strip()
+        host = (headers.get("host", "") or "").strip()
+        if not origin or origin == "null" or urllib.parse.urlparse(origin).netloc != host:
+            raise RequestError(403, "csrf_origin_rejected", "browser session origin is not allowed")
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -242,6 +413,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "max_admin_sessions": self.max_admin_sessions,
+            "admin_session_secure_cookie": self.admin_session_secure_cookie,
         }
 
 
@@ -1807,7 +1980,9 @@ def _validate_mode(mode: Any) -> str:
 
 
 
-def _require_pool_model(orchestrator: Any, model_name: str) -> None:
+def _require_pool_model(
+    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
@@ -1817,7 +1992,9 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
-        if getattr(agent, "model", None) == model_name:
+        if getattr(agent, "model", None) == model_name and (
+            required_capability is None or required_capability in getattr(agent, "tags", ())
+        ):
             return
     raise RequestError(
         400,
@@ -2595,6 +2772,7 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     default_attribution = _validate_attribution(body.get("attribution")) or {}
     default_model = str(body.get("model", "contextual-orchestrator"))
     batch: list[BatchRequest] = []
+    seen_custom_ids: set[str] = set()
     for item in raw_requests:
         if not isinstance(item, dict):
             raise RequestError(400, "invalid_request", "each batch request must be an object")
@@ -2602,12 +2780,34 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
         attribution = _validate_attribution(item.get("attribution"))
         merged = {**default_attribution, **(attribution or {})}
         mode = _validate_mode(item.get("mode", "auto"))
-        batch.append(BatchRequest(
-            messages=messages,
-            model=str(item.get("model", default_model)),
-            attribution=merged,
-            mode=mode,
-        ))
+        kwargs: dict[str, Any] = {
+            "messages": messages,
+            "model": str(item.get("model", default_model)),
+            "attribution": merged,
+            "mode": mode,
+        }
+        # Caller-supplied custom_id: without it, results cannot be mapped
+        # back to requests on backends that do not preserve submission
+        # order (the OpenAI Batch contract explicitly does not), because
+        # the submit response never discloses the generated ids. Same
+        # bounds as the OpenAI Batch API's custom_id.
+        custom_id = item.get("custom_id")
+        if custom_id is not None:
+            if not isinstance(custom_id, str) or not custom_id.strip():
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be a non-empty string"
+                )
+            if len(custom_id) > 64:
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be at most 64 characters"
+                )
+            if custom_id in seen_custom_ids:
+                raise RequestError(
+                    400, "invalid_request", "custom_id values must be unique within a batch"
+                )
+            seen_custom_ids.add(custom_id)
+            kwargs["custom_id"] = custom_id
+        batch.append(BatchRequest(**kwargs))
     return batch
 
 
@@ -4191,15 +4391,28 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
     return value
 
 
-def _validate_embeddings_model(body: dict[str, Any]) -> str:
-    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars.
+def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = None) -> str:
+    """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface.
+    form/JS model names bind to the pool id on every surface. An omitted model
+    is resolved by the orchestrator's explicit ``embedding`` capability pool;
+    no consumer-side sentinel model is accepted.
     """
+    if body.get("model") is None:
+        if orchestrator is None:
+            raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
+        try:
+            model = orchestrator.select_capability_agent("embedding").model
+        except (RuntimeError, ValueError) as exc:
+            raise RequestError(
+                503,
+                "embedding_unavailable",
+                "no enabled embedding-capable agent is available",
+            ) from exc
+        body["model"] = model
+        return model
     model = body.get("model")
-    if model is None:
-        raise RequestError(400, "invalid_model", "model is required")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -4441,7 +4654,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Handle authenticated orchestration, administration, and health routes."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -4462,6 +4678,11 @@ def build_server(
                         "provider_readiness": "unprobed",
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
+                    return
+                if path in ("/", "/admin"):
+                    # The shell is public so an operator can establish a session;
+                    # all data and mutation routes remain admin-authorized.
+                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
                     return
                 if path == "/v1/models" or path.startswith("/v1/models/"):
                     # OpenAI model discovery is inference-scope (same bearer as chat).
@@ -4519,9 +4740,6 @@ def build_server(
                         self._send(coordinator.poll_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
-                    return
-                if path in ("/", "/admin"):
-                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
                     return
                 if path == "/admin/state":
                     state = orchestrator.admin_state()
@@ -4791,8 +5009,9 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Apply an authenticated agent-pool worker update."""
             try:
-                self._authorize("admin")
+                self._authorize("admin", state_changing=True)
                 path = urllib.parse.urlparse(self.path).path
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
@@ -4814,9 +5033,19 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Delete an authenticated agent-pool worker resource."""
             try:
-                self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
+                if path == "/admin/session":
+                    security.check_rate_limit(self.client_address[0])
+                    security.validate_admin_session_origin(self.headers)
+                    session_id = security._extract_admin_session_cookie(self.headers)
+                    self._send(
+                        {"session_status": "cleared", "session_revoked": security.revoke_admin_session(session_id)},
+                        extra_headers={"set-cookie": security.admin_session_clear_cookie_header()},
+                    )
+                    return
+                self._authorize("admin", state_changing=True)
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
                     if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
@@ -4834,10 +5063,31 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
-                self._authorize(scope)
+                if path == "/admin/session":
+                    security.check_rate_limit(self.client_address[0])
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_SESSION_KEYS)
+                    presented = body.get("token")
+                    if not isinstance(presented, str) or not presented.strip():
+                        presented = security._extract_bearer_token(self.headers)
+                    session_id = security.establish_admin_session(
+                        presented.strip() if isinstance(presented, str) else ""
+                    )
+                    self._send(
+                        {"session_status": "established"},
+                        extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
+                    )
+                    return
+                scope = (
+                    "admin"
+                    if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
+                    or path.startswith("/api/v1/agent_pools/")
+                    else "inference"
+                )
+                self._authorize(scope, state_changing=True)
                 body = self._read_json()
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
@@ -5238,10 +5488,10 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
-                    model_name = _validate_embeddings_model(body)
+                    model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5327,16 +5577,8 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    # Require model — silent default to contextual-orchestrator was an
-                    # honesty gap for naruon/batch clients that omit the field.
-                    if "model" not in body:
-                        raise RequestError(
-                            400,
-                            "invalid_model",
-                            "model is required on /v1/batch/embeddings",
-                        )
-                    model_name = _validate_embeddings_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5639,9 +5881,11 @@ def build_server(
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
-        def _authorize(self, scope: str) -> None:
+        def _authorize(self, scope: str, *, state_changing: bool = False) -> None:
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
+            if state_changing and scope == "admin":
+                security.validate_admin_session_origin(self.headers)
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
@@ -5677,13 +5921,24 @@ def build_server(
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+            try:
+                body_size = _request_body_size(self.headers, security.max_body_bytes)
+            except RequestError:
+                # Do not let a peer reuse a connection after an ambiguous frame.
+                self.close_connection = True
+                raise
             raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                self.close_connection = True
+                raise RequestError(
+                    400,
+                    "invalid_request_framing",
+                    "request body ended before content-length",
+                )
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Suppress default request logging to keep service output structured."""
             return
 
         def _send_error(
@@ -5695,12 +5950,20 @@ def build_server(
         ) -> None:
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
-        def _send(self, payload: dict[str, Any], status: int = 200) -> None:
+        def _send(
+            self,
+            payload: dict[str, Any],
+            status: int = 200,
+            *,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(raw)))
             self._send_security_headers()
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(raw)
 
