@@ -109,4 +109,9 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 - **Ponytail design gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the stdlib or an already selected library covers the need; no interface or factory until a second real implementation exists.
 - **Honest metrics**: spend/analytics surfaces label estimates (`usage_source`, `measurement_status`) and never fabricate prices — preserve this when touching analytics.
 - **Fuzz seams**: untrusted-input parsers (request body, agent config, redaction, orchestration) share invariant checks in `fuzz/targets.py`, driven by both Hypothesis (`tests/fuzz/`) and Atheris (`fuzz/`). New parsing seams should get a target there (see `docs/fuzzing.md`).
-- **ADR location**: architecture decision records live in `docs/planning/adrs/NNNN-slug.md`, four-digit sequential, matching ADR 0001-0011's existing convention — not `docs/adr/`. Pick the next unused number by checking both the branch you're on and `main`, since concurrent PRs number independently; a same-number collision is a rename, not a redesign.
+- **ADR location**: new product-planning decisions live in
+  `docs/planning/adrs/NNNN-slug.md`; `docs/adr/` retains the earlier research
+  and API decision series and is not renumbered into the planning series.
+  Planning filenames use four digits and must be unique across current `main`
+  and every open PR. A same-number collision is a rename, not a redesign; the
+  executable uniqueness contract lands in PR #848.

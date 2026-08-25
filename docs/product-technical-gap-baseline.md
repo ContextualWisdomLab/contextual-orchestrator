@@ -1,5 +1,34 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-25 20:55 KST exact-head continuation
+
+Protected `main` is `838b3de160c341a6f36bf588ae9fcc09989c040c`.
+PRs #782 and #790 merged normally as `ba70855cd0f63654feca3a5925c673fb1bf39072`
+and `838b3de160c341a6f36bf588ae9fcc09989c040c`. PR #847 merged normally into
+the #834 stack as `93b8016cb77cf400b7aec2f15dfc38bc2b7ebeef`; it repairs four reviewed
+routing defects: missing-affinity inversion, non-chat leakage into chat roles,
+heterogeneous score units, and unjudged quality observations. Its routing
+score is now consistently posterior stability divided by EWMA latency;
+tokens-per-second remains diagnostic evidence rather than an arbitrary weight.
+
+| PR | Exact head | Current gate and customer consequence |
+| --- | --- | --- |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `574932d2f7b31612e3c046346779e4fea7c6968a` | k6 measured 64 concurrent inference requests: 128/128 inference and 101/101 health requests succeeded with 0/229 HTTP failures. HTTP/1.1 persistence plus native `socket.SOMAXCONN` raised inference throughput from 16.18 to 25.02 req/s and reduced average blocked time from 571.73 ms to 1.79 ms. Independent review and protected checks remain pending with auto-merge enabled. |
+| [#848](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/848) | `9632a682644516b784e77b253cd47583b74ff7a3` | Latest-main merge applied; independent exact-head review and required checks are pending with auto-merge enabled. Until this lands, planning ADR identifiers are not mechanically unique. |
+| [#845](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/845) | `44305d069c0c4ef9f1dd4a166e585a3db4401787` | Latest-main merge applied; exact-head review and checks are pending with auto-merge enabled. Until this lands, hourly provider-catalog refresh cannot claim reliable run-scoped KV fallback. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | `8b03206b04cc9855d7ed8930ba0127bd12c71922` | Contains the reviewed #847 remediation and a model-group fetch failure guard for the admin console; independent exact-head review and protected checks are pending with auto-merge enabled. This is not protected-main evidence yet. |
+| [#818](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/818) | `1fe847f47c7a404b61a863dbe937650424e93515` | Latest-main merge applied; independent approval and exact-head checks remain pending with auto-merge enabled. Telemetry correlation is not release evidence yet. |
+| [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | `f1a5e8b7a9c5fa4d1fd93e5c54bc70537c4fa77a` | Latest-main merge applied; exact-head checks are queued and auto-merge enabled. Database naming/persistence migrations remain unreleased. |
+| [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | this commit supersedes `b6d1f1958338a5fb8162ebd3d5e16a365b8cb61a` | This baseline refresh must pass exact-head checks before it becomes protected-main product evidence. |
+
+PR #849 closes the first measurable asynchronous web-capacity slice with a
+checked-in E2E scenario and before/after evidence. The remaining capacity gap is
+deployment-specific: repeat the same workload through production TLS, real
+provider quotas, multi-process workers, and a soak duration before declaring a
+production SLO. Its candidate inference p95 remains provider-delay dominated at
+about 1.06 seconds; no unmeasured concurrency target or heuristic tuning is
+claimed.
+
 ## 2026-08-25 exact-head review continuation
 
 | PR | Exact head/base | Current evidence and decision |
