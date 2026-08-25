@@ -1,7 +1,8 @@
 # ADR 0001: Safety-aware tool-execution fallback policy
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-15
+- Citation alignment: 2026-08-25
 - Decision owners: ContextualWisdomLab
 
 ## Context
@@ -62,3 +63,51 @@ The route and Conduct-stage invocation path performs at most `tool_retry_attempt
 - Some non-idempotent requests that might have been safe to repeat will stop for human or caller reconciliation.
 - Text classification remains a compatibility bridge; adapters should migrate to structured errors.
 - Agent capability matching remains sequential and role-based; endpoint equivalence/racing is outside this ADR.
+
+## Citation alignment
+
+The fallback matrix is unchanged. Verified sources below confirm the existing
+retry and fail-closed rules; they do not require a different action table.
+
+- RFC 9110 §9.2.1 defines *safe* methods as essentially read-only: the client
+  does not request a state change (Fielding et al., 2022, section 9.2.1).
+  RFC 9110 §9.2.2 defines *idempotent* methods as those whose intended server
+  effect of multiple identical requests equals the effect of one, and says a
+  client **SHOULD NOT** automatically retry a non-idempotent method unless it
+  knows the semantics are actually idempotent or can detect that the original
+  request was never applied (Fielding et al., 2022, section 9.2.2). That is
+  why this ADR retries or fails over only when the adapter declares
+  idempotency, and why timeout or transport uncertainty on a non-idempotent
+  call is `fail_closed` as `ambiguous_outcome`.
+- NIST SP 800-53 Rev. 5 control **SI-11** (Error Handling) requires error
+  messages that support corrective action without revealing information that
+  adversaries could exploit, and restricts those messages to authorized
+  roles (Joint Task Force, 2020, SI-11). That is why fallback audit events
+  carry only agent id, failure kind, action, reason code, and retry count.
+- NIST SP 800-53 Rev. 5 control **SC-24** (Fail in Known State) requires
+  failing to an organization-defined known state and preserving defined
+  state information so confidentiality, integrity, or availability is not
+  lost in failure (Joint Task Force, 2020, SC-24). This ADR's `fail_closed`
+  actions are that known safe stop: do not replay, do not substitute an
+  unauthorized agent, and do not guess a tool alias.
+- NIST SP 800-204 discusses **circuit breakers** and the **fail-fast**
+  isolation of an instance that exceeds a failure threshold; it does **not**
+  use the phrase fail-closed (Chandramouli, 2019). This ADR cites 800-204
+  only for bounded isolation after repeated failure (same-agent retry
+  budget, then sequential failover). Fail-closed itself is grounded in
+  RFC 9110 §9.2.2 and SP 800-53 SC-24 / SI-11, not in 800-204.
+
+## References
+
+Chandramouli, R. (2019). *Security strategies for microservices-based
+application systems* (NIST Special Publication 800-204). National Institute
+of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-204
+
+Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics*
+(RFC 9110). Internet Engineering Task Force.
+https://doi.org/10.17487/RFC9110
+
+Joint Task Force. (2020). *Security and privacy controls for information
+systems and organizations* (NIST Special Publication 800-53, Rev. 5).
+National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-53r5
