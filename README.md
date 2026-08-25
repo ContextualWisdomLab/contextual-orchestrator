@@ -18,8 +18,12 @@ token into the encrypted KV from a Compose secret, and binds the gateway to
 loopback:
 
 ```bash
+umask 077
 mkdir -p .secrets
+chmod 700 .secrets
 printf '%s' 'replace-with-a-long-random-token' > .secrets/server-token
+chmod 600 .secrets/server-token
+export TOKEN="$(cat .secrets/server-token)"
 export CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD='replace-with-a-database-password'
 export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE='replace-with-an-encryption-passphrase'
 docker compose up --build --wait

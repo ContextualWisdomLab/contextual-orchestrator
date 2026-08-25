@@ -6475,7 +6475,7 @@ def build_server(
             created_at = int(time.time())
             sequence = 0
             summaries: list[str] = []
-            open_parts: dict[str, tuple[int, str]] = {}
+            open_parts: dict[str, list[tuple[int, str]]] = {}
 
             def emit(event_type: str, **values: Any) -> None:
                 nonlocal sequence
@@ -6490,7 +6490,7 @@ def build_server(
                 if status == "started":
                     index = len(summaries)
                     summaries.append(text)
-                    open_parts[role] = (index, text)
+                    open_parts.setdefault(role, []).append((index, text))
                     emit(
                         "response.reasoning_summary_part.added",
                         item_id=reasoning_id,
@@ -6505,8 +6505,10 @@ def build_server(
                         summary_index=index,
                         delta=text,
                     )
-                elif role in open_parts:
-                    index, text = open_parts.pop(role)
+                elif open_parts.get(role):
+                    index, text = open_parts[role].pop(0)
+                    if not open_parts[role]:
+                        del open_parts[role]
                     emit(
                         "response.reasoning_summary_text.done",
                         item_id=reasoning_id,

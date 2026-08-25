@@ -8,6 +8,9 @@ def test_compose_uses_postgres_kv_and_secret_bootstrap() -> None:
     assert "credential_bootstrap:" in compose
     assert "condition: service_completed_successfully" in compose
     assert "CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres" in compose
+    assert "postgresql://contextual_orchestrator@postgres/contextual_orchestrator" in compose
+    assert "PGPASSWORD: ${CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD" in compose
+    assert "postgresql://contextual_orchestrator:${CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD}" not in compose
     assert "--value-stdin < /run/secrets/server_token" in compose
     assert "OPENAI_API_KEY" not in compose
     assert '127.0.0.1:${CONTEXTUAL_ORCHESTRATOR_PORT:-8000}:8000' in compose

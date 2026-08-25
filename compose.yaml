@@ -20,7 +20,8 @@ services:
     build: .
     environment: &kv_environment
       CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
-      CONTEXTUAL_ORCHESTRATOR_KV_DSN: postgresql://contextual_orchestrator:${CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD}@postgres/contextual_orchestrator
+      CONTEXTUAL_ORCHESTRATOR_KV_DSN: postgresql://contextual_orchestrator@postgres/contextual_orchestrator
+      PGPASSWORD: ${CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD:?set the Postgres password}
       CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE:?set the KV encryption passphrase}
     command: ["sh", "-c", "python -m contextual_orchestrator register-credential --name CONTEXTUAL_ORCHESTRATOR_TOKEN --value-stdin < /run/secrets/server_token"]
     depends_on:

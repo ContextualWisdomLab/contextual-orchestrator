@@ -110,6 +110,39 @@ def test_conduct_preserves_responses_instructions_for_every_stage() -> None:
     assert all("Caller instructions:\nAnswer in Korean." in message for message in observed_system_messages)
 
 
+def test_duplicate_workflow_roles_close_each_reasoning_summary_part() -> None:
+    token = "duplicate_role_stream_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("workflow_agent", "mock-model", base_url="mock://provider"),
+    ])
+    orchestrator.would_route = lambda *_args, **_kwargs: False  # type: ignore[method-assign]
+
+    def conduct(_messages, *, model_name, progress):
+        progress("worker", "started")
+        progress("worker", "started")
+        progress("worker", "completed")
+        progress("worker", "completed")
+        return {"answer": "done"}
+
+    orchestrator.conduct = conduct  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        events = [
+            json.loads(line[6:])
+            for line in _post(server, token, "orchestrator/auto").splitlines()
+            if line.startswith("data: {")
+        ]
+    finally:
+        server.shutdown()
+
+    assert [
+        event["summary_index"]
+        for event in events
+        if event["type"] == "response.reasoning_summary_part.done"
+    ] == [0, 1]
+
+
 def test_free_virtual_model_fails_closed_without_zero_cost_candidate() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("paid_worker", "paid-model")])
     with pytest.raises(RuntimeError, match="no enabled zero-cost model"):
