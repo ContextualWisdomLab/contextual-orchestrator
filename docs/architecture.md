@@ -62,6 +62,11 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   Buyer next action: run `python -m pytest -q tests/test_reasoning_effort_profile.py`
   and keep live defaults unchanged while that gate is false.
 
+Agent-pool administration resolves `agent_pool_id` and `worker_agent_id`
+together at the resource boundary. The current persistence model has one
+`default` pool, so an unknown pool/worker combination returns not-found before
+the worker is read, patched, or removed.
+
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses a deterministic capability-hint heuristic only for worker/role routing so the repo runs without training data, GPUs, or vendor credentials. It is never an answer-quality, verification, or accept/reject judgment: verifier decisions must use the structured model judge and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
