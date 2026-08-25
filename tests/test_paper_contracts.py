@@ -62,19 +62,18 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     assert "Step 1: builder_agent:2" in verifier_prompt
 
 
+def _adr_text(relative_path: str) -> str:
+    raw = (ROOT_DIR / relative_path).read_text(encoding="utf-8")
+    return " ".join(raw.split())
+
+
 def test_adr_records_include_verified_paper_and_standard_references() -> None:
     """docs/adr is the citation-backed architecture series, not planning/adrs."""
-    index = (ROOT_DIR / "docs/adr/README.md").read_text(encoding="utf-8")
-    fallback = (ROOT_DIR / "docs/adr/0001-tool-execution-fallback-policy.md").read_text(
-        encoding="utf-8"
-    )
-    control_plane = (ROOT_DIR / "docs/adr/0002-control-plane-orchestrator.md").read_text(
-        encoding="utf-8"
-    )
-    cost_routing = (ROOT_DIR / "docs/adr/0003-cost-aware-sync-batch-routing.md").read_text(
-        encoding="utf-8"
-    )
-    msa_leaf = (ROOT_DIR / "docs/adr/0004-msa-leaf-composition.md").read_text(encoding="utf-8")
+    index = _adr_text("docs/adr/README.md")
+    fallback = _adr_text("docs/adr/0001-tool-execution-fallback-policy.md")
+    control_plane = _adr_text("docs/adr/0002-control-plane-orchestrator.md")
+    cost_routing = _adr_text("docs/adr/0003-cost-aware-sync-batch-routing.md")
+    msa_leaf = _adr_text("docs/adr/0004-msa-leaf-composition.md")
 
     assert "docs/planning/adrs/" in index
     assert "not a second source of truth for the same number" in index

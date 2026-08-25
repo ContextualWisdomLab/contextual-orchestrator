@@ -24,12 +24,7 @@ local MLX evaluation, Keyverse auth, PR loop, IRT matrix, polytomous
 LLM-judge calibration, SAST, fast-judge, supply-chain, PII audit-not-mask,
 provider error boundary, auto embedding selection, and so on).
 
-Those files are planning history. They are **not** a second source of truth
-for the same number as this directory. Example: planning ADR 0001 is
-fail-closed model judgment; this directory's ADR 0001 is the tool-execution
-fallback policy. When a planning decision is still in force (especially
-planning ADR 0001), architecture ADRs link to it; they do not duplicate it
-as a new `docs/adr` number and they do not rewrite its product decision.
+Those files are planning history. They are not a second source of truth for the same number as this directory. Example: planning ADR 0001 is fail-closed model judgment; this directory's ADR 0001 is the tool-execution fallback policy. When a planning decision is still in force (especially planning ADR 0001), architecture ADRs link to it; they do not duplicate it as a new `docs/adr` number and they do not rewrite its product decision.
 
 ## How to add a record
 
