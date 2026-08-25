@@ -5600,7 +5600,11 @@ def build_server(
                                     )
                                 )
                         orchestrator.record_analytics_event(
-                            "chat_completion_passthrough",
+                            (
+                                "chat_completion_passthrough"
+                                if tool_loop
+                                else "chat_completion_orchestrated"
+                            ),
                             {
                                 "endpoint_path": "/v1/chat/completions",
                                 "actor_scope": "inference",
