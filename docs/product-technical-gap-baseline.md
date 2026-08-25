@@ -1,5 +1,35 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-25 Responses reasoning stream, free orchestration, and Compose refresh
+
+| PR | Exact head/base | Current evidence and decision |
+| --- | --- | --- |
+| [#843](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/843) | head `5970a4dd9f2b429359580d2046ab1b6b655ed499`, base #834 head `bc89d6161dfac2b872ebdca8c5b2541168041be9` | Open stacked PR. `orchestrator/auto` and `orchestrator/free` are durable virtual models; `free` admits only discovery-tagged `cost:free` models or an operator-configured exact zero price, measures success/latency inside that pool, and fails closed when it is empty. `/v1/responses` streams fixed safe stage summaries with OpenAI `response.reasoning_summary_part.*` and `response.reasoning_summary_text.*` events; raw chain-of-thought and intermediate agent output are excluded. Exact-head full local evidence is `1644 passed in 557.01s`; post-parent focused reconciliation is `63 passed`; diff-check and compile passed. Hosted reviews/checks and independent approval remain required. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `bc89d6161dfac2b872ebdca8c5b2541168041be9`, base current `main` | Parent model-group stack now includes current main and remains the required predecessor of #843. No protected-main or release claim transfers from local or downstream evidence. |
+
+The canonical container entry path is root `compose.yaml`: PostgreSQL 17.6,
+pgcrypto-backed KV bootstrap from a Compose secret, durable gateway state, a
+loopback-only published port, and health-gated service ordering. `docker compose
+config --quiet` and both application image builds passed. End-to-end `compose up`
+is **not yet runtime evidence** on this machine: the current Colima VM exposes no
+host mount, so Docker cannot bind the Compose secret file even under `$HOME`.
+Do not replace the secret with a gateway runtime environment variable. Re-run
+the health/authenticated inference smoke test on a runner with a working host
+mount and record its exact image digest.
+
+Remaining customer-visible gaps:
+
+1. Conducted workflow reasoning summaries stream as each stage starts/completes,
+   but final answer deltas begin only after synthesis. True answer-token streaming
+   needs a cancellable asynchronous dependency graph; do not fabricate partial
+   answers from unverified intermediate work.
+2. `orchestrator/free` optimizes only within models with explicit zero-cost
+   evidence. OpenCode Zen entries without price metadata remain unknown and are
+   excluded until the provider or an operator supplies exact pricing.
+3. The in-process success/latency ledger is not multi-replica evidence. Add a
+   normalized time-windowed observation store with explicit retention/decay
+   before claiming fleet-wide optimal routing.
+
 **Snapshot convention:** the initial inventory records its observation time
 below; each live continuation carries its own recheck time.
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
