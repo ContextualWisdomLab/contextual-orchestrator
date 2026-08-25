@@ -5551,10 +5551,7 @@ def build_server(
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if any(
-                        key in body and body.get(key) is not None
-                        for key in PASSTHROUGH_TRIGGER_KEYS
-                    ):
+                    if body.get("response_format") or tools_list:
                         tool_loop = bool(tools_list)
                         started_at = time.perf_counter()
                         if tool_loop:
