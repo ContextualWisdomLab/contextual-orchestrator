@@ -247,7 +247,15 @@ def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
         is_free=True,
     )
     tags = provider_bootstrap.serving_tags_for_discovered(model)
-    assert {"cost:free", "chat", "text", "input:image", "output:text"} <= set(tags)
+    assert {
+        "cost:free",
+        "chat",
+        "text",
+        "capability:chat",
+        "capability:text",
+        "input:image",
+        "output:text",
+    } <= set(tags)
 
 
 def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(

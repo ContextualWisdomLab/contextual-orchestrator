@@ -2093,7 +2093,11 @@ def _require_pool_model(
         if getattr(agent, "disabled", False):
             continue
         if getattr(agent, "model", None) == model_name and (
-            required_capability is None or required_capability in getattr(agent, "tags", ())
+            required_capability is None
+            or (
+                required_capability in getattr(agent, "tags", ())
+                and required_capability not in getattr(agent, "provider_exclusions", ())
+            )
         ):
             return model_name
     try:
@@ -2105,7 +2109,13 @@ def _require_pool_model(
         for agent in agents
         if group_name
         and getattr(agent, "group_name", "") == group_name
-        and (required_capability is None or required_capability in getattr(agent, "tags", ()))
+        and (
+            required_capability is None
+            or (
+                required_capability in getattr(agent, "tags", ())
+                and required_capability not in getattr(agent, "provider_exclusions", ())
+            )
+        )
     ]
     if members:
         ranked_ids = orchestrator._group_router.ranked_member_ids([agent.id for agent in members])

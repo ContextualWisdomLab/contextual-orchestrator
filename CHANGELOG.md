@@ -22,10 +22,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   latency), group-alias model resolution, `/api/v1/model_groups` CRUD with
   normalized persistence, Admin editing, and routing-evidence display across
   text, image, video, speech, transcription, embeddings, rerank, and audio.
-  (#834, ADR 0026)
+  (#834, ADR 0027)
 - OpenCode Zen provider discovery plus explicit free-tier classification from
-  reported zero prices or `-free`/`:free` id suffixes; `discover-models
-  --free-only`. (#834)
+  structured Models.dev zero-price metadata; `discover-models --free-only`.
+  (#834)
 - Versioned `reasoning_effort_profile` catalog (issue #568) with fail-closed
   parse, per-role bindings, replayable snapshot hash, and an equal-budget
   true-θ RMSE ablation that emits θ̂ and RMSE(θ̂, θ). Sampling temperature

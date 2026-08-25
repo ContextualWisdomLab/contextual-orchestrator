@@ -179,6 +179,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
                 *model.capabilities,
+                *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
                 *(f"output:{value}" for value in model.output_modalities),
             )

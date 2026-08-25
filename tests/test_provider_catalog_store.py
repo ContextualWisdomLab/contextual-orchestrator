@@ -191,6 +191,8 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
                 "discovered",
                 "chat",
                 "text",
+                "capability:chat",
+                "capability:text",
                 "cost:free",
                 "input:text",
                 "input:image",
@@ -324,7 +326,12 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
                 "usd",
             )
         ],
-        [("model-b", "chat"), ("model-b", "cost:free"), ("model-b", "input:text")],
+        [
+            ("model-b", "chat"),
+            ("model-b", "capability:chat"),
+            ("model-b", "cost:free"),
+            ("model-b", "input:text"),
+        ],
     )
     store = PostgresProviderCatalogStore(
         "postgresql://catalog.example/db",

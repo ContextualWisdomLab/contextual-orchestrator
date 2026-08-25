@@ -277,7 +277,9 @@ def _restore_model_semantics(
         chat_base_url=model.chat_base_url,
         auth_scheme=model.auth_scheme,
         capabilities=tuple(
-            tag for tag in normalized if ":" not in tag and tag not in {"discovered"}
+            tag.removeprefix("capability:")
+            for tag in normalized
+            if tag.startswith("capability:")
         ),
         input_modalities=tuple(tag.removeprefix("input:") for tag in normalized if tag.startswith("input:")),
         output_modalities=tuple(tag.removeprefix("output:") for tag in normalized if tag.startswith("output:")),
