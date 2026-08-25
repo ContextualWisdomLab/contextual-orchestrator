@@ -21,7 +21,7 @@ Invalid:
 
 Python class names keep Python convention but still use at least two semantic words, for example `ModelAgent`, `WorkflowStep`, `TaskOrchestrator`, and `ModelClient`.
 
-Paper role values are deliberate exceptions because they are source terminology: `thinker`, `worker`, `verifier`, `synthesizer`.
+Paper role values are deliberate exceptions because they are source terminology: `thinker`, `worker`, `verifier`, `synthesizer`, `planner`, and `judge`.
 
 ## Enforcement
 
@@ -32,7 +32,8 @@ Paper role values are deliberate exceptions because they are source terminology:
 ## Module Rules
 
 - Domain code stays in `contextual_orchestrator/orchestrator.py` until a second implementation forces extraction.
+- Issue #568 compute profiles live in `reasoning_effort_profile.py` so the
+  catalog and ablation can land without changing `OrchestrationPolicy` defaults.
 - Delivery adapters live in `server.py`.
-- UI static assets live in `admin.py` only while the product remains dependency-free.
+- UI static assets live in `admin.py` while the stdlib HTTP/admin surface remains sufficient.
 - Do not introduce provider SDKs unless OpenAI-compatible HTTP falls short.
-

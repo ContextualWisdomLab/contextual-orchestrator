@@ -20,7 +20,9 @@ from fuzz.targets import (
     exercise_agent_config,
     exercise_model_judge_reply,
     exercise_orchestration,
+    exercise_pii_key,
     exercise_provider_model_payload,
+    exercise_reasoning_effort_profile,
     exercise_redaction,
     exercise_request_body,
 )
@@ -105,6 +107,12 @@ def test_provider_model_payload_parser_never_crashes(value: object) -> None:
 
 @_SETTINGS
 @given(st.text(max_size=4096))
+def test_unprefixed_pii_keys_are_rejected(value: str) -> None:
+    exercise_pii_key(value)
+
+
+@_SETTINGS
+@given(st.text(max_size=4096))
 def test_redaction_never_crashes_and_is_idempotent(text: str) -> None:
     exercise_redaction(text)
 
@@ -122,3 +130,9 @@ def test_orchestration_on_arbitrary_prompt(prompt: str, mode: str) -> None:
 @given(st.text(max_size=4096))
 def test_model_judge_parser_rejects_or_validates_arbitrary_text(reply: str) -> None:
     exercise_model_judge_reply(reply)
+
+
+@_SETTINGS
+@given(_json_values)
+def test_reasoning_effort_profile_never_crashes(value: object) -> None:
+    exercise_reasoning_effort_profile(value)

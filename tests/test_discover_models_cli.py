@@ -164,3 +164,49 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
     by_id = {agent.id: agent for agent in reloaded.candidates}
     assert by_id["openrouter_cheap_model"].disabled is False
     assert by_id["openai_pricey_model"].disabled is True
+
+
+def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> None:
+    """CLI bootstrap must use the provider-diverse selector, not only the cheapest vendor."""
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.orchestrator import ModelAgent
+
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    register_credential("NVIDIA_NIM_API_KEY", "nv-primary")
+    db_path = str(tmp_path / "pool.db")
+    stdout = StringIO()
+
+    def urlopen(request, timeout=None):
+        host = urllib.parse.urlsplit(request.full_url).hostname
+        payloads = {
+            "api.openai.com": {"data": [{"id": "openai-model", "pricing": {"prompt": "0.001", "completion": "0.001"}}]},
+            "openrouter.ai": {"data": [{"id": "router-model", "pricing": {"prompt": "0.000001", "completion": "0.000001"}}]},
+            "integrate.api.nvidia.com": {"data": [{"id": "nim-model", "pricing": {"prompt": "0.000002", "completion": "0.000002"}}]},
+        }
+        return _Response(payloads.get(host, {"data": []}))
+
+    try:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["contextual-orchestrator", "discover-models", "--agents-db", db_path, "--enable-cheapest", "3"],
+            ),
+            patch.object(sys, "stdout", stdout),
+            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    report = json.loads(stdout.getvalue())
+    assert report["enabled_agent_ids"] == [
+        "openrouter_router_model",
+        "nvidia_nim_nim_model",
+        "openai_openai_model",
+    ]
+    reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
+    enabled = {agent.id for agent in reloaded.candidates if not agent.disabled}
+    assert enabled - {"seed_agent"} == set(report["enabled_agent_ids"])

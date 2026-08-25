@@ -431,6 +431,41 @@ def test_mock_path_is_unchanged_no_failover_no_circuit_state() -> None:
     assert orchestrator._circuit == {}
 
 
+def test_batch_boundary_hides_raw_upload_error_text_and_cause() -> None:
+    """Provider Batch API failures surface one package-owned error (CWE-209).
+
+    Regression: ``_batch_run`` (upload, poll, download) propagated raw
+    ``urllib`` errors carrying the provider URL and response body out of
+    ``batch_chat``.
+    """
+    class RawBatchFailureClient(ModelClient):
+        def _validate_provider(self, agent):  # type: ignore[override]
+            return None  # skip URL/credential validation; only the boundary matters here
+
+        def _batch_run(self, agent, requests, temperature, poll_interval, poll_timeout, destination=None):  # type: ignore[override]
+            raise RuntimeError("provider-secret-batch-body")
+
+    client = RawBatchFailureClient()
+    agent = ModelAgent("batch_worker", "gpt", base_url="https://provider.example/v1")
+    try:
+        client.batch_chat(agent, {"task_0": [{"role": "user", "content": "ping"}]})
+    except RuntimeError as error:
+        assert "batch request failed" in str(error)
+        assert "provider-secret-batch-body" not in str(error)
+        assert error.__cause__ is None
+    else:  # pragma: no cover
+        raise AssertionError("a failed provider batch must raise a package-owned error")
+
+
+def test_mock_batch_path_is_not_wrapped() -> None:
+    """The mock batch path keeps its plain results — no boundary wrapping."""
+    client = ModelClient()
+    agent = ModelAgent("solo_worker", "mock")
+    results = client.batch_chat(agent, {"task_0": [{"role": "user", "content": "hello"}]})
+    assert set(results) == {"task_0"}
+    assert results["task_0"]["content"]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

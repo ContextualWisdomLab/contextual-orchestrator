@@ -350,7 +350,8 @@ def test_response_without_content_or_reasoning_fails_clearly() -> None:
         ModelClient()._response_content(agent, {"choices": [{"message": {}}]})
 
 
-def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
+@pytest.mark.parametrize("endpoint", ["responses", "/v1/responses"])
+def test_local_responses_passthrough_adapts_to_chat_transport(endpoint: str) -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0, chat_template_args={"enable_thinking": False})
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
@@ -369,7 +370,7 @@ def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
     ) as send:
         response = client.proxy_send(
             agent,
-            "responses",
+            endpoint,
             {
                 "model": "local-model",
                 "instructions": "Be concise.",
@@ -760,19 +761,20 @@ def test_local_batch_preserves_ids_and_usage() -> None:
     calls = []
 
     def fake_chat(_agent, messages, temperature=None):
-        calls.append((messages[0]["content"], temperature))
+        calls.append((messages[0]["content"], temperature, client.request_settings_snapshot()["max_output_tokens"]))
         client._local.usage = {"completion_tokens": 1}
         return messages[0]["content"]
 
     with patch.object(client, "chat", side_effect=fake_chat):
-        result = client.batch_chat(
-            agent,
-            {"one": [{"role": "user", "content": "1"}], "two": [{"role": "user", "content": "2"}]},
-            temperature=0.0,
-        )
+        with client.request_settings(max_output_tokens=321):
+            result = client.batch_chat(
+                agent,
+                {"one": [{"role": "user", "content": "1"}], "two": [{"role": "user", "content": "2"}]},
+                temperature=0.0,
+            )
     assert {key: value["content"] for key, value in result.items()} == {"one": "1", "two": "2"}
     assert all(value["usage"] == {"completion_tokens": 1} for value in result.values())
-    assert sorted(calls) == [("1", 0.0), ("2", 0.0)]
+    assert sorted(calls) == [("1", 0.0, 321), ("2", 0.0, 321)]
 
 
 def test_local_batch_default_uses_sequential_path() -> None:
