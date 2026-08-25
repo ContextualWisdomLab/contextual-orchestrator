@@ -1,5 +1,5 @@
 ---
-id: "0024"
+id: "0028"
 title: "Protect marked PII with purpose-limited access and field encryption"
 status: accepted
 proposed_date: "2026-08-21"
