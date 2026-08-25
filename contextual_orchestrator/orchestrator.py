@@ -43,6 +43,11 @@ from .tool_fallback import (
     classify_tool_failure,
     downgrade_to_failover,
 )
+from .reasoning_effort_profile import (
+    ReasoningEffortProfile,
+    apply_request_profile,
+    snapshot_role_effort_catalog,
+)
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -162,7 +167,13 @@ class _FastMLSIJudgeAdapter:
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="verifier")
+        output, served_id, usage = self.orchestrator._invoke(
+            self._agent(),
+            messages,
+            text=self.text,
+            role="judge",
+            eligibility_role="verifier",
+        )
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
     def complete_structured(
@@ -178,13 +189,19 @@ class _FastMLSIJudgeAdapter:
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        request = {
             "model": agent.model,
             "messages": messages,
             "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+        }
+        effort_profile = self.orchestrator._role_effort_profile("judge")
+        response = (
+            self.orchestrator.proxy_completion(request, effort_profile=effort_profile)
+            if effort_profile is not None
+            else self.orchestrator.proxy_completion(request)
+        )
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -270,6 +287,9 @@ class ModelAgent:
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
     auth_scheme: str = "Bearer"
+    # ``None`` means provider support is unproven. Opt-in effort profiles then
+    # fail closed unless the profile explicitly requests the safe ``omit`` fallback.
+    reasoning_effort_supported: bool | None = None
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -279,6 +299,8 @@ class ModelAgent:
             raise ValueError("local_credential_key requires a local:// gateway URL")
         if not self.auth_scheme or type(self.auth_scheme) is not str:
             raise ValueError("auth_scheme must be a non-empty string")
+        if self.reasoning_effort_supported not in (None, True, False):
+            raise TypeError("reasoning_effort_supported must be true, false, or null")
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -295,6 +317,7 @@ class ModelAgent:
             "provider_exclusions": list(self.provider_exclusions),
             "local_credential_key": self.local_credential_key,
             "auth_scheme": self.auth_scheme,
+            "reasoning_effort_supported": self.reasoning_effort_supported,
         }
 
     @property
@@ -324,6 +347,7 @@ class ModelAgent:
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
             auth_scheme=value.get("auth_scheme", "Bearer"),
+            reasoning_effort_supported=value.get("reasoning_effort_supported"),
         )
 
 
@@ -818,6 +842,7 @@ class ModelClient:
         messages: list[ChatMessage],
         temperature: float | None = None,
         top_p: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
@@ -861,8 +886,27 @@ class ModelClient:
             payload["frequency_penalty"] = effective_frequency
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        payload = self.apply_effort_profile(agent, payload, effort_profile)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
+
+    def apply_effort_profile(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        profile: ReasoningEffortProfile | None,
+    ) -> dict[str, Any]:
+        """Apply an opt-in profile while proving provider support before egress."""
+        supports = (
+            agent.reasoning_effort_supported is True
+            or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
+        )
+        return apply_request_profile(
+            payload,
+            profile,
+            supports_reasoning_effort=supports,
+            default_max_output_tokens=self.max_output_tokens,
+        )
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
@@ -1115,7 +1159,13 @@ class ModelClient:
             connection.close()
             raise
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
@@ -1138,6 +1188,7 @@ class ModelClient:
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        payload = self.apply_effort_profile(agent, payload, effort_profile)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
@@ -1381,6 +1432,7 @@ class ModelClient:
         temperature: float | None = None,
         poll_interval: float = 5.0,
         poll_timeout: float = 3600.0,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Run many chat requests through the provider's Batch API and return results by id.
 
@@ -1394,13 +1446,13 @@ class ModelClient:
                 for custom_id, messages in requests.items()
             }
         elif _is_local_provider_url(agent.base_url):
-            results = self._local_batch_chat(agent, requests, temperature)
+            results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
             batch_error: RuntimeError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
-                    agent, requests, temperature, poll_interval, poll_timeout, destination
+                    agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
                 )
             except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
@@ -1416,10 +1468,20 @@ class ModelClient:
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
         temperature: float | None,
+        effort_profile: ReasoningEffortProfile | None,
     ) -> dict[str, dict[str, Any]]:
         """Run local OpenAI-compatible requests concurrently through mlx-lm."""
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
-            content = self.chat(agent, messages, temperature=temperature)
+            content = (
+                self.chat(
+                    agent,
+                    messages,
+                    temperature=temperature,
+                    effort_profile=effort_profile,
+                )
+                if effort_profile is not None
+                else self.chat(agent, messages, temperature=temperature)
+            )
             return custom_id, {"content": content, "usage": self.take_usage()}
 
         if self.local_concurrency == 1 or len(requests) <= 1:
@@ -1432,10 +1494,11 @@ class ModelClient:
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float,
+        temperature: float | None,
         poll_interval: float,
         poll_timeout: float,
         destination: ProviderDestination | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
         lines = [
@@ -1443,12 +1506,11 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
+                "body": self.apply_effort_profile(agent, {
                     "model": agent.model,
                     "messages": messages,
                     "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
-                },
+                }, effort_profile),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
@@ -1711,6 +1773,7 @@ class TaskOrchestrator:
         "thinker": ("planning", "reasoning", "research"),
         "worker": ("coding", "implementation", "reasoning"),
         "verifier": ("verification", "security", "review", "debugging"),
+        "judge": ("verification", "security", "review", "debugging"),
         "synthesizer": ("writing", "reasoning", "planning"),
         "embedding": ("embedding",),
     }
@@ -1751,6 +1814,7 @@ class TaskOrchestrator:
         cache_max_entries: int = 256,
         tool_retry_attempts: int = 1,
         tool_retry_backoff_seconds: float = 0.25,
+        role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -1789,6 +1853,10 @@ class TaskOrchestrator:
         self._tool_retry_sleep = time.sleep
         self._tool_retry_jitter = random.uniform
         self.policy = OrchestrationPolicy()
+        # Opt-in issue #568 catalog. None keeps production answers and payload
+        # keys unchanged. Buyer next action: pass default_role_effort_catalog()
+        # to attach a replayable snapshot; do not treat that as a default change.
+        self.role_effort_catalog = role_effort_catalog
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
         # Operator spend caps; None => disabled (no behavior change). Enforced in run().
@@ -1893,7 +1961,11 @@ class TaskOrchestrator:
     )
 
     def proxy_completion(
-        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+        self,
+        body: dict[str, Any],
+        *,
+        endpoint: str = "chat/completions",
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, Any]:
         """Passthrough a full OpenAI request to the primary agent, returning its raw response.
 
@@ -1925,6 +1997,8 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
+        if effort_profile is not None:
+            upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
@@ -1973,24 +2047,32 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
+        effort_profile = self._role_effort_profile("worker")
+        stream = (
+            self.client.stream_chat(agent, messages, effort_profile=effort_profile)
+            if effort_profile is not None
+            else self.client.stream_chat(agent, messages)
+        )
+        for delta in stream:
             parts.append(delta)
             yield delta
         answer = "".join(parts)
-        record = {
-            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
-            "created_at": int(time.time()),
-            "mode": "route",
-            "policy_mode": "route",
-            "prompt_text": text,
-            "answer": answer,
-            "trace": [
-                {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                 "access": [], "output": answer}
-            ],
-            "policy_snapshot": self.policy.as_dict(),
-            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
-        }
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": text,
+                "answer": answer,
+                "trace": [
+                    {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
+                     "access": [], "output": answer}
+                ],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+            }
+        )
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
@@ -2015,17 +2097,19 @@ class TaskOrchestrator:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
         result = self.complete(messages, mode=mode)
         prompt = self._latest_user_text(messages)
-        record = {
-            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
-            "created_at": int(time.time()),
-            "mode": result["mode"],
-            "policy_mode": mode,
-            "prompt_text": prompt,
-            "answer": result["answer"],
-            "trace": result["trace"],
-            "policy_snapshot": self.policy.as_dict(),
-            "verification": result.get("verification"),
-        }
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": result["mode"],
+                "policy_mode": mode,
+                "prompt_text": prompt,
+                "answer": result["answer"],
+                "trace": result["trace"],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": result.get("verification"),
+            }
+        )
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
@@ -2082,10 +2166,15 @@ class TaskOrchestrator:
 
         answers: dict[int, dict[str, Any]] = {}
         for agent_id, requests in requests_by_agent.items():
-            results = _validate_batch_results(
-                requests,
-                self.client.batch_chat(agents_by_id[agent_id], requests),
+            effort_profile = self._role_effort_profile("worker")
+            batch = (
+                self.client.batch_chat(
+                    agents_by_id[agent_id], requests, effort_profile=effort_profile
+                )
+                if effort_profile is not None
+                else self.client.batch_chat(agents_by_id[agent_id], requests)
             )
+            results = _validate_batch_results(requests, batch)
             for custom_id, result in results.items():
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
@@ -2107,17 +2196,19 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
-            record = {
-                "workflow_run_id": f"run_{uuid.uuid4().hex}",
-                "created_at": int(time.time()),
-                "mode": "route",
-                "policy_mode": "route",
-                "prompt_text": prompt,
-                "answer": result["content"],
-                "trace": [row],
-                "policy_snapshot": self.policy.as_dict(),
-                "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
-            }
+            record = self._with_effort_snapshot(
+                {
+                    "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                    "created_at": int(time.time()),
+                    "mode": "route",
+                    "policy_mode": "route",
+                    "prompt_text": prompt,
+                    "answer": result["content"],
+                    "trace": [row],
+                    "policy_snapshot": self.policy.as_dict(),
+                    "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
+                }
+            )
             self._workflow_runs[record["workflow_run_id"]] = record
             self._run_order.appendleft(record["workflow_run_id"])
             if self._store is not None:
@@ -2448,12 +2539,14 @@ class TaskOrchestrator:
         if served_id != agent.id:  # pragma: no cover
             row["served_agent_id"] = served_id
             row["failover_from"] = agent.id
-        return {
-            "mode": "route",
-            "answer": answer,
-            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
-            "trace": [row],
-        }
+        return self._with_effort_snapshot(
+            {
+                "mode": "route",
+                "answer": answer,
+                "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+                "trace": [row],
+            }
+        )
 
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
@@ -2524,13 +2617,38 @@ class TaskOrchestrator:
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
-        return {
-            "mode": "conduct",
-            "answer": answer,
-            "trace": trace,
-            "verification": verification,
-            "plan_source": plan_source,
+        return self._with_effort_snapshot(
+            {
+                "mode": "conduct",
+                "answer": answer,
+                "trace": trace,
+                "verification": verification,
+                "plan_source": plan_source,
+            }
+        )
+
+    def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
+        """Return the opt-in profile bound to one workflow role."""
+        if self.role_effort_catalog is None:
+            return None
+        return self.role_effort_catalog.get(role)
+
+    def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Attach a replayable role-effort snapshot when the operator opted in.
+
+        Buyer next action: compare ``reasoning_effort_snapshot.snapshot_hash``
+        on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
+        the constructor catalog to keep today's payload.
+        """
+        if self.role_effort_catalog is None:
+            return result
+        snapshot = snapshot_role_effort_catalog(self.role_effort_catalog)
+        result["reasoning_effort_snapshot"] = {
+            "profile_version": snapshot.profile_version,
+            "snapshot_hash": snapshot.snapshot_hash,
+            "role_profiles": snapshot.role_profiles,
         }
+        return result
 
     def _plan_generated(self, task: str) -> list[WorkflowStep]:
         """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
@@ -2553,10 +2671,16 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
+        planner_messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": task},
-        ])
+        ]
+        effort_profile = self._role_effort_profile("planner")
+        raw = (
+            self.client.chat(planner, planner_messages, effort_profile=effort_profile)
+            if effort_profile is not None
+            else self.client.chat(planner, planner_messages)
+        )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -2645,7 +2769,13 @@ class TaskOrchestrator:
         return ranked[0]
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        eligibility_role: str | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -2653,14 +2783,22 @@ class TaskOrchestrator:
         agent/tool-runtime failures: missing tools move to a compatible agent,
         explicitly idempotent transient calls retry the same agent, and ambiguous
         side effects or policy/permission/argument errors fail closed.
+
+        ``eligibility_role`` keeps operator exclusions tied to the role used to
+        select the primary when the call's effort profile has a distinct name.
         """
-        candidates = self._failover_candidates(primary, text, role)
+        candidates = self._failover_candidates(primary, text, eligibility_role or role)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
             retry_attempt = 0
             while True:
                 try:
-                    output = self.client.chat(agent, messages)
+                    effort_profile = self._role_effort_profile(role)
+                    output = (
+                        self.client.chat(agent, messages, effort_profile=effort_profile)
+                        if effort_profile is not None
+                        else self.client.chat(agent, messages)
+                    )
                 except Exception as exc:
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
