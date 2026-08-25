@@ -26,6 +26,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _price_per_1k,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -168,6 +169,13 @@ def test_default_sources_activate_only_provider_filtered_chat_catalogs() -> None
     assert sources["openrouter"].list_url.endswith("?output_modalities=text")
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
+
+
+def test_price_per_1k_rejects_underflowing_positive_value() -> None:
+    """A nonzero per-token price that underflows to 0.0 in float stays unknown."""
+    assert _price_per_1k("1e-10000") is None
+    assert _price_per_1k(0) == 0.0
+    assert _price_per_1k(0.000001) == pytest.approx(0.001)
 
 
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:

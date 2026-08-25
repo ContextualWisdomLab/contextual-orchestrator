@@ -86,7 +86,9 @@ structurally unsupported, not transiently unavailable.
 Runtime containment means an already-persisted embedding agent can no longer win
 chat selection or failover while stale data is being cleaned up. Durable state must
 still converge to the correct exact set: the provider-bootstrap slice owns stale
-discovered-agent withdrawal and must import the same shared classifier when rebased.
+discovered-agent withdrawal and now imports the same shared classifier as the
+runtime, with a policy-matrix regression test covering image, embedding, safety,
+audio, and ordinary chat identifiers.
 Runtime rejection is defense in depth, not a substitute for deleting invalid
 persistent configuration.
 

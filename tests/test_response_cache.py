@@ -47,7 +47,10 @@ def test_cache_hit_skips_provider_call() -> None:
 
     second = orchestrator.complete(messages)
     assert client.calls == calls_after_first  # served from cache, no new provider call
-    assert second == first
+    assert second["answer"] == first["answer"]
+    assert second["trace"] == first["trace"]
+    assert first["cache_status"] == "miss"
+    assert second["cache_status"] == "hit"
 
 
 def test_different_request_is_not_a_hit() -> None:
