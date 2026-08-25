@@ -552,7 +552,7 @@ and re-inventoried the whole open queue at the listed heads.
 
 | PR | Exact head (2026-08-25 09:30 KST) | Base / mergeability | Decision |
 |---:|---|---|---|
-| #835 | `338a12d026da` | stacked on #834; UNSTABLE | `WAIT_AND_REMEDIATE` — hosted Checks + approval |
+| #835 | `f21da70b7f18` | stacked on #834; UNSTABLE | `WAIT_AND_REMEDIATE` — hosted Checks + approval |
 | #834 | `6b069a059b67` | main; MERGEABLE | `WAIT_AND_REMEDIATE` — hosted Checks + approval |
 | #833 | `88112e49f13e` | main; MERGEABLE | `WAIT_AND_REMEDIATE` — strix rerun + approval |
 | #831 | `d7efa634a1f1` | main; MERGEABLE | IDOR boundary fix; awaiting terminal Checks + approval |
@@ -593,7 +593,7 @@ and re-inventoried the whole open queue at the listed heads.
 4. **Open — multi-instance telemetry:** observation ledger is process-local by
    design; durable time-windowed aggregation is required before horizontal
    scaling (ADR 0026 boundary).
-5. **Closed on #835 head `338a12d026da`: scheduler pinning and transient-model
+5. **Closed on #835 head `f21da70b7f18`: scheduler pinning and transient-model
    coupling.** OpenCode is pinned to `1.18.22`, actionlint passes, and the loop
    targets the stable gateway alias without creating an implicit model group.
 6. **Open — conflicting stack:** five PRs (#820, #807, #785, #780, #765) need
