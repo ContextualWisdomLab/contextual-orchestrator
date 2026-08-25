@@ -76,7 +76,8 @@ def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() ->
     assert "image: postgres:17.6-alpine" in workflow
     assert "CATALOG_STORAGE_SCOPE=run-scoped" in workflow
     assert "KV DSN and passphrase must be configured together" in workflow
-    assert "CONTEXTUAL_ORCHESTRATOR_KV_DSN=${DURABLE_KV_DSN}" not in workflow
+    assert "RUN_SCOPED_KV_DSN=postgresql://" in workflow
+    assert 'export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${RUN_SCOPED_KV_DSN}"' in workflow
 
 
 if __name__ == "__main__":  # pragma: no cover

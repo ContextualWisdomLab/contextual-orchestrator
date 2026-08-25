@@ -19,9 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 15
-    env:
-      CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
-      CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
     services:
       postgres:
         image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
@@ -52,19 +49,22 @@ jobs:
 
       - name: Select durable or run-scoped PostgreSQL KV
         shell: bash
+        env:
+          DURABLE_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+          DURABLE_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
         run: |
           set -euo pipefail
-          if [[ -n "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}" && -n "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}" ]]; then
+          if [[ -n "${DURABLE_KV_DSN}" && -n "${DURABLE_KV_PASSPHRASE}" ]]; then
             echo "CATALOG_STORAGE_SCOPE=durable" >> "${GITHUB_ENV}"
-          elif [[ -z "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}" && -z "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}" ]]; then
-            echo "CONTEXTUAL_ORCHESTRATOR_KV_DSN=postgresql://contextual_orchestrator:catalog_sync_ci@localhost:5432/contextual_orchestrator" >> "${GITHUB_ENV}"
+          elif [[ -z "${DURABLE_KV_DSN}" && -z "${DURABLE_KV_PASSPHRASE}" ]]; then
+            echo "RUN_SCOPED_KV_DSN=postgresql://contextual_orchestrator:catalog_sync_ci@localhost:5432/contextual_orchestrator" >> "${GITHUB_ENV}"
             python - <<'PY'
           import os
           import secrets
 
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
               environment.write(
-                  f"CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE={secrets.token_urlsafe(32)}\n"
+                  f"RUN_SCOPED_KV_PASSPHRASE={secrets.token_urlsafe(32)}\n"
               )
               environment.write("CATALOG_STORAGE_SCOPE=run-scoped\n")
           PY
@@ -77,6 +77,8 @@ jobs:
         shell: bash
         env:
           CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
+          DURABLE_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+          DURABLE_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
@@ -84,6 +86,13 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
+          if [[ "${CATALOG_STORAGE_SCOPE}" == "durable" ]]; then
+            export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${DURABLE_KV_DSN}"
+            export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE="${DURABLE_KV_PASSPHRASE}"
+          else
+            export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${RUN_SCOPED_KV_DSN}"
+            export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE="${RUN_SCOPED_KV_PASSPHRASE}"
+          fi
           python -m contextual_orchestrator.provider_catalog_bootstrap --model-limit 24 > provider-bootstrap-report.json
           python - <<'PY'
           import json
