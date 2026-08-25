@@ -206,7 +206,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if not is_general_chat_agent_model_id(model_id):
+        if not source.capabilities and not is_general_chat_agent_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(

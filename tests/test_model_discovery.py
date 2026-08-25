@@ -308,6 +308,24 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     assert discovered[0].prompt_price_per_1k is None
 
 
+def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
+    register_credential("BYTEZ_EMBEDDING_KEY", "bytez-secret")
+    source = ProviderModelSource(
+        provider_name="bytez",
+        credential_name="BYTEZ_EMBEDDING_KEY",
+        list_url="https://api.bytez.com/models/v2/list/models?task=embedding",
+        chat_base_url="https://api.bytez.com/models/v2/openai/v1",
+        auth_scheme="Key",
+        style="bytez",
+        capabilities=("embedding",),
+    )
+
+    with _patched_provider_transport(lambda request, timeout=None: _Response({"output": [{"modelId": "embedding-deployment"}]})):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].capabilities == ("embedding",)
+
+
 def test_discover_all_models_continues_after_one_provider_error() -> None:
     register_credential("OPENAI_API_KEY", "sk-openai")
     register_credential("OPENROUTER_API_KEY", "sk-router")
