@@ -328,6 +328,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument(
+        "--rate-limit-requests",
+        type=int,
+        default=None,
+        help="Per-client requests allowed per fixed window (default: SecurityConfig's 60). "
+        "Size this above your measured peak concurrency — load tests and health "
+        "probes from one NAT egress share the same bucket.",
+    )
+    parser.add_argument(
+        "--rate-limit-window-seconds",
+        type=int,
+        default=None,
+        help="Fixed rate-limit window length in seconds (default: SecurityConfig's 60).",
+    )
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
     parser.add_argument(
@@ -453,6 +467,16 @@ def main(argv: list[str] | None = None) -> None:
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
                 admin_session_secure_cookie=not args.insecure_admin_session_cookie,
+                **(
+                    {}
+                    if args.rate_limit_requests is None
+                    else {"rate_limit_requests": args.rate_limit_requests}
+                ),
+                **(
+                    {}
+                    if args.rate_limit_window_seconds is None
+                    else {"rate_limit_window_seconds": args.rate_limit_window_seconds}
+                ),
             ),
             clearfolio_url=args.clearfolio_url,
             coordinator=CostRoutingCoordinator(

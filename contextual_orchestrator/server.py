@@ -5008,6 +5008,13 @@ def build_server(
             finally:
                 self._reset_session()
 
+        # HTTP/1.1 keep-alive: every response sets Content-Length, so connections
+        # are reusable. The HTTP/1.0 default forces a TCP handshake + TIME_WAIT
+        # socket per request — k6 evidence (loadtests/k6_gateway_smoke.js): at
+        # 200 req/s the CLIENT exhausted local ephemeral ports ("dial: i/o
+        # timeout") long before server capacity was reached.
+        protocol_version = "HTTP/1.1"
+
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
@@ -6640,6 +6647,8 @@ def build_server(
                 self.send_header("content-type", "application/json; charset=utf-8")
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
+                if self.close_connection:
+                    self.send_header("connection", "close")
                 for name, value in (extra_headers or {}).items():
                     self.send_header(name, value)
                 self.end_headers()
@@ -6655,6 +6664,8 @@ def build_server(
                 self.send_header("content-type", content_type)
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
+                if self.close_connection:
+                    self.send_header("connection", "close")
                 self.end_headers()
                 self.wfile.write(raw)
 
@@ -6680,6 +6691,8 @@ def build_server(
                 self.send_header("cache-control", "no-cache")
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
+                if self.close_connection:
+                    self.send_header("connection", "close")
                 self.end_headers()
                 self.wfile.write(raw)
 
@@ -6693,6 +6706,8 @@ def build_server(
                 self.send_header("cache-control", "no-cache")
                 self.send_header("connection", "close")
                 self._send_security_headers()
+                if self.close_connection:
+                    self.send_header("connection", "close")
                 self.end_headers()
 
             return self._write_response(_write)
@@ -6941,7 +6956,19 @@ def build_server(
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
 
-    return ThreadingHTTPServer((host, port), Handler)
+    class GatewayHTTPServer(ThreadingHTTPServer):
+        """Threading server with a listen backlog sized for concurrent bursts.
+
+        ``socketserver.TCPServer.request_queue_size`` defaults to 5, so bursty
+        clients (health probes, fan-out SDK retries) overflow the accept queue
+        and see connection resets before any handler runs. k6 evidence
+        (loadtests/k6_gateway_smoke.js): healthz error rate 7.8% at 200 req/s
+        with the default backlog; raising it to 128 removes the resets.
+        """
+
+        request_queue_size = 128
+
+    return GatewayHTTPServer((host, port), Handler)
 
 
 def serve(
