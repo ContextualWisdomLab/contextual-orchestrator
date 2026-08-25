@@ -166,6 +166,21 @@ def test_stream_route_yields_and_persists() -> None:
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
 
 
+def test_stream_route_persists_owner() -> None:
+    """Authenticated streaming lineage retains its owner boundary."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))]
+    )
+
+    list(
+        orchestrator.stream_route(
+            [{"role": "user", "content": "stream"}], owner_id="principal_123"
+        )
+    )
+
+    assert next(iter(orchestrator._workflow_runs.values()))["owner_id"] == "principal_123"
+
+
 def test_stream_disconnect_stops_consuming_upstream_deltas() -> None:
     """A disconnected SSE client releases the route without reading another provider delta."""
     server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)

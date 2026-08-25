@@ -49,7 +49,11 @@ def _provider_discovery_error_code(exc: Exception) -> str:
         return "transport_error"
     if isinstance(exc, ValueError):
         return "invalid_response"
-    return "provider_error"
+    # The sole caller catches exactly (URLError, TimeoutError, ValueError,
+    # OSError) plus HTTPError (a URLError subtype), every one of which is
+    # classified above. Reaching this point means the catch tuple drifted;
+    # fail loudly instead of silently labeling an unclassified failure.
+    raise AssertionError(f"unclassified provider discovery failure: {exc!r}")
 
 
 @dataclass(frozen=True)
