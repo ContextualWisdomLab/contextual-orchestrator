@@ -50,21 +50,22 @@ admission limit under test, not an inferred capacity.
 ## Exact measured result
 
 Host: Apple Silicon macOS; Python 3.13.14; k6 2.2.0; loopback HTTP; synthetic
-one-second provider delay. Base was `838b3de1`; candidate source was the
-`feat/async-web-k6` working tree before its final merge-base refresh.
+one-second provider delay. Base was `838b3de1`; the exact tested candidate
+source tree was `97ce7ed7` (the later documentation-only commit does not alter
+runtime code or the k6 fixture).
 
 | Metric | Base HTTP/1.0 + backlog 5 | Candidate HTTP/1.1 + `SOMAXCONN` | Observation |
 |---|---:|---:|---|
 | Completed inference checks | 128/128 | 128/128 | 64 simultaneous calls supported |
 | Failed HTTP requests | 0/229 | 0/229 | no request loss |
-| Inference scenario rate | 16.18 req/s | 25.07 req/s | 54.91% higher measured rate |
-| Inference connection-blocked average | 571.73 ms | 0.892 ms | listen/connection bottleneck removed |
-| Inference connection-blocked p95 | 3.95 s | 3.68 ms | burst tail materially reduced |
-| Liveness p99 during delayed inference | 18.73 ms | 8.52 ms | completes before one-second provider delay |
+| Inference scenario rate | 16.18 req/s | 25.02 req/s | 54.61% higher measured rate |
+| Inference connection-blocked average | 571.73 ms | 1.79 ms | listen/connection bottleneck removed |
+| Inference connection-blocked p95 | 3.95 s | 9.16 ms | burst tail materially reduced |
+| Liveness p99 during delayed inference | 18.73 ms | 9.90 ms | completes before one-second provider delay |
 | Candidate liveness checks | — | 101/101 | web remained responsive |
 
 The throughput percentage is derived directly from the two measured scenario
-rates: `(25.069161 / 16.183192 - 1) * 100 = 54.91%`. It is not a weight used by
+rates: `(25.021239 / 16.183192 - 1) * 100 = 54.61%`. It is not a weight used by
 routing or production configuration.
 
 ## Remaining bottlenecks and next measurement
