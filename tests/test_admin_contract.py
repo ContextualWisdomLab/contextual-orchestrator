@@ -51,6 +51,24 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'id="registerAgent"' in ADMIN_HTML
     assert "registerAgent: document.querySelector" in ADMIN_HTML
     assert 'els.registerAgent.addEventListener("click", () => showView("integrations"))' in ADMIN_HTML
+    assert 'id="modelGroupForm"' in ADMIN_HTML
+    assert 'id="modelGroupName" required pattern=' in ADMIN_HTML
+    assert 'id="modelGroupMembers" multiple required' in ADMIN_HTML
+    assert 'role="status" aria-live="polite"' in ADMIN_HTML
+    assert 'fetch("/api/v1/model_groups")' in ADMIN_HTML
+    assert 'method: exists ? "PATCH" : "POST"' in ADMIN_HTML
+    assert 'method: "DELETE"' in ADMIN_HTML
+    for key in (
+        "model_groups_title",
+        "group_name_label",
+        "group_members_label",
+        "save_group",
+        "delete_group",
+        "no_model_groups",
+        "group_saved",
+        "group_deleted",
+    ):
+        assert key in ADMIN_TRANSLATIONS["en"] and key in ADMIN_TRANSLATIONS["ko"]
     assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == "No agents are configured yet."
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "No audit events yet."

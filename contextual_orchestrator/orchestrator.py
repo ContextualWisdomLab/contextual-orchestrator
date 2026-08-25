@@ -51,6 +51,9 @@ ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
+MODEL_CAPABILITIES = frozenset(
+    {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
+)
 MAX_PROVIDER_PROBE_TIMEOUT = 30.0
 _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "ConnectionError",
@@ -1585,29 +1588,67 @@ def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
 
 
 class _AgentPoolStore:
-    """Durable agent-pool (model group) storage: operator changes survive restarts.
-
-    ponytail: one sqlite table keyed by agent id, JSON payloads, thread-safe. The
-    seed agents file stays the bootstrap; stored rows overlay it at startup.
-    """
+    """Durable, normalized agent and model-group storage."""
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._path = path
         conn = sqlite3.connect(self._path)
         try:
+            conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("CREATE TABLE IF NOT EXISTS agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS model_group (group_name TEXT PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS model_group_member ("
+                "agent_id TEXT PRIMARY KEY REFERENCES agent_pool(agent_id) ON DELETE CASCADE, "
+                "group_name TEXT NOT NULL REFERENCES model_group(group_name) ON DELETE CASCADE)"
+            )
+            self._migrate_legacy_groups(conn)
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _migrate_legacy_groups(conn: sqlite3.Connection) -> None:
+        """Move legacy payload group names into the normalized membership relation."""
+        for agent_id, raw_payload in conn.execute("SELECT agent_id, payload FROM agent_pool"):
+            payload = json.loads(raw_payload)
+            group_name = payload.pop("group_name", "")
+            if not group_name:
+                continue
+            group_name = canonical_group_name(group_name)
+            conn.execute("INSERT OR IGNORE INTO model_group (group_name) VALUES (?)", (group_name,))
+            conn.execute(
+                "INSERT OR REPLACE INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
+                (agent_id, group_name),
+            )
+            conn.execute(
+                "UPDATE agent_pool SET payload = ? WHERE agent_id = ?",
+                (json.dumps(payload, ensure_ascii=False), agent_id),
+            )
 
     def save(self, agent: "ModelAgent") -> None:
         with self._lock:
             conn = sqlite3.connect(self._path)
             try:
+                conn.execute("PRAGMA foreign_keys = ON")
+                payload = agent.to_config()
+                payload.pop("group_name", None)
                 conn.execute(
-                    "INSERT OR REPLACE INTO agent_pool (agent_id, payload) VALUES (?, ?)",
-                    (agent.id, json.dumps(agent.to_config(), ensure_ascii=False)),
+                    "INSERT INTO agent_pool (agent_id, payload) VALUES (?, ?) "
+                    "ON CONFLICT(agent_id) DO UPDATE SET payload = excluded.payload",
+                    (agent.id, json.dumps(payload, ensure_ascii=False)),
+                )
+                conn.execute("DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,))
+                if agent.group_name:
+                    conn.execute("INSERT OR IGNORE INTO model_group (group_name) VALUES (?)", (agent.group_name,))
+                    conn.execute(
+                        "INSERT INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
+                        (agent.id, agent.group_name),
+                    )
+                conn.execute(
+                    "DELETE FROM model_group WHERE NOT EXISTS ("
+                    "SELECT 1 FROM model_group_member WHERE model_group_member.group_name = model_group.group_name)"
                 )
                 conn.commit()
             finally:
@@ -1617,10 +1658,19 @@ class _AgentPoolStore:
         with self._lock:
             conn = sqlite3.connect(self._path)
             try:
-                rows = conn.execute("SELECT payload FROM agent_pool ORDER BY agent_id").fetchall()
+                rows = conn.execute(
+                    "SELECT agent_pool.payload, model_group_member.group_name "
+                    "FROM agent_pool LEFT JOIN model_group_member USING (agent_id) "
+                    "ORDER BY agent_pool.agent_id"
+                ).fetchall()
             finally:
                 conn.close()
-        return [ModelAgent.from_dict(json.loads(row[0])) for row in rows]
+        values = []
+        for raw_payload, group_name in rows:
+            payload = json.loads(raw_payload)
+            payload["group_name"] = group_name or ""
+            values.append(ModelAgent.from_dict(payload))
+        return values
 
     def close(self) -> None:
         """Compatibility no-op: agent-pool operations use short-lived sqlite handles."""
@@ -2432,6 +2482,11 @@ class TaskOrchestrator:
             "group_name": name,
             "member_agent_ids": ranked_ids,
             "enabled_member_count": sum(1 for agent in members if not agent.disabled),
+            "capability_coverage": {
+                capability: sum(capability in agent.tags for agent in members)
+                for capability in sorted(MODEL_CAPABILITIES)
+                if any(capability in agent.tags for agent in members)
+            },
             "members": [self._agent_to_admin_payload(self._agent(agent_id)) for agent_id in ranked_ids],
         }
 
