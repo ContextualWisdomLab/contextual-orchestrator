@@ -90,6 +90,42 @@ def test_unrelated_import_failure_from_fast_mlsirm_propagates(monkeypatch) -> No
         _resolve_fast_mlsirm_components()
 
 
+def test_available_fast_mlsirm_components_are_resolved(monkeypatch) -> None:
+    """An installed optional judge exposes the three adapter symbols."""
+    package = types.ModuleType("fast_mlsirm")
+    package.ContextualOrchestratorJudge = type("ContextualOrchestratorJudge", (), {})
+    package.JudgeCriterion = type("JudgeCriterion", (), {})
+    package.JudgeFormatError = type("JudgeFormatError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "fast_mlsirm", package)
+
+    components = _resolve_fast_mlsirm_components()
+
+    assert components is not None
+    assert components.judge_cls is package.ContextualOrchestratorJudge
+
+
+def test_proxy_completion_applies_explicit_effort_profile() -> None:
+    """Provider passthrough maps a request-scoped reasoning effort."""
+    from contextual_orchestrator.reasoning_effort_profile import ReasoningEffortProfile
+
+    orchestrator = _orch(_agent(reasoning_effort_supported=True))
+    profile = ReasoningEffortProfile(reasoning_effort="high")
+    with patch.object(
+        orchestrator.client,
+        "apply_effort_profile",
+        wraps=orchestrator.client.apply_effort_profile,
+    ) as apply_effort:
+        orchestrator.proxy_completion(
+            {
+                "model": "mock-model",
+                "messages": [{"role": "user", "content": "reason"}],
+            },
+            effort_profile=profile,
+        )
+
+    apply_effort.assert_called_once()
+
+
 def test_judge_adapter_validates_mode_and_response_format() -> None:
     orch = _orch(_agent())
     adapter = _FastMLSIJudgeAdapter(orchestrator=orch, text="task", judge="planner_agent")
