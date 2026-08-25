@@ -1,5 +1,20 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-25 exact-head review continuation
+
+| PR | Exact head/base | Current evidence and decision |
+| --- | --- | --- |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `69cc674a88bb3023348232c8ad712aaa343095f4`, base `main` `e22c826ab16e41aff83016a0fc0f97978b2f34e3` | Open and protected-review blocked with zero unresolved threads at the snapshot; replacement hosted Checks and independent exact-head approval remain pending. The normal main merge resolves prior conflicts and preserves operator groups across discovery, output-directed modality capability, honest discovered-price ranking, group-bounded judge/failover, model-aware batch routing, measured passthrough/embedding routing, endpoint-specific OpenAPI, Responses duplicate-role summary completion, KV bootstrap secret removal, a fork-safe hourly workflow split, Compose password separation, and release metadata consistency. Exact predecessor `40e00f8d` passed the full `1872`-test suite in `682.97s`; exact head `69cc674a` passed the focused `17`-test Compose/Responses/security suite, `docker compose config --quiet`, actionlint, compile, and diff checks. Decision: `WAIT_AND_REMEDIATE`; predecessor full-suite evidence does not replace same-head hosted gates. |
+| [#844](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/844) | head `3ca50633` on current protected main | Focused session-security coverage is `22 passed`; the actionable server-thread review finding is fixed and all current threads are resolved. Hosted Checks and independent approval remain pending. This focused PR may land before #834; if it does, #834 must merge the new main and regenerate exact-head evidence rather than duplicate or overwrite it. |
+
+The remaining customer-visible routing gap is durable, multi-replica observation
+aggregation with an explicit time horizon. The current in-process Beta-Bernoulli
+success and Jacobson latency observations are evidence-based but intentionally
+reset on restart; inventing decay or cross-model quality weights is prohibited.
+Provider identity equivalence remains an operator/provider-provenance assertion,
+never a model-name heuristic. Async embedding submissions also must not count as
+inference success until the terminal provider result is observed.
+
 ## 2026-08-25 Responses reasoning stream, free orchestration, and Compose refresh
 
 | PR | Exact head/base | Current evidence and decision |
