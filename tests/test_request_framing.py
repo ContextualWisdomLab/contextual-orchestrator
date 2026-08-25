@@ -140,7 +140,7 @@ def test_unbounded_digit_content_length_is_rejected_and_connection_is_closed() -
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
-    assert b"HTTP/1.0 413 " in response
+    assert b"HTTP/1.1 413 " in response
     assert b"request_too_large" in response
 
 
