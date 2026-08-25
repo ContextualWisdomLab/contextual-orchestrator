@@ -27,10 +27,12 @@ _FIELD_AAD_CONTEXT = "contextual-orchestrator:event-detail"
 PURPOSES_BY_SCOPE = {
     "inference": frozenset({"message_delivery"}),
     "admin": frozenset({"operator_read", "audit_replay"}),
+    "trace": frozenset({"trace.read"}),
 }
 DEFAULT_PURPOSE_BY_SCOPE = {
     "inference": "message_delivery",
     "admin": "operator_read",
+    "trace": "trace.read",
 }
 
 
