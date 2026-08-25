@@ -19,6 +19,11 @@ Stability uses the posterior mean of a Bernoulli success probability under a uni
 
 OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery intersects its documented `/zen/v1/models` availability response with the `opencode` catalog in Models.dev, which OpenCode documents as a source for its own model catalog. Only structured cost records whose declared monetary components are all exactly zero are classified free. A missing, malformed, unmatched, or temporarily unavailable metadata record remains unknown; model-name suffixes are never treated as price evidence. All available models remain discoverable for later policy decisions.
 
+Durable provider-catalog refreshes store explicit cost, capability, and directed
+modality evidence in normalized serving-tag rows. Last-known-good reads reconstruct
+those semantics before selection and Agent Pool synchronization; otherwise
+`orchestrator/free` would lose its evidence after the first database round trip.
+
 Two durable virtual models replace transient examples: `orchestrator/auto` uses
 the full eligible pool, while `orchestrator/free` admits only models carrying
 discovery's explicit `cost:free` evidence or an operator-configured exact zero

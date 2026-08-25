@@ -159,7 +159,10 @@ documentation publishes the mutable availability endpoint `/zen/v1/models`, whil
 its model documentation states that OpenCode builds its catalog from Models.dev.
 Discovery therefore intersects Zen availability with the structured Models.dev
 `opencode` cost and modality records. A metadata outage preserves availability but
-fails closed to unknown cost; no model-name suffix is price evidence.
+fails closed to unknown cost; no model-name suffix is price evidence. Normalized
+provider-catalog serving tags preserve the resulting `cost:free` and directed
+modality evidence across last-known-good reloads, so durable bootstrap cannot
+silently downgrade a free multimodal model to unknown.
 
 ## References
 

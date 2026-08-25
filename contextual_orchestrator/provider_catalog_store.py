@@ -227,7 +227,7 @@ def _normalize_tags(tags: Sequence[str]) -> tuple[str, ...]:
         if not isinstance(raw, str):
             continue
         tag = raw.strip().casefold()
-        if not tag or not re.fullmatch(r"[a-z][a-z0-9_]*", tag):
+        if not tag or not re.fullmatch(r"[a-z][a-z0-9_]*(?::[a-z0-9_]+)?", tag):
             continue
         if tag not in normalized:
             normalized.append(tag)
@@ -258,6 +258,33 @@ def normalize_discovered_model(
             model.completion_price_per_1k
         ),
         currency_code=_normalize_currency(model.currency_code),
+        capabilities=tuple(model.capabilities),
+        input_modalities=tuple(model.input_modalities),
+        output_modalities=tuple(model.output_modalities),
+        is_free=bool(model.is_free),
+    )
+
+
+def _restore_model_semantics(
+    model: DiscoveredModel, tags: Sequence[str]
+) -> DiscoveredModel:
+    """Restore normalized discovery semantics from persisted serving tags."""
+    normalized = _normalize_tags(tags)
+    return DiscoveredModel(
+        provider_name=model.provider_name,
+        model_id=model.model_id,
+        credential_name=model.credential_name,
+        chat_base_url=model.chat_base_url,
+        auth_scheme=model.auth_scheme,
+        capabilities=tuple(
+            tag for tag in normalized if ":" not in tag and tag not in {"discovered"}
+        ),
+        input_modalities=tuple(tag.removeprefix("input:") for tag in normalized if tag.startswith("input:")),
+        output_modalities=tuple(tag.removeprefix("output:") for tag in normalized if tag.startswith("output:")),
+        prompt_price_per_1k=model.prompt_price_per_1k,
+        completion_price_per_1k=model.completion_price_per_1k,
+        currency_code=model.currency_code,
+        is_free="cost:free" in normalized,
     )
 
 
@@ -359,7 +386,13 @@ class InMemoryProviderCatalogStore:
         with self._lock:
             models = self._models.get(account_id, {})
             eligible = self._eligible.get(account_id, set())
-            return [models[name] for name in sorted(eligible) if name in models]
+            return [
+                _restore_model_semantics(
+                    models[name], self._tags.get((account_id, name), ())
+                )
+                for name in sorted(eligible)
+                if name in models
+            ]
 
     def serving_tags(
         self,
@@ -615,8 +648,18 @@ class PostgresProviderCatalogStore:
                     (account_id,),
                 )
                 rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT pm.model_name, mst.tag_name FROM model_serving_tag AS mst "
+                    "JOIN provider_model AS pm ON pm.provider_model_id = mst.provider_model_id "
+                    "WHERE pm.provider_account_id = %s ORDER BY pm.model_name, mst.tag_name",
+                    (account_id,),
+                )
+                tag_rows = cursor.fetchall()
+        tags_by_model: dict[str, list[str]] = {}
+        for model_name, tag_name in tag_rows:
+            tags_by_model.setdefault(model_name, []).append(tag_name)
         return [
-            DiscoveredModel(
+            _restore_model_semantics(DiscoveredModel(
                 provider_name=source.provider_name,
                 model_id=row[0],
                 credential_name=source.credential_name,
@@ -625,7 +668,7 @@ class PostgresProviderCatalogStore:
                 prompt_price_per_1k=_normalize_price(row[3]),
                 completion_price_per_1k=_normalize_price(row[4]),
                 currency_code=_normalize_currency(row[5]),
-            )
+            ), tags_by_model.get(row[0], ()))
             for row in rows
         ]
 

@@ -237,6 +237,19 @@ def test_serving_tags_do_not_infer_capabilities_from_model_names():
     )
 
 
+def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
+    """Structured catalog evidence survives bootstrap without model-name inference."""
+    model = replace(
+        _model("opencode_zen", "OPENCODE_ZEN_API_KEY", "temporary-name", 0.0),
+        capabilities=("chat", "text"),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    tags = provider_bootstrap.serving_tags_for_discovered(model)
+    assert {"cost:free", "chat", "text", "input:image", "output:text"} <= set(tags)
+
+
 def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(
     monkeypatch,
 ):
