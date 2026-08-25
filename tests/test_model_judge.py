@@ -121,6 +121,33 @@ def test_structured_model_judge_accepts() -> None:
     assert result["answer"] == "step-output(4)"
 
 
+def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
+    class _RecordingClient(_ScriptedClient):
+        def __init__(self) -> None:
+            super().__init__('{"decision":"ACCEPT","reason":"Free verification passed."}')
+            self.agent_ids: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: object) -> str:  # type: ignore[override]
+            self.agent_ids.append(agent.id)
+            return super().chat(agent, messages, **kwargs)
+
+    client = _RecordingClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_verifier", "paid-model", tags=("verification",), priority=100),
+            ModelAgent("free_verifier", "free-model", tags=("verification", "cost:free")),
+        ],
+        client=client,
+    )
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        orchestrator.conduct(MESSAGES, model_name="orchestrator/free")
+    assert set(client.agent_ids) == {"free_verifier"}
+
+
 def test_structured_model_judge_rejects() -> None:
     orchestrator, _ = _orch('{"decision":"REJECT","reason":"The migration plan loses writes."}')
     with patch.object(

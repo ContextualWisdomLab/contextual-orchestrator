@@ -5852,6 +5852,7 @@ def build_server(
                                 "stream is not supported for this model on /v1/responses; use orchestrator/auto or orchestrator/free",
                             )
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+                        _require_pool_model(orchestrator, model_name)
                         if body.get("tools"):
                             raise RequestError(
                                 400,
@@ -6158,15 +6159,28 @@ def build_server(
                     "summary": [],
                 }
                 emit("response.output_item.added", output_index=0, item=reasoning_item)
-                if orchestrator.would_route(messages, "auto", model_name):
-                    progress("worker", "started")
-                    parts = list(orchestrator.stream_route(messages, model_name=model_name))
-                    progress("worker", "completed")
-                    result = {"answer": "".join(parts)}
-                else:
-                    result = orchestrator.conduct(
-                        messages, model_name=model_name, progress=progress
-                    )
+                try:
+                    if orchestrator.would_route(messages, "auto", model_name):
+                        progress("worker", "started")
+                        parts = list(orchestrator.stream_route(messages, model_name=model_name))
+                        progress("worker", "completed")
+                        result = {"answer": "".join(parts)}
+                    else:
+                        result = orchestrator.conduct(
+                            messages, model_name=model_name, progress=progress
+                        )
+                except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": {
+                            "code": "server_error",
+                            "message": "Orchestration failed before a final answer was produced.",
+                        },
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",

@@ -6,6 +6,7 @@ from http.server import ThreadingHTTPServer
 import json
 import threading
 import urllib.request
+import urllib.error
 
 import pytest
 
@@ -81,3 +82,54 @@ def test_free_virtual_model_fails_closed_without_zero_cost_candidate() -> None:
             [{"role": "user", "content": "Research and verify this."}],
             model_name="orchestrator/free",
         )
+
+
+def test_free_ranking_keeps_role_eligibility_ahead_of_measurements() -> None:
+    excluded = ModelAgent(
+        "excluded_free", "free-fast", tags=("cost:free",), provider_exclusions=("verifier",)
+    )
+    eligible = ModelAgent("eligible_free", "free-verifier", tags=("cost:free", "verification"))
+    orchestrator = TaskOrchestrator([excluded, eligible])
+    for _ in range(5):
+        orchestrator._group_router.observe_success(excluded.id, 0.001)
+    assert orchestrator._select_agent("verify", "verifier", free_only=True) == eligible
+
+
+def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
+    token = "responses_stream_token"
+    orchestrator = TaskOrchestrator([ModelAgent("paid_worker", "paid-model")])
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({"model": "orchestrator/free", "input": "hello"}).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(request, timeout=5)
+    finally:
+        server.shutdown()
+    assert raised.value.code == 400
+    assert "no enabled zero-cost model" in raised.value.read().decode()
+
+
+def test_stream_failure_emits_terminal_responses_event() -> None:
+    token = "responses_stream_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
+    ])
+    orchestrator.conduct = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret failure"))  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        stream = _post(server, token, "orchestrator/free")
+    finally:
+        server.shutdown()
+    assert "event: response.failed" in stream
+    assert "secret failure" not in stream
+    assert stream.endswith("data: [DONE]\n\n")
+    assert "HTTP/1.0 500" not in stream

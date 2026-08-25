@@ -157,6 +157,7 @@ class _FastMLSIJudgeAdapter:
     judge: str
     served_agent_id: str | None = None
     mode: str = "auto"
+    allowed_agent_ids: set[str] | None = None
 
     @property
     def contextual_orchestrator_contract(self) -> str:
@@ -176,6 +177,7 @@ class _FastMLSIJudgeAdapter:
             messages,
             text=self.text,
             role="judge",
+            allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
         )
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
@@ -2874,14 +2876,18 @@ class TaskOrchestrator:
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
             if self.policy.verifier_judge == "model":
-                verification = self._model_judge_verification(task, verification)
+                verification = self._model_judge_verification(
+                    task, verification, free_only=model_name == self.FREE_MODEL
+                )
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":
-                verification = self._model_judge_verification(task, verification)
+                verification = self._model_judge_verification(
+                    task, verification, free_only=model_name == self.FREE_MODEL
+                )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
@@ -3020,11 +3026,20 @@ class TaskOrchestrator:
             raise RuntimeError("no enabled zero-cost model is available")
         static = sorted(candidates, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
         if free_only:
-            by_id = {agent.id: agent for agent in static}
-            return [
-                by_id[agent_id]
-                for agent_id in self._group_router.ranked_member_ids(list(by_id))
-            ]
+            eligible = [agent for agent in static if role not in agent.provider_exclusions]
+            excluded = [agent for agent in static if role in agent.provider_exclusions]
+            ranked_free: list[ModelAgent] = []
+            for partition in (eligible, excluded):
+                score_buckets: dict[tuple[int, int], list[ModelAgent]] = {}
+                for agent in partition:
+                    score_buckets.setdefault(self._score_agent(agent, role, lowered)[:2], []).append(agent)
+                for members in score_buckets.values():
+                    by_id = {agent.id: agent for agent in members}
+                    ranked_free.extend(
+                        by_id[agent_id]
+                        for agent_id in self._group_router.ranked_member_ids(list(by_id))
+                    )
+            return ranked_free
         groups: dict[str, list[ModelAgent]] = {}
         for agent in static:
             key = canonical_group_name(agent.group_name) if agent.group_name else f"agent:{agent.id}"
@@ -3298,7 +3313,9 @@ class TaskOrchestrator:
                 return text
         return ""  # pragma: no cover
 
-    def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
+    def _model_judge_verification(
+        self, task: str, fallback: dict[str, Any], *, free_only: bool = False
+    ) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
@@ -3325,11 +3342,21 @@ class TaskOrchestrator:
                 "judge": "model",
             }
         try:
-            judge = self._select_agent(task, "verifier")
+            judge = self._select_agent(task, "verifier", free_only=free_only)
             # The judge is one bounded provider call.  Do not pass the
             # planning strategy ("template"/"generated") as an
             # orchestration mode or recursively conduct another workflow.
-            judge_adapter = _FastMLSIJudgeAdapter(self, task, judge.id, mode="route")
+            judge_adapter = _FastMLSIJudgeAdapter(
+                self,
+                task,
+                judge.id,
+                mode="route",
+                allowed_agent_ids=(
+                    {agent.id for agent in self.agents if self._is_free_agent(agent)}
+                    if free_only
+                    else None
+                ),
+            )
             fast_judge = components.judge_cls(
                 judge_adapter,
                 mode="route",
