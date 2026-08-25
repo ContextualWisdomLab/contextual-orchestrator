@@ -87,6 +87,9 @@ jobs:
       - name: Fuzz model-judge response parser
         run: python fuzz/fuzz_model_judge.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/judge
 
+      - name: Fuzz PII encryption key boundary
+        run: python fuzz/fuzz_pii_key.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/pii_key
+
       - name: Fuzz reasoning-effort profile parser
         run: python fuzz/fuzz_reasoning_effort_profile.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/reasoning_effort_profile
 

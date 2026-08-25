@@ -761,19 +761,20 @@ def test_local_batch_preserves_ids_and_usage() -> None:
     calls = []
 
     def fake_chat(_agent, messages, temperature=None):
-        calls.append((messages[0]["content"], temperature))
+        calls.append((messages[0]["content"], temperature, client.request_settings_snapshot()["max_output_tokens"]))
         client._local.usage = {"completion_tokens": 1}
         return messages[0]["content"]
 
     with patch.object(client, "chat", side_effect=fake_chat):
-        result = client.batch_chat(
-            agent,
-            {"one": [{"role": "user", "content": "1"}], "two": [{"role": "user", "content": "2"}]},
-            temperature=0.0,
-        )
+        with client.request_settings(max_output_tokens=321):
+            result = client.batch_chat(
+                agent,
+                {"one": [{"role": "user", "content": "1"}], "two": [{"role": "user", "content": "2"}]},
+                temperature=0.0,
+            )
     assert {key: value["content"] for key, value in result.items()} == {"one": "1", "two": "2"}
     assert all(value["usage"] == {"completion_tokens": 1} for value in result.values())
-    assert sorted(calls) == [("1", 0.0), ("2", 0.0)]
+    assert sorted(calls) == [("1", 0.0, 321), ("2", 0.0, 321)]
 
 
 def test_local_batch_default_uses_sequential_path() -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from contextual_orchestrator.cost_ledger import PriceBook, PriceEntry
 from contextual_orchestrator.kv_config import InMemoryConfigStore
 from contextual_orchestrator import model_discovery
@@ -356,3 +358,7 @@ def test_bootstrap_selector_is_deterministic_when_every_model_is_unpriced() -> N
     )
 
     assert selected == [nim_b, router_a, router_z]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

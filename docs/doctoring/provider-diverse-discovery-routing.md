@@ -9,12 +9,13 @@ scope: "PR #770"
 
 ## Decision
 
-PR #770 makes model discovery fail closed for invalid or unpriced catalog
-rows, retains candidates whose prices are unknown only as an explicit
-fallback, and selects a provider-diverse bootstrap pool before ordinary
-chat routing. The selector is deterministic eligibility and cost accounting;
-it is not a learned answer-quality judge and does not claim to reproduce the
-learning systems in the cited work.
+PR #770 makes model discovery fail closed for invalid catalog rows (a price
+that is negative, non-finite, or a nonzero value that underflows to zero),
+retains eligible candidates that simply have no reported price as an
+explicit unknown-cost fallback, and selects a provider-diverse bootstrap
+pool before ordinary chat routing. The selector is deterministic eligibility
+and cost accounting; it is not a learned answer-quality judge and does not
+claim to reproduce the learning systems in the cited work.
 
 ## Research-to-code mapping
 

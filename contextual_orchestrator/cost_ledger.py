@@ -106,6 +106,31 @@ def _price_key(provider: str, model: str) -> str:
     return f"{provider}:{model}"
 
 
+def _decimal_safe_price(value: object) -> Optional[float]:
+    """Parse one raw price component, or ``None`` when unknown, underflowed, or overflowed.
+
+    Parses through ``Decimal`` first so a nonzero price that underflows to
+    ``0.0`` in float (e.g. a stray ``1e-10000``) is rejected as unknown
+    rather than silently accepted as a legitimate free price. A ``Decimal``
+    can still be finite while its ``float()`` conversion overflows to
+    ``inf`` (e.g. ``1e10000``), so ``math.isfinite`` is checked separately
+    on the converted value.
+    """
+    try:
+        decimal_value = Decimal(str(value))
+        price = float(decimal_value)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if (
+        not decimal_value.is_finite()
+        or not math.isfinite(price)
+        or decimal_value < 0
+        or (decimal_value != 0 and price == 0)
+    ):
+        return None
+    return price
+
+
 @dataclass
 class PriceEntry:
     """A single price-table row: per-1K-token prices for a provider+model."""
@@ -156,12 +181,27 @@ class PriceBook:
         """Return the price entry for ``provider``+``model``, if configured.
 
         Falls back to a provider-wildcard entry (``"{provider}:*"``) so a
-        provider can set one default price for all of its models.
+        provider can set one default price for all of its models. A corrupt
+        specific row does not suppress an otherwise-valid wildcard fallback.
         """
-        raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, model), None)
-        if raw is None:
-            raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, "*"), None)
-        if raw is None:
+        for candidate_model in (model, "*"):
+            raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, candidate_model), None)
+            entry = self._parse_price_entry(raw, provider, model)
+            if entry is not None:
+                return entry
+        return None
+
+    def _parse_price_entry(
+        self, raw: Any, provider: str, model: str
+    ) -> Optional[PriceEntry]:
+        """Validate one raw KV row into a ``PriceEntry``, or ``None`` if it is unusable."""
+        if not isinstance(raw, dict):
+            return None
+        if "prompt_price_per_1k" not in raw or "completion_price_per_1k" not in raw:
+            return None
+        prompt_price = _decimal_safe_price(raw["prompt_price_per_1k"])
+        completion_price = _decimal_safe_price(raw["completion_price_per_1k"])
+        if prompt_price is None or completion_price is None:
             return None
         if not isinstance(raw, dict):
             return None

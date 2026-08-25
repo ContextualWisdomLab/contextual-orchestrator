@@ -13,6 +13,7 @@ registering a subset of the five supported keys still works. Stdlib only
 
 from __future__ import annotations
 
+from decimal import Decimal
 import json
 import math
 import re
@@ -158,12 +159,20 @@ def _valid_price_component(value: object) -> bool:
 
 
 def _price_per_1k(value: Any) -> float | None:
-    """Convert a trustworthy per-token USD price to per-1K, else return unknown."""
+    """Convert a trustworthy per-token USD price to per-1K, else return unknown.
+
+    Parses through ``Decimal`` first so a nonzero price that underflows to
+    ``0.0`` in float (e.g. a stray ``1e-10000``) is rejected as unknown
+    rather than silently accepted as a legitimate free price.
+    """
     if value is None or isinstance(value, bool):
         return None
     try:
-        per_1k = float(value) * 1000
-    except (TypeError, ValueError, OverflowError):
+        decimal_per_1k = Decimal(str(value)) * 1000
+        per_1k = float(decimal_per_1k)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if not decimal_per_1k.is_finite() or (decimal_per_1k != 0 and per_1k == 0):
         return None
     return per_1k if _valid_price_component(per_1k) else None
 
@@ -219,7 +228,14 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if not _source_model_id_is_allowed(model_id, source):
+        if (
+            type(model_id) is not str
+            or not model_id
+            or (
+                not any(capability != "chat" for capability in source.capabilities)
+                and not is_general_chat_agent_model_id(model_id)
+            )
+        ):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         discovered.append(
@@ -244,7 +260,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if not _source_model_id_is_allowed(model_id, source):
+        if type(model_id) is not str or not model_id or not is_general_chat_agent_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(
@@ -259,15 +275,6 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
             )
         )
     return _deduplicate_discovered_models(discovered)
-
-
-def _source_model_id_is_allowed(model_id: object, source: ProviderModelSource) -> bool:
-    """Admit explicit non-chat catalogs while keeping inferred catalogs chat-safe."""
-    if type(model_id) is not str or not model_id:
-        return False
-    if source.capabilities and "chat" not in source.capabilities:
-        return True
-    return is_general_chat_agent_model_id(model_id)
 
 
 def discover_provider_models(
@@ -326,8 +333,10 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
-    """Build a disabled general-chat agent or reject an ineligible record."""
-    if not is_general_chat_agent_model_id(discovered.model_id):
+    """Build a disabled capability agent or reject a chat-ineligible record."""
+    if not any(capability != "chat" for capability in discovered.capabilities) and not (
+        is_general_chat_agent_model_id(discovered.model_id)
+    ):
         raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),
@@ -350,6 +359,7 @@ def _currency_is_comparable(currency_code: object, default_currency: object) -> 
         and currency_code.strip().upper() == default_currency.strip().upper()
         and bool(currency_code.strip())
     )
+
 
 def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
     """Write complete, comparable provider pricing into the discovery price book.

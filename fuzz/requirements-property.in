@@ -2,3 +2,4 @@
 pip
 hypothesis>=6.100
 pytest
+cryptography>=43.0
