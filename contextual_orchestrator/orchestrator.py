@@ -3576,7 +3576,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
     ) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role, free_only=allowed_agent_ids is not None)
+        ranked = self._ranked_agents(text, role)
         if allowed_agent_ids is not None:
             ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
         if allowed_agent_ids is None:

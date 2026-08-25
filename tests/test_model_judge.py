@@ -171,7 +171,8 @@ def test_group_conduct_keeps_model_judge_inside_requested_group() -> None:
         "_resolve_fast_mlsirm_components",
         return_value=_scripted_fast_components(),
     ):
-        orchestrator.conduct(MESSAGES, model_name="requested_model_group")
+        result = orchestrator.conduct(MESSAGES, model_name="requested_model_group")
+    assert result["verification"]["accepted"] is True
     assert set(client.agent_ids) == {"group_member"}
 
 
