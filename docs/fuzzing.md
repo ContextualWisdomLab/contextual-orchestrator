@@ -63,6 +63,7 @@ python fuzz/fuzz_request_body.py  -max_total_time=60 fuzz/corpus/request_body
 python fuzz/fuzz_agent_config.py  -max_total_time=60 fuzz/corpus/agent_config
 python fuzz/fuzz_redaction.py     -max_total_time=60 fuzz/corpus/redaction
 python fuzz/fuzz_orchestration.py -max_total_time=60 fuzz/corpus/orchestration
+python fuzz/fuzz_model_judge.py   -max_total_time=60 fuzz/corpus/model_judge
 python fuzz/fuzz_pii_key.py       -max_total_time=60 fuzz/corpus/pii_key
 python fuzz/fuzz_reasoning_effort_profile.py -max_total_time=60 fuzz/corpus/reasoning_effort_profile
 ```
