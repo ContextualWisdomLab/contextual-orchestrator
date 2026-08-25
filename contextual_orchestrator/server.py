@@ -4942,7 +4942,11 @@ def build_server(
                     if len(segments) != 5 or segments[:3] != ["api", "v1", "agent_pools"]:
                         raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
                     _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
-                    self._send(orchestrator.add_agent(segments[3], body), 201)
+                    try:
+                        created_agent = orchestrator.add_agent(segments[3], body)
+                    except KeyError as exc:
+                        raise RequestError(404, "agent_not_found", str(exc)) from exc
+                    self._send(created_agent, 201)
                     return
 
                 if path == "/v1/completions":

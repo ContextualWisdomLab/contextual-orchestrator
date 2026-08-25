@@ -159,6 +159,15 @@ def test_http_create_and_delete_worker_agents() -> None:
         )
         assert status == 404 and wrong_pool["error"]["code"] == "agent_not_found"
 
+        status, wrong_pool_create = _call(
+            f"http://127.0.0.1:{server.server_address[1]}"
+            "/api/v1/agent_pools/other_pool/worker_agents",
+            "POST",
+            token,
+            {**NEW_AGENT, "id": "other_agent"},
+        )
+        assert status == 404 and wrong_pool_create["error"]["code"] == "agent_not_found"
+
         status, unknown = _call(base, "POST", token, {**NEW_AGENT, "id": "extra_agent", "surprise": 1})
         assert status == 400 and unknown["error"]["code"] == "unknown_fields"
 
