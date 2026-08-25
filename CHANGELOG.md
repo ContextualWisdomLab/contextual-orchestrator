@@ -22,7 +22,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   latency), group-alias model resolution, `/api/v1/model_groups` CRUD with
   normalized persistence, Admin editing, and routing-evidence display across
   text, image, video, speech, transcription, embeddings, rerank, and audio.
-  (#834, ADR 0027)
+  (#834, ADR 0032)
 - OpenCode Zen provider discovery plus explicit free-tier classification from
   structured Models.dev zero-price metadata; `discover-models --free-only`.
   (#834)

@@ -1,4 +1,4 @@
-# ADR 0027: Measured model groups and cost-aware discovery
+# ADR 0032: Measured model groups and cost-aware discovery
 
 - Status: Accepted on PR #834; protected-main delivery pending
 - Date: 2026-08-25
