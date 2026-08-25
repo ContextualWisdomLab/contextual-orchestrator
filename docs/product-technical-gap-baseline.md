@@ -665,3 +665,20 @@ PR #773 is currently `ebf397e03c6c69a214a015c39efade6f78c603e1`, with
 auto-merge enabled, several successful security/review contexts, and remaining
 full-suite/fuzz/security contexts in progress or queued; `REVIEW_REQUIRED`
 therefore remains the honest decision boundary.
+
+[#841](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/841)
+head `c4896ae4d1d410fdd933b8ae9e99a870d1d2cc9d` subsequently merged normally
+into the #834 stack, advancing #834 to exact head
+`4bf5cf0a8dce43d7a08a8e9f6ed79bb00017cb03`, tree
+`549e85b33dc9cc2941d3983b397add60415b66d0`. It prevents a provider's JSON-null
+modality arrays from aborting cross-provider discovery; the focused discovery
+suite passed 23 tests. The immediately preceding tree passed the complete local
+suite (`1611 passed in 645.34s`); because #841 changes that tree, the current
+head still requires its replacement exact-head hosted full-suite result.
+
+Two adjacent queue failures were also remediated at their own heads: #768 is
+now `4d3d11ec2836e21b973ab7573322ac883abfb785` and preserves explicitly declared
+non-chat capabilities through discovery/agent creation (38 focused tests); #803
+is now `030b4348eb4ecdf85d1017f8891cac9faa5a0394` and restores the exact CPython
+3.12 Atheris lock marker (1 focused test). Both have normal auto-merge enabled
+and remain gated by fresh hosted Checks/review; neither is merged evidence.
