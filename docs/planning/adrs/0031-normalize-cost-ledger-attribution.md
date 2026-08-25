@@ -1,4 +1,4 @@
-# ADR 0027: Normalize Cost-Ledger Attribution
+# ADR 0031: Normalize Cost-Ledger Attribution
 
 - Status: Accepted
 - Date: 2026-08-21

@@ -1,4 +1,4 @@
-# ADR 0025: Use descriptive multi-word database object names
+# ADR 0029: Use descriptive multi-word database object names
 
 - Status: Accepted
 - Date: 2026-08-21

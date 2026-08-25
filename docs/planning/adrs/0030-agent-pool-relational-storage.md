@@ -1,4 +1,4 @@
-# ADR 0026: Store Agent Pool Attributes in Third-Normal-Form Tables
+# ADR 0030: Store Agent Pool Attributes in Third-Normal-Form Tables
 
 - Status: Accepted
 - Date: 2026-08-21
