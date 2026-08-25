@@ -90,7 +90,7 @@ def test_key_is_order_stable_but_model_and_mode_specific() -> None:
 
 
 def test_request_scoped_sampling_produces_thread_isolated_cache_keys() -> None:
-    client = ModelClient()
+    client = ModelClient(temperature=0.4)
     orchestrator = TaskOrchestrator(
         [ModelAgent("general_agent", "mock", tags=("reasoning", "writing"))],
         client=client,
@@ -107,7 +107,7 @@ def test_request_scoped_sampling_produces_thread_isolated_cache_keys() -> None:
         keys = list(executor.map(cache_key, (0.1, 0.9)))
 
     assert keys[0] != keys[1]
-    assert client.request_settings_snapshot()["temperature"] == client.default_temperature
+    assert client.request_settings_snapshot()["temperature"] == 0.4
 
 
 def test_redis_compatible_provider_round_trips_json_with_ttl_and_namespace() -> None:

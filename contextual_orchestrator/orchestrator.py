@@ -746,7 +746,7 @@ class ModelClient:
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.default_temperature = 0.2
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -1424,9 +1424,12 @@ class ModelClient:
         temperature: float | None,
     ) -> dict[str, dict[str, Any]]:
         """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        request_settings = self.request_settings_snapshot()
+
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
-            content = self.chat(agent, messages, temperature=temperature)
-            return custom_id, {"content": content, "usage": self.take_usage()}
+            with self.request_settings(**request_settings):
+                content = self.chat(agent, messages, temperature=temperature)
+                return custom_id, {"content": content, "usage": self.take_usage()}
 
         if self.local_concurrency == 1 or len(requests) <= 1:
             return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
