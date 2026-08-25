@@ -334,6 +334,7 @@ python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py
 python tests/test_analytics_runtime.py
+python tests/test_cost_ledger.py
 python tests/test_sales_readiness.py
 python tests/test_buyer_evidence_manifest.py
 python tests/test_buyer_handoff_bundle.py

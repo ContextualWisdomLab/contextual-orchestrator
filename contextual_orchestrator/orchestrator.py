@@ -1713,42 +1713,294 @@ def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
 
 
 class _AgentPoolStore:
-    """Durable agent-pool (model group) storage: operator changes survive restarts.
+    """Durable, normalized agent-pool storage used across process restarts.
 
-    ponytail: one sqlite table keyed by agent id, JSON payloads, thread-safe. The
-    seed agents file stays the bootstrap; stored rows overlay it at startup.
+    Agent scalar attributes live in ``agent_pool``. Ordered tags and provider
+    exclusions live in child tables, so a database row never hides a second
+    unqueryable JSON document. Legacy ``agent_pool(agent_id, payload)`` files
+    migrate transactionally on first open; malformed or ambiguous data fails
+    closed without discarding the old table.
     """
+
+    _AGENT_TABLE_NAME = "agent_pool"
+    _TAG_TABLE_NAME = "agent_pool_tags"
+    _EXCLUSION_TABLE_NAME = "agent_pool_provider_exclusions"
+    _LEGACY_TABLE_NAME = "agent_pool_legacy_payloads"
+    _AGENT_COLUMNS = frozenset(
+        {
+            "agent_id",
+            "model_name",
+            "base_url",
+            "api_key_env",
+            "credential_key",
+            "priority",
+            "disabled",
+            "provider_name",
+            "local_credential_key",
+            "auth_scheme",
+            "reasoning_effort_supported",
+        }
+    )
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+        """Return whether the exact application-owned SQLite table exists."""
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _connect(path: str) -> sqlite3.Connection:
+        """Open a pool connection with relationship integrity enabled first."""
+        conn = sqlite3.connect(path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    @classmethod
+    def _create_normalized_schema(cls, conn: sqlite3.Connection) -> None:
+        """Create the 3NF parent and ordered child tables if absent."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_pool (
+                agent_id TEXT PRIMARY KEY,
+                model_name TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key_env TEXT NOT NULL,
+                credential_key TEXT NOT NULL,
+                priority INTEGER NOT NULL,
+                disabled INTEGER NOT NULL,
+                provider_name TEXT NOT NULL,
+                local_credential_key TEXT NOT NULL,
+                auth_scheme TEXT NOT NULL,
+                reasoning_effort_supported INTEGER,
+                CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
+                CONSTRAINT agent_pool_reasoning_effort_flag_check
+                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_pool_tags (
+                agent_id TEXT NOT NULL,
+                tag_position INTEGER NOT NULL,
+                tag_name TEXT NOT NULL,
+                CONSTRAINT agent_pool_tags_primary_key PRIMARY KEY (agent_id, tag_position),
+                CONSTRAINT agent_pool_tags_agent_foreign_key
+                    FOREIGN KEY (agent_id) REFERENCES agent_pool(agent_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_pool_provider_exclusions (
+                agent_id TEXT NOT NULL,
+                exclusion_position INTEGER NOT NULL,
+                provider_name TEXT NOT NULL,
+                CONSTRAINT agent_pool_provider_exclusions_primary_key
+                    PRIMARY KEY (agent_id, exclusion_position),
+                CONSTRAINT agent_pool_provider_exclusions_agent_foreign_key
+                    FOREIGN KEY (agent_id) REFERENCES agent_pool(agent_id) ON DELETE CASCADE
+            )
+            """
+        )
+
+    @classmethod
+    def _insert_agent(cls, conn: sqlite3.Connection, agent: "ModelAgent") -> None:
+        """Insert one agent and its ordered multi-valued attributes."""
+        config = agent.to_config()
+        conn.execute(
+            """
+            INSERT INTO agent_pool (
+                agent_id, model_name, base_url, api_key_env, credential_key,
+                priority, disabled, provider_name, local_credential_key, auth_scheme,
+                reasoning_effort_supported
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                config["id"],
+                config["model"],
+                config["base_url"],
+                config["api_key_env"],
+                config["credential_key"],
+                config["priority"],
+                int(config["disabled"]),
+                config["provider_name"],
+                config["local_credential_key"],
+                config["auth_scheme"],
+                config["reasoning_effort_supported"],
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
+            [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
+        )
+        conn.executemany(
+            """
+            INSERT INTO agent_pool_provider_exclusions
+                (agent_id, exclusion_position, provider_name)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (agent.id, position, provider)
+                for position, provider in enumerate(agent.provider_exclusions)
+            ],
+        )
+
+    @classmethod
+    def _initialize_schema(cls, conn: sqlite3.Connection) -> None:
+        """Create or transactionally migrate the agent-pool schema."""
+        agent_exists = cls._table_exists(conn, cls._AGENT_TABLE_NAME)
+        tag_exists = cls._table_exists(conn, cls._TAG_TABLE_NAME)
+        exclusion_exists = cls._table_exists(conn, cls._EXCLUSION_TABLE_NAME)
+        if not agent_exists:
+            if tag_exists or exclusion_exists:
+                raise RuntimeError("agent-pool child tables exist without agent_pool")
+            cls._create_normalized_schema(conn)
+            return
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_pool)")}
+        if "payload" in columns:
+            if tag_exists or exclusion_exists:
+                raise RuntimeError("legacy agent_pool conflicts with normalized child tables")
+            conn.execute("ALTER TABLE agent_pool RENAME TO agent_pool_legacy_payloads")
+            cls._create_normalized_schema(conn)
+            rows = conn.execute(
+                "SELECT payload FROM agent_pool_legacy_payloads ORDER BY agent_id"
+            ).fetchall()
+            for (payload,) in rows:
+                cls._insert_agent(conn, ModelAgent.from_dict(json.loads(payload)))
+            conn.execute("DROP TABLE agent_pool_legacy_payloads")
+            return
+
+        if "reasoning_effort_supported" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN reasoning_effort_supported INTEGER "
+                "CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))"
+            )
+            columns.add("reasoning_effort_supported")
+        if not cls._AGENT_COLUMNS.issubset(columns):
+            missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
+            raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
+        cls._create_normalized_schema(conn)
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._path = path
-        conn = sqlite3.connect(self._path)
+        conn = self._connect(self._path)
         try:
-            conn.execute("CREATE TABLE IF NOT EXISTS agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.execute("BEGIN")
+            self._initialize_schema(conn)
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
     def save(self, agent: "ModelAgent") -> None:
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect(self._path)
             try:
+                config = agent.to_config()
                 conn.execute(
-                    "INSERT OR REPLACE INTO agent_pool (agent_id, payload) VALUES (?, ?)",
-                    (agent.id, json.dumps(agent.to_config(), ensure_ascii=False)),
+                    """
+                    UPDATE agent_pool SET
+                        model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
+                        priority = ?, disabled = ?, provider_name = ?,
+                        local_credential_key = ?, auth_scheme = ?,
+                        reasoning_effort_supported = ?
+                    WHERE agent_id = ?
+                    """,
+                    (
+                        config["model"],
+                        config["base_url"],
+                        config["api_key_env"],
+                        config["credential_key"],
+                        config["priority"],
+                        int(config["disabled"]),
+                        config["provider_name"],
+                        config["local_credential_key"],
+                        config["auth_scheme"],
+                        config["reasoning_effort_supported"],
+                        agent.id,
+                    ),
                 )
+                if conn.execute("SELECT changes()").fetchone()[0] == 0:
+                    self._insert_agent(conn, agent)
+                else:
+                    conn.execute("DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,))
+                    conn.execute(
+                        "DELETE FROM agent_pool_provider_exclusions WHERE agent_id = ?",
+                        (agent.id,),
+                    )
+                    conn.executemany(
+                        "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
+                        [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
+                    )
+                    conn.executemany(
+                        """
+                        INSERT INTO agent_pool_provider_exclusions
+                            (agent_id, exclusion_position, provider_name)
+                        VALUES (?, ?, ?)
+                        """,
+                        [
+                            (agent.id, position, provider)
+                            for position, provider in enumerate(agent.provider_exclusions)
+                        ],
+                    )
                 conn.commit()
             finally:
                 conn.close()
 
     def load_all(self) -> list["ModelAgent"]:
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect(self._path)
             try:
-                rows = conn.execute("SELECT payload FROM agent_pool ORDER BY agent_id").fetchall()
+                rows = conn.execute(
+                    """
+                    SELECT agent_id, model_name, base_url, api_key_env, credential_key,
+                           priority, disabled, provider_name, local_credential_key, auth_scheme,
+                           reasoning_effort_supported
+                    FROM agent_pool ORDER BY agent_id
+                    """
+                ).fetchall()
+                tags = conn.execute(
+                    "SELECT agent_id, tag_position, tag_name FROM agent_pool_tags "
+                    "ORDER BY agent_id, tag_position"
+                ).fetchall()
+                exclusions = conn.execute(
+                    "SELECT agent_id, exclusion_position, provider_name "
+                    "FROM agent_pool_provider_exclusions ORDER BY agent_id, exclusion_position"
+                ).fetchall()
             finally:
                 conn.close()
-        return [ModelAgent.from_dict(json.loads(row[0])) for row in rows]
+        tags_by_agent: dict[str, list[str]] = {}
+        for agent_id, _position, tag_name in tags:
+            tags_by_agent.setdefault(agent_id, []).append(tag_name)
+        exclusions_by_agent: dict[str, list[str]] = {}
+        for agent_id, _position, provider_name in exclusions:
+            exclusions_by_agent.setdefault(agent_id, []).append(provider_name)
+        return [
+            ModelAgent(
+                id=row[0],
+                model=row[1],
+                base_url=row[2],
+                api_key_env=row[3],
+                credential_key=row[4],
+                tags=tuple(tags_by_agent.get(row[0], ())),
+                priority=row[5],
+                disabled=bool(row[6]),
+                provider_name=row[7],
+                provider_exclusions=tuple(exclusions_by_agent.get(row[0], ())),
+                local_credential_key=row[8],
+                auth_scheme=row[9],
+                reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
+            )
+            for row in rows
+        ]
 
     def close(self) -> None:
         """Compatibility no-op: agent-pool operations use short-lived sqlite handles."""
@@ -1765,30 +2017,42 @@ class _StateStore:
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
+    _TABLE_NAME = "orchestration_records"
+    _LEGACY_TABLE_NAME = "records"
+    _LEGACY_INDEX_NAME = "records_kind_seq"
+    _INDEX_NAME = "orchestration_records_kind_seq"
     _STREAM_LIMITS = {"audit": 256, "authorization": 256, "analytics": 256}
     _CREATE_RECORDS_SQL = (
-        "CREATE TABLE IF NOT EXISTS records ("
+        "CREATE TABLE IF NOT EXISTS orchestration_records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
     )
-    _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
-    _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
-    _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
-    _PRUNE_STREAM_SQL = (
-        "DELETE FROM records WHERE kind = ? AND seq NOT IN ("
-        "SELECT seq FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?)"
+    _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = (
+        f"CREATE INDEX IF NOT EXISTS {_INDEX_NAME} ON {_TABLE_NAME}(kind, seq)"
     )
-    _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
-    _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
+    _DELETE_KEYED_SQL = "DELETE FROM orchestration_records WHERE kind = ? AND key = ?"
+    _INSERT_SQL = "INSERT INTO orchestration_records (kind, key, payload) VALUES (?, ?, ?)"
+    _PRUNE_STREAM_SQL = (
+        "DELETE FROM orchestration_records WHERE kind = ? AND seq NOT IN ("
+        "SELECT seq FROM orchestration_records WHERE kind = ? ORDER BY seq DESC LIMIT ?)"
+    )
+    _SELECT_ALL_SQL = "SELECT payload FROM orchestration_records WHERE kind = ? ORDER BY seq"
+    _SELECT_LIMIT_SQL = "SELECT payload FROM orchestration_records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute(self._CREATE_RECORDS_SQL)
-        self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
-        self._conn.commit()
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._migrate_legacy_table()
+            self._conn.execute(self._CREATE_RECORDS_SQL)
+            self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            self._conn.close()
+            raise
         # Non-durable streams are best-effort, but each keeps its own newest
         # retention window so an authorization flood cannot evict audit data.
-        # The worker keeps best-effort denial writes off the request thread.
         self._stream_events: dict[str, deque[tuple[str | None, dict[str, Any]]]] = {
             kind: deque(maxlen=limit) for kind, limit in self._STREAM_LIMITS.items()
         }
@@ -1802,6 +2066,29 @@ class _StateStore:
             daemon=True,
         )
         self._stream_worker.start()
+
+    def _migrate_legacy_table(self) -> None:
+        """Rename the pre-policy table without discarding persisted state."""
+        tables = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = ?", ("table",)
+            ).fetchall()
+        }
+        has_legacy = self._LEGACY_TABLE_NAME in tables
+        has_current = self._TABLE_NAME in tables
+        if has_legacy and has_current:
+            raise RuntimeError(
+                "state database contains both legacy and current persistence tables"
+            )
+        if has_legacy:
+            # _LEGACY_TABLE_NAME/_TABLE_NAME/_LEGACY_INDEX_NAME are fixed
+            # class-level string literals, never derived from request or
+            # database content -- no injection surface despite the f-string shape.
+            rename_sql = f"ALTER TABLE {self._LEGACY_TABLE_NAME} RENAME TO {self._TABLE_NAME}"
+            drop_index_sql = f"DROP INDEX IF EXISTS {self._LEGACY_INDEX_NAME}"
+            self._conn.execute(rename_sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            self._conn.execute(drop_index_sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any], *, durable: bool = False) -> None:
         if kind in self._STREAM_LIMITS and not durable:
