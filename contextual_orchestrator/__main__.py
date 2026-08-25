@@ -115,6 +115,8 @@ def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
         import fast_mlsirm
         from fast_mlsirm import (
             CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 as fast_contract,
+        )
+        from fast_mlsirm import (
             ContextualOrchestratorJudge,
             JudgeCriterion,
             JudgeFormatError,
@@ -311,6 +313,21 @@ def _auto_discover_seed_agents(
     return expanded
 
 
+def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
+    """Discover and activate only models with explicit chat capability evidence."""
+    discovered, _errors = discover_all_models()
+    chat_models = [model for model in discovered if "chat" in model.capabilities]
+    existing_ids = {agent.id for agent in orchestrator.candidates}
+    agents = [
+        replace(agent_from_discovered(model), disabled=False)
+        for model in chat_models
+        if agent_id_for(model) not in existing_ids
+    ]
+    if not agents:
+        return {"added": [], "updated": []}
+    return orchestrator.sync_discovered_agents(agents)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -332,7 +349,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
-        "--auto-discover-model-agents",
+        "--auto-discover-seed-agents",
         action="store_true",
         help="Expand empty-model agents from their configured OpenAI-compatible /models endpoint.",
     )
@@ -401,6 +418,11 @@ def main(argv: list[str] | None = None) -> None:
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
+    parser.add_argument(
+        "--auto-discover-model-agents",
+        action="store_true",
+        help="discover source-declared chat-capable models at startup and activate them",
+    )
     args = parser.parse_args(arguments)
 
     client = ModelClient(
@@ -411,7 +433,7 @@ def main(argv: list[str] | None = None) -> None:
         allowed_provider_hosts=args.allowed_provider_hosts,
     )
     agents = load_agents(args.agents)
-    if args.auto_discover_model_agents:
+    if args.auto_discover_seed_agents:
         try:
             agents = _auto_discover_seed_agents(agents, allow_failures=args.allow_discovery_failures)
         except (ProviderDiscoveryError, ValueError) as exc:
@@ -425,6 +447,8 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
     )
+    if args.auto_discover_model_agents:
+        _auto_discover_runtime_agents(orchestrator)
 
     if args.conduct_hint_threshold is not None or args.route_text_length_threshold is not None:
         overrides: dict[str, int] = {}

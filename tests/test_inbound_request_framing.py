@@ -126,11 +126,19 @@ def test_request_reader_rejects_non_json_media_type() -> None:
 
 
 def test_header_value_fallbacks_and_integer_overflow_are_safe() -> None:
-    """Support ordinary header mappings without weakening strict parsing."""
+    """Support ordinary header mappings without weakening strict parsing.
+
+    A pathologically long digit run (well past CPython's int<->str
+    conversion digit limit) is classified as oversized, not malformed --
+    it obviously exceeds any real max_body_bytes, so 413 is the honest
+    response, and the length comparison never calls int() on the raw
+    string.
+    """
     assert _parse_request_framing(_GetAllHeaders(), 64) == 1
     assert _parse_request_framing(_GetHeaders(), 64) == 1
-    with pytest.raises(RequestError, match="invalid"):
+    with pytest.raises(RequestError) as error:
         _parse_request_framing(_headers("9" * 5000), 64)
+    assert error.value.status == 413
 
 
 def test_duplicate_content_length_is_rejected_even_when_equal() -> None:

@@ -34,6 +34,7 @@ from .batch_routing import (
     RoutingHints,
     RoutingPolicy,
 )
+from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook, UsageRecord
 from .kv_config import InMemoryConfigStore
 from .token_counting import HeuristicTokenCounter, build_token_counter
@@ -59,6 +60,7 @@ class CostRoutingCoordinator:
         batch_backend: Optional[BatchBackend] = None,
         embedding_batch_backend: Optional[EmbeddingBatchBackend] = None,
         postgres_dsn: Optional[str] = None,
+        job_registry: Optional[JobRegistryFactory] = None,
     ) -> None:
         self.orchestrator = orchestrator
         self.config = config_store or InMemoryConfigStore()
@@ -68,28 +70,41 @@ class CostRoutingCoordinator:
             build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
         )
         self.policy = routing_policy or RoutingPolicy(self.config)
+        # Job registries live in Valkey when the credential registry carries
+        # batch_job_registry_valkey_url, so submitted jobs survive a process
+        # restart; otherwise they are the historical in-process dicts. Built
+        # before the backends so the default local backends share it and
+        # their results survive a restart too.
+        registry = job_registry if job_registry is not None else build_job_registry(self.config)
+        self.job_registry = registry
         if batch_backend is None:
             client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
             self.batch_backend = LocalBatchBackend(
                 runner=lambda messages, mode: orchestrator.complete(messages, mode=mode),
                 max_concurrency=local_concurrency,
+                job_registry=registry,
             )
         else:
             self.batch_backend = batch_backend
         self._embedding_backend_is_default = embedding_batch_backend is None
         self.embedding_batch_backend: EmbeddingBatchBackend = embedding_batch_backend or self._default_embedding_backend()
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
-        self._batch_jobs: Dict[str, BatchJob] = {}
+        self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
         # embeddings batch state: job handle + submitted requests + cached doc,
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
-        self._embedding_jobs: Dict[str, BatchJob] = {}
+        self._embedding_jobs = registry.mapping("embedding_jobs", decode=lambda raw: BatchJob(**raw))
+        # Live backend instances are not JSON-serializable, so this map stays
+        # a plain in-process dict rather than a job_registry mapping.
         self._embedding_job_backends: Dict[str, EmbeddingBatchBackend] = {}
-        self._embedding_requests: Dict[str, List[EmbeddingBatchRequest]] = {}
-        self._embedding_input_counts: Dict[str, int] = {}
-        self._embedding_part_counts: Dict[str, List[int]] = {}
-        self._embedding_part_limits: Dict[str, Dict[str, int]] = {}
-        self._embedding_documents: Dict[str, Dict[str, Any]] = {}
+        self._embedding_models = registry.mapping("embedding_models")
+        self._embedding_requests = registry.mapping(
+            "embedding_requests", decode=lambda raw: EmbeddingBatchRequest(**raw)
+        )
+        self._embedding_input_counts = registry.mapping("embedding_input_counts")
+        self._embedding_part_counts = registry.mapping("embedding_part_counts")
+        self._embedding_part_limits = registry.mapping("embedding_part_limits")
+        self._embedding_documents = registry.mapping("embedding_documents")
 
     def _default_embedding_backend(self) -> EmbeddingBatchBackend:
         """Use a provider-tagged embedding agent when one is configured."""
@@ -101,7 +116,9 @@ class CostRoutingCoordinator:
             and not agent.base_url.startswith("mock://")
         ]
         if not candidates:
-            return LocalEmbeddingBatchBackend(token_counter=self.token_counter)
+            return LocalEmbeddingBatchBackend(
+                token_counter=self.token_counter, job_registry=self.job_registry
+            )
 
         def embed_batch(requests: List[EmbeddingBatchRequest]) -> List[List[float]]:
             vectors: List[List[float] | None] = [None] * len(requests)
@@ -143,6 +160,7 @@ class CostRoutingCoordinator:
         return LocalEmbeddingBatchBackend(
             batch_embedder=embed_batch,
             token_counter=self.token_counter,
+            job_registry=self.job_registry,
         )
 
     # ------------------------------------------------------------------
@@ -497,6 +515,7 @@ class CostRoutingCoordinator:
         job = backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
         self._embedding_job_backends[job.job_id] = backend
+        self._embedding_models[job.job_id] = model
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
@@ -711,17 +730,19 @@ class CostRoutingCoordinator:
 
         job = self._require_embedding_job(batch_id)
         backend = self._embedding_job_backends.get(batch_id, self.embedding_batch_backend)
+        requests = self._embedding_requests.get(batch_id, [])
+        model_name = self._embedding_models.get(batch_id, "contextual-orchestrator")
         status = backend.poll(job)
         if not status.get("is_complete"):
             return {
                 "batch_id": batch_id,
                 "status": status.get("status") or job.status,
                 "backend": job.backend,
+                "model": model_name,
                 "embeddings": None,
             }
 
         items: List[EmbeddingBatchResultItem] = backend.retrieve(job)
-        requests = self._embedding_requests.get(batch_id, [])
         request_by_custom_id = {request.custom_id: request for request in requests}
         input_count = self._embedding_input_counts.get(batch_id, len(requests))
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)
@@ -755,7 +776,6 @@ class CostRoutingCoordinator:
         token_counts: List[int] = []
         total_cost_amount = 0.0
         currency_code = "USD"
-        model_name = "contextual-orchestrator"
         provider_name = "unknown"
         for source_index in range(input_count):
             parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])

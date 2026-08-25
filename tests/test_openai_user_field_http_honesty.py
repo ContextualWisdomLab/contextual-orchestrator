@@ -11,8 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TEST_AUTH_TOKEN = "openai_user_field_http_honesty_token"  # noqa: S105
 

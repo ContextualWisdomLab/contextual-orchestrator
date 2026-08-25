@@ -330,7 +330,7 @@ class NoopUsageTelemetrySink:
     """Default sink for callers that do not wire telemetry yet."""
 
     def emit_usage(self, event: UsageTelemetryEvent) -> None:
-        """Discard one prompt-safe usage event."""
+        """Discard prompt-safe usage telemetry when export is not configured."""
         return None
 
 
@@ -343,14 +343,14 @@ class InMemoryUsageTelemetrySink:
         self._lock = threading.Lock()
 
     def emit_usage(self, event: UsageTelemetryEvent) -> None:
-        """Append one usage event while retaining only the configured limit."""
+        """Retain the newest prompt-safe usage events up to the configured limit."""
         with self._lock:
             self._events.append(event)
             if len(self._events) > self._max_events:
                 del self._events[: len(self._events) - self._max_events]
 
     def events(self) -> List[UsageTelemetryEvent]:
-        """Return a thread-safe snapshot of retained usage events."""
+        """Return a snapshot of the retained usage telemetry events."""
         with self._lock:
             return list(self._events)
 
@@ -366,7 +366,7 @@ class UsageTelemetryHealth:
     last_error_type: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
-        """Return operator-safe counters as a serializable mapping."""
+        """Return operator-safe health counters as a serializable mapping."""
         return {
             "records_accepted": self.records_accepted,
             "records_stored": self.records_stored,
@@ -446,7 +446,7 @@ class NonBlockingLedgerStore:
         return True
 
     def telemetry_health(self) -> Dict[str, Any]:
-        """Return a thread-safe snapshot of persistence health counters."""
+        """Return current asynchronous ledger persistence and export health."""
         with self._lock:
             return self._health.as_dict()
 

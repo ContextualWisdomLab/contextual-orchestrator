@@ -44,6 +44,15 @@ from .orchestrator import (
 )
 from .passthrough_failover import TaskOrchestrator
 from .token_counting import HeuristicTokenCounter, build_token_counter
+from .tool_fallback import (
+    MAX_TOOL_RETRY_ATTEMPTS,
+    ToolExecutionError,
+    ToolFallbackAction,
+    ToolFallbackStoppedError,
+    ToolFailureDecision,
+    ToolFailureKind,
+    classify_tool_failure,
+)
 
 __all__ = [
     "ModelAgent",
@@ -53,6 +62,14 @@ __all__ = [
     "get_credential",
     "register_credential",
     "NotConfigured",
+    "MAX_TOOL_RETRY_ATTEMPTS",
+    # tool fallback
+    "ToolExecutionError",
+    "ToolFallbackAction",
+    "ToolFallbackStoppedError",
+    "ToolFailureDecision",
+    "ToolFailureKind",
+    "classify_tool_failure",
     # cost review
     "ATTRIBUTION_DIMENSIONS",
     "AttributionDimensions",

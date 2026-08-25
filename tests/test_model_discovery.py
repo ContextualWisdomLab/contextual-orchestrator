@@ -24,6 +24,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 from contextual_orchestrator.cost_ledger import PriceBook  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
+    PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
@@ -86,11 +87,20 @@ OPENAI_SOURCE = ProviderModelSource(
     chat_base_url="https://api.openai.com/v1",
 )
 
+EMBEDDING_SOURCE = ProviderModelSource(
+    provider_name="embedding_provider",
+    credential_name="EMBEDDING_API_KEY",
+    list_url="https://embedding.example/v1/models",
+    chat_base_url="https://embedding.example/v1",
+    capabilities=("embedding",),
+)
+
 OPENROUTER_SOURCE = ProviderModelSource(
     provider_name="openrouter",
     credential_name="OPENROUTER_API_KEY",
-    list_url="https://openrouter.ai/api/v1/models",
+    list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
     chat_base_url="https://openrouter.ai/api/v1",
+    capabilities=("chat",),
 )
 
 BYTEZ_SOURCE = ProviderModelSource(
@@ -101,6 +111,7 @@ BYTEZ_SOURCE = ProviderModelSource(
     auth_scheme="Key",
     style="bytez",
     task_filter="chat",
+    capabilities=("chat",),
 )
 
 
@@ -127,12 +138,36 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
         discovered = discover_provider_models(OPENROUTER_SOURCE)
 
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-router"
-    assert seen_requests[0].full_url == "https://openrouter.ai/api/v1/models"
+    assert seen_requests[0].full_url == "https://openrouter.ai/api/v1/models?output_modalities=text"
     assert [m.model_id for m in discovered] == ["meta/llama-3.3", "no-pricing-model"]
     priced = discovered[0]
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
+    assert all(model.capabilities == ("chat",) for model in discovered)
+
+
+def test_discovery_preserves_operator_declared_source_capabilities() -> None:
+    register_credential("EMBEDDING_API_KEY", "registered-secret")
+
+    def urlopen(request, timeout=None):
+        del request, timeout
+        return _Response({"data": [{"id": "embedding-deployment"}]})
+
+    with _patched_provider_transport(urlopen):
+        discovered = discover_provider_models(EMBEDDING_SOURCE)
+
+    assert discovered[0].capabilities == ("embedding",)
+
+
+def test_default_sources_activate_only_provider_filtered_chat_catalogs() -> None:
+    sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
+
+    assert sources["openai"].capabilities == ()
+    assert sources["openrouter"].capabilities == ("chat",)
+    assert sources["openrouter"].list_url.endswith("?output_modalities=text")
+    assert sources["nvidia_nim"].capabilities == ("chat",)
+    assert sources["nvidia_nim_sub"].capabilities == ("chat",)
 
 
 def test_discover_local_gateway_is_not_a_model_discovery_source() -> None:
@@ -268,6 +303,7 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     assert len(discovered) == 1
     assert discovered[0].model_id == "0-hero/Matter-0.1-Slim-7B-C"
     assert discovered[0].auth_scheme == "Key"
+    assert discovered[0].capabilities == ("chat",)
     # Bytez prices by GPU-second, not per-token: no fabricated per-1k estimate.
     assert discovered[0].prompt_price_per_1k is None
 
@@ -318,6 +354,19 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
     assert agent.credential_key == "BYTEZ_API_KEY"
     assert agent.priority == 3
     assert "discovered" in agent.tags
+
+
+def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="embedding-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+    )
+
+    assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
 
 
 def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:

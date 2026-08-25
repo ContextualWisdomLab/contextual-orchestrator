@@ -6,6 +6,8 @@ the capability a model-orchestration gateway is bought for.
 
 from __future__ import annotations
 
+import io
+import json
 import socket
 import ssl
 import sys
@@ -22,12 +24,24 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
+    ProviderResponseError,
     is_transient_error,
 )
+from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 
 def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
+
+
+def _stopped_http_error() -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        409,
+        "Conflict",
+        None,
+        io.BytesIO(json.dumps({"error": {"code": "tool_execution_stopped"}}).encode()),
+    )
 
 
 def test_transient_classification_matches_status_and_network_errors() -> None:
@@ -39,10 +53,94 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(urllib.error.URLError("dns"))
     assert is_transient_error(TimeoutError("read timeout"))
     assert is_transient_error(socket.timeout("slow"))
+
+
+def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> None:
+    class StoppedProviderClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=3, retry_backoff=0.0)
+            self.chat_calls = 0
+            self.raw_calls = 0
+
+        def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+            del agent
+            return
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination, timeout
+            self.chat_calls += 1
+            raise _stopped_http_error()
+
+        def _send_raw(self, agent, endpoint, payload, destination=None):  # type: ignore[override]
+            del agent, endpoint, payload, destination
+            self.raw_calls += 1
+            raise _stopped_http_error()
+
+    client = StoppedProviderClient()
+    agent = ModelAgent(
+        "provider_worker",
+        "provider-model",
+        base_url="https://provider.example/v1",
+        api_key_env="",
+        credential_key="",
+    )
+
+    try:
+        client.chat(agent, [{"role": "user", "content": "send"}])
+    except ToolFallbackStoppedError as exc:
+        assert exc.decision.kind.value == "ambiguous_outcome"
+    else:  # pragma: no cover
+        raise AssertionError("provider tool stop must fail closed")
+    try:
+        client.proxy_send(agent, "chat/completions", {"model": agent.model, "messages": []})
+    except ToolFallbackStoppedError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("raw provider tool stop must fail closed")
+
+    assert client.chat_calls == 1
+    assert client.raw_calls == 1
     assert is_transient_error(ssl.SSLEOFError("peer closed TLS stream"))
     assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
     assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))
     assert not is_transient_error(ValueError("bad json"))
+
+
+def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -> None:
+    stopped = _stopped_http_error()
+    assert not is_transient_error(stopped)
+    assert is_transient_error(_http_error(409))
+
+
+def test_terminal_tool_stop_is_preserved_by_chat_and_passthrough_transport() -> None:
+    class StoppedClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=3, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            del agent, payload, destination
+            self.attempts += 1
+            raise _stopped_http_error()
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            del agent, endpoint, payload, destination
+            self.attempts += 1
+            raise _stopped_http_error()
+
+    client = StoppedClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+
+    with pytest.raises(ToolFallbackStoppedError) as chat_error:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert chat_error.value.decision.kind.value == "ambiguous_outcome"
+    assert chat_error.value.decision.observed_kind.value == "transport_error"
+    assert client.attempts == 1
+
+    with pytest.raises(ToolFallbackStoppedError) as passthrough_error:
+        client._send_raw_with_retry(agent, "chat/completions", {"model": agent.model})
+    assert passthrough_error.value.decision.reason_code == "tool_failure.ambiguous_outcome.fail_closed"
+    assert client.attempts == 2
 
 
 def test_retry_recovers_from_transient_failures_with_backoff() -> None:
@@ -195,8 +293,6 @@ def test_embedding_request_hides_raw_error_text_and_cause() -> None:
 
     assert "embedding-provider-secret" not in str(error.value)
     assert error.value.__cause__ is None
-
-
 class _AgentDownClient(ModelClient):
     """Fails for a chosen agent id, succeeds for the rest."""
 
@@ -229,6 +325,39 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert row["served_agent_id"] == "backup_worker"
     assert row["failover_from"] == "primary_worker"
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
+
+
+def test_structural_provider_response_stops_before_tool_failover() -> None:
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+    ]
+
+    class MalformedPrimaryClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(retry_backoff=0.0)
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "primary_worker":
+                raise ProviderResponseError("provider primary_worker response did not contain assistant content")
+            return "backup must not be called"
+
+    client = MalformedPrimaryClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    try:
+        orchestrator._invoke(
+            agents[0], [{"role": "user", "content": "route this"}], text="route this", role="worker"
+        )
+    except ProviderResponseError as exc:
+        assert "did not contain assistant content" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("a structurally invalid provider response must fail closed")
+
+    assert client.calls == ["primary_worker"]
+    assert orchestrator._circuit == {}
 
 
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:

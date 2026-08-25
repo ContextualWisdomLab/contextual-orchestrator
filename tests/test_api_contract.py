@@ -61,7 +61,9 @@ def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> Non
     ]["schema"]
 
     assert embeddings_schema["required"] == ["input"]
+    assert "503" in OPENAPI_SPEC["paths"]["/v1/embeddings"]["post"]["responses"]
     assert "model" not in batch_schema.get("required", [])
+    assert "503" in OPENAPI_SPEC["paths"]["/v1/batch/embeddings"]["post"]["responses"]
     assert batch_schema["anyOf"] == [
         {"required": ["input"]},
         {"required": ["inputs"]},

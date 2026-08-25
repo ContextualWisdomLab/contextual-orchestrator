@@ -45,6 +45,7 @@ from .telemetry import (
     session_id_from_metadata,
     set_session_id,
 )
+from .tool_fallback import ToolFallbackStoppedError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -158,6 +159,55 @@ class RequestError(Exception):
         self.code = code
         self.message = message
         self.detail = detail or {}
+
+
+def _request_body_size(headers: Any, max_body_bytes: int) -> int:
+    """Return a safe JSON body length or reject ambiguous HTTP framing.
+
+    The stdlib handler does not decode transfer codings for this API. A single
+    ASCII decimal ``Content-Length`` is therefore the only accepted framing
+    signal; duplicate, comma-joined, negative, malformed, oversized, or
+    transfer-coded requests fail closed before any body read.
+    """
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        transfer_values = get_all("transfer-encoding")
+        length_values = get_all("content-length")
+    else:  # pragma: no cover - production uses email.message.Message headers
+        transfer_value = headers.get("transfer-encoding")
+        length_value = headers.get("content-length")
+        transfer_values = None if transfer_value is None else [transfer_value]
+        length_values = None if length_value is None else [length_value]
+
+    if transfer_values is not None:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoding request framing is not supported",
+        )
+    if length_values is None:
+        return 0
+    if len(length_values) != 1 or "," in length_values[0]:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must appear exactly once",
+        )
+    value = length_values[0].strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must be a non-negative decimal value",
+        )
+    normalized = value.lstrip("0") or "0"
+    maximum = str(max_body_bytes)
+    if len(normalized) > len(maximum) or (
+        len(normalized) == len(maximum) and normalized > maximum
+    ):
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    body_size = int(normalized)
+    return body_size
 
 
 @dataclass
@@ -318,6 +368,27 @@ def _reject_excessive_json_nesting(payload: bytes, max_depth: int = MAX_JSON_NES
             depth -= 1
 
 
+TOOL_FALLBACK_STOPPED_STATUS = 409
+TOOL_FALLBACK_STOPPED_CODE = "tool_execution_stopped"
+TOOL_FALLBACK_STOPPED_MESSAGE = (
+    "tool execution stopped because no safe retry or failover was available"
+)
+
+
+def _tool_fallback_error_detail(error: ToolFallbackStoppedError) -> dict[str, Any]:
+    """Return secret-free structured evidence for one fail-closed tool decision."""
+    decision = error.decision
+    detail = {
+        "action": decision.action.value,
+        "failure_kind": decision.kind.value,
+        "reason_code": decision.reason_code,
+    }
+    observed_kind = decision.observed_kind or decision.kind
+    if observed_kind is not decision.kind:
+        detail["observed_failure_kind"] = observed_kind.value
+    return detail
+
+
 def _coerce_json(payload: bytes) -> dict[str, Any]:
     _reject_excessive_json_nesting(payload)
     value = json.loads(payload.decode("utf-8"))
@@ -361,12 +432,17 @@ def _parse_request_framing(headers: Any, max_body_bytes: int) -> int:
     raw_length = content_lengths[0]
     if not raw_length or raw_length != raw_length.strip() or not raw_length.isascii() or not raw_length.isdigit():
         raise RequestError(400, "invalid_request_framing", "content-length must be an ASCII decimal integer")
-    try:
-        body_size = int(raw_length, 10)
-    except (ValueError, TypeError):
-        raise RequestError(400, "invalid_request_framing", "content-length is invalid") from None
-    if body_size > max_body_bytes:
+    # Compare digit strings before calling int(): an absurdly long digit run
+    # (e.g. an attacker-sent 5000-digit value) both exceeds CPython's default
+    # int<->str conversion digit limit and, more to the point, obviously
+    # exceeds max_body_bytes -- classify it as oversized, not malformed.
+    normalized = raw_length.lstrip("0") or "0"
+    maximum = str(max_body_bytes)
+    if len(normalized) > len(maximum) or (
+        len(normalized) == len(maximum) and normalized > maximum
+    ):
         raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    body_size = int(normalized, 10)
     return body_size
 
 
@@ -2796,6 +2872,7 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     default_attribution = _validate_attribution(body.get("attribution")) or {}
     default_model = str(body.get("model", "contextual-orchestrator"))
     batch: list[BatchRequest] = []
+    seen_custom_ids: set[str] = set()
     for item in raw_requests:
         if not isinstance(item, dict):
             raise RequestError(400, "invalid_request", "each batch request must be an object")
@@ -2803,12 +2880,34 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
         attribution = _validate_attribution(item.get("attribution"))
         merged = {**default_attribution, **(attribution or {})}
         mode = _validate_mode(item.get("mode", "auto"))
-        batch.append(BatchRequest(
-            messages=messages,
-            model=str(item.get("model", default_model)),
-            attribution=merged,
-            mode=mode,
-        ))
+        kwargs: dict[str, Any] = {
+            "messages": messages,
+            "model": str(item.get("model", default_model)),
+            "attribution": merged,
+            "mode": mode,
+        }
+        # Caller-supplied custom_id: without it, results cannot be mapped
+        # back to requests on backends that do not preserve submission
+        # order (the OpenAI Batch contract explicitly does not), because
+        # the submit response never discloses the generated ids. Same
+        # bounds as the OpenAI Batch API's custom_id.
+        custom_id = item.get("custom_id")
+        if custom_id is not None:
+            if not isinstance(custom_id, str) or not custom_id.strip():
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be a non-empty string"
+                )
+            if len(custom_id) > 64:
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be at most 64 characters"
+                )
+            if custom_id in seen_custom_ids:
+                raise RequestError(
+                    400, "invalid_request", "custom_id values must be unique within a batch"
+                )
+            seen_custom_ids.add(custom_id)
+            kwargs["custom_id"] = custom_id
+        batch.append(BatchRequest(**kwargs))
     return batch
 
 
@@ -4406,7 +4505,7 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     is resolved by the orchestrator's explicit ``embedding`` capability pool;
     no consumer-side sentinel model is accepted.
     """
-    if "model" not in body:
+    if body.get("model") is None:
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4420,8 +4519,6 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
         body["model"] = model
         return model
     model = body.get("model")
-    if model is None:
-        raise RequestError(400, "invalid_model", "model is required")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -4664,7 +4761,7 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
-        """Serve the authenticated OpenAI-compatible and administrative routes."""
+        """Handle authenticated orchestration, administration, and health routes."""
         _session_token = None
         _trace_token = None
 
@@ -4699,8 +4796,9 @@ def build_server(
                 super().finish()
             finally:
                 self._reset_session()
+
         def do_GET(self) -> None:  # noqa: N802
-            """Return health, discovery, result, and administrative resources."""
+            """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -5050,7 +5148,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
-            """Apply an authenticated worker-agent configuration update."""
+            """Apply an authenticated agent-pool worker update."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -5074,7 +5172,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
-            """Remove an authenticated worker agent from its configured pool."""
+            """Delete an authenticated agent-pool worker resource."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -5095,7 +5193,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
-            """Validate and execute inference or administrative commands."""
+            """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -5952,6 +6050,13 @@ def build_server(
                 self._send_error(404, "route_not_found", "not found")
             except json.JSONDecodeError:
                 self._send_error(400, "invalid_json", "request body is not valid JSON")
+            except ToolFallbackStoppedError as exc:
+                self._send_error(
+                    TOOL_FALLBACK_STOPPED_STATUS,
+                    TOOL_FALLBACK_STOPPED_CODE,
+                    TOOL_FALLBACK_STOPPED_MESSAGE,
+                    _tool_fallback_error_detail(exc),
+                )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except RequestError as exc:
@@ -6005,6 +6110,7 @@ def build_server(
             try:
                 body_size = _parse_request_framing(self.headers, security.max_body_bytes)
             except RequestError:
+                # Do not let a peer reuse a connection after an ambiguous frame.
                 self.close_connection = True
                 raise
             if body_size == 0:
@@ -6041,7 +6147,7 @@ def build_server(
             return _coerce_json(bytes(chunks))
 
         def log_message(self, format: str, *args: object) -> None:
-            """Disable the base server's unaudited stderr access log."""
+            """Suppress default request logging to keep service output structured."""
             return
 
         def _send_error(
@@ -6125,6 +6231,20 @@ def build_server(
                     for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
+                except ToolFallbackStoppedError as exc:
+                    detail = {
+                        "request_id": uuid.uuid4().hex,
+                        **_tool_fallback_error_detail(exc),
+                    }
+                    payload = _error_payload(
+                        TOOL_FALLBACK_STOPPED_CODE,
+                        TOOL_FALLBACK_STOPPED_MESSAGE,
+                        detail,
+                    )
+                    self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                    self._write_sse(frame({}, finish="error"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     self._write_sse(frame({}, finish="error"))
                 self._write_sse("data: [DONE]\n\n")

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
-_TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"  # noqa: S105
+_TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
 
 
 def build() -> TaskOrchestrator:
@@ -149,6 +149,17 @@ def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
         thread.join(timeout=5)
 
 
+def test_http_embeddings_null_model_auto_selects_enabled_embedding_agent() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, "/v1/embeddings", {"model": None, "input": "invoice"})
+        assert status == 200, body
+        assert body["model"] == "mock-planner"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_embeddings_auto_selection_fails_when_capability_is_missing() -> None:
     server, thread, port = _server_without_embedding()
     try:
@@ -171,6 +182,29 @@ def test_http_embeddings_reject_virtual_orchestrator_model() -> None:
             status, body = _post(port, path, payload)
             assert status == 400, (path, body)
             assert "invalid_model" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_rejects_explicit_model_without_embedding_capability() -> None:
+    """An in-pool model without the ``embedding`` tag fails closed on /v1/embeddings.
+
+    Regression: capability gating must also bind when the caller names a pool
+    member explicitly; otherwise a reasoning-only deployment would silently
+    serve embedding traffic after an operator re-tags the pool.
+    """
+    server, thread, port = _server_without_embedding()
+    try:
+        status, body = _post(
+            port,
+            "/v1/embeddings",
+            {"model": "mock-planner", "input": "invoice search chunk"},
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_model" in blob
+        assert "agent pool" in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)

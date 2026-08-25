@@ -81,7 +81,6 @@ def test_http_chat_rejects_valid_function_tools_without_single_agent_fallback() 
         server.shutdown()
         thread.join(timeout=5)
 
-
 def test_http_chat_accepts_empty_tools_array_as_noop() -> None:
     """SDKs often send tools: [] when no tools are configured — honest no-op."""
     server, thread, port = _server()
