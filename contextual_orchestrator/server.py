@@ -5035,7 +5035,20 @@ def build_server(
                 super().handle_one_request()
             finally:
                 self._reset_session()
+            # A request that declared a body it never delivered (unsupported
+            # method, rejected route) must not leave those bytes on a reusable
+            # connection for the stdlib to reparse as the next request.
+            if (
+                self._request_body_consumed is False
+                and hasattr(self, "headers")
+                and (
+                    self.headers.get("Content-Length") not in (None, "0")
+                    or self.headers.get("Transfer-Encoding")
+                )
+            ):
+                self.close_connection = True
 
+        def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
