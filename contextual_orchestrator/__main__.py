@@ -28,9 +28,9 @@ from .orchestrator import (
 )
 from .server import SecurityConfig, serve
 
-DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
-DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
-DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
+DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
 
 
 def _positive_int(value: str) -> int:
@@ -266,15 +266,16 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     return orchestrator.sync_discovered_agents(agents)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
-    if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
-        _register_credential_command(sys.argv[2:])
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "register-credential":
+        _register_credential_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "discover-models":
-        _discover_models_command(sys.argv[2:])
+    if arguments and arguments[0] == "discover-models":
+        _discover_models_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "check-fast-mlsirm":
+    if arguments and arguments[0] == "check-fast-mlsirm":
         _check_fast_mlsirm_command()
         return
 
@@ -340,7 +341,7 @@ def main() -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -391,17 +392,17 @@ def main() -> None:
             )
         try:
             auth_token = (
-                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_TOKEN_KEY)
+                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)
                 if not split_requested
                 else ""
             )
             admin_token = (
-                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_TOKEN_KEY)
+                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_CREDENTIAL_NAME)
                 if split_requested
                 else ""
             )
             inference_token = (
-                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_TOKEN_KEY)
+                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_CREDENTIAL_NAME)
                 if split_requested
                 else ""
             )
