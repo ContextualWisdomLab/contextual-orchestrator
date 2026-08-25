@@ -68,7 +68,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_value_readiness_gap_count",
         "commercial_close_signature_gap_count",
         "commercial_go_to_market_warning_count",
-        "commercial_launch_external_input_count",
+        "launch_summary.external_input_group_count",
         "commercial_completion_warning_count",
         "buyer_acceptance_workflow_warning_count",
         "commercial_demo_warning_count",
@@ -1035,7 +1035,7 @@ def test_commercial_launch_readiness_defines_launch_gate() -> None:
         "local_commercial_launch_readiness",
         "launch_items",
         "commercial_launch_ready_with_warnings",
-        "commercial_launch_external_input_count",
+        "launch_summary.external_input_group_count",
     ]:
         assert expected_text in launch
 

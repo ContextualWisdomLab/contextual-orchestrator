@@ -166,6 +166,70 @@ def test_stream_route_yields_and_persists() -> None:
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
 
 
+def test_stream_route_persists_owner() -> None:
+    """Authenticated streaming lineage retains its owner boundary."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))]
+    )
+
+    list(
+        orchestrator.stream_route(
+            [{"role": "user", "content": "stream"}], owner_id="principal_123"
+        )
+    )
+
+    assert next(iter(orchestrator._workflow_runs.values()))["owner_id"] == "principal_123"
+
+
+def test_stream_disconnect_stops_consuming_upstream_deltas() -> None:
+    """A disconnected SSE client releases the route without reading another provider delta."""
+    server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    consumed: list[str] = []
+    closed: list[bool] = []
+
+    class DisconnectAfterFirstFrame:
+        """Accept the assistant role frame, then emulate a closed client socket."""
+
+        writes = 0
+
+        def write(self, raw: bytes) -> int:
+            self.writes += 1
+            if self.writes > 1:
+                raise BrokenPipeError
+            return len(raw)
+
+        def flush(self) -> None:
+            return None
+
+    def stream_route(_messages, *, workflow_run_id: str):
+        assert workflow_run_id.startswith("run_")
+        try:
+            for delta in ("first", "second"):
+                consumed.append(delta)
+                yield delta
+        finally:
+            closed.append(True)
+
+    handler.wfile = DisconnectAfterFirstFrame()
+    handler.send_response = lambda _status: None
+    handler.send_header = lambda _name, _value: None
+    handler.end_headers = lambda: None
+    expected_value = "stream-test-value"
+    try:
+        handler._stream_route_completion(
+            type("StreamSource", (), {"stream_route": staticmethod(stream_route)})(),
+            SecurityConfig(auth_token=expected_value),
+            [{"role": "user", "content": "stream"}],
+            "m-model",
+        )
+    finally:
+        server.server_close()
+
+    assert consumed == ["first"]
+    assert closed == [True]
+
+
 def test_http_route_stream_pipes_live_deltas() -> None:
     token = "stream_token"
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))])

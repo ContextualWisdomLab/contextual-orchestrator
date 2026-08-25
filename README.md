@@ -127,6 +127,8 @@ One public interface:
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
 - The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged.
+- `/api/v1/provider_readiness/latest` reports provider liveness separately from an explicit chat readiness probe; `?refresh=true` re-probes instead of returning the cached result.
+- `/api/v1/analytics_snapshots/latest` returns source-backed local KPI definitions (trace completeness, policy-safe run rate, successful chat requests, and related event-derived counts) from in-memory runtime state, localized via the same locale bundles as the admin console.
 - `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. See [Observability & spend](#observability--spend).
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
@@ -237,8 +239,9 @@ is read from a **KV config store**, never `os.getenv`.
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,
   group, company, provider) carried in `metadata`.
-- **Health.** `GET /healthz` is an unauthenticated liveness probe; it never
-  claims that an upstream chat worker is serving. Admins can use
+- **Health.** `GET /healthz` is an unauthenticated liveness probe that returns
+  only service identity and process status; it never discloses worker topology,
+  backend names, usage volume, or upstream readiness. Admins can use
   `GET /api/v1/provider_readiness/latest?refresh=true` for one bounded,
   non-retrying chat probe per enabled worker.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
@@ -290,6 +293,8 @@ Grounding papers (LLM cost, routing, load balancing) live in
 - [Commercial investment committee memo](docs/commercial_investment_committee_memo.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
+- [Fuzzing](docs/fuzzing.md)
+- [Product and technical gap baseline](docs/product-technical-gap-baseline.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
 - [Commercial plugin readiness plan](docs/superpowers/plans/2026-07-02-commercial-plugin-readiness.md)
 
@@ -330,6 +335,7 @@ python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py
 python tests/test_analytics_runtime.py
+python tests/test_cost_ledger.py
 python tests/test_sales_readiness.py
 python tests/test_buyer_evidence_manifest.py
 python tests/test_buyer_handoff_bundle.py
