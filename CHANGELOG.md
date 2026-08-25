@@ -26,6 +26,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Virtual-model tools, structured-output, and Responses passthrough requests now
+  advance once across capability-ranked providers after transient or stale-model
+  failures; concrete model requests remain sticky and caller errors fail closed.
 - Reject missing profiles, blank `profile_version`, and fractional seeds.
   Snapshot hashing now fails closed on extra or missing roles. The
   production-default gate returns false on junk reports and on

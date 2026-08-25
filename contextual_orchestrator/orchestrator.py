@@ -66,6 +66,8 @@ from .reasoning_effort_profile import (
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
+_PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410})
+_PROVIDER_ERROR_CHAIN_LIMIT = 8
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MAX_PROVIDER_PROBE_TIMEOUT = 30.0
 _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
@@ -760,6 +762,30 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_passthrough_failover_error(exc: BaseException) -> bool:
+    """Recognize transient or stale-model failures through bounded wrapper chains."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if is_transient_error(current):
+            return True
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and current.code in _PASSTHROUGH_UNAVAILABLE_STATUS
+        ):
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return False
+        else:
+            current = current.__context__
+    return False
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -1305,6 +1331,23 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
+        return self._proxy_send(agent, endpoint, payload, allow_transient_retries=True)
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Send one passthrough attempt so cross-provider failover cannot amplify load."""
+        return self._proxy_send(agent, endpoint, payload, allow_transient_retries=False)
+
+    def _proxy_send(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        *,
+        allow_transient_retries: bool,
+    ) -> dict[str, Any]:
+        """Apply the shared passthrough contract with a selectable retry policy."""
         normalized_endpoint = endpoint.strip("/")
         if normalized_endpoint.startswith("v1/"):
             normalized_endpoint = normalized_endpoint[3:]
@@ -1325,11 +1368,21 @@ class ModelClient:
                 chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw_with_retry(
-                    agent, "chat/completions", chat_payload, destination
+                    agent,
+                    "chat/completions",
+                    chat_payload,
+                    destination,
+                    allow_transient_retries=allow_transient_retries,
                 )
             return _chat_to_responses_payload(chat_response, payload)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
+            return self._send_raw_with_retry(
+                agent,
+                normalized_endpoint,
+                payload,
+                destination,
+                allow_transient_retries=allow_transient_retries,
+            )
 
     def _send_raw_with_retry(
         self,
@@ -1337,10 +1390,12 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        allow_transient_retries: bool = True,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
-        retry_limit = self._retry_limit(agent)
+        retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
@@ -1351,6 +1406,8 @@ class ModelClient:
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
+        if not allow_transient_retries and last_error is not None:
+            raise last_error
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
@@ -2158,12 +2215,39 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
-        if effort_profile is not None:
-            upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        return self.client.proxy_send(agent, endpoint, upstream)
+        if requested_model not in (None, "contextual-orchestrator"):
+            if effort_profile is not None:
+                upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+            return self.client.proxy_send(agent, endpoint, upstream)
+
+        candidates = self._failover_candidates(agent, text, "worker")
+        last_error: Exception | None = None
+        for candidate in candidates:
+            candidate_payload = dict(upstream)
+            candidate_payload["model"] = candidate.model
+            if effort_profile is not None:
+                candidate_payload = self.client.apply_effort_profile(
+                    candidate, candidate_payload, effort_profile
+                )
+            try:
+                send_once = getattr(self.client, "proxy_send_once", None)
+                if not callable(send_once):
+                    send_once = self.client.proxy_send
+                result = send_once(candidate, endpoint, candidate_payload)
+            except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                if not _is_passthrough_failover_error(exc):
+                    raise
+                last_error = exc
+                self._record_failure(candidate.id)
+                continue
+            self._record_success(candidate.id)
+            return result
+        raise RuntimeError(
+            f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
+        ) from last_error
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
