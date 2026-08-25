@@ -4,23 +4,21 @@
 
 | PR | Exact head/base | Current evidence and decision |
 | --- | --- | --- |
-| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `bfc95d75567352052f4c86c5ab914be9c53977f0`, base `main` `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Open with normal auto-merge enabled. The current head joins Zen availability to Models.dev structured cost/modality evidence, removes model-name free inference, stops paid orchestration when SSE headers cannot reach the client, and keeps a model judge inside an explicitly requested paid group without conflating membership restriction with free-only routing. All review threads were resolved at this snapshot; focused judge/group/reliability evidence is `102 passed`. Hosted Checks and independent exact-head approval remain authoritative. Decision: `WAIT_AND_REMEDIATE`. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `f1fea507f1efc65bf4bb978d9e619210265f9dd7`, base `main` `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | Open with normal auto-merge enabled. Zen availability is joined to Models.dev structured cost/modality evidence without name inference, and normalized catalog reload now preserves `cost:free` plus directed modality evidence. The branch contains protected-main merges #762/#780/#821 and the model-group ADR was renumbered to unique ADR 0027. Exact-head focused discovery/catalog/group/Responses and merged-main regression evidence is `133 passed`. Hosted Checks and independent exact-head approval remain authoritative. Decision: `WAIT_AND_REMEDIATE`. |
 | [#844](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/844) | head `3ca50633b8fa8f639754a5a5dcc8aaa0f2b2bf9f`, merge `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Merged normally to protected `main` on 2026-08-25. It partitions cached admin-session responses by an active opaque session and contains the thread-termination regression repair. This merge is protected-main evidence for that bounded fix only. |
+| [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762), [#821](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/821), [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | merge commits `2b4a2ff3787d19da7240f5647a05c1a9091d0097`, `38d211665b0d0022e689086db0cc7bc5dc29fcbe`, `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | Normally merged to protected `main` on 2026-08-25. The resulting main exact head is `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424`; this is bounded release evidence for the PII design, token-count strategy coverage, and liveness/readiness boundary only. |
 
 Current open-queue exact-head inventory at this continuation:
 
 | PR | Head | Base | Gate state |
 | ---: | --- | --- | --- |
-| #762 | `1047bfab5986160146309911c242b7a174382f21` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, changes requested, auto-merge enabled |
 | #765 | `b70540420f0f86132cc5911baaf55a26ad0084fa` | `50014ef9f87623c6dfd529116297c5d180743125` | `DIRTY`, changes requested |
-| #773 | self-reference; refetch live | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required |
-| #780 | `1e2c42415a378f5f4cee2c8d7e49699874ab27ab` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, changes requested, auto-merge enabled |
-| #782 | `c4b7a322dd71d7bc6f9214cdfdb447988e5eb0b5` | `52dfa448417953ebf6e0c7b295e92b4d81cf9420` | `DIRTY`, changes requested |
-| #790 | `ee216d0e4588cd23d4d7bcb93e6864e4db4a4461` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, changes requested, auto-merge enabled |
-| #794 | `486266de81d9eeec1abd90f31cb6179192476a2e` | `87c6c66a7f049e725b417b8fa16f99b886062845` | `DIRTY`, review required |
+| #773 | self-reference; refetch live | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, auto-merge enabled |
+| #782 | `ee659d53463bbaa1697622a3196b5d719291d575` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BEHIND`, changes requested, auto-merge enabled |
+| #790 | `ee216d0e4588cd23d4d7bcb93e6864e4db4a4461` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BEHIND`, changes requested, auto-merge disabled |
+| #794 | `426c633cf144fecd219607fcd570b9915ff9da93` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, review required, auto-merge enabled |
 | #818 | `d286f51f8fe2ae24c62234c191994c81045cb79e` | `50014ef9f87623c6dfd529116297c5d180743125` | `DIRTY`, review required |
-| #821 | `4f61158ddf878c3359d6b3f409e9ac114fc80f42` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required, auto-merge enabled |
-| #834 | `bfc95d75567352052f4c86c5ab914be9c53977f0` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required, auto-merge enabled |
+| #834 | `f1fea507f1efc65bf4bb978d9e619210265f9dd7` | `6970dbb9e63b9bd1ec602bb8c3c85e3a05480424` | `BLOCKED`, review required, auto-merge enabled |
 
 The remaining customer-visible routing gap is durable, multi-replica observation
 aggregation with an explicit time horizon. The current in-process Beta-Bernoulli
@@ -54,10 +52,12 @@ Remaining customer-visible gaps:
    needs a cancellable asynchronous dependency graph; do not fabricate partial
    answers from unverified intermediate work.
 2. `orchestrator/free` optimizes only within models with complete structured
-   zero-cost evidence. Zen availability is joined to Models.dev metadata; an
+   zero-cost evidence. Zen availability is joined to Models.dev metadata, and
+   normalized last-known-good reload now retains its free/modality tags; an
    unmatched model or metadata outage remains unknown and excluded. Production
-   still needs freshness timestamps and last-success/error evidence for both
-   catalogs so operators can distinguish current unknown cost from stale data.
+   still needs freshness timestamps and last-success/error evidence for the
+   secondary metadata catalog so operators can distinguish current unknown cost
+   from stale data.
 3. The in-process success/latency ledger is not multi-replica evidence. Add a
    normalized time-windowed observation store with explicit retention/decay
    before claiming fleet-wide optimal routing.
