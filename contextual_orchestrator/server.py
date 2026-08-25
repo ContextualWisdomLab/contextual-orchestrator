@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
+import hashlib
 import json
 import hashlib
 import secrets
@@ -32,6 +33,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
 from .tool_fallback import ToolFallbackStoppedError
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
@@ -257,12 +259,31 @@ class SecurityConfig:
         if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
             raise ValueError("public bind requires --allow-public-bind")
 
-    def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate a bearer token or an opaque, server-side admin session cookie."""
+    def resolve_purpose(self, scope: str, purpose: str | None = None) -> str:
+        """Resolve and validate the route-owned purpose for an authenticated role."""
+        if scope not in PURPOSES_BY_SCOPE:
+            raise RequestError(403, "invalid_scope", "authorization scope is not supported")
+        effective = purpose or DEFAULT_PURPOSE_BY_SCOPE[scope]
+        if effective not in PURPOSES_BY_SCOPE[scope]:
+            raise RequestError(403, "purpose_not_allowed", "purpose is not allowed for this scope")
+        return effective
+
+    def authorize(
+        self,
+        headers: Any,
+        scope: str,
+        client_address: str,
+        purpose: str | None = None,
+    ) -> str:
+        """Validate a bearer token or an opaque admin session; return the authorized purpose."""
+        effective_purpose = self.resolve_purpose(scope, purpose)
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
-            return
+            # An active opaque session authorizes the admin role; the route-owned
+            # purpose is still resolved and validated so a session holder cannot
+            # exceed the scope's purpose allowlist.
+            return effective_purpose
         raw = headers.get("authorization", "")
         if not raw.lower().startswith("bearer "):
             raise RequestError(401, "unauthorized", "bearer token is required")
@@ -282,6 +303,7 @@ class SecurityConfig:
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        return effective_purpose
 
     def principal_id(self, headers: Any) -> str:
         """Return a stable non-secret owner key for the authenticated deployment principal."""
@@ -442,6 +464,18 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
         "error_message": error_message,
         "error_detail": detail,
     }
+
+
+def _cache_bypass_header(value: str | None) -> bool:
+    """Parse the opt-in cache bypass header without accepting ambiguous values."""
+    if value is None or not value.strip():
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    raise RequestError(400, "invalid_cache_bypass", "X-Cache-Bypass must be true, false, 1, or 0")
 
 
 MAX_JSON_NESTING_DEPTH = 32
@@ -4741,7 +4775,7 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
-                self._authorize("admin")
+                self._authorize("admin", purpose=self._admin_purpose(path))
                 if path == "/api/v1/cost_attribution_dimensions":
                     self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})
                     return
@@ -4775,7 +4809,10 @@ def build_server(
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
                 if path == "/admin/state":
-                    state = orchestrator.admin_state()
+                    state = orchestrator.admin_state(
+                        role=getattr(self, "_authorized_role", None),
+                        purpose=getattr(self, "_authorized_purpose", None),
+                    )
                     state["document_viewer"] = (
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
@@ -5124,6 +5161,8 @@ def build_server(
                 )
                 self._authorize(scope, state_changing=True)
                 body = self._read_json()
+                cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
+                cache_partition = self._cache_partition()
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -5197,24 +5236,15 @@ def build_server(
                         attribution["service"] = "completions_api"
                     routing = _validate_routing(body.get("routing"))
                     started_at = time.perf_counter()
-                    # Apply request sampling knobs to the provider client for this call.
+                    # Apply request sampling knobs to this request thread only.
                     model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with model_client.request_settings(
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                    ):
                         result = self._run(lambda: coordinator.complete(
                             messages,
                             mode="route",
@@ -5222,13 +5252,9 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass,
+                            cache_partition=cache_partition,
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     # Batch-channel Completions return a job handle (202), not a
                     # text_completion body — match chat Completions honesty so
                     # clients never receive a 500 on a valid batch routing hint.
@@ -5443,22 +5469,13 @@ def build_server(
                         _validate_openai_metadata(body)
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with model_client.request_settings(
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                    ):
                         if stream and orchestrator.would_route(messages, mode):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
@@ -5480,13 +5497,9 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass,
+                            cache_partition=cache_partition,
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
@@ -5920,11 +5933,88 @@ def build_server(
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
-        def _authorize(self, scope: str, *, state_changing: bool = False) -> None:
-            security.check_rate_limit(self.client_address[0])
-            security.authorize(self.headers, scope, self.client_address[0])
-            if state_changing and scope == "admin":
-                security.validate_admin_session_origin(self.headers)
+        @staticmethod
+        def _admin_purpose(path: str) -> str:
+            """Select the least-privileged purpose for an admin GET route."""
+            if (
+                path == "/admin/state"
+                or path == "/api/v1/workflow_runs"
+                or path.startswith("/api/v1/workflow_runs/")
+                or path.startswith("/api/v1/access_reports/")
+                or path.startswith("/api/v1/evaluation_runs/")
+            ):
+                return "audit_replay"
+            return "operator_read"
+
+        def _authorize(
+            self,
+            scope: str,
+            *,
+            purpose: str | None = None,
+            state_changing: bool = False,
+        ) -> None:
+            """Authorize the request and audit denials or sensitive replay access.
+
+            Combines the opaque-session/bearer validation with route-owned
+            purposes: denials and sensitive ``audit_replay`` access are recorded
+            (durable for replays), and browser-driven state-changing admin
+            requests must pass the same-origin check.
+            """
+            effective_purpose = purpose or DEFAULT_PURPOSE_BY_SCOPE.get(scope, "")
+            try:
+                security.check_rate_limit(self.client_address[0])
+                effective_purpose = security.authorize(
+                    self.headers, scope, self.client_address[0], purpose=purpose
+                )
+                if state_changing and scope == "admin":
+                    security.validate_admin_session_origin(self.headers)
+            except RequestError as exc:
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=False,
+                        reason=exc.code,
+                    )
+                except Exception:
+                    pass
+                raise
+            if effective_purpose == "audit_replay":
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=True,
+                        reason="authorized",
+                        durable=True,
+                    )
+                except Exception as exc:
+                    raise RequestError(
+                        503,
+                        "authorization_audit_unavailable",
+                        "authorization audit unavailable",
+                    ) from exc
+            self._authorized_role = scope
+            self._authorized_purpose = effective_purpose
+
+        def _cache_partition(self) -> str:
+            """Return a non-secret cache partition for the authenticated principal.
+
+            Bearer-authenticated callers partition by their bearer token.
+            Browser admin sessions authenticate without a bearer header, so an
+            active opaque session id partitions those requests instead — the
+            session id is random per login, so cross-session cache reuse stays
+            impossible while cookie-authenticated operators still get hits
+            within their own session.
+            """
+            raw = self.headers.get("authorization", "")
+            token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+            if not token:
+                session_id = security._extract_admin_session_cookie(self.headers)
+                if session_id and security._admin_session_is_active(session_id):
+                    return hashlib.sha256(f"admin-session:{session_id}".encode("utf-8")).hexdigest()
+                raise RequestError(401, "unauthorized", "bearer token is required")
+            return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
@@ -5989,6 +6079,26 @@ def build_server(
         ) -> None:
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
+        def _write_response(self, writer: Callable[[], None]) -> bool:
+            """Run a response-writing callback, swallowing a dead-peer disconnect.
+
+            A client that gave up waiting (e.g. on a slow orchestration run)
+            closes its end of the socket before this thread finishes writing.
+            The write then raises BrokenPipeError/ConnectionError/OSError --
+            there is nothing left to deliver, so this is not a server error.
+            Without this guard, that exception propagates out of do_POST's
+            try block into its own `except Exception: self._send_error(...)`
+            handler, which calls back into a send method on the same closed
+            socket and raises again -- uncaught this time, crashing the
+            request-handling thread (visible as a second, unhandled
+            BrokenPipeError in server logs after the first).
+            """
+            try:
+                writer()
+                return True
+            except (BrokenPipeError, ConnectionError, OSError):
+                return False
+
         def _send(
             self,
             payload: dict[str, Any],
@@ -5997,46 +6107,64 @@ def build_server(
             extra_headers: dict[str, str] | None = None,
         ) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("content-type", "application/json; charset=utf-8")
-            self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
-            for name, value in (extra_headers or {}).items():
-                self.send_header(name, value)
-            self.end_headers()
-            self.wfile.write(raw)
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", "application/json; charset=utf-8")
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                for name, value in (extra_headers or {}).items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(raw)
+
+            self._write_response(_write)
 
         def _send_text(self, payload: str, content_type: str, status: int = 200) -> None:
             raw = payload.encode("utf-8")
-            self.send_response(status)
-            self.send_header("content-type", content_type)
-            self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
-            self.end_headers()
-            self.wfile.write(raw)
+
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(raw)
+
+            self._write_response(_write)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
             raw = body.encode("utf-8")
-            self.send_response(status)
-            self.send_header("content-type", "text/event-stream; charset=utf-8")
-            self.send_header("cache-control", "no-cache")
-            self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
-            self.end_headers()
-            self.wfile.write(raw)
 
-        def _begin_sse(self) -> None:
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", "text/event-stream; charset=utf-8")
+                self.send_header("cache-control", "no-cache")
+                self.send_header("content-length", str(len(raw)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(raw)
+
+            self._write_response(_write)
+
+        def _begin_sse(self) -> bool:
             # Incremental SSE: no content-length; the connection close delimits the body.
-            self.send_response(200)
-            self.send_header("content-type", "text/event-stream; charset=utf-8")
-            self.send_header("cache-control", "no-cache")
-            self.send_header("connection", "close")
-            self._send_security_headers()
-            self.end_headers()
+            def _write() -> None:
+                self.send_response(200)
+                self.send_header("content-type", "text/event-stream; charset=utf-8")
+                self.send_header("cache-control", "no-cache")
+                self.send_header("connection", "close")
+                self._send_security_headers()
+                self.end_headers()
 
-        def _write_sse(self, frame: str) -> None:
-            self.wfile.write(frame.encode("utf-8"))
-            self.wfile.flush()
+            return self._write_response(_write)
+
+        def _write_sse(self, frame: str) -> bool:
+            def _write() -> None:
+                self.wfile.write(frame.encode("utf-8"))
+                self.wfile.flush()
+
+            return self._write_response(_write)
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
@@ -6056,12 +6184,14 @@ def build_server(
 
             security.acquire_run_slot()
             try:
-                self._begin_sse()
-                self._write_sse(frame({"role": "assistant"}))
+                if not self._begin_sse() or not self._write_sse(frame({"role": "assistant"})):
+                    return
                 try:
                     for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
-                        self._write_sse(frame({"content": delta}))
-                    self._write_sse(frame({}, finish="stop"))
+                        if not self._write_sse(frame({"content": delta})):
+                            return
+                    if not self._write_sse(frame({}, finish="stop")):
+                        return
                 except ToolFallbackStoppedError as exc:
                     detail = {
                         "request_id": uuid.uuid4().hex,
@@ -6072,12 +6202,15 @@ def build_server(
                         TOOL_FALLBACK_STOPPED_MESSAGE,
                         detail,
                     )
-                    self._write_sse(
+                    if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                    )
-                    self._write_sse(frame({}, finish="error"))
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
-                    self._write_sse(frame({}, finish="error"))
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
                 self._write_sse("data: [DONE]\n\n")
             finally:
                 security.release_run_slot()

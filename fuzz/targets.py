@@ -23,7 +23,9 @@ consume untrusted bytes/JSON:
 6. ``model_discovery._parse_openai_compatible`` / ``_parse_bytez`` -- parsing
    of a remote provider's model-list HTTP response (attacker/compromised
    provider-controlled JSON).
-7. ``reasoning_effort_profile.parse_reasoning_effort_profile`` -- untrusted
+7. ``pii_protection._decode_secret`` -- explicit key-encoding enforcement at
+   the field-encryption boundary.
+8. ``reasoning_effort_profile.parse_reasoning_effort_profile`` -- untrusted
    role-compute JSON. Must raise ``EffortProfileError`` / ``TypeError`` /
    ``ValueError`` or return a finite profile. Never crash on NaN, bool-as-
    number, or unknown keys.
@@ -52,6 +54,7 @@ from contextual_orchestrator.orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from contextual_orchestrator.pii_protection import PiiProtectionError, _decode_secret
 from contextual_orchestrator.reasoning_effort_profile import (
     ACCESS_LIST_SCOPES,
     REASONING_EFFORT_LEVELS,
@@ -79,6 +82,17 @@ _EXPECTED_CONFIG_EXC = (
     TypeError,
     ValueError,
 )
+
+
+def exercise_pii_key(value: str) -> None:
+    """Verify arbitrary unprefixed key text cannot cross the key boundary."""
+    if value.startswith(("base64:", "hex:", "passphrase:")):
+        return
+    try:
+        _decode_secret(value, key_name="fuzz_key")
+    except PiiProtectionError:
+        return
+    raise AssertionError("unprefixed PII encryption key was accepted")
 
 
 def exercise_request_body(raw: bytes) -> None:

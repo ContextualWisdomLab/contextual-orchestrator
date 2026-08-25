@@ -35,6 +35,5 @@ Paper role values are deliberate exceptions because they are source terminology:
 - Issue #568 compute profiles live in `reasoning_effort_profile.py` so the
   catalog and ablation can land without changing `OrchestrationPolicy` defaults.
 - Delivery adapters live in `server.py`.
-- UI static assets live in `admin.py` only while the product remains dependency-free.
+- UI static assets live in `admin.py` while the stdlib HTTP/admin surface remains sufficient.
 - Do not introduce provider SDKs unless OpenAI-compatible HTTP falls short.
-
