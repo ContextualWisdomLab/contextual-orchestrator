@@ -21,6 +21,14 @@ ADMIN_TRANSLATIONS = {
         "active_status": "Active",
         "agent_pool_title": "Agent Pool",
         "register_agent": "Register Agent",
+        "model_groups_title": "Model groups",
+        "group_name_label": "Group name",
+        "group_members_label": "Provider model members",
+        "save_group": "Save group",
+        "delete_group": "Delete group",
+        "no_model_groups": "No model groups yet. Create one to route a logical model across providers.",
+        "group_saved": "Group saved. Send requests with this group name to use measured routing.",
+        "group_deleted": "Group deleted. Its provider models remain available.",
         "search_agents": "Search agents",
         "all_statuses": "All statuses",
         "no_agents_match": "No agents match the current filters.",
@@ -255,6 +263,14 @@ ADMIN_TRANSLATIONS = {
         "active_status": "활성",
         "agent_pool_title": "에이전트 풀",
         "register_agent": "에이전트 등록",
+        "model_groups_title": "모델 그룹",
+        "group_name_label": "그룹 이름",
+        "group_members_label": "공급자 모델 멤버",
+        "save_group": "그룹 저장",
+        "delete_group": "그룹 삭제",
+        "no_model_groups": "모델 그룹이 없습니다. 논리 모델을 여러 공급자로 라우팅하려면 그룹을 만드세요.",
+        "group_saved": "그룹을 저장했습니다. 측정 기반 라우팅에는 이 그룹 이름으로 요청하세요.",
+        "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
         "search_agents": "에이전트 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다.",
@@ -869,6 +885,18 @@ ADMIN_HTML = r"""<!doctype html>
             </thead>
             <tbody id="agents"></tbody>
           </table>
+          <form id="modelGroupForm" class="policy-list" aria-labelledby="modelGroupsTitle">
+            <h2 id="modelGroupsTitle" data-i18n="model_groups_title">Model groups</h2>
+            <label><span data-i18n="group_name_label">Group name</span>
+              <input id="modelGroupName" required pattern="[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+" autocomplete="off">
+            </label>
+            <label><span data-i18n="group_members_label">Provider model members</span>
+              <select id="modelGroupMembers" multiple required size="5"></select>
+            </label>
+            <div class="actions"><button class="btn primary" type="submit" data-i18n="save_group">Save group</button></div>
+            <p id="modelGroupFeedback" role="status" aria-live="polite"></p>
+            <ul id="modelGroups" class="policy-list"></ul>
+          </form>
         </section>
         <section class="panel" id="orchestration-policy" tabindex="-1">
           <div class="panel-header">
@@ -1032,10 +1060,15 @@ Summarize this research thread and verify claims.</textarea>
       viewAudit: document.querySelector("#viewAudit"),
       agentSettings: document.querySelector("#agentSettings"),
       registerAgent: document.querySelector("#registerAgent"),
+      modelGroupForm: document.querySelector("#modelGroupForm"),
+      modelGroupName: document.querySelector("#modelGroupName"),
+      modelGroupMembers: document.querySelector("#modelGroupMembers"),
+      modelGroupFeedback: document.querySelector("#modelGroupFeedback"),
+      modelGroups: document.querySelector("#modelGroups"),
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
-    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
+    let state = {agents: [], modelGroups: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -1076,6 +1109,41 @@ Summarize this research thread and verify claims.</textarea>
           <td>${agent.group_routing?.ewma_latency_seconds == null ? "—" : `${escapeHtml(agent.group_routing.ewma_latency_seconds)}s`}</td>
           <td>${agent.group_routing ? `${(agent.group_routing.success_posterior_mean * 100).toFixed(1)}%` : "—"}</td>
         </tr>`).join("") || `<tr><td colspan="6" class="empty" data-i18n="no_agents_match">${t("no_agents_match")}</td></tr>`;
+    }
+    function renderModelGroups() {
+      const selected = new Set(Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value));
+      els.modelGroupMembers.innerHTML = state.agents.map(agent =>
+        `<option value="${escapeHtml(agent.id)}" ${selected.has(agent.id) ? "selected" : ""}>${escapeHtml(agent.id)} — ${escapeHtml(agent.model)} [${escapeHtml((agent.tags || []).join(", "))}]</option>`
+      ).join("");
+      els.modelGroups.innerHTML = state.modelGroups.map(group => `
+        <li><strong>${escapeHtml(group.group_name)}</strong> — ${escapeHtml(group.member_agent_ids.join(", "))}<br>
+          <small>${escapeHtml(Object.entries(group.capability_coverage || {}).map(([name, count]) => `${name}: ${count}`).join(" · "))}</small>
+          <button class="btn" type="button" data-delete-group="${escapeHtml(group.group_name)}" data-i18n="delete_group">${t("delete_group")}</button>
+        </li>`).join("") || `<li class="empty">${t("no_model_groups")}</li>`;
+    }
+
+    async function refreshModelGroups() {
+      const response = await fetch("/api/v1/model_groups");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not load model groups");
+      state.modelGroups = payload.items || [];
+      renderModelGroups();
+    }
+
+    async function saveModelGroup(event) {
+      event.preventDefault();
+      const groupName = els.modelGroupName.value.trim();
+      const memberIds = Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value);
+      const exists = state.modelGroups.some(group => group.group_name === groupName.replaceAll("-", "_").toLowerCase());
+      const response = await fetch(exists ? `/api/v1/model_groups/${encodeURIComponent(groupName)}` : "/api/v1/model_groups", {
+        method: exists ? "PATCH" : "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify(exists ? {member_agent_ids: memberIds} : {group_name: groupName, member_agent_ids: memberIds})
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not save model group");
+      els.modelGroupFeedback.textContent = t("group_saved");
+      await refreshModelGroups();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -1471,11 +1539,13 @@ Summarize this research thread and verify claims.</textarea>
       });
       localStorage.setItem("admin_lang", lang);
       if (state.agents.length) renderAgents();
+      if (state.agents.length) renderModelGroups();
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
       const res = await fetch("/admin/state");
       state = await res.json();
+      await refreshModelGroups();
       await refreshAnalytics();
       await refreshReadiness();
       els.hintCount.textContent = state.policy.complex_hints.length;
@@ -1572,6 +1642,20 @@ Summarize this research thread and verify claims.</textarea>
     els.viewAudit.addEventListener("click", () => showView("audit"));
     els.agentSettings.addEventListener("click", () => showView("settings"));
     els.registerAgent.addEventListener("click", () => showView("integrations"));
+    els.modelGroupForm.addEventListener("submit", event => saveModelGroup(event).catch(error => {
+      els.modelGroupFeedback.textContent = error.message;
+    }));
+    els.modelGroups.addEventListener("click", event => {
+      const name = event.target.dataset?.deleteGroup;
+      if (!name) return;
+      fetch(`/api/v1/model_groups/${encodeURIComponent(name)}`, {method: "DELETE"})
+        .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
+        .then(() => {
+          els.modelGroupFeedback.textContent = t("group_deleted");
+          return refreshModelGroups();
+        })
+        .catch(error => { els.modelGroupFeedback.textContent = error.message; });
+    });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     document.querySelector("#copyJson").addEventListener("click", () => {

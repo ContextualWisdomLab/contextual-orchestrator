@@ -35,7 +35,24 @@ sequenceDiagram
 
 ## Data, web, and operational boundaries
 
-Group membership survives restart in the existing `agent_pool` database payload. Authenticated REST resources provide `GET/POST /api/v1/model_groups` and `GET/PATCH/DELETE /api/v1/model_groups/{group_name}`; deleting a group retains its provider agents. The existing worker-agent create/PATCH API also accepts `group_name`. Admin shows the group, posterior success probability, and EWMA latency instead of fabricated capacity/success figures. The observation ledger intentionally resets on process restart: persisting it without a measurement horizon would let stale provider incidents dominate current routing. Add a normalized, time-windowed observation table when multi-instance aggregation and an explicit retention/decay policy are specified.
+Group membership survives restart in normalized `model_group` and `model_group_member` relations; the agent JSON payload no longer duplicates `group_name`. Startup migrates legacy payload membership transactionally without dropping agent configuration. Authenticated REST resources provide `GET/POST /api/v1/model_groups` and `GET/PATCH/DELETE /api/v1/model_groups/{group_name}`; deleting a group retains its provider agents. The existing worker-agent create/PATCH API also accepts `group_name`. Admin provides a keyboard/native-form editor backed by those same resources and shows capability coverage, posterior success probability, and EWMA latency instead of fabricated capacity/success figures. The observation ledger intentionally resets on process restart: persisting it without a measurement horizon would let stale provider incidents dominate current routing. Add a normalized, time-windowed observation table when multi-instance aggregation and an explicit retention/decay policy are specified.
+
+```mermaid
+erDiagram
+  agent_pool ||--o| model_group_member : "belongs through"
+  model_group ||--o{ model_group_member : contains
+  agent_pool {
+    text agent_id PK
+    text payload
+  }
+  model_group {
+    text group_name PK
+  }
+  model_group_member {
+    text agent_id PK,FK
+    text group_name FK
+  }
+```
 
 ## Verification and gaps
 
