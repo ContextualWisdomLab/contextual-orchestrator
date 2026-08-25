@@ -141,6 +141,50 @@ def test_admin_session_is_opaque_scoped_and_revocable() -> None:
         thread.join(timeout=5)
 
 
+
+def test_admin_session_requests_partition_cache_without_bearer() -> None:
+    """A cookie-authenticated admin POST must not 401 in the cache partitioner.
+
+    Regression: #772's cache partitioner required a bearer header, breaking
+    every state-changing admin route for opaque-session operators after #788.
+    """
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, body, headers = request_json(
+            f"{base}/admin/session",
+            "POST",
+            body={"token": "secret_token"},
+        )
+        assert status == 200
+        set_cookie = headers.get("set-cookie") or headers.get("Set-Cookie") or ""
+        cookie_pair = set_cookie.split(";", 1)[0]
+        status, evaluation, _ = request_json(
+            f"{base}/api/v1/evaluation_runs",
+            "POST",
+            body={"prompts": ["evaluate this"]},
+            headers={"cookie": cookie_pair, "origin": base},
+        )
+        assert status == 201 and evaluation["prompt_count"] == 1
+
+        status, other, other_headers = request_json(
+            f"{base}/admin/session",
+            "POST",
+            body={"token": "secret_token"},
+        )
+        other_cookie = (other_headers.get("set-cookie") or "").split(";", 1)[0]
+        status2, evaluation2, _ = request_json(
+            f"{base}/api/v1/evaluation_runs",
+            "POST",
+            body={"prompts": ["evaluate this"]},
+            headers={"cookie": other_cookie, "origin": base},
+        )
+        assert status2 == 201
+    finally:
+        server.shutdown()
+
 def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
