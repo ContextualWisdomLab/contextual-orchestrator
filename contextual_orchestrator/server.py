@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import secrets
+import socket
 import struct
 import threading
 import time
@@ -49,6 +50,19 @@ from .telemetry import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
+    """Serve slow upstream calls concurrently without a five-connection backlog.
+
+    ``ThreadingHTTPServer`` already isolates each request in a daemon thread,
+    which is appropriate for the gateway's blocking provider transports.  Its
+    inherited five-connection listen backlog is not: a burst of slow provider
+    calls can leave even ``/healthz`` waiting to connect.  Use the operating
+    system's native maximum backlog rather than an application guess.
+    """
+
+    request_queue_size = socket.SOMAXCONN
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -5009,10 +5023,11 @@ def build_server(
                 self._reset_session()
 
         # HTTP/1.1 keep-alive: every response sets Content-Length, so connections
-        # are reusable. The HTTP/1.0 default forces a TCP handshake + TIME_WAIT
-        # socket per request — k6 evidence (loadtests/k6_gateway_smoke.js): at
-        # 200 req/s the CLIENT exhausted local ephemeral ports ("dial: i/o
-        # timeout") long before server capacity was reached.
+        # are reusable while provider calls run. The HTTP/1.0 default forces a
+        # TCP handshake + TIME_WAIT socket per request — k6 evidence
+        # (loadtests/k6_gateway_smoke.js): at 200 req/s the CLIENT exhausted
+        # local ephemeral ports ("dial: i/o timeout") long before server
+        # capacity was reached.
         protocol_version = "HTTP/1.1"
 
         def do_GET(self) -> None:  # noqa: N802
@@ -6956,19 +6971,7 @@ def build_server(
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
 
-    class GatewayHTTPServer(ThreadingHTTPServer):
-        """Threading server with a listen backlog sized for concurrent bursts.
-
-        ``socketserver.TCPServer.request_queue_size`` defaults to 5, so bursty
-        clients (health probes, fan-out SDK retries) overflow the accept queue
-        and see connection resets before any handler runs. k6 evidence
-        (loadtests/k6_gateway_smoke.js): healthz error rate 7.8% at 200 req/s
-        with the default backlog; raising it to 128 removes the resets.
-        """
-
-        request_queue_size = 128
-
-    return GatewayHTTPServer((host, port), Handler)
+    return ResponsiveThreadingHTTPServer((host, port), Handler)
 
 
 def serve(
