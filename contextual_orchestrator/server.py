@@ -144,6 +144,55 @@ class RequestError(Exception):
         self.detail = detail or {}
 
 
+def _request_body_size(headers: Any, max_body_bytes: int) -> int:
+    """Return a safe JSON body length or reject ambiguous HTTP framing.
+
+    The stdlib handler does not decode transfer codings for this API. A single
+    ASCII decimal ``Content-Length`` is therefore the only accepted framing
+    signal; duplicate, comma-joined, negative, malformed, oversized, or
+    transfer-coded requests fail closed before any body read.
+    """
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        transfer_values = get_all("transfer-encoding")
+        length_values = get_all("content-length")
+    else:  # pragma: no cover - production uses email.message.Message headers
+        transfer_value = headers.get("transfer-encoding")
+        length_value = headers.get("content-length")
+        transfer_values = None if transfer_value is None else [transfer_value]
+        length_values = None if length_value is None else [length_value]
+
+    if transfer_values is not None:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoding request framing is not supported",
+        )
+    if length_values is None:
+        return 0
+    if len(length_values) != 1 or "," in length_values[0]:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must appear exactly once",
+        )
+    value = length_values[0].strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must be a non-negative decimal value",
+        )
+    normalized = value.lstrip("0") or "0"
+    maximum = str(max_body_bytes)
+    if len(normalized) > len(maximum) or (
+        len(normalized) == len(maximum) and normalized > maximum
+    ):
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    body_size = int(normalized)
+    return body_size
+
+
 @dataclass
 class SecurityConfig:
     """Runtime safety controls for the stdlib HTTP server."""
@@ -1807,7 +1856,9 @@ def _validate_mode(mode: Any) -> str:
 
 
 
-def _require_pool_model(orchestrator: Any, model_name: str) -> None:
+def _require_pool_model(
+    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
@@ -1817,7 +1868,9 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
-        if getattr(agent, "model", None) == model_name:
+        if getattr(agent, "model", None) == model_name and (
+            required_capability is None or required_capability in getattr(agent, "tags", ())
+        ):
             return
     raise RequestError(
         400,
@@ -2595,6 +2648,7 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     default_attribution = _validate_attribution(body.get("attribution")) or {}
     default_model = str(body.get("model", "contextual-orchestrator"))
     batch: list[BatchRequest] = []
+    seen_custom_ids: set[str] = set()
     for item in raw_requests:
         if not isinstance(item, dict):
             raise RequestError(400, "invalid_request", "each batch request must be an object")
@@ -2602,12 +2656,34 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
         attribution = _validate_attribution(item.get("attribution"))
         merged = {**default_attribution, **(attribution or {})}
         mode = _validate_mode(item.get("mode", "auto"))
-        batch.append(BatchRequest(
-            messages=messages,
-            model=str(item.get("model", default_model)),
-            attribution=merged,
-            mode=mode,
-        ))
+        kwargs: dict[str, Any] = {
+            "messages": messages,
+            "model": str(item.get("model", default_model)),
+            "attribution": merged,
+            "mode": mode,
+        }
+        # Caller-supplied custom_id: without it, results cannot be mapped
+        # back to requests on backends that do not preserve submission
+        # order (the OpenAI Batch contract explicitly does not), because
+        # the submit response never discloses the generated ids. Same
+        # bounds as the OpenAI Batch API's custom_id.
+        custom_id = item.get("custom_id")
+        if custom_id is not None:
+            if not isinstance(custom_id, str) or not custom_id.strip():
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be a non-empty string"
+                )
+            if len(custom_id) > 64:
+                raise RequestError(
+                    400, "invalid_request", "custom_id must be at most 64 characters"
+                )
+            if custom_id in seen_custom_ids:
+                raise RequestError(
+                    400, "invalid_request", "custom_id values must be unique within a batch"
+                )
+            seen_custom_ids.add(custom_id)
+            kwargs["custom_id"] = custom_id
+        batch.append(BatchRequest(**kwargs))
     return batch
 
 
@@ -4191,15 +4267,28 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
     return value
 
 
-def _validate_embeddings_model(body: dict[str, Any]) -> str:
-    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars.
+def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = None) -> str:
+    """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface.
+    form/JS model names bind to the pool id on every surface. An omitted model
+    is resolved by the orchestrator's explicit ``embedding`` capability pool;
+    no consumer-side sentinel model is accepted.
     """
+    if body.get("model") is None:
+        if orchestrator is None:
+            raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
+        try:
+            model = orchestrator.select_capability_agent("embedding").model
+        except (RuntimeError, ValueError) as exc:
+            raise RequestError(
+                503,
+                "embedding_unavailable",
+                "no enabled embedding-capable agent is available",
+            ) from exc
+        body["model"] = model
+        return model
     model = body.get("model")
-    if model is None:
-        raise RequestError(400, "invalid_model", "model is required")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -4441,7 +4530,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Handle authenticated orchestration, administration, and health routes."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -4791,6 +4883,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Apply an authenticated agent-pool worker update."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4814,6 +4907,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Delete an authenticated agent-pool worker resource."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4834,6 +4928,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -5238,10 +5333,10 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
-                    model_name = _validate_embeddings_model(body)
+                    model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5327,16 +5422,8 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    # Require model — silent default to contextual-orchestrator was an
-                    # honesty gap for naruon/batch clients that omit the field.
-                    if "model" not in body:
-                        raise RequestError(
-                            400,
-                            "invalid_model",
-                            "model is required on /v1/batch/embeddings",
-                        )
-                    model_name = _validate_embeddings_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5677,13 +5764,24 @@ def build_server(
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+            try:
+                body_size = _request_body_size(self.headers, security.max_body_bytes)
+            except RequestError:
+                # Do not let a peer reuse a connection after an ambiguous frame.
+                self.close_connection = True
+                raise
             raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                self.close_connection = True
+                raise RequestError(
+                    400,
+                    "invalid_request_framing",
+                    "request body ended before content-length",
+                )
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Suppress default request logging to keep service output structured."""
             return
 
         def _send_error(
