@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
+_MODELS_DEV_URL = "https://models.dev/api.json"
+_MODELS_DEV_OPENCODE_PROVIDER = "opencode"
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -141,18 +143,15 @@ class ProviderDiscoveryError(RuntimeError):
         super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
-def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
+def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
         # constants below, never external input -- but urlopen also honors
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
-    request = urllib.request.Request(
-        url,
-        headers={"authorization": f"{auth_scheme} {api_key}"},
-        method="GET",
-    )
+    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return json.loads(response.read().decode("utf-8"))
@@ -232,15 +231,75 @@ def _deduplicate_discovered_models(
     return list(unique.values())
 
 
-def _pricing_is_free(pricing: dict[str, Any], model_id: str) -> bool:
-    """Classify explicit free variants or provider price vectors that are entirely zero."""
+def _pricing_is_free(pricing: dict[str, Any]) -> bool:
+    """Classify only complete provider price vectors that are entirely zero."""
+    if pricing.get("prompt") is None or pricing.get("completion") is None:
+        return False
     try:
         values = [float(value) for value in pricing.values() if value is not None]
     except (TypeError, ValueError):
         return False
     if values:
         return all(value == 0.0 for value in values)
-    return model_id.endswith((":free", "-free"))
+    return False
+
+
+def _models_dev_cost_is_free(cost: object) -> bool:
+    """Return whether every declared Models.dev monetary component is exactly zero."""
+    if not isinstance(cost, dict) or not cost:
+        return False
+    monetary_values: list[object] = []
+
+    def collect(value: object, key: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                collect(child_value, child_key)
+        elif isinstance(value, list):
+            for child_value in value:
+                collect(child_value, key)
+        elif key not in {"size"}:
+            monetary_values.append(value)
+
+    collect(cost)
+    return bool(monetary_values) and all(
+        _valid_price_component(value) and float(value) == 0.0 for value in monetary_values
+    )
+
+
+def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> Any:
+    """Join an availability catalog with Models.dev cost and modality evidence."""
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    provider_row = metadata.get(provider) if isinstance(metadata, dict) else None
+    models = provider_row.get("models") if isinstance(provider_row, dict) else None
+    if not isinstance(rows, list) or not isinstance(models, dict):
+        return payload
+    enriched: list[Any] = []
+    for row in rows:
+        model_id = row.get("id") if isinstance(row, dict) else None
+        model = models.get(model_id) if isinstance(model_id, str) else None
+        if not isinstance(row, dict) or not isinstance(model, dict):
+            enriched.append(row)
+            continue
+        cost = model.get("cost")
+        pricing: dict[str, str] = {}
+        if isinstance(cost, dict):
+            for source_key, target_key in (("input", "prompt"), ("output", "completion")):
+                value = cost.get(source_key)
+                if _valid_price_component(value):
+                    pricing[target_key] = str(Decimal(str(value)) / Decimal(1_000_000))
+        modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
+        enriched.append(
+            {
+                **row,
+                "pricing": pricing,
+                "architecture": {
+                    "input_modalities": modalities.get("input"),
+                    "output_modalities": modalities.get("output"),
+                },
+                "is_free": _models_dev_cost_is_free(cost),
+            }
+        )
+    return {**payload, "data": enriched}
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
@@ -289,7 +348,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 output_modalities=outputs,
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
-                is_free=_pricing_is_free(pricing, model_id),
+                is_free=(
+                    row["is_free"]
+                    if isinstance(row.get("is_free"), bool)
+                    else _pricing_is_free(pricing)
+                ),
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -336,6 +399,12 @@ def discover_provider_models(
         # subclasses, so a raw provider transport failure can never escape the
         # discovery boundary with provider text attached.
         raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
+    if source.provider_name == "opencode_zen":
+        try:
+            metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            metadata = None
+        payload = _merge_models_dev_metadata(payload, metadata, _MODELS_DEV_OPENCODE_PROVIDER)
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)

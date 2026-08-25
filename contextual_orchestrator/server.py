@@ -6539,7 +6539,8 @@ def build_server(
 
             security.acquire_run_slot()
             try:
-                self._begin_sse()
+                if not self._begin_sse():
+                    return False
                 created_response = _orchestrated_response(
                     model_name,
                     {"answer": ""},

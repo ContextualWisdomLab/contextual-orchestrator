@@ -41,8 +41,9 @@ without breaking a hard-coded group.
    introduced.
 5. Discovery queries the full OpenRouter modality catalog and OpenCode Zen model
    catalog, preserving input/output direction and provider pricing evidence.
-6. Zero provider prices or an explicit provider free suffix are free; missing or
-   malformed prices remain unknown.
+6. Only complete structured price evidence whose monetary components are all
+   exactly zero is free; model-name suffixes, missing prices, and malformed prices
+   remain unknown.
 7. No transient provider model identifier or implicit provider-alias equivalence
    appears in production configuration, source, or deterministic tests.
 
@@ -154,8 +155,11 @@ published optimum.
 
 OpenRouter's current official documentation defines `output_modalities=all`,
 input/output modality metadata, and zero-valued pricing. OpenCode's current Zen
-documentation publishes a mutable model list and `/zen/v1/models`; that mutable
-catalog is why no example model identifier is part of this specification.
+documentation publishes the mutable availability endpoint `/zen/v1/models`, while
+its model documentation states that OpenCode builds its catalog from Models.dev.
+Discovery therefore intersects Zen availability with the structured Models.dev
+`opencode` cost and modality records. A metadata outage preserves availability but
+fails closed to unknown cost; no model-name suffix is price evidence.
 
 ## References
 
@@ -175,5 +179,9 @@ M. W., & Stoica, I. (2024). RouteLLM: Learning to route LLMs with preference
 data [Preprint]. *arXiv*. https://doi.org/10.48550/arXiv.2406.18665
 
 OpenCode. (2026). *Zen*. https://opencode.ai/docs/zen/
+
+OpenCode. (2026). *Models*. https://opencode.ai/v2/docs/models
+
+Models.dev. (2026). *Models.dev API*. https://models.dev/api.json
 
 OpenRouter. (2026). *Models*. https://openrouter.ai/docs/guides/overview/models
