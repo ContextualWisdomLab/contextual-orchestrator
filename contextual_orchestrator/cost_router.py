@@ -457,17 +457,21 @@ class CostRoutingCoordinator:
                     current = unit
                 else:
                     current = candidate
-            if current:
-                chunks.extend(
-                    self._force_token_safe_chunks(
-                        current,
-                        model=model,
-                        max_tokens=max_tokens,
-                        max_chars=max_chars,
-                    )
+            # ``current`` always holds the final candidate here: the regex
+            # above yields only nonempty units, so the last assignment is a
+            # nonempty string.
+            chunks.extend(
+                self._force_token_safe_chunks(
+                    current,
+                    model=model,
+                    max_tokens=max_tokens,
+                    max_chars=max_chars,
                 )
-            if len(chunks) > 1 or (chunks and chunks[0][0] != text):
-                return chunks
+            )
+            # Every recursive call above receives strictly shorter input than
+            # ``text`` (midpoint and early-fit returns cannot reproduce it), so
+            # ``chunks`` always differs from the original single part here.
+            return chunks
 
         midpoint = max(1, len(text) // 2)
         return self._force_token_safe_chunks(
@@ -669,9 +673,9 @@ def _weighted_average_embedding(parts: List[tuple[List[float], int]]) -> List[fl
     if not vectors:
         return []
     dimension = max(len(vector) for vector in vectors)
+    # Every weight clamps to at least 1, so a non-empty part list always
+    # yields a positive total.
     total_weight = sum(max(1, int(weight)) for _vector, weight in parts)
-    if total_weight <= 0:
-        total_weight = len(parts)
     reduced: List[float] = []
     for offset in range(dimension):
         weighted_sum = 0.0
