@@ -39,6 +39,10 @@ def _provider_discovery_error_code(exc: Exception) -> str:
         return "timeout"
     if isinstance(exc, urllib.error.URLError):
         return "transport_error"
+    if isinstance(exc, (ConnectionError, OSError)):
+        # Raw connection resets/failures that are not URLError still count as
+        # transport failures so callers see one stable code, never provider text.
+        return "transport_error"
     if isinstance(exc, ValueError):
         return "invalid_response"
     return "provider_error"
@@ -278,7 +282,10 @@ def discover_provider_models(
         url = f"{url}?task={source.task_filter}"
     try:
         payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:  # pragma: no cover - network path
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        # OSError covers ConnectionError/reset failures that are not URLError
+        # subclasses, so a raw provider transport failure can never escape the
+        # discovery boundary with provider text attached.
         raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
     if source.style == "bytez":
         return _parse_bytez(payload, source)
