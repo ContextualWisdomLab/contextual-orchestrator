@@ -2049,10 +2049,18 @@ class TaskOrchestrator:
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
 
-    def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
+    def would_route(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        model_name: str = "contextual-orchestrator",
+    ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
-        return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
+        return mode == "route" or (
+            mode == "auto"
+            and (model_name != "contextual-orchestrator" or not self._needs_workflow(text))
+        )
 
     def stream_route(
         self,
@@ -2886,6 +2894,16 @@ class TaskOrchestrator:
             if model_name is not None and model_name not in exact_models
             else None
         )
+        if model_name is not None and not any(
+            agent.model == model_name
+            or (
+                agent.group_name
+                and requested_group is not None
+                and canonical_group_name(agent.group_name) == requested_group
+            )
+            for agent in self.candidates
+        ):
+            raise ValueError(f"requested model {model_name!r} is not configured")
         ranked = [
             agent
             for agent in self._ranked_agents("", capability)

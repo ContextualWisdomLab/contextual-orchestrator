@@ -92,6 +92,15 @@ def test_would_route_true_for_route_false_for_conduct() -> None:
     assert orchestrator.would_route(messages, "conduct") is False
 
 
+def test_would_route_explicit_group_without_buffering_complex_auto_request() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("group_member", "m-model", group_name="stream_group")]
+    )
+    messages = [{"role": "user", "content": "research and compare several alternatives"}]
+    assert orchestrator.would_route(messages, "auto", "stream-group") is True
+    assert orchestrator.would_route(messages, "conduct", "stream-group") is False
+
+
 def test_stream_route_yields_and_persists() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))])
     deltas = list(orchestrator.stream_route([{"role": "user", "content": "stream this please"}]))

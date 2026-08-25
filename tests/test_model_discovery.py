@@ -395,6 +395,23 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
     assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known]
 
 
+def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
+    price_book = PriceBook(InMemoryConfigStore())
+    discovered_price = DiscoveredModel(
+        "openrouter",
+        "priced-by-discovery",
+        "KEY_NAME",
+        "https://openrouter.ai/api/v1",
+        "Bearer",
+        prompt_price_per_1k=0.2,
+        completion_price_per_1k=0.4,
+    )
+
+    assert select_top_n_cheapest_discovered_agents([discovered_price], price_book, 1) == [
+        discovered_price
+    ]
+
+
 def test_select_top_n_cheapest_discovered_agents_zero_limit_returns_empty() -> None:
     price_book = PriceBook(InMemoryConfigStore())
     model = DiscoveredModel("openai", "a", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer")
