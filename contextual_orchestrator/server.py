@@ -6295,11 +6295,21 @@ def build_server(
             self._authorized_purpose = effective_purpose
 
         def _cache_partition(self) -> str:
-            """Return a non-secret cache partition for the authenticated principal."""
+            """Return a non-secret cache partition for the authenticated principal.
+
+            Bearer-authenticated callers partition by their bearer token.
+            Browser admin sessions authenticate without a bearer header, so an
+            active opaque session id partitions those requests instead — the
+            session id is random per login, so cross-session cache reuse stays
+            impossible while cookie-authenticated operators still get hits
+            within their own session.
+            """
             raw = self.headers.get("authorization", "")
             token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
-            token = token or security._extract_admin_session_cookie(self.headers)
-            if not token:  # pragma: no cover - _authorize rejects this first
+            if not token:
+                session_id = security._extract_admin_session_cookie(self.headers)
+                if session_id and security._admin_session_is_active(session_id):
+                    return hashlib.sha256(f"admin-session:{session_id}".encode("utf-8")).hexdigest()
                 raise RequestError(401, "unauthorized", "bearer token is required")
             return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
