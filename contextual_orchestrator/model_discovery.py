@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+_CAPABILITY_NAMES = {"embeddings": "embedding"}
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -69,8 +70,15 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openrouter",
         credential_name="OPENROUTER_API_KEY",
-        list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
+        list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
+        capabilities=("chat",),
+    ),
+    ProviderModelSource(
+        provider_name="opencode_zen",
+        credential_name="OPENCODE_ZEN_API_KEY",
+        list_url="https://opencode.ai/zen/v1/models",
+        chat_base_url="https://opencode.ai/zen/v1",
         capabilities=("chat",),
     ),
     ProviderModelSource(
@@ -110,9 +118,12 @@ class DiscoveredModel:
     chat_base_url: str
     auth_scheme: str
     capabilities: tuple[str, ...] = ()
+    input_modalities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
+    is_free: bool = False
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -151,6 +162,17 @@ def _price_per_1k(value: Any) -> float | None:
         return None
 
 
+def _pricing_is_free(pricing: dict[str, Any], model_id: str) -> bool:
+    """Classify explicit free variants or provider price vectors that are entirely zero."""
+    try:
+        values = [float(value) for value in pricing.values() if value is not None]
+    except (TypeError, ValueError):
+        return False
+    if values:
+        return all(value == 0.0 for value in values)
+    return model_id.endswith((":free", "-free"))
+
+
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
     rows = payload.get("data") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
@@ -161,6 +183,18 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if type(model_id) is not str or not model_id:
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
+        architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        inputs = tuple(
+            value for value in (architecture.get("input_modalities") or ()) if isinstance(value, str)
+        )
+        outputs = tuple(
+            value for value in (architecture.get("output_modalities") or ()) if isinstance(value, str)
+        )
+        capabilities = tuple(
+            dict.fromkeys(_CAPABILITY_NAMES.get(value, value) for value in (*source.capabilities, *inputs, *outputs))
+        )
+        prompt_price = _price_per_1k(pricing.get("prompt"))
+        completion_price = _price_per_1k(pricing.get("completion"))
         discovered.append(
             DiscoveredModel(
                 provider_name=source.provider_name,
@@ -168,9 +202,12 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
-                capabilities=source.capabilities,
-                prompt_price_per_1k=_price_per_1k(pricing.get("prompt")),
-                completion_price_per_1k=_price_per_1k(pricing.get("completion")),
+                capabilities=capabilities,
+                input_modalities=inputs,
+                output_modalities=outputs,
+                prompt_price_per_1k=prompt_price,
+                completion_price_per_1k=completion_price,
+                is_free=_pricing_is_free(pricing, model_id),
             )
         )
     return discovered
@@ -261,25 +298,34 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
-        tags=("discovered", *discovered.capabilities),
+        tags=(
+            "discovered",
+            *discovered.capabilities,
+            *(f"input:{value}" for value in discovered.input_modalities),
+            *(f"output:{value}" for value in discovered.output_modalities),
+        ),
         priority=priority,
         disabled=True,
     )
+
+
+def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
+    """Return models whose provider metadata identifies zero-cost inference."""
+    return [model for model in discovered if model.is_free]
 
 
 def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
     """Write every discovered model's known pricing into the price book.
 
     Returns the number of price rows written. A model without provider-reported
-    pricing is skipped rather than defaulted to 0 -- an unpriced model already
-    costs 0 under ``PriceBook.compute_cost``'s "explicit, not silently expensive"
-    contract, so writing a fabricated 0 row here would just hide that signal.
+    pricing is skipped rather than defaulted to 0. An explicitly free model is
+    recorded as zero; an unknown-price model remains unknown.
     """
     from .cost_ledger import PriceEntry
 
     written = 0
     for model in discovered:
-        if model.prompt_price_per_1k is None and model.completion_price_per_1k is None:
+        if model.prompt_price_per_1k is None and model.completion_price_per_1k is None and not model.is_free:
             continue
         price_book.set_price(
             PriceEntry(
@@ -301,20 +347,24 @@ def select_cheapest_discovered_agent(
 
     Reuses :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`, the
     existing cost-optimizing upstream selector. Call :func:`refresh_price_book`
-    first so discovered pricing is visible; an unpriced candidate costs ``0``
-    under that selector's documented contract and is treated as free, not
-    unknown -- so a genuinely unpriced provider (e.g. Bytez, priced by
-    GPU-second rather than per token) will always look cheapest here. Fine for
-    "auto-pick something free to try," but callers doing real cost comparison
-    should refresh pricing for every candidate they care about first.
+    first so discovered pricing is visible. Unknown-price candidates are
+    excluded rather than silently treated as free.
     """
-    if not discovered:
+    priced = [
+        model
+        for model in discovered
+        if model.is_free
+        or model.prompt_price_per_1k is not None
+        or model.completion_price_per_1k is not None
+        or price_book.get_price(model.provider_name, model.model_id) is not None
+    ]
+    if not priced:
         return None
-    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in discovered]
+    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in priced]
     winner = cheapest_upstream(candidates, price_book)
     if winner is None:
         return None
-    for model in discovered:
+    for model in priced:
         if model.provider_name == winner["provider"] and model.model_id == winner["model"]:
             return model
     return None  # pragma: no cover - winner always comes from candidates
@@ -333,7 +383,22 @@ def select_top_n_cheapest_discovered_agents(
         return []
 
     def _cost(model: DiscoveredModel) -> float:
+        if (
+            not model.is_free
+            and model.prompt_price_per_1k is None
+            and model.completion_price_per_1k is None
+            and price_book.get_price(model.provider_name, model.model_id) is None
+        ):
+            return float("inf")
         cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
         return cost
 
-    return sorted(discovered, key=_cost)[:limit]
+    known_price = [
+        model
+        for model in discovered
+        if model.is_free
+        or model.prompt_price_per_1k is not None
+        or model.completion_price_per_1k is not None
+        or price_book.get_price(model.provider_name, model.model_id) is not None
+    ]
+    return sorted(known_price, key=_cost)[:limit]

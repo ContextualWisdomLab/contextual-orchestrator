@@ -31,6 +31,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .tool_fallback import ToolFallbackStoppedError
+from .model_group import canonical_group_name
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -118,7 +119,7 @@ ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
-ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
+ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions", "group_name"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
     "model",
@@ -130,7 +131,10 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "disabled",
     "provider_name",
     "provider_exclusions",
+    "group_name",
 }
+ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
+ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
 
 
 class RequestError(Exception):
@@ -1855,10 +1859,40 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
+    """Validate the required trust-boundary fields for media/rerank passthrough."""
+    model = body.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    required_strings = {
+        "/v1/images/generations": ("prompt",),
+        "/v1/videos": ("prompt",),
+        "/v1/audio/speech": ("input", "voice"),
+        "/v1/rerank": ("query",),
+    }.get(path, ())
+    for field in required_strings:
+        if not isinstance(body.get(field), str) or not body[field].strip():
+            raise RequestError(400, f"invalid_{field}", f"{field} must be a non-empty string")
+    if path == "/v1/audio/transcriptions":
+        audio = body.get("input_audio")
+        if not isinstance(audio, dict) or not all(
+            isinstance(audio.get(field), str) and audio[field] for field in ("data", "format")
+        ):
+            raise RequestError(400, "invalid_input_audio", "input_audio.data and input_audio.format are required")
+    if path == "/v1/rerank":
+        documents = body.get("documents")
+        if not isinstance(documents, list) or not documents:
+            raise RequestError(400, "invalid_documents", "documents must be a non-empty array")
+    if path == "/v1/audio/generations":
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise RequestError(400, "invalid_messages", "messages must be a non-empty array")
+
+
 
 def _require_pool_model(
     orchestrator: Any, model_name: str, *, required_capability: str | None = None
-) -> None:
+) -> str:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
@@ -1871,7 +1905,22 @@ def _require_pool_model(
         if getattr(agent, "model", None) == model_name and (
             required_capability is None or required_capability in getattr(agent, "tags", ())
         ):
-            return
+            return model_name
+    try:
+        group_name = canonical_group_name(model_name)
+    except (TypeError, ValueError):
+        group_name = ""
+    members = [
+        agent
+        for agent in agents
+        if group_name
+        and getattr(agent, "group_name", "") == group_name
+        and (required_capability is None or required_capability in getattr(agent, "tags", ()))
+    ]
+    if members:
+        ranked_ids = orchestrator._group_router.ranked_member_ids([agent.id for agent in members])
+        by_id = {agent.id: agent for agent in members}
+        return by_id[ranked_ids[0]].model
     raise RequestError(
         400,
         "invalid_model",
@@ -4632,6 +4681,16 @@ def build_server(
                         "page_size": page_size,
                     })
                     return
+                if path == "/api/v1/model_groups":
+                    items = orchestrator.list_model_groups()
+                    self._send({"items": items, "total_count": len(items)})
+                    return
+                if path.startswith("/api/v1/model_groups/"):
+                    try:
+                        self._send(orchestrator.get_model_group(urllib.parse.unquote(path.rsplit("/", 1)[-1])))
+                    except KeyError:
+                        self._send_error(404, "model_group_not_found", "model group not found")
+                    return
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
                     return
@@ -4896,6 +4955,13 @@ def build_server(
                     updated = orchestrator.patch_agent(segments[3], segments[-1], body)
                     self._send(updated, 200)
                     return
+                if path.startswith("/api/v1/model_groups/"):
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_PATCH_KEYS)
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    orchestrator.get_model_group(name)
+                    self._send(orchestrator.set_model_group(name, body.get("member_agent_ids")))
+                    return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
@@ -4917,6 +4983,10 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent delete path missing worker agent")
                     self._send(orchestrator.remove_agent(segments[3], segments[-1]), 200)
                     return
+                if path.startswith("/api/v1/model_groups/"):
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    self._send(orchestrator.delete_model_group(name), 200)
+                    return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
@@ -4931,7 +5001,7 @@ def build_server(
             """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
+                scope = "admin" if path == "/admin/simulate" or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups")) else "inference"
                 self._authorize(scope)
                 body = self._read_json()
 
@@ -4941,6 +5011,53 @@ def build_server(
                         raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
                     _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
                     self._send(orchestrator.add_agent(segments[3], body), 201)
+                    return
+                if path == "/api/v1/model_groups":
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_KEYS)
+                    group_name = body.get("group_name")
+                    try:
+                        orchestrator.get_model_group(group_name)
+                    except KeyError:
+                        pass
+                    else:
+                        raise RequestError(409, "model_group_exists", "model group already exists; use PATCH")
+                    try:
+                        created_group = orchestrator.set_model_group(group_name, body.get("member_agent_ids"))
+                    except KeyError as exc:
+                        raise RequestError(404, "resource_not_found", str(exc)) from exc
+                    self._send(created_group, 201)
+                    return
+
+                capability_routes = {
+                    "/v1/images/generations": ("image", "images/generations", False),
+                    "/v1/videos": ("video", "videos", False),
+                    "/v1/audio/speech": ("speech", "audio/speech", True),
+                    "/v1/audio/transcriptions": ("transcription", "audio/transcriptions", False),
+                    "/v1/rerank": ("rerank", "rerank", False),
+                    "/v1/audio/generations": ("audio", "chat/completions", False),
+                }
+                if path in capability_routes:
+                    _validate_capability_request(path, body)
+                    capability, endpoint, binary = capability_routes[path]
+                    try:
+                        result = self._run(
+                            lambda: orchestrator.proxy_capability(
+                                body, capability=capability, endpoint=endpoint, binary=binary
+                            )
+                        )
+                    except ValueError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
+                    except RuntimeError as exc:
+                        raise RequestError(
+                            503,
+                            "capability_unavailable",
+                            f"no enabled {capability}-capable model group member is available",
+                        ) from exc
+                    if binary:
+                        raw, content_type = result
+                        self._send_bytes(raw, content_type)
+                    else:
+                        self._send(result)
                     return
 
                 if path == "/v1/completions":
@@ -5265,7 +5382,7 @@ def build_server(
                     if frequency_penalty is not None:
                         model_client.default_frequency_penalty = frequency_penalty
                     try:
-                        if stream and orchestrator.would_route(messages, mode):
+                        if stream and orchestrator.would_route(messages, mode, model_name):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
@@ -5336,7 +5453,9 @@ def build_server(
                     model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
+                    upstream_model_name = _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5389,7 +5508,7 @@ def build_server(
                     started_at = time.perf_counter()
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
-                        model=model_name,
+                        model=upstream_model_name,
                         attribution=attribution,
                         metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                     ))
@@ -5423,7 +5542,9 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
                     model_name = _validate_embeddings_model(body, orchestrator)
-                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
+                    upstream_model_name = _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5444,7 +5565,7 @@ def build_server(
                         submit_metadata["endpoint_alias"] = endpoint_alias
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
-                        model=model_name,
+                        model=upstream_model_name,
                         attribution=attribution,
                         metadata=submit_metadata,
                     ))
@@ -5811,6 +5932,14 @@ def build_server(
             self.end_headers()
             self.wfile.write(raw)
 
+        def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+            self.send_response(status)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(payload)))
+            self._send_security_headers()
+            self.end_headers()
+            self.wfile.write(payload)
+
         def _send_sse(self, body: str, status: int = 200) -> None:
             raw = body.encode("utf-8")
             self.send_response(status)
@@ -5855,7 +5984,9 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages, workflow_run_id=run_id, model_name=model_name
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except ToolFallbackStoppedError as exc:

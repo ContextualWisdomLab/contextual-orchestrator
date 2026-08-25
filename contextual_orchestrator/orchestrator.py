@@ -33,6 +33,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .model_group import ModelGroupRouter, canonical_group_name
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -50,6 +51,9 @@ ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
+MODEL_CAPABILITIES = frozenset(
+    {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
+)
 MAX_PROVIDER_PROBE_TIMEOUT = 30.0
 _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "ConnectionError",
@@ -270,9 +274,16 @@ class ModelAgent:
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
     auth_scheme: str = "Bearer"
+    # Optional measured-routing group: agents sharing a canonical group name are
+    # one logical model whose members are ordered by observed speed/stability
+    # (see model_group.ModelGroupRouter and planning ADR 0026).
+    # Empty string means the agent is ungrouped.
+    group_name: str = ""
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        if self.group_name:
+            object.__setattr__(self, "group_name", canonical_group_name(self.group_name))
         if type(self.local_credential_key) is not str:
             raise TypeError("local_credential_key must be a string")
         if self.local_credential_key and urlparse(self.base_url).scheme != "local":
@@ -295,6 +306,7 @@ class ModelAgent:
             "provider_exclusions": list(self.provider_exclusions),
             "local_credential_key": self.local_credential_key,
             "auth_scheme": self.auth_scheme,
+            "group_name": self.group_name,
         }
 
     @property
@@ -324,6 +336,7 @@ class ModelAgent:
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
             auth_scheme=value.get("auth_scheme", "Bearer"),
+            group_name=value.get("group_name", ""),
         )
 
 
@@ -1202,6 +1215,25 @@ class ModelClient:
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             return self._send_raw_with_retry(agent, endpoint, payload, destination)
 
+    def proxy_send_bytes(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> tuple[bytes, str]:
+        """Passthrough a provider response whose body is binary media."""
+        if agent.base_url.startswith("mock://"):
+            return b"mock audio", "audio/mpeg"
+        api_key = _provider_credential(agent)  # pragma: no cover
+        headers = {"content-type": "application/json"}  # pragma: no cover
+        if api_key:  # pragma: no cover
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(  # pragma: no cover
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
+            return response.read(), response.headers.get_content_type()
+
     def _send_raw_with_retry(
         self,
         agent: ModelAgent,
@@ -1556,29 +1588,67 @@ def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
 
 
 class _AgentPoolStore:
-    """Durable agent-pool (model group) storage: operator changes survive restarts.
-
-    ponytail: one sqlite table keyed by agent id, JSON payloads, thread-safe. The
-    seed agents file stays the bootstrap; stored rows overlay it at startup.
-    """
+    """Durable, normalized agent and model-group storage."""
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._path = path
         conn = sqlite3.connect(self._path)
         try:
+            conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("CREATE TABLE IF NOT EXISTS agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS model_group (group_name TEXT PRIMARY KEY)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS model_group_member ("
+                "agent_id TEXT PRIMARY KEY REFERENCES agent_pool(agent_id) ON DELETE CASCADE, "
+                "group_name TEXT NOT NULL REFERENCES model_group(group_name) ON DELETE CASCADE)"
+            )
+            self._migrate_legacy_groups(conn)
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _migrate_legacy_groups(conn: sqlite3.Connection) -> None:
+        """Move legacy payload group names into the normalized membership relation."""
+        for agent_id, raw_payload in conn.execute("SELECT agent_id, payload FROM agent_pool"):
+            payload = json.loads(raw_payload)
+            group_name = payload.pop("group_name", "")
+            if not group_name:
+                continue
+            group_name = canonical_group_name(group_name)
+            conn.execute("INSERT OR IGNORE INTO model_group (group_name) VALUES (?)", (group_name,))
+            conn.execute(
+                "INSERT OR REPLACE INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
+                (agent_id, group_name),
+            )
+            conn.execute(
+                "UPDATE agent_pool SET payload = ? WHERE agent_id = ?",
+                (json.dumps(payload, ensure_ascii=False), agent_id),
+            )
 
     def save(self, agent: "ModelAgent") -> None:
         with self._lock:
             conn = sqlite3.connect(self._path)
             try:
+                conn.execute("PRAGMA foreign_keys = ON")
+                payload = agent.to_config()
+                payload.pop("group_name", None)
                 conn.execute(
-                    "INSERT OR REPLACE INTO agent_pool (agent_id, payload) VALUES (?, ?)",
-                    (agent.id, json.dumps(agent.to_config(), ensure_ascii=False)),
+                    "INSERT INTO agent_pool (agent_id, payload) VALUES (?, ?) "
+                    "ON CONFLICT(agent_id) DO UPDATE SET payload = excluded.payload",
+                    (agent.id, json.dumps(payload, ensure_ascii=False)),
+                )
+                conn.execute("DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,))
+                if agent.group_name:
+                    conn.execute("INSERT OR IGNORE INTO model_group (group_name) VALUES (?)", (agent.group_name,))
+                    conn.execute(
+                        "INSERT INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
+                        (agent.id, agent.group_name),
+                    )
+                conn.execute(
+                    "DELETE FROM model_group WHERE NOT EXISTS ("
+                    "SELECT 1 FROM model_group_member WHERE model_group_member.group_name = model_group.group_name)"
                 )
                 conn.commit()
             finally:
@@ -1588,10 +1658,19 @@ class _AgentPoolStore:
         with self._lock:
             conn = sqlite3.connect(self._path)
             try:
-                rows = conn.execute("SELECT payload FROM agent_pool ORDER BY agent_id").fetchall()
+                rows = conn.execute(
+                    "SELECT agent_pool.payload, model_group_member.group_name "
+                    "FROM agent_pool LEFT JOIN model_group_member USING (agent_id) "
+                    "ORDER BY agent_pool.agent_id"
+                ).fetchall()
             finally:
                 conn.close()
-        return [ModelAgent.from_dict(json.loads(row[0])) for row in rows]
+        values = []
+        for raw_payload, group_name in rows:
+            payload = json.loads(raw_payload)
+            payload["group_name"] = group_name or ""
+            values.append(ModelAgent.from_dict(payload))
+        return values
 
     def close(self) -> None:
         """Compatibility no-op: agent-pool operations use short-lived sqlite handles."""
@@ -1740,6 +1819,14 @@ class TaskOrchestrator:
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
+        # Measured speed/stability routing inside model groups (global: every
+        # selection path below funnels through _ranked_agents). Ledger state is
+        # process-local by design: it reflects this instance's observed traffic
+        # and resets on restart, never carrying stale evidence across pools.
+        self._group_router = ModelGroupRouter()
+        for grouped in self.candidates:
+            if grouped.group_name:
+                self._group_router.register_member(grouped.id)
         self.client = client or ModelClient()
         if (
             isinstance(tool_retry_attempts, bool)
@@ -1916,44 +2003,91 @@ class TaskOrchestrator:
             raise ValueError("requested model must be a configured non-empty string")
         matches = [candidate for candidate in self.candidates if candidate.model == requested_model]
         if not matches:
+            try:
+                requested_group = canonical_group_name(requested_model)
+            except ValueError:
+                requested_group = ""
+            matches = [
+                candidate
+                for candidate in self._ranked_agents("", "worker")
+                if candidate.group_name
+                and canonical_group_name(candidate.group_name) == requested_group
+            ]
+        if not matches:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, mode, model_name)
+        key = self._cache_key(messages, mode, model_name)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, mode, model_name)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
-        if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages)
-        return self.conduct(messages)
+        if mode == "route" or (
+            mode == "auto"
+            and (model_name != "contextual-orchestrator" or not self._needs_workflow(text))
+        ):
+            return self.route_once(messages, model_name=model_name)
+        return self.conduct(messages, model_name=model_name)
 
-    def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
+    def would_route(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        model_name: str = "contextual-orchestrator",
+    ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
-        return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
+        return mode == "route" or (
+            mode == "auto"
+            and (model_name != "contextual-orchestrator" or not self._needs_workflow(text))
+        )
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        *,
+        model_name: str = "contextual-orchestrator",
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
-            parts.append(delta)
-            yield delta
+        started_at = time.perf_counter()
+        try:
+            for delta in self.client.stream_chat(agent, messages):
+                parts.append(delta)
+                yield delta
+        except Exception:
+            if agent.group_name:
+                self._group_router.observe_failure(agent.id)
+            raise
+        if agent.group_name:
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -1981,17 +2115,33 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        model_name: str = "contextual-orchestrator",
+    ) -> str:
+        payload = json.dumps(
+            {"mode": mode, "model": model_name, "messages": messages},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(messages, mode=mode, model_name=model_name)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -2278,6 +2428,9 @@ class TaskOrchestrator:
             patched = replace(patched, tags=tuple(patch["tags"]))
         if "provider_exclusions" in patch:
             patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
+        if "group_name" in patch:
+            group_name = str(patch["group_name"])
+            patched = replace(patched, group_name=canonical_group_name(group_name) if group_name else "")
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -2285,6 +2438,12 @@ class TaskOrchestrator:
             raise ValueError("cannot disable the last enabled agent")
         self.candidates = updated_candidates
         self.agents = updated_agents
+        if patched.group_name != current.group_name:
+            self._group_router.reset_members({worker_agent_id})
+        grouped_ids = {agent.id for agent in updated_candidates if agent.group_name}
+        for agent_id in grouped_ids:
+            self._group_router.register_member(agent_id)
+        self._group_router.forget_members(grouped_ids)
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self._append_audit_event(
@@ -2315,6 +2474,91 @@ class TaskOrchestrator:
             )
         return self._agent_to_admin_payload(patched)
 
+    def list_model_groups(self) -> list[dict[str, Any]]:
+        """Return operator-defined logical models and measured member evidence."""
+        names = sorted({canonical_group_name(agent.group_name) for agent in self.candidates if agent.group_name})
+        return [self.get_model_group(name) for name in names]
+
+    def get_model_group(self, group_name: str) -> dict[str, Any]:
+        """Return one logical model group or raise ``KeyError`` when absent."""
+        name = canonical_group_name(group_name)
+        members = [agent for agent in self.candidates if agent.group_name and canonical_group_name(agent.group_name) == name]
+        if not members:
+            raise KeyError(name)
+        ranked_ids = self._group_router.ranked_member_ids([agent.id for agent in members])
+        return {
+            "group_name": name,
+            "member_agent_ids": ranked_ids,
+            "enabled_member_count": sum(1 for agent in members if not agent.disabled),
+            "capability_coverage": {
+                capability: sum(capability in agent.tags for agent in members)
+                for capability in sorted(MODEL_CAPABILITIES)
+                if any(capability in agent.tags for agent in members)
+            },
+            "members": [self._agent_to_admin_payload(self._agent(agent_id)) for agent_id in ranked_ids],
+        }
+
+    def set_model_group(self, group_name: str, member_agent_ids: list[str]) -> dict[str, Any]:
+        """Create or replace a group membership using configured agent identifiers."""
+        name = canonical_group_name(group_name)
+        if not member_agent_ids or any(type(agent_id) is not str for agent_id in member_agent_ids):
+            raise ValueError("member_agent_ids must be a non-empty list of strings")
+        if len(member_agent_ids) != len(set(member_agent_ids)):
+            raise ValueError("member_agent_ids must not contain duplicates")
+        requested = set(member_agent_ids)
+        known = {agent.id for agent in self.candidates}
+        previous = {
+            agent.id
+            for agent in self.candidates
+            if agent.group_name and canonical_group_name(agent.group_name) == name
+        }
+        missing = sorted(requested - known)
+        if missing:
+            raise KeyError(",".join(missing))
+        previous_candidates = self.candidates
+        updated = [
+            replace(agent, group_name=name)
+            if agent.id in requested
+            else replace(agent, group_name="")
+            if agent.group_name and canonical_group_name(agent.group_name) == name
+            else agent
+            for agent in self.candidates
+        ]
+        self.candidates = updated
+        self.agents = [agent for agent in updated if not agent.disabled]
+        changed = {
+            before.id
+            for before, after in zip(previous_candidates, updated)
+            if before.group_name != after.group_name
+        }
+        self._group_router.reset_members(changed)
+        for agent in updated:
+            if agent.id in requested:
+                self._group_router.register_member(agent.id)
+                if self._pool_store is not None:
+                    self._pool_store.save(agent)
+            elif agent.id in previous and self._pool_store is not None:
+                self._pool_store.save(agent)
+        self._group_router.forget_members({agent.id for agent in updated if agent.group_name})
+        self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
+        return self.get_model_group(name)
+
+    def delete_model_group(self, group_name: str) -> dict[str, Any]:
+        """Delete a logical group while retaining its provider agents."""
+        current = self.get_model_group(group_name)
+        name = current["group_name"]
+        member_ids = set(current["member_agent_ids"])
+        self._group_router.reset_members(member_ids)
+        self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
+        if self._pool_store is not None:
+            for agent in self.candidates:
+                if agent.id in member_ids:
+                    self._pool_store.save(agent)
+        self._group_router.forget_members({agent.id for agent in self.candidates if agent.group_name})
+        self._append_audit_event("model_group_deleted", {"group_name": name})
+        return {"group_name": name, "deleted": True}
+
     def add_agent(self, agent_pool_id: str, value: dict[str, Any]) -> dict[str, Any]:
         """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""
         if agent_pool_id != "default":  # pragma: no cover
@@ -2332,6 +2576,8 @@ class TaskOrchestrator:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        if agent.group_name:
+            self._group_router.register_member(agent.id)
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
@@ -2405,10 +2651,15 @@ class TaskOrchestrator:
         )
         return {"removed": worker_agent_id}
 
-    def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def route_once(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
         start = time.perf_counter()
         answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
         latency_ms = (time.perf_counter() - start) * 1000
@@ -2433,11 +2684,18 @@ class TaskOrchestrator:
             "trace": [row],
         }
 
-    def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def conduct(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
         plan_source = "template"
-        if self.policy.workflow_planning == "generated":
+        if model_name != "contextual-orchestrator":
+            steps = self._plan(task, model_name=model_name)
+        elif self.policy.workflow_planning == "generated":
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
@@ -2569,11 +2827,14 @@ class TaskOrchestrator:
             raise ValueError("final step must produce the answer")
         return steps
 
-    def _plan(self, task: str) -> list[WorkflowStep]:
-        thinker = self._select_agent(task, "thinker").id
-        worker = self._select_agent(task, "worker").id
-        verifier = self._select_agent(task, "verifier").id
-        synthesizer = self._select_agent(task, "synthesizer").id
+    def _plan(
+        self, task: str, *, model_name: str = "contextual-orchestrator"
+    ) -> list[WorkflowStep]:
+        requested = self._requested_agent(model_name)
+        thinker = (requested or self._select_agent(task, "thinker")).id
+        worker = (requested or self._select_agent(task, "worker")).id
+        verifier = (requested or self._select_agent(task, "verifier")).id
+        synthesizer = (requested or self._select_agent(task, "synthesizer")).id
         return [
             WorkflowStep(0, "thinker", thinker, "Decompose the task and identify the best execution strategy."),
             WorkflowStep(1, "worker", worker, "Execute the core task using the plan.", (0,)),
@@ -2594,9 +2855,24 @@ class TaskOrchestrator:
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
-        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
+        """Rank logical model groups, then measured provider members within each group."""
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        static = sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        groups: dict[str, list[ModelAgent]] = {}
+        for agent in static:
+            key = canonical_group_name(agent.group_name) if agent.group_name else f"agent:{agent.id}"
+            groups.setdefault(key, []).append(agent)
+        ranked: list[ModelAgent] = []
+        for members in groups.values():
+            if not members[0].group_name:
+                ranked.extend(members)
+                continue
+            eligible = [member for member in members if role not in member.provider_exclusions]
+            excluded = [member for member in members if role in member.provider_exclusions]
+            for partition in (eligible, excluded):
+                by_id = {member.id: member for member in partition}
+                ranked.extend(by_id[member_id] for member_id in self._group_router.ranked_member_ids(list(by_id)))
+        return ranked
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:
         selected = self._ranked_agents(text, role)[0]
@@ -2606,21 +2882,86 @@ class TaskOrchestrator:
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
 
-    def select_capability_agent(self, capability: str) -> ModelAgent:
-        """Select an enabled agent carrying an explicit capability tag."""
+    def _capability_agents(self, capability: str, model_name: str | None = None) -> list[ModelAgent]:
+        """Return measured candidates supporting a capability, optionally within one group."""
         capability = capability.strip().lower()
+        capability = {"embeddings": "embedding"}.get(capability, capability)
         if not capability:
             raise ValueError("capability must be a non-empty string")
+        exact_models = {agent.model for agent in self.candidates}
+        requested_group = (
+            canonical_group_name(model_name)
+            if model_name is not None and model_name not in exact_models
+            else None
+        )
+        if model_name is not None and not any(
+            agent.model == model_name
+            or (
+                agent.group_name
+                and requested_group is not None
+                and canonical_group_name(agent.group_name) == requested_group
+            )
+            for agent in self.candidates
+        ):
+            raise ValueError(f"requested model {model_name!r} is not configured")
         ranked = [
             agent
             for agent in self._ranked_agents("", capability)
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions
+            and (
+                model_name is None or agent.model == model_name
+                or (
+                    agent.group_name
+                    and requested_group is not None
+                    and canonical_group_name(agent.group_name) == requested_group
+                )
+            )
         ]
         if not ranked:
             raise RuntimeError(f"no enabled agent available for capability={capability}")
-        return ranked[0]
+        return ranked
+
+    def select_capability_agent(self, capability: str, model_name: str | None = None) -> ModelAgent:
+        """Select a measured member supporting a capability, optionally within one group."""
+        return self._capability_agents(capability, model_name)[0]
+
+    def proxy_capability(
+        self,
+        body: dict[str, Any],
+        *,
+        capability: str,
+        endpoint: str,
+        binary: bool = False,
+    ) -> dict[str, Any] | tuple[bytes, str]:
+        """Route one capability request with measured group-member failover."""
+        requested_model = body.get("model")
+        candidates = self._capability_agents(capability, requested_model)
+        last_error: Exception | None = None
+        for agent in candidates:
+            payload = {**body, "model": agent.model}
+            provider_endpoint = (
+                "images"
+                if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                else endpoint
+            )
+            started_at = time.perf_counter()
+            try:
+                result = (
+                    self.client.proxy_send_bytes(agent, provider_endpoint, payload)
+                    if binary
+                    else self.client.proxy_send(agent, provider_endpoint, payload)
+                )
+            except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
+                last_error = exc
+                if agent.group_name:
+                    self._group_router.observe_failure(agent.id)
+                continue
+            if agent.group_name:
+                self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            return result
+        raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
@@ -2638,12 +2979,17 @@ class TaskOrchestrator:
             retry_attempt = 0
             while True:
                 try:
+                    attempt_start = time.perf_counter()
                     output = self.client.chat(agent, messages)
                 except Exception as exc:
+                    if agent.group_name:
+                        self._group_router.observe_failure(agent.id)
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
                     decision = classify_tool_failure(exc)
                     action = decision.action
+                    # A failed attempt is one Bernoulli stability observation
+                    # for measured group routing regardless of what happens next.
                     if (
                         action is ToolFallbackAction.RETRY_SAME_AGENT
                         and retry_attempt < retry_limit
@@ -2670,6 +3016,12 @@ class TaskOrchestrator:
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
                     break
+                # Success: one Bernoulli observation plus the measured latency
+                # feeding the group router's EWMA (Jacobson 1988 gain).
+                if agent.group_name:
+                    self._group_router.observe_success(
+                        agent.id, time.perf_counter() - attempt_start
+                    )
                 self._record_success(agent.id)
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 return output, agent.id, usage
@@ -2700,6 +3052,8 @@ class TaskOrchestrator:
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
+        if primary.group_name:
+            ranked = [agent for agent in ranked if agent.group_name == primary.group_name]
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
@@ -2890,6 +3244,8 @@ class TaskOrchestrator:
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
+            "group_name": agent.group_name,
+            "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
 
     def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
@@ -2922,6 +3278,23 @@ class TaskOrchestrator:
             }
         ]
         seen: set[str] = {"contextual-orchestrator"}
+        # Model-group aliases are addressable model ids (a logical name routes
+        # to the best measured member), so advertise them like real models.
+        for group in self.list_model_groups():
+            if not group.get("enabled_member_count"):
+                continue
+            group_alias = str(group["group_name"])
+            if group_alias in seen:
+                continue
+            seen.add(group_alias)
+            data.append(
+                {
+                    "id": group_alias,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": "model_group",
+                }
+            )
         for agent in self.agents:
             if agent.disabled:
                 continue

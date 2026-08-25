@@ -15,6 +15,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    free_discovered_models,
     refresh_price_book,
     select_top_n_cheapest_discovered_agents,
 )
@@ -216,34 +217,48 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Enable the N cheapest discovered agents in --agents-db (auto-optimization bootstrap; "
         "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
     )
+    parser.add_argument(
+        "--free-only",
+        action="store_true",
+        help="Report only models whose provider metadata marks them zero-cost "
+        "(reported 0 price or an explicit -free/:free id suffix); the full report keeps every model.",
+    )
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
     discovered, errors = discover_all_models()
+    free_models = free_discovered_models(discovered)
+    reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
-    priced_count = refresh_price_book(discovered, price_book)
+    priced_count = refresh_price_book(reported, price_book)
 
     enabled_agent_ids: list[str] = []
     if args.agents_db:
         bootstrap = TaskOrchestrator(
             [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
         )
-        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in discovered])
+        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in reported])
         if args.enable_cheapest:
-            for model in select_top_n_cheapest_discovered_agents(discovered, price_book, args.enable_cheapest):
+            for model in select_top_n_cheapest_discovered_agents(reported, price_book, args.enable_cheapest):
                 agent_id = agent_id_for(model)
                 bootstrap.patch_agent("default", agent_id, {"status": "active"})
                 enabled_agent_ids.append(agent_id)
 
     report = {
-        "discovered_count": len(discovered),
+        "discovered_count": len(reported),
+        "free_tier_count": len(free_models),
         "priced_count": priced_count,
         "providers_with_errors": sorted({error.provider_name for error in errors}),
         "enabled_agent_ids": enabled_agent_ids,
         "models": [
-            {"provider": model.provider_name, "model": model.model_id, "agent_id": agent_id_for(model)}
-            for model in discovered
+            {
+                "provider": model.provider_name,
+                "model": model.model_id,
+                "agent_id": agent_id_for(model),
+                "is_free": model.is_free,
+            }
+            for model in reported
         ],
     }
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
