@@ -2325,9 +2325,25 @@ class TaskOrchestrator:
                 upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
             return self.client.proxy_send(agent, endpoint, upstream)
 
+        ranked_candidates = self._failover_candidates(agent, text, "worker")
+        if (
+            effort_profile is not None
+            and effort_profile.unsupported_provider_fallback != "omit"
+        ):
+            supported = [
+                candidate
+                for candidate in ranked_candidates
+                if candidate.reasoning_effort_supported is True
+                or (
+                    candidate.reasoning_effort_supported is None
+                    and candidate.base_url.startswith("mock://")
+                )
+            ]
+            if supported:
+                ranked_candidates = supported
         candidates: list[ModelAgent] = []
         seen_providers: set[str] = set()
-        for candidate in self._failover_candidates(agent, text, "worker"):
+        for candidate in ranked_candidates:
             provider_key = (
                 f"provider:{candidate.provider_name.casefold()}"
                 if candidate.provider_name.strip()
@@ -2337,21 +2353,6 @@ class TaskOrchestrator:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
-        if (
-            effort_profile is not None
-            and effort_profile.unsupported_provider_fallback != "omit"
-        ):
-            supported = [
-                candidate
-                for candidate in candidates
-                if candidate.reasoning_effort_supported is True
-                or (
-                    candidate.reasoning_effort_supported is None
-                    and candidate.base_url.startswith("mock://")
-                )
-            ]
-            if supported:
-                candidates = supported
         last_error: Exception | None = None
         for candidate in candidates:
             candidate_payload = dict(upstream)
