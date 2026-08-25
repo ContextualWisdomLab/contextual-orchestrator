@@ -45,6 +45,7 @@ HTTP serving is hardened for local lab use:
 - A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
+- `/healthz` is a minimal unauthenticated process probe; use the administrator-authenticated `/readyz` endpoint for secret-free orchestration, sync-routing, and optional batch dependency status. Liveness stays available during optional dependency degradation.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
 - State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
@@ -97,7 +98,6 @@ Run an evaluation against that server with `--temperature 0` for repeatable judg
 Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](docs/planning/adrs/0001-fail-closed-model-judgment.md).
 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
-
 Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
 
 Seed the credential into the KV once at bootstrap:
@@ -309,10 +309,21 @@ python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps -e .
 python tests/test_self_check.py
 python tests/test_paper_contracts.py
+python -m pytest -q tests/test_reasoning_effort_profile.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_security_hardening.py
+python tests/test_chat_model_capability_isolation.py
+python tests/test_chat_transport_role_separation.py
+python tests/test_chat_capability_unknown_identifiers.py
+python tests/test_chat_passthrough_capability_isolation.py
+python tests/test_discovery_bootstrap_selection.py
+python tests/test_provider_bootstrap.py
+python tests/test_provider_bootstrap_secret_normalization.py
+python tests/test_provider_catalog_bootstrap.py
+python tests/test_provider_catalog_credential_promotion.py
+python tests/test_provider_catalog_store.py
 python tests/test_tool_execution_fallback.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py

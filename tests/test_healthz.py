@@ -1,4 +1,4 @@
-"""Container liveness probe: /healthz must answer without any auth token."""
+"""Container probes: minimal public liveness and authenticated readiness."""
 from __future__ import annotations
 
 import json
@@ -39,9 +39,7 @@ def test_healthz_is_unauthenticated_liveness() -> None:
         thread.join(timeout=5)
 
     assert status == 200
-    assert body["status"] == "ok"
-    assert body["service"] == "contextual-orchestrator"
-    assert set(body) == {"status", "service"}
+    assert body == {"status": "ok", "service": "contextual-orchestrator"}
 
 
 def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:

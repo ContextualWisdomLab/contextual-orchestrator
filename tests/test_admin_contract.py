@@ -13,6 +13,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Agent Pool" in ADMIN_HTML
     assert "Orchestration Policy" in ADMIN_HTML
     assert "Audit &amp; Compliance" in ADMIN_HTML
+    assert '<tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>' in ADMIN_HTML
+    assert "PII-001" in ADMIN_HTML
+    assert "Mask email, phone" not in ADMIN_HTML
     assert "/admin/simulate" in ADMIN_HTML
     assert "ADMIN_TRANSLATIONS" not in ADMIN_HTML
     assert "source_basis_text" in ADMIN_HTML
@@ -42,6 +45,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "function agentStatus(index)" in ADMIN_HTML
     assert "no_agents_match" in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == "No agents match the current filters."
+    assert '{ pass: "ok", warn: "warning", fail: "failure" }[row.status]' in ADMIN_HTML
+    assert ADMIN_TRANSLATIONS["en"]["readiness_ok"] == "Pass"
+    assert ADMIN_TRANSLATIONS["ko"]["readiness_failure"] == "실패"
     assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
     assert "viewAudit: document.querySelector" in ADMIN_HTML
     assert 'els.viewAudit.addEventListener("click", () => showView("audit"))' in ADMIN_HTML
@@ -55,6 +61,15 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "No audit events yet."
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`' in ADMIN_HTML
+    assert 'id="sessionForm"' in ADMIN_HTML
+    assert 'id="sessionToken"' in ADMIN_HTML
+    assert 'credentials: "same-origin"' in ADMIN_HTML
+    assert '"/admin/session"' in ADMIN_HTML
+    assert 'finally {\n        els.sessionToken.value = "";' in ADMIN_HTML
+    assert 'headers: {"origin": window.location.origin}' not in ADMIN_HTML
+    assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
+    assert "Mask email, phone" not in ADMIN_HTML
+    assert "Field encryption and audited release" in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:

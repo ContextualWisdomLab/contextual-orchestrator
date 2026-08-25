@@ -17,7 +17,7 @@ from .model_discovery import (
     agent_id_for,
     discover_all_models,
     refresh_price_book,
-    select_top_n_cheapest_discovered_agents,
+    select_bootstrap_discovered_agents,
 )
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
@@ -29,9 +29,9 @@ from .orchestrator import (
 )
 from .server import SecurityConfig, serve
 
-DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
-DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
-DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
+DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -228,7 +228,7 @@ def _discover_models_command(argv: list[str]) -> None:
         type=_non_negative_int,
         default=0,
         metavar="N",
-        help="Enable the N cheapest discovered agents in --agents-db (auto-optimization bootstrap; "
+        help="Enable a price-honest, provider-diverse discovered agent pool in --agents-db (auto-optimization bootstrap; "
         "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
     )
     args = parser.parse_args(argv)
@@ -246,7 +246,7 @@ def _discover_models_command(argv: list[str]) -> None:
         )
         bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in discovered])
         if args.enable_cheapest:
-            for model in select_top_n_cheapest_discovered_agents(discovered, price_book, args.enable_cheapest):
+            for model in select_bootstrap_discovered_agents(discovered, price_book, args.enable_cheapest):
                 agent_id = agent_id_for(model)
                 bootstrap.patch_agent("default", agent_id, {"status": "active"})
                 enabled_agent_ids.append(agent_id)
@@ -281,15 +281,16 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     return orchestrator.sync_discovered_agents(agents)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
-    if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
-        _register_credential_command(sys.argv[2:])
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "register-credential":
+        _register_credential_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "discover-models":
-        _discover_models_command(sys.argv[2:])
+    if arguments and arguments[0] == "discover-models":
+        _discover_models_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "check-fast-mlsirm":
+    if arguments and arguments[0] == "check-fast-mlsirm":
         _check_fast_mlsirm_command()
         return
 
@@ -314,6 +315,11 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument(
+        "--insecure-admin-session-cookie",
+        action="store_true",
+        help="Allow the admin session cookie over local HTTP; use only for isolated development.",
+    )
     parser.add_argument("--clearfolio-url", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL") or None,
                         help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
     parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
@@ -355,7 +361,7 @@ def main() -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -406,17 +412,17 @@ def main() -> None:
             )
         try:
             auth_token = (
-                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_TOKEN_KEY)
+                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)
                 if not split_requested
                 else ""
             )
             admin_token = (
-                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_TOKEN_KEY)
+                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_CREDENTIAL_NAME)
                 if split_requested
                 else ""
             )
             inference_token = (
-                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_TOKEN_KEY)
+                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_CREDENTIAL_NAME)
                 if split_requested
                 else ""
             )
@@ -435,6 +441,7 @@ def main() -> None:
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
+                admin_session_secure_cookie=not args.insecure_admin_session_cookie,
             ),
             clearfolio_url=args.clearfolio_url,
             coordinator=CostRoutingCoordinator(
