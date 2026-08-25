@@ -231,7 +231,7 @@ class SecurityConfig:
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin, inference, or trace purpose scope."""
+        """Validate a bearer token or an opaque, server-side admin session cookie."""
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         raw = headers.get("authorization", "")
