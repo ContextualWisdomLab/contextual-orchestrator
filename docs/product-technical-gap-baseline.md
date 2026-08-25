@@ -612,9 +612,10 @@ contract: equivalence is an operator assertion, never a name-derived inference.
 
 | PR | Exact identity and live boundary |
 |---|---|
-| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `b353e6aee77f9f8d38e1116300e149bdd76e658b`, base `50014ef9f87623c6dfd529116297c5d180743125`; open, auto-merge enabled, `REVIEW_REQUIRED`, replacement Checks pending. Its tree `61621479c144bcc133dbc97caf4189861b8cc70c` is identical to the locally validated #837 tree: full suite `1605 passed in 614.81s` before the parent merge plus `66` focused post-merge capability/group/stream/bootstrap tests. No protected-main claim is made until exact-head hosted gates and independent approval finish. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `fae8665771443587fcb64bc517a005412c979c14`, base `50014ef9f87623c6dfd529116297c5d180743125`; open, auto-merge enabled, `REVIEW_REQUIRED`, replacement Checks pending. Its tree `017ca560293c7939b405af6fa25c7f0e3ba13e76` is identical to the locally validating #838 tree. The preceding capability tree passed `1605` tests before parent integration plus `66` focused post-merge tests; #838 adds `28` focused DB/Admin/group tests, with the full exact-tree run still in progress. No protected-main claim is made until exact-head hosted gates and independent approval finish. |
 | [#837](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/837) | head `b2d7aea0d71b5669d6c0167527691592a9ab2abe`; normally merged into #834's feature branch at 2026-08-25 10:30 KST. Adds provider-declared `text`, `image`, `video`, `speech`, `transcription`, `embedding`, `rerank`, and `audio` discovery/routing surfaces; its merge-result tree equals #834's current tree. This is stack integration, not protected-main release evidence. |
 | [#835](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/835) | head `f21da70b7f184b687b9c4996327c18d384c420d0`; normally merged into #834's feature branch at 2026-08-25 09:52 KST. The hourly loop uses the stable gateway alias, a random loopback bearer token, job-scoped write permission, hash-locked Python requirements, and lockfile-integrity-checked OpenCode `1.18.22`. |
+| [#838](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/838) | head `2de42512ac552246b8a5bc024ba179b3addcc1ed`; normally merged into #834's feature branch at 2026-08-25 10:39 KST. It migrates group membership from duplicated agent JSON into 3NF `model_group`/`model_group_member` relations and adds an accessible Admin REST editor plus capability coverage. Its merge-result tree equals #834's current tree; this is stack integration, not protected-main release evidence. |
 | [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) | head `33bd77ed216f274d658e288c05d9dca6018e07b5`; open/blocked, no failed hosted check at refresh, three pending/external contexts. |
 | [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768) | head `2bb7538c614e9bd8686ba9007c2955b6c770390d`; open/blocked with stale `CHANGES_REQUESTED`, one failed and three pending/external contexts. Exact failure and unresolved review evidence must be remediated before merge. |
 | [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) | head `6b6bd783272033d7de93d584b7618b4445b5f391`; open/blocked with one failed and three pending/external contexts. The earlier PII and hash-lock local evidence does not clear the current hosted failure. |
@@ -632,9 +633,10 @@ Buyer-visible gaps now prioritized:
 1. Video submission is routed, but provider-affine polling/content download and
    durable job ownership are not yet represented; add a normalized async job
    resource before calling video orchestration production-complete.
-2. Capability discovery preserves declared input/output direction, but the Admin
-   web surface still needs group-level capability intersection/coverage and an
-   accessible operator editor for capability-specific membership.
+2. **Closed on the #838 stack:** Admin exposes group capability coverage and a
+   keyboard/native-form REST editor; DB membership is normalized and legacy JSON
+   membership migrates without data loss. Authenticated deployed-browser runtime
+   evidence remains a release/UAT gate rather than an implementation gap.
 3. Free-model tests are deterministic catalog-contract tests. Add an opt-in,
    spend-capped live OpenRouter canary selected from current zero-price metadata;
    never pin a transient free model identifier in production or CI.
