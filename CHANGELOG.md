@@ -9,6 +9,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Citation-backed `docs/adr` set: APA 7th references on the tool-execution fallback policy, plus accepted control-plane, cost-aware sync-versus-batch, and MSA-leaf composition ADRs, indexed from `docs/adr/README.md`.
 - Structured tool failure categories, stable fallback actions, and public adapter exceptions.
 - Secret-free `tool_fallback_decision` audit events.
 - Exact regression coverage for the Strix `Tool execute_command not found in agent strix` failure.
