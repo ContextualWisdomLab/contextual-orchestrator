@@ -4,3 +4,4 @@
 # wheel is available.
 pip
 atheris==3.1.0; python_full_version == "3.12.*"
+cryptography>=43.0

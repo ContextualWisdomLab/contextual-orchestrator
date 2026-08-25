@@ -52,6 +52,13 @@ ADMIN_TRANSLATIONS = {
         "spend_cost": "Est. cost",
         "spend_runs": "Runs",
         "settings_title": "Settings",
+        "session_title": "Operator session",
+        "session_hint": "Use an opaque HttpOnly session cookie so the browser never retains the admin bearer.",
+        "session_token_placeholder": "Admin bearer token",
+        "session_start": "Start session",
+        "session_end": "End session",
+        "session_status_ready": "Session established",
+        "session_status_missing": "Session required",
         "compatible_api_adoption": "Compatible API adoption",
         "trace_complete_workflow_rate": "Trace-complete workflow rate",
         "policy_safe_routing_rate": "Policy-safe routing rate",
@@ -167,9 +174,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_investment_committee_ready": "Commercial investment committee ready",
         "commercial_investment_committee_ready_with_warnings": "Commercial investment committee ready with warnings",
         "commercial_investment_committee_blocked": "Commercial investment committee blocked",
-        "readiness_pass": "Pass",
-        "readiness_warn": "Warn",
-        "readiness_fail": "Fail",
+        "readiness_ok": "Pass",
+        "readiness_warning": "Warn",
+        "readiness_failure": "Fail",
         "api_compatibility": "OpenAI-compatible API",
         "admin_evidence": "Operator evidence surface",
         "trace_evidence": "Workflow trace evidence",
@@ -286,6 +293,13 @@ ADMIN_TRANSLATIONS = {
         "spend_cost": "추정 비용",
         "spend_runs": "실행",
         "settings_title": "설정",
+        "session_title": "운영자 세션",
+        "session_hint": "브라우저가 관리자 bearer를 보관하지 않도록 불투명 HttpOnly 세션 쿠키를 사용합니다.",
+        "session_token_placeholder": "관리자 bearer 토큰",
+        "session_start": "세션 시작",
+        "session_end": "세션 종료",
+        "session_status_ready": "세션이 설정되었습니다",
+        "session_status_missing": "세션이 필요합니다",
         "compatible_api_adoption": "호환 API 사용량",
         "trace_complete_workflow_rate": "트레이스 완성 워크플로 비율",
         "policy_safe_routing_rate": "정책 안전 라우팅 비율",
@@ -401,9 +415,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_investment_committee_ready": "상용 투자심의 준비 완료",
         "commercial_investment_committee_ready_with_warnings": "주의 조건부 상용 투자심의 가능",
         "commercial_investment_committee_blocked": "상용 투자심의 차단",
-        "readiness_pass": "통과",
-        "readiness_warn": "주의",
-        "readiness_fail": "실패",
+        "readiness_ok": "통과",
+        "readiness_warning": "주의",
+        "readiness_failure": "실패",
         "api_compatibility": "OpenAI 호환 API",
         "admin_evidence": "운영자 근거 화면",
         "trace_evidence": "워크플로 트레이스 근거",
@@ -622,6 +636,7 @@ ADMIN_HTML = r"""<!doctype html>
     h2 { font-size: 15px; }
     h3 { font-size: 13px; color: var(--muted); font-weight: 700; text-transform: uppercase; }
     .actions { display: flex; gap: 8px; align-items: center; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .btn {
       border: 1px solid var(--line);
       background: var(--surface);
@@ -913,7 +928,7 @@ ADMIN_HTML = r"""<!doctype html>
             <table>
               <thead><tr><th data-i18n="rule_header">Rule</th><th data-i18n="scope_header">Scope</th><th data-i18n="exclusion_header">Exclusion</th></tr></thead>
               <tbody>
-                <tr><td>PII-001</td><td>All agents</td><td><span class="chip amber">Proposed</span> Preserve PII; use purpose authorization and field encryption</td></tr>
+                <tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>
                 <tr><td>SEC-002</td><td>worker</td><td>Tool web_search</td></tr>
                 <tr><td>DATA-003</td><td>verifier</td><td>Field ip_address</td></tr>
                 <tr><td>FIN-004</td><td>synthesizer</td><td>Record amount</td></tr>
@@ -958,6 +973,17 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="integrations_title">Integrations</h1><span class="chip green" data-i18n="single_api_status">OpenAI-compatible endpoint active</span></div>
           <table><thead><tr><th data-i18n="provider_header">Provider</th><th data-i18n="endpoint_header">Endpoint</th><th data-i18n="policy_header">Policy</th></tr></thead><tbody id="integrationRows"></tbody></table>
+        </section>
+        <section class="panel wide">
+          <div class="panel-header"><h1 data-i18n="session_title">Operator session</h1><span class="chip">HttpOnly</span></div>
+          <p class="muted" data-i18n="session_hint">Use an opaque HttpOnly session cookie so the browser never retains the admin bearer.</p>
+          <form id="sessionForm" class="actions">
+            <label class="sr-only" for="sessionToken" data-i18n="session_token_placeholder">Admin bearer token</label>
+            <input id="sessionToken" type="password" autocomplete="off" data-i18n-placeholder="session_token_placeholder" placeholder="Admin bearer token">
+            <button class="btn primary" type="submit" data-i18n="session_start">Start session</button>
+            <button class="btn" id="endSession" type="button" data-i18n="session_end">End session</button>
+          </form>
+          <p class="muted" id="sessionStatus" role="status"></p>
         </section>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="doc_viewer_title">Document Viewer</h1><span class="chip" id="docViewerStatus" data-i18n="doc_viewer_unset">Not configured</span></div>
@@ -1033,7 +1059,11 @@ Summarize this research thread and verify claims.</textarea>
       agentSettings: document.querySelector("#agentSettings"),
       registerAgent: document.querySelector("#registerAgent"),
       mobileView: document.querySelector("#mobileView"),
-      language: document.querySelector("#language")
+      language: document.querySelector("#language"),
+      sessionForm: document.querySelector("#sessionForm"),
+      sessionToken: document.querySelector("#sessionToken"),
+      sessionStatus: document.querySelector("#sessionStatus"),
+      endSession: document.querySelector("#endSession")
     };
     let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
     let currentLang = "en";
@@ -1050,6 +1080,10 @@ Summarize this research thread and verify claims.</textarea>
 
     function t(key) {
       return (translations[currentLang] || translations.en)[key] || translations.en[key] || key;
+    }
+
+    function apiFetch(url, options = {}) {
+      return fetch(url, {credentials: "same-origin", ...options});
     }
 
     function tags(tags) {
@@ -1418,7 +1452,7 @@ Summarize this research thread and verify claims.</textarea>
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
             const chip = row.status === "pass" ? "green" : row.status === "warn" ? "amber" : "red";
             return `<div class="readiness-row">
-              <span class="chip ${chip}">${escapeHtml(t(`readiness_${row.status}`))}</span>
+              <span class="chip ${chip}">${escapeHtml(t(`readiness_${{ pass: "ok", warn: "warning", fail: "failure" }[row.status]}`))}</span>
               <strong>${escapeHtml(t(row.criterion_name) || row.label)}</strong>
               <small>${escapeHtml(row.evidence)}</small>
               <small><b>${escapeHtml(t("readiness_remediation_label"))}:</b> ${escapeHtml(row.remediation || "")}</small>
@@ -1474,7 +1508,11 @@ Summarize this research thread and verify claims.</textarea>
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
-      const res = await fetch("/admin/state");
+      const res = await apiFetch("/admin/state");
+      if (!res.ok) {
+        if (els.sessionStatus) els.sessionStatus.textContent = t("session_status_missing");
+        return;
+      }
       state = await res.json();
       await refreshAnalytics();
       await refreshReadiness();
@@ -1484,63 +1522,63 @@ Summarize this research thread and verify claims.</textarea>
       await simulate();
     }
     async function refreshAnalytics() {
-      const analyticsRes = await fetch("/api/v1/analytics_snapshots/latest");
+      const analyticsRes = await apiFetch("/api/v1/analytics_snapshots/latest");
       state.analytics = await analyticsRes.json();
     }
     async function refreshReadiness() {
-      const readinessRes = await fetch("/api/v1/sales_readiness/latest");
+      const readinessRes = await apiFetch("/api/v1/sales_readiness/latest");
       state.readiness = await readinessRes.json();
-      const commercialRes = await fetch("/api/v1/commercial_readiness/latest");
+      const commercialRes = await apiFetch("/api/v1/commercial_readiness/latest");
       state.commercialReadiness = await commercialRes.json();
-      const buyerManifestRes = await fetch("/api/v1/buyer_evidence_manifests/latest");
+      const buyerManifestRes = await apiFetch("/api/v1/buyer_evidence_manifests/latest");
       state.buyerEvidenceManifest = await buyerManifestRes.json();
-      const handoffBundleRes = await fetch("/api/v1/buyer_handoff_bundles/latest");
+      const handoffBundleRes = await apiFetch("/api/v1/buyer_handoff_bundles/latest");
       state.buyerHandoffBundle = await handoffBundleRes.json();
-      const saleabilityRes = await fetch("/api/v1/saleability_decisions/latest");
+      const saleabilityRes = await apiFetch("/api/v1/saleability_decisions/latest");
       state.saleabilityDecision = await saleabilityRes.json();
-      const commercialExportRes = await fetch("/api/v1/commercial_evidence_exports/latest");
+      const commercialExportRes = await apiFetch("/api/v1/commercial_evidence_exports/latest");
       state.commercialEvidenceExport = await commercialExportRes.json();
-      const commercialAcceptanceRes = await fetch("/api/v1/commercial_acceptance_checks/latest");
+      const commercialAcceptanceRes = await apiFetch("/api/v1/commercial_acceptance_checks/latest");
       state.commercialAcceptanceCheck = await commercialAcceptanceRes.json();
-      const commercialReleaseRes = await fetch("/api/v1/commercial_release_candidates/latest");
+      const commercialReleaseRes = await apiFetch("/api/v1/commercial_release_candidates/latest");
       state.commercialReleaseCandidate = await commercialReleaseRes.json();
-      const commercialGapRes = await fetch("/api/v1/commercial_gap_registers/latest");
+      const commercialGapRes = await apiFetch("/api/v1/commercial_gap_registers/latest");
       state.commercialGapRegister = await commercialGapRes.json();
-      const commercialProcurementRes = await fetch("/api/v1/commercial_procurement_readiness/latest");
+      const commercialProcurementRes = await apiFetch("/api/v1/commercial_procurement_readiness/latest");
       state.commercialProcurementReadiness = await commercialProcurementRes.json();
-      const commercialContractRes = await fetch("/api/v1/commercial_contract_readiness/latest");
+      const commercialContractRes = await apiFetch("/api/v1/commercial_contract_readiness/latest");
       state.commercialContractReadiness = await commercialContractRes.json();
-      const commercialOnboardingRes = await fetch("/api/v1/commercial_onboarding_readiness/latest");
+      const commercialOnboardingRes = await apiFetch("/api/v1/commercial_onboarding_readiness/latest");
       state.commercialOnboardingReadiness = await commercialOnboardingRes.json();
-      const commercialOperationsRes = await fetch("/api/v1/commercial_operations_readiness/latest");
+      const commercialOperationsRes = await apiFetch("/api/v1/commercial_operations_readiness/latest");
       state.commercialOperationsReadiness = await commercialOperationsRes.json();
-      const commercialSecurityRes = await fetch("/api/v1/commercial_security_attestations/latest");
+      const commercialSecurityRes = await apiFetch("/api/v1/commercial_security_attestations/latest");
       state.commercialSecurityAttestation = await commercialSecurityRes.json();
-      const commercialValueRes = await fetch("/api/v1/commercial_value_readiness/latest");
+      const commercialValueRes = await apiFetch("/api/v1/commercial_value_readiness/latest");
       state.commercialValueReadiness = await commercialValueRes.json();
-      const commercialCloseRes = await fetch("/api/v1/commercial_close_readiness/latest");
+      const commercialCloseRes = await apiFetch("/api/v1/commercial_close_readiness/latest");
       state.commercialCloseReadiness = await commercialCloseRes.json();
-      const commercialGtmRes = await fetch("/api/v1/commercial_go_to_market_readiness/latest");
+      const commercialGtmRes = await apiFetch("/api/v1/commercial_go_to_market_readiness/latest");
       state.commercialGoToMarketReadiness = await commercialGtmRes.json();
-      const commercialLaunchRes = await fetch("/api/v1/commercial_launch_readiness/latest");
+      const commercialLaunchRes = await apiFetch("/api/v1/commercial_launch_readiness/latest");
       state.commercialLaunchReadiness = await commercialLaunchRes.json();
-      const commercialCompletionRes = await fetch("/api/v1/commercial_completion_scorecards/latest");
+      const commercialCompletionRes = await apiFetch("/api/v1/commercial_completion_scorecards/latest");
       state.commercialCompletionScorecard = await commercialCompletionRes.json();
-      const commercialBuyerAcceptanceWorkflowRes = await fetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
+      const commercialBuyerAcceptanceWorkflowRes = await apiFetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
       state.commercialBuyerAcceptanceWorkflow = await commercialBuyerAcceptanceWorkflowRes.json();
-      const commercialDemoRes = await fetch("/api/v1/commercial_demo_scenarios/latest");
+      const commercialDemoRes = await apiFetch("/api/v1/commercial_demo_scenarios/latest");
       state.commercialDemoScenarios = await commercialDemoRes.json();
-      const commercialProposalRes = await fetch("/api/v1/commercial_proposal_packets/latest");
+      const commercialProposalRes = await apiFetch("/api/v1/commercial_proposal_packets/latest");
       state.commercialProposalPacket = await commercialProposalRes.json();
-      const commercialPurchaseApprovalRes = await fetch("/api/v1/commercial_purchase_approval_packets/latest");
+      const commercialPurchaseApprovalRes = await apiFetch("/api/v1/commercial_purchase_approval_packets/latest");
       state.commercialPurchaseApprovalPacket = await commercialPurchaseApprovalRes.json();
-      const commercialDueDiligenceRes = await fetch("/api/v1/commercial_due_diligence_rooms/latest");
+      const commercialDueDiligenceRes = await apiFetch("/api/v1/commercial_due_diligence_rooms/latest");
       state.commercialDueDiligenceRoom = await commercialDueDiligenceRes.json();
-      const commercialInvestmentCommitteeRes = await fetch("/api/v1/commercial_investment_committee_memos/latest");
+      const commercialInvestmentCommitteeRes = await apiFetch("/api/v1/commercial_investment_committee_memos/latest");
       state.commercialInvestmentCommitteeMemo = await commercialInvestmentCommitteeRes.json();
     }
     async function simulate() {
-      const res = await fetch("/admin/simulate", {
+      const res = await apiFetch("/admin/simulate", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({prompt: els.prompt.value, mode: els.mode.value, include_orchestration_trace: true})
@@ -1548,13 +1586,38 @@ Summarize this research thread and verify claims.</textarea>
       state.last = await res.json();
       state.recent_workflow_runs = [state.last, ...(state.recent_workflow_runs || [])].slice(0, 8);
       await refreshAnalytics();
-      await refreshReadiness();
       renderTrace(state.last);
       renderSecondaryViews();
     }
+    async function startSession(event) {
+      event.preventDefault();
+      const token = els.sessionToken.value;
+      try {
+        const res = await apiFetch("/admin/session", {
+          method: "POST",
+          headers: {"content-type": "application/json"},
+          body: JSON.stringify({token})
+        });
+        const result = await res.json();
+        if (res.ok) {
+          els.sessionStatus.textContent = t("session_status_ready");
+          await load();
+        } else {
+          els.sessionStatus.textContent = result.error?.message || t("session_status_missing");
+        }
+      } finally {
+        els.sessionToken.value = "";
+      }
+    }
+    async function endSession() {
+      const res = await apiFetch("/admin/session", {
+        method: "DELETE"
+      });
+      els.sessionStatus.textContent = res.ok ? t("session_status_missing") : "Session logout failed";
+    }
     async function runEvaluation() {
       const prompts = els.evaluationPrompts.value.split("\n").map(item => item.trim()).filter(Boolean);
-      const res = await fetch("/api/v1/evaluation_runs", {
+      const res = await apiFetch("/api/v1/evaluation_runs", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({prompts, run_mode: els.evaluationMode.value, include_orchestration_trace: true})
@@ -1562,7 +1625,6 @@ Summarize this research thread and verify claims.</textarea>
       const result = await res.json();
       els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
       await refreshAnalytics();
-      await refreshReadiness();
       renderSecondaryViews();
     }
     els.agentSearch.addEventListener("input", renderAgents);
@@ -1574,6 +1636,8 @@ Summarize this research thread and verify claims.</textarea>
     els.registerAgent.addEventListener("click", () => showView("integrations"));
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
+    els.sessionForm?.addEventListener("submit", startSession);
+    els.endSession?.addEventListener("click", endSession);
     document.querySelector("#copyJson").addEventListener("click", () => {
       renderTraceTab("json");
       navigator.clipboard?.writeText(els.traceJson.textContent);

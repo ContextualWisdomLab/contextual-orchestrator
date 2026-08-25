@@ -1,6 +1,8 @@
 # Library Research
 
-The design researched existing libraries before adding code. The repository keeps the runtime dependency-free for the current lab, but the enterprise implementation target is explicit.
+The design researches existing libraries before adding code. The repository keeps
+the runtime dependency-light for the current lab, while security-critical
+primitives use maintained libraries when the enterprise target requires them.
 
 ## Selected Stack
 
@@ -53,6 +55,36 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Role reasoning-effort profiles (2026-08-16)
+
+Issue #568 needs a provider-neutral `reasoning_effort_profile` and an
+equal-budget ablation against true parameters. Sampling temperature is not
+reasoning effort.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Profile object | Existing `OrchestrationPolicy` dataclass; OpenAI `reasoning_effort` enum; Anthropic thinking-token budget | New stdlib module `reasoning_effort_profile.py` with a frozen dataclass, fail-closed parser, role catalog, and snapshot hash. No production-default change until the RMSE gate passes. | New dependency, provider SDK, treating temperature as an effort proxy, a second policy factory. |
+| Ablation | Fugu latency-vs-quality frontier; TRINITY role split; Conductor steps/access lists; Baker (2001) IRT true-θ RMSE | Deterministic offline θ̂ = (1−λ)θ with RMSE(θ̂, θ). Access-list scope and recursion depth change λ. Record quality, budget, estimated tokens used, and `measurement_status=estimated`. Persist the same snapshot on `run` / `stream_route` / `batch_route`. | Live NVIDIA NIM calls in this slice (issue #86 evidence plane); changing `OrchestrationPolicy` defaults. |
+| Doctoring | Sakana Fugu (2026); Xu et al. (2025) TRINITY arXiv:2512.04695; Nielsen et al. (2025) Conductor arXiv:2512.04388 | APA 7th citations in `docs/architecture.md` and `docs/papers/README.md`. PDFs are not vendored when redistribution is unclear. | Training a learned coordinator. |
+
+Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_ablation()`
+and keep route/conduct defaults unchanged until `production_default_change_allowed`
+returns true.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
+
+## Purpose-limited PII protection
+
+| Area | Library/pattern | Decision | Evidence |
+|---|---|---|---|
+| Field encryption | `cryptography.hazmat.primitives.ciphers.aead.AESGCM` | Use the maintained AEAD primitive already available in the Python ecosystem; resolve the 256-bit key from the existing KV credential registry. Generated key bytes use explicit `base64:`/`hex:` encodings; marked passphrases use stdlib scrypt. Versioned ciphertext binds event context, key name, and field label as a canonical JSON AEAD associated-data array. | [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) recommends authenticated encryption such as GCM; [RFC 5116](https://datatracker.ietf.org/doc/html/rfc5116) defines the AEAD interface; Percival and Josefsson (2016), [RFC 7914](https://www.rfc-editor.org/rfc/rfc7914), specifies the memory-hard scrypt derivation function. |
+| Key management | Existing `credentials.get_credential` | Reuse the repository's KV seam; no runtime environment lookup and no second secret store. | [NIST SP 800-57 Part 1 Rev. 5](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final) covers key protection, inventory, access control, and rotation. |
+| Purpose control | Existing bearer scopes plus fixed route purposes | Map authenticated `inference` and `admin` roles to explicit `message_delivery`, `operator_read`, and `audit_replay` purposes; audit every decision. | Wolf, Pallas, and Tai (2021) describe purpose limitation for data-in-transit and access decisions in event-driven systems ([arXiv:2110.15150](https://arxiv.org/abs/2110.15150)). |
+
+The implementation deliberately skips custom cryptography, automatic PII
+detectors, blanket masking, and a new policy framework. Callers explicitly
+declare the top-level event fields that contain PII; undeclared fields retain
+the existing behavior, while marked fields fail closed when the KV key is
+missing or invalid.

@@ -71,7 +71,7 @@ CI gates: `.github/workflows/security.yml` (CodeQL + pip-audit on `requirements.
 
 ## What this is
 
-A stdlib-Python lab implementing a single OpenAI-compatible API that routes, delegates, verifies, and synthesizes work across a configurable pool of model agents — plus the org's cost-review and sync-vs-batch routing hub. Runtime dependencies are the Python standard library only (Hypothesis is the sole listed dependency, for the property tests); FastAPI/SQLAlchemy/psycopg exist as *optional* extras for the hardened production target, not the current runtime.
+A stdlib-Python lab implementing a single OpenAI-compatible API that routes, delegates, verifies, and synthesizes work across a configurable pool of model agents — plus the org's cost-review and sync-vs-batch routing hub. The core runtime uses the Python standard library plus the selected `cryptography` dependency for field-level PII protection; Hypothesis is used for property tests, while FastAPI/SQLAlchemy/psycopg exist as *optional* extras for the hardened production target.
 
 ## Architecture
 
@@ -87,8 +87,9 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 ### Modules (`contextual_orchestrator/`)
 
 - `orchestrator.py` — the domain heart: `ModelAgent`, `WorkflowStep`, `OrchestrationPolicy`, `ModelClient`, `TaskOrchestrator`, secret/PII redaction, budget enforcement, spend analytics, and the commercial-readiness report generators behind `/api/v1/*`. Domain code stays here until a second implementation forces extraction (see `docs/code_conventions.md`).
+- `reasoning_effort_profile.py` — issue #568 role compute catalog and equal-budget true-θ ablation that emits θ̂ and RMSE(θ̂, θ). Production route/conduct defaults stay locked until `production_default_change_allowed`. Buyer next action: `python tests/test_reasoning_effort_profile.py`.
 - `server.py` — HTTP delivery adapter and `SecurityConfig`; all request validation lives here.
-- `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the product is dependency-free).
+- `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the stdlib HTTP/admin surface remains sufficient).
 - `credentials.py` / `kv_config.py` — the KV seam: `get_credential`/`register_credential` over pluggable backends (`InMemoryCredentialBackend` default; pgcrypto-encrypted `PostgresCredentialBackend`, selected via `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`).
 - `cost_ledger.py` / `cost_router.py` / `batch_routing.py` / `token_counting.py` — the cost-review + routing hub: prompt-safe usage ledger with seven attribution dimensions, `RoutingPolicy` (sync vs batch from request hints + KV thresholds), and the [pg-llm-batch](https://github.com/ContextualWisdomLab/pg-llm-batch) batch/embeddings backends (a local in-process backend keeps the standalone path working with no external service).
 - `api_contract.py` / `conventions.py` — API-shape and naming-rule enforcement helpers.
@@ -98,7 +99,7 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ### `conductor/` — context, not code
 
-`conductor/` is the CDD (context-driven development) directory, not a Python package: `product.md` (intent and non-goals), `tech-stack.md` (stdlib-only rationale), `workflow.md` (the TDD/DDD/CDD method and the Ponytail design gate), `tracks.md` (active tracks). Update it when scope, dependencies, workflow, or domain terms change.
+`conductor/` is the CDD (context-driven development) directory, not a Python package: `product.md` (intent and non-goals), `tech-stack.md` (stdlib HTTP/core rationale plus selected runtime dependencies), `workflow.md` (the TDD/DDD/CDD method and the Ponytail design gate), `tracks.md` (active tracks). Update it when scope, dependencies, workflow, or domain terms change.
 
 ## Key conventions
 
