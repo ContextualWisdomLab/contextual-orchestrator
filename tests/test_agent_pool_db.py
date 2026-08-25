@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 import sys
 import tempfile
@@ -43,6 +44,7 @@ def test_add_patch_remove_survive_restart() -> None:
         first = TaskOrchestrator(_seed(), agents_db=db)
         first.add_agent("default", NEW_AGENT)
         first.patch_agent("default", "general_agent", {"priority": 9})
+        first.set_model_group("example-logical-model", ["general_agent", "coding_agent"])
         assert {a.id for a in first.agents} == {"general_agent", "coding_agent"}
 
         second = TaskOrchestrator(_seed(), agents_db=db)  # restart with the same seed file
@@ -50,10 +52,36 @@ def test_add_patch_remove_survive_restart() -> None:
         assert set(by_id) == {"general_agent", "coding_agent"}  # added agent restored
         assert by_id["general_agent"].priority == 9  # patch restored over the seed
         assert by_id["coding_agent"].model == "gpt-5.5"
+        assert {a.group_name for a in by_id.values()} == {"example_logical_model"}
+        with sqlite3.connect(db) as conn:
+            payloads = [json.loads(row[0]) for row in conn.execute("SELECT payload FROM agent_pool")]
+            assert all("group_name" not in payload for payload in payloads)
+            assert conn.execute("SELECT group_name FROM model_group").fetchall() == [
+                ("example_logical_model",)
+            ]
+            assert set(conn.execute("SELECT agent_id FROM model_group_member").fetchall()) == {
+                ("general_agent",),
+                ("coding_agent",),
+            }
 
         second.remove_agent("default", "coding_agent")
         third = TaskOrchestrator(_seed(), agents_db=db)
         assert {a.id for a in third.agents} == {"general_agent"}  # removal survived restart
+
+
+def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        legacy = ModelAgent("legacy_agent", "legacy-model", group_name="legacy-group").to_config()
+        with sqlite3.connect(db) as conn:
+            conn.execute("CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.execute("INSERT INTO agent_pool VALUES (?, ?)", ("legacy_agent", json.dumps(legacy)))
+
+        restored = TaskOrchestrator([], agents_db=db)
+
+        assert restored.candidates[0].group_name == "legacy_group"
+        with sqlite3.connect(db) as conn:
+            assert "group_name" not in json.loads(conn.execute("SELECT payload FROM agent_pool").fetchone()[0])
 
 
 def test_seed_agent_removal_tombstones_across_restart() -> None:
@@ -143,6 +171,63 @@ def test_http_create_and_delete_worker_agents() -> None:
     finally:
         server.shutdown()
     assert {a.id for a in orchestrator.agents} == {"general_agent"}
+
+
+def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
+    token = "pool_token"
+    orchestrator = TaskOrchestrator(_seed())
+    orchestrator.add_agent("default", NEW_AGENT)
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/model_groups"
+    try:
+        status, created = _call(base, "POST", token, {"group_name": "vendor-neutral-example", "member_agent_ids": ["general_agent", "coding_agent"]})
+        assert status == 201 and created["group_name"] == "vendor_neutral_example"
+        assert set(created["member_agent_ids"]) == {"general_agent", "coding_agent"}
+        assert created["capability_coverage"] == {}
+
+        status, duplicate = _call(base, "POST", token, {"group_name": "vendor-neutral-example", "member_agent_ids": ["coding_agent"]})
+        assert status == 409 and duplicate["error"]["code"] == "model_group_exists"
+
+        status, missing = _call(base, "POST", token, {"group_name": "missing-member", "member_agent_ids": ["ghost_agent"]})
+        assert status == 404 and missing["error"]["code"] == "resource_not_found"
+
+        status, missing = _call(f"{base}/missing-group", "PATCH", token, {"member_agent_ids": ["coding_agent"]})
+        assert status == 404 and missing["error"]["code"] == "resource_not_found"
+
+        status, listed = _call(base, "GET", token)
+        assert status == 200 and listed["total_count"] == 1
+
+        status, _ = _call(f"{base}/vendor-neutral-example", "PATCH", token, {"member_agent_ids": ["general_agent"]})
+        assert status == 200
+        status, completion = _call(
+            base.replace("/api/v1/model_groups", "/v1/chat/completions"),
+            "POST",
+            token,
+            {
+                "model": "vendor-neutral-example",
+                "messages": [{"role": "user", "content": "route the logical model"}],
+            },
+        )
+        assert status == 200 and completion["model"] == "vendor-neutral-example"
+
+        status, invalid = _call(
+            base.replace("/api/v1/model_groups", "/v1/chat/completions"),
+            "POST",
+            token,
+            {"model": "not.a.valid.group", "messages": [{"role": "user", "content": "reject"}]},
+        )
+        assert status == 400 and invalid["error"]["code"] == "invalid_model"
+
+        status, updated = _call(f"{base}/vendor-neutral-example", "PATCH", token, {"member_agent_ids": ["coding_agent"]})
+        assert status == 200 and updated["member_agent_ids"] == ["coding_agent"]
+
+        status, deleted = _call(f"{base}/vendor-neutral-example", "DELETE", token)
+        assert status == 200 and deleted["deleted"] is True
+        assert orchestrator.list_model_groups() == []
+    finally:
+        server.shutdown()
 
 
 if __name__ == "__main__":

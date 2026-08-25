@@ -50,6 +50,7 @@ def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None
         "priced_count": 0,
         "providers_with_errors": [],
         "enabled_agent_ids": [],
+        "free_tier_count": 0,
         "models": [],
     }
 
@@ -75,7 +76,9 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
         set_backend(None)
     report = json.loads(stdout.getvalue())
     assert report["discovered_count"] == 1
-    assert report["models"] == [{"provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5"}]
+    assert report["models"] == [
+        {"provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5", "is_free": False}
+    ]
 
 
 def test_discover_models_persists_to_agents_db(tmp_path) -> None:
