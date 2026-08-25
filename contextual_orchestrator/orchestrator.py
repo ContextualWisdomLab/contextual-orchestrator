@@ -1966,7 +1966,12 @@ class TaskOrchestrator:
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str, model_name: str) -> dict[str, Any]:
+    def _dispatch(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if model_name != "contextual-orchestrator" or mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
             return self.route_once(messages, model_name=model_name)
