@@ -184,8 +184,12 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
-        inputs = tuple(value for value in architecture.get("input_modalities", ()) if isinstance(value, str))
-        outputs = tuple(value for value in architecture.get("output_modalities", ()) if isinstance(value, str))
+        inputs = tuple(
+            value for value in (architecture.get("input_modalities") or ()) if isinstance(value, str)
+        )
+        outputs = tuple(
+            value for value in (architecture.get("output_modalities") or ()) if isinstance(value, str)
+        )
         capabilities = tuple(
             dict.fromkeys(_CAPABILITY_NAMES.get(value, value) for value in (*source.capabilities, *inputs, *outputs))
         )
