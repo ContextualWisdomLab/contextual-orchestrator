@@ -769,6 +769,7 @@ class SqlLedgerStore:
             raise ValueError("paramstyle must be qmark or pyformat")
         self._conn = connection
         self._paramstyle = paramstyle
+        self._lock = threading.RLock()
         if self._paramstyle == "qmark":
             # sqlite3 keeps foreign-key enforcement per connection and defaults
             # it off. Set it before schema work can open a transaction: sqlite
@@ -906,6 +907,13 @@ class SqlLedgerStore:
             for statement in statements[2:]:
                 cur.execute(statement)
         elif "account_name" in new_columns:
+            required = set(_CORE_USAGE_COLUMNS) | set(_LEGACY_ATTRIBUTION_COLUMNS)
+            missing = ", ".join(sorted(required - new_columns))
+            if missing:
+                raise RuntimeError(
+                    "flattened llm_usage_records schema is unsupported; "
+                    f"missing columns: {missing}"
+                )
             self._migrate_legacy_usage_table()
         elif not set(_CORE_USAGE_COLUMNS).issubset(new_columns):
             missing = ", ".join(sorted(set(_CORE_USAGE_COLUMNS) - new_columns))
@@ -937,6 +945,11 @@ class SqlLedgerStore:
         caller-owned sqlite transaction is isolated with a savepoint and remains
         open for the caller to commit or roll back.
         """
+        with self._lock:
+            self._append_locked(record)
+
+    def _append_locked(self, record: UsageRecord) -> None:
+        """Insert one record while the shared DB-API connection is locked."""
         row = record.as_dict()
         cur = self._conn.cursor()
         outer_transaction = self._paramstyle == "qmark" and bool(
@@ -966,6 +979,13 @@ class SqlLedgerStore:
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
+        with self._lock:
+            return self._query_locked(start, end)
+
+    def _query_locked(
+        self, start: Optional[int], end: Optional[int]
+    ) -> List[Dict[str, Any]]:
+        """Read records while the shared DB-API connection is locked."""
         params: List[Any] = []
         if start is not None:
             params.append(start)

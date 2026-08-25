@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sqlite3
 import sys
@@ -632,6 +633,44 @@ def test_sql_ledger_rejects_ambiguous_legacy_migration_without_renaming_source()
         SqlLedgerStore(connection, paramstyle="qmark")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(llm_usage_records)")}
     assert "account_name" in columns
+
+
+def test_sql_ledger_serializes_shared_sqlite_connection_writes() -> None:
+    """Concurrent callers cannot overlap transactions on one SQLite connection."""
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(
+            executor.map(
+                lambda index: store.append(
+                    _guard_usage_record(usage_record_id=f"usage_concurrent_{index}")
+                ),
+                range(32),
+            )
+        )
+
+    assert len(store.query()) == 32
+
+
+def test_flattened_migration_names_missing_columns_before_rename() -> None:
+    """Reject incomplete flattened schemas without mutating their table name."""
+    connection = sqlite3.connect(":memory:")
+    columns = [
+        "usage_record_id", "created_at", "workflow_run_id", "request_channel",
+        "route_mode", "provider_name", "model_name", "prompt_tokens",
+        "completion_tokens", "total_tokens", "cost_amount", "currency_code",
+        "account_name", "upstream_api", "team_name", "group_name", "company_name",
+    ]
+    connection.execute("CREATE TABLE llm_usage_records (" + ", ".join(columns) + ")")
+    connection.commit()
+
+    with pytest.raises(RuntimeError, match="missing columns: service_name"):
+        SqlLedgerStore(connection, paramstyle="qmark")
+
+    assert connection.execute(
+        "SELECT name FROM sqlite_master WHERE name='llm_usage_records'"
+    ).fetchone() == ("llm_usage_records",)
 
 
 def _guard_usage_record(**overrides: object):
