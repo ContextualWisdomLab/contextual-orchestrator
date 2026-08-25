@@ -1,0 +1,117 @@
+name: OpenCode hourly maintenance loop
+
+# Hourly autonomous maintenance: an OpenCode agent whose model traffic is
+# served by THIS repository's gateway (contextual-orchestrator) with
+# auto-discovered providers and operator-managed model-group routing.
+# The agent works the PR queue (review -> fix -> recheck -> merge), root-causes
+# failing checks, and advances docs/product-technical-gap-baseline.md items.
+
+on:
+  schedule:
+    - cron: "23 * * * *" # hourly at :23 UTC; offset avoids top-of-hour CI storms
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: opencode-hourly-loop
+  cancel-in-progress: false
+
+jobs:
+  loop:
+    name: Run OpenCode maintenance agent through the local gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      # Bootstrap transport only: these flow into the process-local KV registry
+      # (see scripts/ci/serve_seeded_gateway.py); the gateway never reads them
+      # from the environment again after seeding. See docs/kv-credentials.md.
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+      GATEWAY_BEARER_TOKEN: ${{ secrets.GATEWAY_BEARER_TOKEN || format('loop-{0}', github.run_id) }}
+      OPENCODE_VERSION: "1.18.22"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: true # the agent needs to push fixes/branches
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node for the OpenCode CLI
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned runtime dependencies
+        run: |
+          python -m pip install --require-hashes -r fuzz/requirements-property.txt
+          python -m pip install --no-deps .
+
+      - name: Install OpenCode CLI
+        run: npm install --global "opencode-ai@${OPENCODE_VERSION}"
+
+      - name: Start the contextual-orchestrator gateway with auto-discovery
+        run: |
+          set -euo pipefail
+          nohup python scripts/ci/serve_seeded_gateway.py \
+            --serve \
+            --agents examples/agents.mock.json \
+            --auto-discover-model-agents \
+            --auth-token "$GATEWAY_BEARER_TOKEN" \
+            --host 127.0.0.1 --port 8000 \
+            > /tmp/gateway.log 2>&1 &
+          for _attempt in $(seq 1 30); do
+            if curl -fsS -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
+              http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
+              echo "gateway ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::gateway did not become healthy"; tail -50 /tmp/gateway.log; exit 1
+
+      - name: Point OpenCode at the local gateway
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.config/opencode
+          cat > ~/.config/opencode/opencode.json <<JSON
+          {
+            "\$schema": "https://opencode.ai/config.json",
+            "model": "contextual_orchestrator_gateway/contextual-orchestrator",
+            "provider": {
+              "contextual_orchestrator_gateway": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Contextual Orchestrator Gateway",
+                "options": {
+                  "baseURL": "http://127.0.0.1:8000/v1",
+                  "apiKey": "${GATEWAY_BEARER_TOKEN}"
+                },
+                "models": {
+                  "contextual-orchestrator": { "name": "gateway default" }
+                }
+              }
+            }
+          }
+          JSON
+
+      - name: Run the hourly loop agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          opencode run --model contextual_orchestrator_gateway/contextual-orchestrator \
+            "$(cat .github/opencode/hourly-loop-prompt.md)"
+
+      - name: Dump gateway log on failure
+        if: failure()
+        run: tail -100 /tmp/gateway.log
