@@ -118,6 +118,10 @@ def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     )["trace"]
     records = coordinator.ledger.records()
     assert len(result["usage_record_ids"]) == len(records) == len(trace)
+    statuses = [record["measurement_status"] for record in records]
+    assert statuses.count("estimated") == 2
+    assert set(statuses) == {"measured", "estimated"}
+    assert result["cost"]["measurement_status"] == "estimated"
     assert records[1]["total_tokens"] > 0
     assert records[3]["total_tokens"] > 0
 

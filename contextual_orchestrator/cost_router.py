@@ -246,6 +246,11 @@ class CostRoutingCoordinator:
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "measurement_status": (
+                    "estimated"
+                    if any(record.measurement_status == "estimated" for record in records)
+                    else "measured"
+                ),
             }
             return provider_response
 
@@ -277,6 +282,7 @@ class CostRoutingCoordinator:
             "prompt_tokens": record.prompt_tokens,
             "completion_tokens": record.completion_tokens,
             "total_tokens": record.total_tokens,
+            "measurement_status": record.measurement_status,
         }
         result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
         return result
@@ -296,6 +302,11 @@ class CostRoutingCoordinator:
         completion_tokens: Optional[int] = None,
     ):
         provider, model = provider_model
+        measurement_status = (
+            "measured"
+            if prompt_tokens is not None and completion_tokens is not None
+            else "estimated"
+        )
         if prompt_tokens is None:
             prompt_tokens = self.token_counter.count_messages(messages, model)
         if completion_tokens is None:
@@ -309,6 +320,7 @@ class CostRoutingCoordinator:
             route_mode=route_mode,
             workflow_run_id=workflow_run_id,
             attribution=attribution,
+            measurement_status=measurement_status,
         )
 
     # ------------------------------------------------------------------
@@ -357,6 +369,7 @@ class CostRoutingCoordinator:
                     "currency_code": record.currency_code,
                     "prompt_tokens": record.prompt_tokens,
                     "completion_tokens": record.completion_tokens,
+                    "measurement_status": record.measurement_status,
                 }
             )
         return {
