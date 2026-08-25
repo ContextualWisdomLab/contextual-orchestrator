@@ -167,9 +167,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_investment_committee_ready": "Commercial investment committee ready",
         "commercial_investment_committee_ready_with_warnings": "Commercial investment committee ready with warnings",
         "commercial_investment_committee_blocked": "Commercial investment committee blocked",
-        "readiness_pass": "Pass",
-        "readiness_warn": "Warn",
-        "readiness_fail": "Fail",
+        "readiness_ok": "Pass",
+        "readiness_warning": "Warn",
+        "readiness_failure": "Fail",
         "api_compatibility": "OpenAI-compatible API",
         "admin_evidence": "Operator evidence surface",
         "trace_evidence": "Workflow trace evidence",
@@ -401,9 +401,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_investment_committee_ready": "상용 투자심의 준비 완료",
         "commercial_investment_committee_ready_with_warnings": "주의 조건부 상용 투자심의 가능",
         "commercial_investment_committee_blocked": "상용 투자심의 차단",
-        "readiness_pass": "통과",
-        "readiness_warn": "주의",
-        "readiness_fail": "실패",
+        "readiness_ok": "통과",
+        "readiness_warning": "주의",
+        "readiness_failure": "실패",
         "api_compatibility": "OpenAI 호환 API",
         "admin_evidence": "운영자 근거 화면",
         "trace_evidence": "워크플로 트레이스 근거",
@@ -1418,7 +1418,7 @@ Summarize this research thread and verify claims.</textarea>
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
             const chip = row.status === "pass" ? "green" : row.status === "warn" ? "amber" : "red";
             return `<div class="readiness-row">
-              <span class="chip ${chip}">${escapeHtml(t(`readiness_${row.status}`))}</span>
+              <span class="chip ${chip}">${escapeHtml(t(`readiness_${{ pass: "ok", warn: "warning", fail: "failure" }[row.status]}`))}</span>
               <strong>${escapeHtml(t(row.criterion_name) || row.label)}</strong>
               <small>${escapeHtml(row.evidence)}</small>
               <small><b>${escapeHtml(t("readiness_remediation_label"))}:</b> ${escapeHtml(row.remediation || "")}</small>
