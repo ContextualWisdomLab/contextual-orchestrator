@@ -4,7 +4,7 @@
 
 | PR | Exact head/base | Current evidence and decision |
 | --- | --- | --- |
-| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `bfc95d75a8b91378887d1fcab5c91355da81703c`, base `main` `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Open with normal auto-merge enabled. The current head joins Zen availability to Models.dev structured cost/modality evidence, removes model-name free inference, stops paid orchestration when SSE headers cannot reach the client, and keeps a model judge inside an explicitly requested paid group without conflating membership restriction with free-only routing. All review threads were resolved at this snapshot; focused judge/group/reliability evidence is `102 passed`. Hosted Checks and independent exact-head approval remain authoritative. Decision: `WAIT_AND_REMEDIATE`. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `bfc95d75567352052f4c86c5ab914be9c53977f0`, base `main` `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Open with normal auto-merge enabled. The current head joins Zen availability to Models.dev structured cost/modality evidence, removes model-name free inference, stops paid orchestration when SSE headers cannot reach the client, and keeps a model judge inside an explicitly requested paid group without conflating membership restriction with free-only routing. All review threads were resolved at this snapshot; focused judge/group/reliability evidence is `102 passed`. Hosted Checks and independent exact-head approval remain authoritative. Decision: `WAIT_AND_REMEDIATE`. |
 | [#844](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/844) | head `3ca50633b8fa8f639754a5a5dcc8aaa0f2b2bf9f`, merge `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | Merged normally to protected `main` on 2026-08-25. It partitions cached admin-session responses by an active opaque session and contains the thread-termination regression repair. This merge is protected-main evidence for that bounded fix only. |
 
 Current open-queue exact-head inventory at this continuation:
@@ -20,7 +20,7 @@ Current open-queue exact-head inventory at this continuation:
 | #794 | `486266de81d9eeec1abd90f31cb6179192476a2e` | `87c6c66a7f049e725b417b8fa16f99b886062845` | `DIRTY`, review required |
 | #818 | `d286f51f8fe2ae24c62234c191994c81045cb79e` | `50014ef9f87623c6dfd529116297c5d180743125` | `DIRTY`, review required |
 | #821 | `4f61158ddf878c3359d6b3f409e9ac114fc80f42` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required, auto-merge enabled |
-| #834 | `bfc95d75a8b91378887d1fcab5c91355da81703c` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required, auto-merge enabled |
+| #834 | `bfc95d75567352052f4c86c5ab914be9c53977f0` | `84ec3e5345ef2ee951eb4d7a0d15b1175781ba5b` | `BLOCKED`, review required, auto-merge enabled |
 
 The remaining customer-visible routing gap is durable, multi-replica observation
 aggregation with an explicit time horizon. The current in-process Beta-Bernoulli
