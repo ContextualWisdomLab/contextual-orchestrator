@@ -754,6 +754,8 @@ def is_transient_error(exc: BaseException) -> bool:
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True
+    if isinstance(exc, socket.gaierror):
+        return exc.errno == socket.EAI_AGAIN
     # A VPN/socket path can surface as an SSL EOF or SSL_ERROR_SYSCALL. Keep
     # certificate verification failures non-transient so a bad trust boundary
     # is never retried as if it were a network fault.
@@ -2223,7 +2225,18 @@ class TaskOrchestrator:
                 upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
             return self.client.proxy_send(agent, endpoint, upstream)
 
-        candidates = self._failover_candidates(agent, text, "worker")
+        candidates: list[ModelAgent] = []
+        seen_providers: set[str] = set()
+        for candidate in self._failover_candidates(agent, text, "worker"):
+            provider_key = (
+                f"provider:{candidate.provider_name.casefold()}"
+                if candidate.provider_name.strip()
+                else f"endpoint:{candidate.base_url.rstrip('/').casefold()}"
+            )
+            if provider_key in seen_providers:
+                continue
+            seen_providers.add(provider_key)
+            candidates.append(candidate)
         last_error: Exception | None = None
         for candidate in candidates:
             candidate_payload = dict(upstream)

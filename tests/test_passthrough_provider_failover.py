@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import urllib.error
 from copy import deepcopy
 from typing import Any
@@ -41,8 +42,12 @@ def _build(client: SequencedProxyClient) -> TaskOrchestrator:
     """Build a two-provider pool with deterministic priority."""
     return TaskOrchestrator(
         [
-            ModelAgent("primary_agent", "primary-model", priority=10),
-            ModelAgent("fallback_agent", "fallback-model", priority=1),
+            ModelAgent(
+                "primary_agent", "primary-model", priority=10, provider_name="primary"
+            ),
+            ModelAgent(
+                "fallback_agent", "fallback-model", priority=1, provider_name="fallback"
+            ),
         ],
         client=client,
     )
@@ -163,3 +168,68 @@ def test_all_candidates_chain_the_last_failure() -> None:
         orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
     assert caught.value.__cause__ is final
+
+
+def test_same_provider_is_attempted_only_once() -> None:
+    """Two aliases for one upstream cannot replay a non-idempotent request."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(429),
+            "same_provider_agent": {"model": "same-provider-model"},
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent", "primary-model", priority=10, provider_name="shared"
+            ),
+            ModelAgent(
+                "same_provider_agent",
+                "same-provider-model",
+                priority=5,
+                provider_name="shared",
+            ),
+            ModelAgent(
+                "fallback_agent", "fallback-model", priority=1, provider_name="fallback"
+            ),
+        ],
+        client=client,
+    )
+
+    assert orchestrator.proxy_completion(
+        {"messages": [{"role": "user", "content": "x"}], "tools": []}
+    )["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+@pytest.mark.parametrize(
+    ("dns_errno", "should_fail_over"),
+    [(socket.EAI_AGAIN, True), (socket.EAI_NONAME, False)],
+)
+def test_only_temporary_dns_failures_advance(
+    dns_errno: int, should_fail_over: bool
+) -> None:
+    """Temporary DNS resolution can recover elsewhere; permanent DNS errors cannot."""
+    try:
+        raise RuntimeError("provider resolution failed") from socket.gaierror(
+            dns_errno, "dns failure"
+        )
+    except RuntimeError as wrapped:
+        failure = wrapped
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+
+    if should_fail_over:
+        assert _build(client).proxy_completion(
+            {"messages": [{"role": "user", "content": "x"}]}
+        )["model"] == "fallback-model"
+    else:
+        with pytest.raises(RuntimeError, match="provider resolution failed"):
+            _build(client).proxy_completion(
+                {"messages": [{"role": "user", "content": "x"}]}
+            )
