@@ -368,6 +368,46 @@ def test_stream_survives_noise_and_stream_without_done_marker() -> None:
     assert deltas == ["hel", "lo"]
 
 
+def test_stream_preserves_tool_stop_contract_mid_stream() -> None:
+    """A terminal tool-stop raised during streaming keeps its own semantics."""
+    agent = _streaming_agent()
+    client = ModelClient()
+    from contextual_orchestrator.tool_fallback import (
+        ToolExecutionError,
+        ToolFallbackAction,
+        ToolFallbackStoppedError,
+        ToolFailureDecision,
+        ToolFailureKind,
+    )
+
+    decision = ToolFailureDecision(
+        kind=ToolFailureKind.AMBIGUOUS_OUTCOME,
+        action=ToolFallbackAction.FAIL_CLOSED,
+        reason_code="ambiguous_outcome",
+        retry_safe=False,
+        circuit_failure=False,
+    )
+    stop = ToolFallbackStoppedError(agent.id, decision)
+
+    class _StopStream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def __iter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"par"}}]}'
+            raise stop
+
+    with patch.object(client, "_open_provider", return_value=_StopStream()):
+        iterator = client._stream_send(agent, {})
+        assert next(iterator) == "par"
+        with pytest.raises(ToolFallbackStoppedError) as excinfo:
+            next(iterator)
+    assert excinfo.value is stop
+
+
 def test_stream_wraps_mid_stream_transport_failure_without_provider_text() -> None:
     agent = _streaming_agent()
     client = ModelClient()

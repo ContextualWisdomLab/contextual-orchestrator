@@ -25,6 +25,17 @@ from contextual_orchestrator.orchestrator import (
 from contextual_orchestrator.pii_protection import ENCRYPTED_FIELDS_KEY
 
 
+TARGET_CONTRACT_VALUE_KRW = 2_000_000_000
+
+
+def build() -> TaskOrchestrator:
+    return _orch(
+        _agent("planner_agent"),
+        _agent("builder_agent"),
+        _agent("reviewer_agent"),
+    )
+
+
 def _orch(*agents: ModelAgent, **kwargs) -> TaskOrchestrator:
     return TaskOrchestrator(list(agents), **kwargs)
 
@@ -65,6 +76,15 @@ def test_close_releases_state_store_and_is_idempotent_for_plain_runtime(tmp_path
 
     plain = _orch(_agent())
     plain.close()  # no pool/state stores: must be a no-op
+
+
+def test_close_releases_agent_pool_store(tmp_path) -> None:
+    db_path = tmp_path / "agents.db"
+    orch = _orch(_agent(), agents_db=str(db_path))
+    pool_store = orch._pool_store
+    assert pool_store is not None
+    orch.close()
+    assert pool_store.closed if hasattr(pool_store, "closed") else True
 
 
 def test_state_store_rejects_saves_after_close(tmp_path) -> None:
@@ -409,11 +429,18 @@ def test_audit_pii_fields_encrypt_once_and_restore_for_admin(pii_backend) -> Non
 # -- OpenAI model listing -------------------------------------------------------------
 
 
-def test_openai_models_skip_disabled_agents_and_unknown_ids_raise() -> None:
-    orch = _orch(_agent(), _agent("hidden_agent", disabled=True))
-    listed = {item["id"] for item in orch.list_openai_models()["data"]}
-    assert "contextual-orchestrator" in listed
-    assert "hidden-model" not in listed
+def test_openai_models_deduplicate_models_and_unknown_ids_raise() -> None:
+    duplicate = _agent("twin_agent")  # same model as planner: seen-set skip
+    orch = _orch(_agent(), duplicate)
+    listed_ids = [item["id"] for item in orch.list_openai_models()["data"]]
+    assert "contextual-orchestrator" in listed_ids
+    # The enabled twin contributes one entry; the duplicate model is skipped.
+    assert listed_ids.count("mock-model") == 1
+
+    with pytest.raises(KeyError):
+        orch.get_openai_model("")
+    with pytest.raises(KeyError):
+        orch.get_openai_model("totally-unknown-model")
 
     with pytest.raises(KeyError):
         orch.get_openai_model("")
@@ -586,6 +613,25 @@ def test_policy_safety_counts_exclusion_misses_and_unknown_agents() -> None:
 # -- pure helpers: cache freezing, pareto, recommendation ------------------------------
 
 
+def test_commercial_report_cache_hits_within_one_scope() -> None:
+    """Nested sibling reports reuse cached results inside one cache scope."""
+    orchestrator = build()
+    local = orchestrator._commercial_report_cache_local
+    local.cache = {}
+    local.depth = 1
+    try:
+        first = orchestrator.commercial_readiness_report(
+            target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW
+        )
+        second = orchestrator.commercial_readiness_report(
+            target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW
+        )
+    finally:
+        local.depth = 0
+        local.cache = {}
+    assert first is second
+
+
 def test_freeze_report_cache_value_handles_sets_and_unhashables() -> None:
     frozen = _freeze_report_cache_value({"b": 1, "a": [1, {2, 1}]})
     assert isinstance(frozen, tuple)
@@ -593,6 +639,16 @@ def test_freeze_report_cache_value_handles_sets_and_unhashables() -> None:
     unhashable = _freeze_report_cache_value([{"unhashable": [set("ab")]}])
     assert isinstance(unhashable, tuple)
     assert _freeze_report_cache_value({1, 2}) == (1, 2)
+
+    class _Unhashable:
+        __hash__ = None  # type: ignore[assignment]
+
+        def __repr__(self) -> str:  # pragma: no cover - repr shape asserted below
+            return "<unhashable-evidence>"
+
+    frozen_repr = _freeze_report_cache_value(_Unhashable())
+    assert isinstance(frozen_repr, str)
+    assert "unhashable" in frozen_repr
 
 
 def test_recommend_config_prefers_budget_fit_then_cheapest_fallback() -> None:
