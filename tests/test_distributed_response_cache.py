@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 
@@ -157,11 +158,14 @@ def test_semantically_malformed_cached_response_is_ignored() -> None:
         client=client,
         cache_provider=provider,
     )
+    # Single-step routing with the real-time judge disabled keeps ``calls``
+    # an exact count of worker executions, isolating the cache semantics.
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
     messages = [{"role": "user", "content": "recover from stale cache"}]
-    key = orchestrator._cache_key(messages, "auto")
+    key = orchestrator._cache_key(messages, "route")
     redis.values[f"contextual_orchestrator_response:{key}"] = json.dumps({"answer": "stale"})
 
-    result = orchestrator.complete(messages)
+    result = orchestrator.complete(messages, mode="route")
 
     assert result["answer"] != "stale"
     assert client.calls == 1
