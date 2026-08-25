@@ -300,6 +300,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument(
+        "--insecure-admin-session-cookie",
+        action="store_true",
+        help="Allow the admin session cookie over local HTTP; use only for isolated development.",
+    )
     parser.add_argument("--clearfolio-url", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL") or None,
                         help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
     parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
@@ -421,6 +426,7 @@ def main(argv: list[str] | None = None) -> None:
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
+                admin_session_secure_cookie=not args.insecure_admin_session_cookie,
             ),
             clearfolio_url=args.clearfolio_url,
         )
