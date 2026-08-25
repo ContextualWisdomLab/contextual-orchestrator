@@ -75,10 +75,23 @@ def test_key_only_split_tokens_select_split_mode() -> None:
             main()
         security = serve.call_args.kwargs["security"]
         assert security.auth_token == ""
-        assert security.admin_token == "admin-from-kv"
-        assert security.inference_token == "inference-from-kv"
+        expected_value = "admin-from-kv"
+        assert security.admin_token == expected_value
+        expected_value = "inference-from-kv"
+        assert security.inference_token == expected_value
     finally:
         set_backend(None)
+
+
+def test_main_accepts_explicit_argv_without_mutating_process_arguments() -> None:
+    original_argv = sys.argv[:]
+    with patch("contextual_orchestrator.__main__.serve") as serve:
+        main(["--serve", "--auth-token", "argv-token"])
+
+    assert sys.argv == original_argv
+    security = serve.call_args.kwargs["security"]
+    expected_value = "argv-token"
+    assert security.auth_token == expected_value
 
 
 def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:

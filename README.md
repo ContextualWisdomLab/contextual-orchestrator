@@ -295,11 +295,20 @@ Grounding papers (LLM cost, routing, load balancing) live in
 
 ## Check
 
+Run the full suite with the same hash-locked pytest toolchain as CI:
+
+```bash
+make test
+```
+
+For the individual smoke checks, use the existing runtime lock:
+
 ```bash
 python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps -e .
 python tests/test_self_check.py
 python tests/test_paper_contracts.py
+python -m pytest -q tests/test_reasoning_effort_profile.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py

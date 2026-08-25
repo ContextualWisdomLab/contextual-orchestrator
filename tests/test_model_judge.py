@@ -267,13 +267,48 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
         orchestrator,
         "_invoke",
         return_value=("judge completion", "general_agent", None),
-    ):
+    ) as invoke:
         completion = adapter.complete(
             [{"role": "user", "content": "ping"}],
             mode="conduct",
         )
+    assert invoke.call_args.kwargs["role"] == "judge"
+    assert invoke.call_args.kwargs["eligibility_role"] == "verifier"
     assert completion["answer"] == "judge completion"
     assert completion["mode"] == "conduct"
+
+
+def test_fast_mlsirm_judge_failover_honors_verifier_exclusions() -> None:
+    """A verifier-excluded backup cannot become the model judge on failover."""
+
+    class _PrimaryDownClient(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: object) -> str:  # type: ignore[override]
+            del messages, kwargs
+            if agent.id == "primary_judge":
+                raise RuntimeError("primary judge unavailable")
+            return "unexpected backup judge"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("primary_judge", "primary", tags=("verification",), priority=2),
+            ModelAgent(
+                "verifier_excluded_backup",
+                "backup",
+                tags=("verification",),
+                provider_exclusions=("verifier",),
+            ),
+        ],
+        client=_PrimaryDownClient(),
+    )
+
+    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+        orchestrator._invoke(
+            orchestrator._agent("primary_judge"),
+            [{"role": "user", "content": "judge this"}],
+            text="judge this",
+            role="judge",
+            eligibility_role="verifier",
+        )
 
 
 def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
