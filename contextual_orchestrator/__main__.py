@@ -220,8 +220,8 @@ def _discover_models_command(argv: list[str]) -> None:
     parser.add_argument(
         "--free-only",
         action="store_true",
-        help="Report only models whose provider metadata marks them zero-cost "
-        "(reported 0 price or an explicit -free/:free id suffix); the full report keeps every model.",
+        help="Report only models whose structured provider/catalog price metadata is entirely zero; "
+        "unknown or name-implied prices remain excluded, while the full report keeps every model.",
     )
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:

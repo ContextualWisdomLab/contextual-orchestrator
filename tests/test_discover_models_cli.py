@@ -33,6 +33,22 @@ class _Response:
         return self._body
 
 
+def test_free_only_help_rejects_name_inference() -> None:
+    """CLI guidance matches the fail-closed structured-price contract."""
+    stdout = StringIO()
+    with (
+        patch.object(sys, "argv", ["contextual-orchestrator", "discover-models", "--help"]),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 0
+    help_text = " ".join(stdout.getvalue().split())
+    assert "structured provider/catalog price metadata" in help_text
+    assert "-free/:free" not in help_text
+
+
 def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None:
     set_backend(InMemoryCredentialBackend())
     stdout = StringIO()
