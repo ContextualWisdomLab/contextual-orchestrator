@@ -42,8 +42,20 @@ OPENAPI_SPEC = {
         "/healthz": {
             "get": {
                 "operationId": "get_health_status",
-                "summary": "Get unauthenticated service liveness",
+                "summary": "Get minimal unauthenticated service liveness",
                 "responses": {"200": {"description": "Service health"}},
+            }
+        },
+        "/readyz": {
+            "get": {
+                "operationId": "get_readiness_status",
+                "summary": "Get authenticated dependency readiness",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {
+                    "200": {"description": "Service is ready or has degraded optional dependencies"},
+                    "401": {"description": "Admin authentication required"},
+                    "503": {"description": "Required service dependency is not ready"},
+                },
             }
         },
         "/v1/models": {

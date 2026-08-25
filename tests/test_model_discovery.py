@@ -216,26 +216,72 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
     assert agent_from_discovered(discovered[0]).group_name == ""
 
 
-def test_opencode_zen_free_suffix_is_discovered_without_implicit_grouping() -> None:
+def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            assert request.get_header("Authorization") is None
+            return _Response(
+                {
+                    "opencode": {
+                        "models": {
+                            "provider/example-free": {
+                                "cost": {"input": 0, "output": 0, "cache_read": 0},
+                                "modalities": {"input": ["text", "image"], "output": ["text"]},
+                            },
+                            "paid-model": {
+                                "cost": {"input": 2, "output": 12},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                            "cache-fee-free": {
+                                "cost": {"input": 0, "output": 0, "cache_write": 0.1},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                        }
+                    }
+                }
+            )
+        return _Response(
+            {
+                "data": [
+                    {"id": "provider/example-free"},
+                    {"id": "paid-model"},
+                    {"id": "cache-fee-free"},
+                    {"id": "unknown-free"},
+                ]
+            }
+        )
+
     with patch(
         "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        return_value=_Response({"data": [{"id": "provider/example-free"}, {"id": "paid-model"}]}),
+        side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
 
     assert discovered[0].is_free is True
     assert discovered[1].is_free is False
+    assert discovered[2].is_free is False
+    assert discovered[3].is_free is False
+    assert discovered[0].input_modalities == ("text", "image")
+    assert discovered[1].prompt_price_per_1k == pytest.approx(0.002)
+    assert discovered[1].completion_price_per_1k == pytest.approx(0.012)
     assert agent_from_discovered(discovered[0]).group_name == ""
 
 
-def test_explicit_nonzero_price_overrides_free_model_suffix() -> None:
+def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() -> None:
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            raise urllib.error.URLError("offline")
+        return _Response({"data": [{"id": "vendor/paid-free"}]})
+
     with patch(
         "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        return_value=_Response({"data": [{"id": "vendor/paid-free", "pricing": {"prompt": "0.1"}}]}),
+        side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
 
@@ -266,6 +312,7 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
         "error": None,
         "output": [
             {"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat", "meterPrice": "0.0006 / sec"},
+            {"modelId": "provider/llama-guard", "task": "chat"},
         ],
     }
     seen_requests = []
@@ -285,6 +332,28 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     assert discovered[0].capabilities == ("chat",)
     # Bytez prices by GPU-second, not per-token: no fabricated per-1k estimate.
     assert discovered[0].prompt_price_per_1k is None
+
+
+def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
+    """A declared endpoint capability admits Bytez identifiers without name inference."""
+    register_credential("BYTEZ_EMBEDDING_KEY", "bytez-secret")
+    source = ProviderModelSource(
+        provider_name="bytez",
+        credential_name="BYTEZ_EMBEDDING_KEY",
+        list_url="https://api.bytez.com/models/v2/list/models?task=embedding",
+        chat_base_url="https://api.bytez.com/models/v2/openai/v1",
+        auth_scheme="Key",
+        style="bytez",
+        capabilities=("embedding",),
+    )
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"output": [{"modelId": "embedding-deployment"}]}),
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].capabilities == ("embedding",)
 
 
 def test_discover_all_models_continues_after_one_provider_error() -> None:

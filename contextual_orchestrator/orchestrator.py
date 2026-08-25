@@ -341,7 +341,7 @@ class ModelAgent:
     auth_scheme: str = "Bearer"
     # Optional measured-routing group: agents sharing a canonical group name are
     # one logical model whose members are ordered by observed speed/stability
-    # (see model_group.ModelGroupRouter and planning ADR 0026).
+    # (see model_group.ModelGroupRouter and planning ADR 0032).
     # Empty string means the agent is ungrouped.
     group_name: str = ""
     # ``None`` means provider support is unproven. Opt-in effort profiles then
@@ -4000,7 +4000,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
     ) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role, free_only=allowed_agent_ids is not None)
+        ranked = self._ranked_agents(text, role)
         if allowed_agent_ids is not None:
             ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
         if allowed_agent_ids is None:

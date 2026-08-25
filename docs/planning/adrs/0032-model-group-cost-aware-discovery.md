@@ -1,4 +1,4 @@
-# ADR 0026: Measured model groups and cost-aware discovery
+# ADR 0032: Measured model groups and cost-aware discovery
 
 - Status: Accepted on PR #834; protected-main delivery pending
 - Date: 2026-08-25
@@ -17,7 +17,12 @@ Capability routing is modality-aware rather than model-name-aware. Discovery pre
 
 Stability uses the posterior mean of a Bernoulli success probability under a uniform Beta(1, 1) prior. Latency uses Jacobson's exponentially weighted estimator with gain 1/8. The ranking quantity `posterior success probability / EWMA seconds` has the interpretable unit expected successful responses per second and contains no arbitrary cross-metric weight. This quotient is a gateway design decision, not a claim reproduced from the cited routing studies. RouteLLM and FrugalGPT support learned cost/quality routing between distinct models; they motivate the later quality-aware layer but do not validate treating provider aliases as different model quality.
 
-OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery uses its documented `/zen/v1/models` endpoint; because that response currently omits prices, only identifiers explicitly ending in `-free` or `:free` are classified free. Unknown price is never converted to zero. All discovered models remain available for later policy decisions.
+OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery intersects its documented `/zen/v1/models` availability response with the `opencode` catalog in Models.dev, which OpenCode documents as a source for its own model catalog. Only structured cost records whose declared monetary components are all exactly zero are classified free. A missing, malformed, unmatched, or temporarily unavailable metadata record remains unknown; model-name suffixes are never treated as price evidence. All available models remain discoverable for later policy decisions.
+
+Durable provider-catalog refreshes store explicit cost, capability, and directed
+modality evidence in normalized serving-tag rows. Last-known-good reads reconstruct
+those semantics before selection and Agent Pool synchronization; otherwise
+`orchestrator/free` would lose its evidence after the first database round trip.
 
 Two durable virtual models replace transient examples: `orchestrator/auto` uses
 the full eligible pool, while `orchestrator/free` admits only models carrying
@@ -69,7 +74,7 @@ erDiagram
 
 - Contract tests cover canonical aliases, static tie behavior, measured reordering, snapshot safety, DB/API group persistence, full-catalog discovery, free classification, and the absence of implicit grouping.
 - Capability tests cover all eight requested model surfaces, group-scoped measured selection, binary speech preservation, and OpenRouter modality metadata without paid inference. An opt-in live test may use a currently free model, but the deterministic contract suite never assumes that a transient free model will remain listed.
-- Gap: provider-reported OpenCode Zen pricing is unavailable in `/models`; retain `unknown` rather than infer paid prices.
+- OpenCode Zen `/models` availability is joined to Models.dev cost/modality metadata; if either catalog lacks matching structured cost evidence, retain `unknown` rather than infer a price.
 - Gap: response quality is not yet in this intra-model score. Distinct-model composition must use calibrated evaluation evidence (for example fast-mlsirm), not a hand-authored weight.
 - Gap: multi-replica telemetry needs a time-windowed durable store and concurrency-safe aggregation before production horizontal scaling.
 - Gap: final answer deltas for conducted workflows begin after synthesis; true
@@ -85,6 +90,10 @@ Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM Computer Com
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference data* [Preprint]. arXiv. https://arxiv.org/abs/2406.18665
 
 OpenCode. (2026). *Zen*. https://opencode.ai/docs/zen
+
+OpenCode. (2026). *Models*. https://opencode.ai/v2/docs/models
+
+Models.dev. (2026). *Models.dev API*. https://models.dev/api.json
 
 OpenAI. (2026). *OpenAI OpenAPI specification: Responses streaming events*.
 https://github.com/openai/openai-openapi/blob/master/openapi.yaml

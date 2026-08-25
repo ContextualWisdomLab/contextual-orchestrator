@@ -92,6 +92,39 @@ def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
         server.server_close()
 
 
+def test_responses_stream_does_not_start_orchestration_after_header_disconnect() -> None:
+    """A dead Responses peer must not trigger any paid provider work."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+
+    class Orchestrator:
+        def would_route(self, *_args, **_kwargs):
+            raise AssertionError("orchestration must not start")
+
+    class Security:
+        acquired = 0
+        released = 0
+
+        def acquire_run_slot(self):
+            self.acquired += 1
+
+        def release_run_slot(self):
+            self.released += 1
+
+    class Handler:
+        def _begin_sse(self):
+            return False
+
+    try:
+        security = Security()
+        result = server.RequestHandlerClass._stream_orchestrated_response(
+            Handler(), Orchestrator(), security, [], "orchestrator/auto"
+        )
+        assert result is False
+        assert security.acquired == security.released == 1
+    finally:
+        server.server_close()
+
+
 def test_write_response_still_propagates_unrelated_errors() -> None:
     """Only disconnect-shaped errors are swallowed; real bugs must still surface."""
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
