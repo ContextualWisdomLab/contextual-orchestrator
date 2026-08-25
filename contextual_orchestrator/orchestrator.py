@@ -1224,6 +1224,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        stream_error: RuntimeError | None = None
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1237,13 +1238,25 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                    choices = chunk.get("choices") or [{}]
+                    delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
-        except urllib.error.HTTPError as exc:
+        except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
+            # The gateway's own terminal tool-stop contract must survive the
+            # boundary: convert the provider HTTP shape into the package-owned
+            # stop error so callers keep the 409 semantics they rely on.
             if _is_tool_execution_stopped(exc):
                 raise _provider_tool_execution_stopped(agent) from None
-            raise
+            if isinstance(exc, ToolFallbackStoppedError):
+                raise
+            # A stream may already have emitted bytes, so it can neither be retried
+            # nor failed over to another provider. Keep the provider status, body,
+            # and exception cause inside the gateway; callers get one stable,
+            # package-owned error instead of raw provider diagnostics.
+            stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+        if stream_error is not None:
+            raise stream_error
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
@@ -1473,9 +1486,18 @@ class ModelClient:
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
-            results = self._batch_run(  # pragma: no cover
-                agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
-            )
+            batch_error: RuntimeError | None = None
+            try:
+                results = self._batch_run(  # pragma: no cover
+                    agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
+                )
+            except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
+                # Batch upload, polling, and output retrieval all cross the same
+                # public gateway boundary; provider bodies and exception text stay
+                # inside the authorized provider observability system.
+                batch_error = RuntimeError(f"provider {agent.id} batch request failed")
+            if batch_error is not None:
+                raise batch_error
         return _validate_batch_results(requests, results)
 
     def _local_batch_chat(
@@ -2520,9 +2542,7 @@ class TaskOrchestrator:
         """Apply governance updates to an agent and emit an audit event."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
-        if agent_pool_id != "default":  # pragma: no cover
-            raise KeyError(agent_pool_id)
-        current = self._agent(worker_agent_id)
+        current = self._agent_in_pool(agent_pool_id, worker_agent_id)
         patched = current
         if "status" in patch:
             status = str(patch["status"]).lower()
@@ -2743,9 +2763,7 @@ class TaskOrchestrator:
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
-        if agent_pool_id != "default":  # pragma: no cover
-            raise KeyError(agent_pool_id)
-        target = self._agent(worker_agent_id)
+        target = self._agent_in_pool(agent_pool_id, worker_agent_id)
         remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
@@ -3316,6 +3334,18 @@ class TaskOrchestrator:
             if agent.id == agent_id:
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
+
+    def _agent_in_pool(self, agent_pool_id: str, worker_agent_id: str) -> ModelAgent:
+        """Resolve an agent only through the pool boundary it can belong to.
+
+        The current persistence model has one ``default`` pool and stores
+        agents by ID. Keeping the pool check beside the lookup prevents a
+        future multi-pool change from turning separately validated path
+        parameters into an object-authorization bypass.
+        """
+        if agent_pool_id != "default":
+            raise KeyError(agent_pool_id)
+        return self._agent(worker_agent_id)
 
     def _needs_workflow(self, text: str) -> bool:
         lowered = text.lower()
