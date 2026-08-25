@@ -71,7 +71,7 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         "Planning the approach.",
         "Executing the selected approach.",
         "Checking the result for errors and unsupported claims.",
-        "Preparing the verified final answer.",
+        "Preparing the final answer.",
     ]
     assert all("[" not in summary for summary in summaries)
     assert any(
@@ -178,6 +178,35 @@ def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
         server.shutdown()
     assert raised.value.code == 400
     assert "no enabled zero-cost model" in raised.value.read().decode()
+
+
+@pytest.mark.parametrize(
+    "structured_output",
+    [
+        {"response_format": {"type": "json_object"}},
+        {"text": {"format": {"type": "json_schema", "name": "result", "schema": {}}}},
+    ],
+)
+def test_orchestrated_responses_reject_unsupported_structured_output(
+    structured_output: dict,
+) -> None:
+    token = "responses_stream_token"
+    orchestrator = TaskOrchestrator([ModelAgent("free_worker", "free-model", tags=("cost:free",))])
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({"model": "orchestrator/free", "input": "hello", **structured_output}).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with pytest.raises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(request, timeout=5)
+    finally:
+        server.shutdown()
+    assert raised.value.code == 400
+    assert "structured output is not supported" in raised.value.read().decode()
 
 
 def test_stream_failure_emits_terminal_responses_event() -> None:

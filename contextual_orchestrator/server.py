@@ -4711,7 +4711,7 @@ _REASONING_STAGE_SUMMARIES = {
     "thinker": "Planning the approach.",
     "worker": "Executing the selected approach.",
     "verifier": "Checking the result for errors and unsupported claims.",
-    "synthesizer": "Preparing the verified final answer.",
+    "synthesizer": "Preparing the final answer.",
 }
 
 
@@ -6029,6 +6029,20 @@ def build_server(
                                 400,
                                 "invalid_tools",
                                 "tools are not supported for orchestrated Responses requests",
+                            )
+                        response_format = body.get("response_format")
+                        text_format = (body.get("text") or {}).get("format") if isinstance(
+                            body.get("text"), dict
+                        ) else None
+                        if any(
+                            isinstance(value, dict)
+                            and value.get("type") in {"json_object", "json_schema"}
+                            for value in (response_format, text_format)
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_response_format",
+                                "structured output is not supported for orchestrated Responses requests",
                             )
                         messages = []
                         instructions = body.get("instructions")

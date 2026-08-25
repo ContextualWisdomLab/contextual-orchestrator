@@ -13,9 +13,9 @@ FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a
 
 WORKDIR /app
 COPY pyproject.toml requirements.lock README.md LICENSE ./
-COPY contextual_orchestrator/ contextual_orchestrator/
-COPY examples/ examples/
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
+COPY contextual_orchestrator/ /usr/local/lib/python3.12/site-packages/contextual_orchestrator/
+COPY examples/ examples/
 
 ENV AGENTS_FILE=/app/examples/agents.mock.json \
     PORT=8000
