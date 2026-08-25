@@ -47,6 +47,11 @@ from .reasoning_effort_profile import (
     snapshot_role_effort_catalog,
 )
 from .token_counting import HeuristicTokenCounter, build_token_counter
+from .response_cache import (
+    RedisResponseCacheProvider,
+    ResponseCacheProvider,
+    build_response_cache_key,
+)
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -68,17 +73,16 @@ __all__ = [
     "default_role_effort_catalog",
     "parse_reasoning_effort_profile",
     "snapshot_role_effort_catalog",
-    "get_credential",
-    "register_credential",
-    "NotConfigured",
     "MAX_TOOL_RETRY_ATTEMPTS",
-    # tool fallback
     "ToolExecutionError",
     "ToolFallbackAction",
     "ToolFallbackStoppedError",
     "ToolFailureDecision",
     "ToolFailureKind",
     "classify_tool_failure",
+    "get_credential",
+    "register_credential",
+    "NotConfigured",
     # cost review
     "ATTRIBUTION_DIMENSIONS",
     "AttributionDimensions",
@@ -100,6 +104,9 @@ __all__ = [
     "get_config_store",
     "HeuristicTokenCounter",
     "build_token_counter",
+    "ResponseCacheProvider",
+    "RedisResponseCacheProvider",
+    "build_response_cache_key",
     # routing / batch
     "RoutingPolicy",
     "RoutingHints",

@@ -3,14 +3,14 @@
 The orchestrator consumes untrusted input at a handful of well-defined seams:
 HTTP request bodies, agent-pool configuration, arbitrary prompt text, trace
 payloads that pass through secret/PII redaction, untrusted model-generated
-judge verdicts, a remote provider's model-list HTTP response, and reasoning-
-effort profiles. Those seams
+judge verdicts, a remote provider's model-list HTTP response, PII encryption-
+key text, and reasoning-effort profiles. Those seams
 are fuzzed with two complementary, permissively licensed tools.
 
 | Tool | License | Role |
 | --- | --- | --- |
-| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`), covering all seven targets below. Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
-| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.12 (the first Atheris 3.1.0 wheel; also the pin the central CPython 3.14 coverage-evidence image preflights). Covers targets 1-5 and 7; target 6 currently has Hypothesis coverage only. |
+| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`), covering all eight targets below. Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
+| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.12. Covers targets 1-5, 7, and 8; target 6 currently has Hypothesis coverage only. |
 
 Both drivers call the same invariant checks in [`fuzz/targets.py`](../fuzz/targets.py),
 so a bug found by either tool reproduces under the other.
@@ -39,7 +39,9 @@ deserialize request config validate untrusted input"`):
 6. **Provider model-list response** — `_parse_openai_compatible` / `_parse_bytez`.
    Arbitrary provider-controlled JSON must produce validated model records or
    reject malformed rows without crashing discovery.
-7. **Reasoning-effort profile** — `parse_reasoning_effort_profile` (issue #568).
+7. **PII key boundary** — unprefixed encryption-key text must be rejected;
+   accepted key material must declare `base64:`, `hex:`, or `passphrase:`.
+8. **Reasoning-effort profile** — `parse_reasoning_effort_profile` (issue #568).
    Arbitrary decoded JSON must yield a finite `ReasoningEffortProfile` or raise
    `EffortProfileError` / `TypeError` / `ValueError`. Never crash on NaN,
    infinity, bool-as-number, or unknown keys.
@@ -61,6 +63,7 @@ python fuzz/fuzz_request_body.py  -max_total_time=60 fuzz/corpus/request_body
 python fuzz/fuzz_agent_config.py  -max_total_time=60 fuzz/corpus/agent_config
 python fuzz/fuzz_redaction.py     -max_total_time=60 fuzz/corpus/redaction
 python fuzz/fuzz_orchestration.py -max_total_time=60 fuzz/corpus/orchestration
+python fuzz/fuzz_pii_key.py       -max_total_time=60 fuzz/corpus/pii_key
 python fuzz/fuzz_reasoning_effort_profile.py -max_total_time=60 fuzz/corpus/reasoning_effort_profile
 ```
 

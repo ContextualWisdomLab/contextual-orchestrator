@@ -6,7 +6,10 @@ Python 3.11+.
 
 ## Dependencies
 
-Runtime dependencies: none beyond the Python standard library.
+Runtime dependencies:
+
+- `cryptography` for AES-256-GCM protection of explicitly marked PII fields.
+- The HTTP server, persistence, and orchestration core remain Python standard-library based.
 
 Production target dependencies after this lab hardens:
 
