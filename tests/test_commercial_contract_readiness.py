@@ -154,7 +154,15 @@ def test_commercial_contract_readiness_endpoint_openapi_admin_and_docs_contract(
     assert "contract_items" in contract
 
 
+def test_commercial_contract_blocked_rule_names_document_mismatch() -> None:
+    orchestrator = build()
+    report = orchestrator.commercial_contract_readiness_report(target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW)
+    rules = {row["contract_status"]: row["rule"] for row in report["contract_status_rules"]}
+    assert "document mismatch" in rules["commercial_contract_blocked"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_commercial_contract_readiness_report_tracks_terms_and_buyer_warnings()
     test_commercial_contract_readiness_endpoint_openapi_admin_and_docs_contract()
+    test_commercial_contract_blocked_rule_names_document_mismatch()
     print("ok")
