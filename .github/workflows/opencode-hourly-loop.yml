@@ -111,6 +111,14 @@ jobs:
           }
           JSON
 
+      - name: Build trusted same-repository PR allowlist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
+            --jq '.[] | select(.head.repo.full_name == env.GITHUB_REPOSITORY) | .number' \
+            > /tmp/trusted-pr-numbers.txt
+
       - name: Run the hourly loop agent
         env:
           GH_TOKEN: ${{ github.token }}

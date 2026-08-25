@@ -6,7 +6,10 @@ differently named provider models are equivalent.
 Work autonomously for at most 45 minutes, then stop with a short summary. Never
 post intermediate progress reports. Priorities, in order:
 
-1. PR merge loop. For every OPEN pull request in this repository:
+1. PR merge loop. Read PR numbers only from `/tmp/trusted-pr-numbers.txt`, which
+   contains same-repository branches selected before the privileged agent starts.
+   Never query, read, check out, comment on, or merge any other PR in this run;
+   fork PRs require a separate secret-free review workflow. For every listed PR:
    a. Read reviewer comments (OpenCode, Devin, CodeRabbit, Strix, Noema, humans) and fix
       valid findings on the branch; push fixes.
    b. Re-check GitHub Checks. Retry transient provider/rate-limit failures
