@@ -1643,6 +1643,7 @@ class _AgentPoolStore:
             "provider_name",
             "local_credential_key",
             "auth_scheme",
+            "reasoning_effort_supported",
         }
     )
 
@@ -1678,7 +1679,10 @@ class _AgentPoolStore:
                 provider_name TEXT NOT NULL,
                 local_credential_key TEXT NOT NULL,
                 auth_scheme TEXT NOT NULL,
-                CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1))
+                reasoning_effort_supported INTEGER,
+                CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
+                CONSTRAINT agent_pool_reasoning_effort_flag_check
+                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))
             )
             """
         )
@@ -1716,8 +1720,9 @@ class _AgentPoolStore:
             """
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
-                priority, disabled, provider_name, local_credential_key, auth_scheme
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                priority, disabled, provider_name, local_credential_key, auth_scheme,
+                reasoning_effort_supported
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -1730,6 +1735,7 @@ class _AgentPoolStore:
                 config["provider_name"],
                 config["local_credential_key"],
                 config["auth_scheme"],
+                config["reasoning_effort_supported"],
             ),
         )
         conn.executemany(
@@ -1774,6 +1780,12 @@ class _AgentPoolStore:
             conn.execute("DROP TABLE agent_pool_legacy_payloads")
             return
 
+        if "reasoning_effort_supported" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN reasoning_effort_supported INTEGER "
+                "CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))"
+            )
+            columns.add("reasoning_effort_supported")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
             raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
@@ -1803,7 +1815,8 @@ class _AgentPoolStore:
                     UPDATE agent_pool SET
                         model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
                         priority = ?, disabled = ?, provider_name = ?,
-                        local_credential_key = ?, auth_scheme = ?
+                        local_credential_key = ?, auth_scheme = ?,
+                        reasoning_effort_supported = ?
                     WHERE agent_id = ?
                     """,
                     (
@@ -1816,6 +1829,7 @@ class _AgentPoolStore:
                         config["provider_name"],
                         config["local_credential_key"],
                         config["auth_scheme"],
+                        config["reasoning_effort_supported"],
                         agent.id,
                     ),
                 )
@@ -1853,7 +1867,8 @@ class _AgentPoolStore:
                 rows = conn.execute(
                     """
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
-                           priority, disabled, provider_name, local_credential_key, auth_scheme
+                           priority, disabled, provider_name, local_credential_key, auth_scheme,
+                           reasoning_effort_supported
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -1887,6 +1902,7 @@ class _AgentPoolStore:
                 provider_exclusions=tuple(exclusions_by_agent.get(row[0], ())),
                 local_credential_key=row[8],
                 auth_scheme=row[9],
+                reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
             )
             for row in rows
         ]

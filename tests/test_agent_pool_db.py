@@ -82,6 +82,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
             "model-x",
             tags=("second", "first"),
             provider_exclusions=("provider-b", "provider-a"),
+            reasoning_effort_supported=False,
         )
         first = TaskOrchestrator([agent], agents_db=db)
         first._pool_store.save(agent)
@@ -89,6 +90,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
         with sqlite3.connect(db) as connection:
             columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_pool)")}
             assert "payload" not in columns
+            assert "reasoning_effort_supported" in columns
             assert connection.execute("SELECT COUNT(*) FROM agent_pool").fetchone() == (1,)
             assert connection.execute("SELECT COUNT(*) FROM agent_pool_tags").fetchone() == (2,)
             assert connection.execute(
@@ -137,6 +139,7 @@ def test_legacy_agent_pool_payloads_migrate_transactionally() -> None:
             "legacy-model",
             tags=("reasoning", "coding"),
             provider_exclusions=("provider-x",),
+            reasoning_effort_supported=True,
         )
         with sqlite3.connect(db) as connection:
             connection.execute(
