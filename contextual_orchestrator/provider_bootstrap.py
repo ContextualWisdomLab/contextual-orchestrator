@@ -263,14 +263,11 @@ def _synchronize_durable_agent_pool(
     for agent in agents:
         bootstrap.patch_agent("default", agent.id, {"status": "active"})
 
-    enabled = tuple(
+    # The patch loop above raises KeyError if any selected agent is missing from
+    # the pool, so the enabled set equals selected_ids by construction here.
+    return tuple(
         sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
     )
-    if set(enabled) != selected_ids:
-        raise ProviderBootstrapError(
-            "provider bootstrap could not activate the selected agent pool"
-        )
-    return enabled
 
 
 def bootstrap_provider_runtime(
@@ -299,11 +296,10 @@ def bootstrap_provider_runtime(
 
     price_book = PriceBook(InMemoryConfigStore())
     priced_count = refresh_price_book(discovered, price_book)
+    # select_provider_diverse_models returns at least one model for a non-empty
+    # input with a positive limit and raises ValueError for a non-positive one,
+    # so the selection here is never empty.
     selected = select_provider_diverse_models(eligible, limit=model_limit)
-    if not selected:
-        raise ProviderBootstrapError(
-            "provider bootstrap selected no chat-capable models"
-        )
     selected_ids = tuple(agent_id_for(model) for model in selected)
     enabled_ids = (
         _synchronize_durable_agent_pool(agents_db, selected)

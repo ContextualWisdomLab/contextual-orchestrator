@@ -159,6 +159,23 @@ def test_python_lockfile_uses_hash_pinning():
     assert "sqlalchemy==" in lock_text
 
 
+def test_unit_workflow_installs_runtime_and_test_lockfiles():
+    """CI must exercise declared runtime integrations, not graceful no-op imports."""
+    workflow_text = read_text(".github/workflows/tests.yml")
+    install_step = workflow_text.split(
+        "      - name: Install test dependencies\n", 1
+    )[1].split("\n      - name:", 1)[0]
+    runtime_command = "python -m pip install --require-hashes -r requirements.lock"
+    property_command = (
+        "python -m pip install --require-hashes "
+        "-r fuzz/requirements-property.txt"
+    )
+
+    assert runtime_command in install_step
+    assert property_command in install_step
+    assert install_step.index(runtime_command) < install_step.index(property_command)
+
+
 def test_security_tool_lockfile_uses_hash_pinning():
     lock_text = read_text("requirements-security-ci.txt")
 
