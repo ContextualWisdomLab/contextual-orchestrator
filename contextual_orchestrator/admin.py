@@ -862,7 +862,7 @@ ADMIN_HTML = r"""<!doctype html>
         <button class="nav-item" data-view="audit"><span>§</span><span data-i18n="nav_audit">Audit</span></button>
         <button class="nav-item" data-view="settings"><span>⚙</span><span data-i18n="nav_settings">Settings</span></button>
       </nav>
-      <div class="side-footer">Contextual Orchestrator v0.1.0</div>
+      <div class="side-footer">Contextual Orchestrator v0.2.0</div>
     </aside>
     <main class="main">
       <header class="topbar">

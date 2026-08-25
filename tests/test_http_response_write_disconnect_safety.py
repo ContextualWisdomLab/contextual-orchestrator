@@ -55,7 +55,7 @@ def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
     yielded: list[str] = []
 
     class Orchestrator:
-        def stream_route(self, messages, workflow_run_id):
+        def stream_route(self, messages, workflow_run_id, *, model_name):
             for delta in ("first", "second"):
                 yielded.append(delta)
                 yield delta

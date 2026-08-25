@@ -2030,9 +2030,13 @@ def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
         "/v1/audio/speech": ("input", "voice"),
         "/v1/rerank": ("query",),
     }.get(path, ())
-    for field in required_strings:
-        if not isinstance(body.get(field), str) or not body[field].strip():
-            raise RequestError(400, f"invalid_{field}", f"{field} must be a non-empty string")
+    for required_field in required_strings:
+        if not isinstance(body.get(required_field), str) or not body[required_field].strip():
+            raise RequestError(
+                400,
+                f"invalid_{required_field}",
+                f"{required_field} must be a non-empty string",
+            )
     if path == "/v1/audio/transcriptions":
         audio = body.get("input_audio")
         if not isinstance(audio, dict) or not all(
@@ -5720,11 +5724,12 @@ def build_server(
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
                     model_name = _validate_embeddings_model(body, orchestrator)
-                    # Same pool honesty as chat/Completions: do not silently serve
-                    # a different embedding deployment than the client requested.
-                    upstream_model_name = _require_pool_model(
+                    _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
+                    # Same pool honesty as chat/Completions: do not silently serve
+                    # a different embedding deployment than the client requested.
+                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5775,12 +5780,33 @@ def build_server(
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
                     started_at = time.perf_counter()
-                    document = self._run(lambda: coordinator.complete_embeddings_batch(
-                        inputs,
-                        model=upstream_model_name,
-                        attribution=attribution,
-                        metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
-                    ))
+                    document = None
+                    last_embedding_error: Exception | None = None
+                    for embedding_agent in embedding_agents:
+                        attempt_started_at = time.perf_counter()
+                        try:
+                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                inputs,
+                                model=agent.model,
+                                attribution=attribution,
+                                metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
+                            ))
+                        except Exception as exc:  # noqa: BLE001 - measured member failover
+                            last_embedding_error = exc
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            continue
+                        if document.get("status") == "completed":
+                            orchestrator._group_router.observe_success(
+                                embedding_agent.id,
+                                time.perf_counter() - attempt_started_at,
+                            )
+                        break
+                    if document is None:
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "all enabled embedding-capable model group members failed",
+                        ) from last_embedding_error
                     if document.get("status") != "completed" or document.get("embeddings") is None:
                         # Async backends return a job handle; fail closed on the
                         # sync OpenAI path rather than inventing vectors.
@@ -5811,9 +5837,10 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
                     model_name = _validate_embeddings_model(body, orchestrator)
-                    upstream_model_name = _require_pool_model(
+                    _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
                     )
+                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5832,12 +5859,33 @@ def build_server(
                     endpoint_alias = _validate_batch_embeddings_endpoint(body)
                     if endpoint_alias is not None:
                         submit_metadata["endpoint_alias"] = endpoint_alias
-                    document = self._run(lambda: coordinator.complete_embeddings_batch(
-                        inputs,
-                        model=upstream_model_name,
-                        attribution=attribution,
-                        metadata=submit_metadata,
-                    ))
+                    document = None
+                    last_embedding_error: Exception | None = None
+                    for embedding_agent in embedding_agents:
+                        attempt_started_at = time.perf_counter()
+                        try:
+                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                inputs,
+                                model=agent.model,
+                                attribution=attribution,
+                                metadata=submit_metadata,
+                            ))
+                        except Exception as exc:  # noqa: BLE001 - measured member failover
+                            last_embedding_error = exc
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            continue
+                        if document.get("status") == "completed":
+                            orchestrator._group_router.observe_success(
+                                embedding_agent.id,
+                                time.perf_counter() - attempt_started_at,
+                            )
+                        break
+                    if document is None:
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "all enabled embedding-capable model group members failed",
+                        ) from last_embedding_error
                     is_complete = document.get("status") == "completed"
                     orchestrator.record_analytics_event(
                         "embeddings_batch_created",

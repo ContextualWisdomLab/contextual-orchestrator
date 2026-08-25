@@ -7,7 +7,7 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
@@ -166,22 +166,29 @@ OPENAPI_SPEC = {
                     "security": [{"inference_bearer_auth": []}],
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": {"type": "object"}}},
+                        "content": {"application/json": {"schema": schema}},
                     },
                     "responses": {
-                        "200": {"description": "Capability response"},
+                        "200": {
+                            "description": "Capability response",
+                            "content": (
+                                {"audio/mpeg": {"schema": {"type": "string", "format": "binary"}}}
+                                if path == "/v1/audio/speech"
+                                else {"application/json": {"schema": {"type": "object"}}}
+                            ),
+                        },
                         "400": {"description": "Invalid request"},
                         "503": {"description": "No capable model group member is available"},
                     },
                 }
             }
-            for path, operation_id, summary in (
-                ("/v1/images/generations", "create_image", "Generate an image"),
-                ("/v1/videos", "create_video", "Submit video generation"),
-                ("/v1/audio/speech", "create_speech", "Synthesize speech"),
-                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio"),
-                ("/v1/rerank", "create_rerank", "Rerank documents"),
-                ("/v1/audio/generations", "create_audio", "Generate audio"),
+            for path, operation_id, summary, schema in (
+                ("/v1/images/generations", "create_image", "Generate an image", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
+                ("/v1/videos", "create_video", "Submit video generation", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
+                ("/v1/audio/speech", "create_speech", "Synthesize speech", {"type": "object", "required": ["input", "voice"], "properties": {"model": {"type": "string"}, "input": {"type": "string"}, "voice": {"type": "string"}}}),
+                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio", {"type": "object", "required": ["input_audio"], "properties": {"model": {"type": "string"}, "input_audio": {"type": "object", "required": ["data", "format"]}}}),
+                ("/v1/rerank", "create_rerank", "Rerank documents", {"type": "object", "required": ["query", "documents"], "properties": {"model": {"type": "string"}, "query": {"type": "string"}, "documents": {"type": "array", "minItems": 1}}}),
+                ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}}}),
             )
         },
         "/v1/responses": {

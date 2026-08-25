@@ -89,7 +89,12 @@ def test_seed_agent_removal_tombstones_across_restart() -> None:
         db = os.path.join(directory, "pool.db")
         seed = [
             ModelAgent("general_agent", "seed-model", tags=("reasoning",)),
-            ModelAgent("backup_worker", "seed-model", tags=("reasoning",)),
+            ModelAgent(
+                "backup_worker",
+                "seed-model",
+                tags=("reasoning",),
+                group_name="removed_model_group",
+            ),
         ]
         first = TaskOrchestrator(list(seed), agents_db=db)
         first.remove_agent("default", "backup_worker")
@@ -97,6 +102,7 @@ def test_seed_agent_removal_tombstones_across_restart() -> None:
 
         second = TaskOrchestrator(list(seed), agents_db=db)  # seed still lists backup_worker
         assert {a.id for a in second.agents} == {"general_agent"}  # tombstone wins over seed
+        assert second.list_model_groups() == []
 
 
 def test_add_agent_validations() -> None:

@@ -96,20 +96,20 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
         provider_name="openrouter",
     )
     orchestrator = TaskOrchestrator([agent])
-    observed: list[str] = []
+    observed: list[tuple[str, dict]] = []
 
     def send(_agent: ModelAgent, endpoint: str, payload: dict) -> dict:
-        observed.append(endpoint)
+        observed.append((endpoint, payload))
         return {"model": payload["model"], "data": []}
 
     orchestrator.client.proxy_send = send  # type: ignore[method-assign]
     orchestrator.proxy_capability(
-        {"model": "image-group", "prompt": "diagram"},
+        {"model": "image-group", "prompt": "diagram", "routing": {"channel": "sync"}},
         capability="image",
         endpoint="images/generations",
     )
 
-    assert observed == ["images"]
+    assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
 
 
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:

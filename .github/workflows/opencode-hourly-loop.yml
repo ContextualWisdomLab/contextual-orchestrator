@@ -21,6 +21,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  external-pr-review:
+    name: Review external PR diffs without secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: none
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate untrusted fork diffs without executing them
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls?state=open&per_page=100" \
+            --jq '.[] | select(.head.repo.full_name != env.GITHUB_REPOSITORY) | [.number, .head.sha] | @tsv' |
+          while IFS=$'\t' read -r pr_number head_sha; do
+            [ -n "$pr_number" ] || continue
+            git fetch --no-tags origin "pull/${pr_number}/head:refs/review/external-${pr_number}"
+            git diff --check "origin/main...refs/review/external-${pr_number}"
+            printf 'PR #%s head %s: diff integrity passed\n' "$pr_number" "$head_sha" >> "$GITHUB_STEP_SUMMARY"
+          done
+
   loop:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest

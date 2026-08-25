@@ -3003,7 +3003,7 @@ class TaskOrchestrator:
         if self._pool_store is not None:
             # Disabled tombstone (not a row delete): it overlays the seed file on restart
             # and startup drops disabled agents, so removal survives even for seed agents.
-            self._pool_store.save(replace(target, disabled=True))
+            self._pool_store.save(replace(target, disabled=True, group_name=""))
         self._append_audit_event(
             "agent_removed",
             {"agent_pool_id": agent_pool_id, "worker_agent_id": worker_agent_id, "model": target.model},
@@ -3087,6 +3087,20 @@ class TaskOrchestrator:
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
         free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+        requested_agent = self._requested_agent(model_name)
+        judge_agent_ids = (
+            {
+                candidate.id
+                for candidate in self.agents
+                if candidate.group_name == requested_agent.group_name
+            }
+            if requested_agent is not None and requested_agent.group_name
+            else {requested_agent.id}
+            if requested_agent is not None
+            else free_ids
+            if model_name == self.FREE_MODEL
+            else None
+        )
 
         for step in steps:
             agent = self._agent(step.agent_id)
@@ -3141,7 +3155,10 @@ class TaskOrchestrator:
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
             if self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(
-                    task, verification, free_only=model_name == self.FREE_MODEL
+                    task,
+                    verification,
+                    free_only=model_name == self.FREE_MODEL,
+                    allowed_agent_ids=judge_agent_ids,
                 )
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
@@ -3150,7 +3167,10 @@ class TaskOrchestrator:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(
-                    task, verification, free_only=model_name == self.FREE_MODEL
+                    task,
+                    verification,
+                    free_only=model_name == self.FREE_MODEL,
+                    allowed_agent_ids=judge_agent_ids,
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
@@ -3301,8 +3321,9 @@ class TaskOrchestrator:
             and (not free_only or self._is_free_agent(agent))
         ]
         if not candidates:
-            detail = "zero-cost " if free_only else "chat-compatible "
-            raise RuntimeError(f"no enabled {detail}model is available")
+            if free_only:
+                raise RuntimeError("no enabled zero-cost model is available")
+            raise RuntimeError("no chat-compatible agent available")
         static = sorted(candidates, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
         if free_only:
             eligible = [agent for agent in static if role not in agent.provider_exclusions]
@@ -3416,7 +3437,12 @@ class TaskOrchestrator:
         candidates = self._capability_agents(capability, requested_model)
         last_error: Exception | None = None
         for agent in candidates:
-            payload = {**body, "model": agent.model}
+            payload = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS
+            }
+            payload["model"] = agent.model
             provider_endpoint = (
                 "images"
                 if agent.provider_name == "openrouter" and endpoint == "images/generations"
@@ -3565,6 +3591,7 @@ class TaskOrchestrator:
                 )
             ]
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+        ordered = [agent for agent in ordered if is_general_chat_agent_model_id(agent.model)]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
@@ -3625,7 +3652,12 @@ class TaskOrchestrator:
         return ""  # pragma: no cover
 
     def _model_judge_verification(
-        self, task: str, fallback: dict[str, Any], *, free_only: bool = False
+        self,
+        task: str,
+        fallback: dict[str, Any],
+        *,
+        free_only: bool = False,
+        allowed_agent_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
@@ -3653,7 +3685,11 @@ class TaskOrchestrator:
                 "judge": "model",
             }
         try:
-            judge = self._select_agent(task, "verifier", free_only=free_only)
+            judge = next(
+                agent
+                for agent in self._ranked_agents(task, "verifier", free_only=free_only)
+                if allowed_agent_ids is None or agent.id in allowed_agent_ids
+            )
             # The judge is one bounded provider call.  Do not pass the
             # planning strategy ("template"/"generated") as an
             # orchestration mode or recursively conduct another workflow.
@@ -3662,11 +3698,7 @@ class TaskOrchestrator:
                 task,
                 judge.id,
                 mode="route",
-                allowed_agent_ids=(
-                    {agent.id for agent in self.agents if self._is_free_agent(agent)}
-                    if free_only
-                    else None
-                ),
+                allowed_agent_ids=allowed_agent_ids,
             )
             fast_judge = components.judge_cls(
                 judge_adapter,

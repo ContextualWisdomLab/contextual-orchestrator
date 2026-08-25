@@ -148,6 +148,33 @@ def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     assert set(client.agent_ids) == {"free_verifier"}
 
 
+def test_group_conduct_keeps_model_judge_inside_requested_group() -> None:
+    class _RecordingClient(_ScriptedClient):
+        def __init__(self) -> None:
+            super().__init__('{"decision":"ACCEPT","reason":"Group verification passed."}')
+            self.agent_ids: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: object) -> str:  # type: ignore[override]
+            self.agent_ids.append(agent.id)
+            return super().chat(agent, messages, **kwargs)
+
+    client = _RecordingClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("group_member", "group-model", group_name="requested_model_group"),
+            ModelAgent("outside_verifier", "outside-model", tags=("verification",), priority=100),
+        ],
+        client=client,
+    )
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        orchestrator.conduct(MESSAGES, model_name="requested_model_group")
+    assert set(client.agent_ids) == {"group_member"}
+
+
 def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -> None:
     class _ProxyClient(ModelClient):
         def __init__(self) -> None:

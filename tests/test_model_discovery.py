@@ -6,6 +6,7 @@ import json
 import sys
 import urllib.error
 import urllib.parse
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -152,6 +153,13 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert {capability for model in discovered for capability in model.capabilities} >= {
         "text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"
     }
+    transcription = next(model for model in discovered if "transcription" in model.capabilities)
+    generated_audio = next(
+        model for model in discovered if model.output_modalities == ("audio",)
+    )
+    assert transcription.input_modalities == ("audio",)
+    assert "audio" not in transcription.capabilities
+    assert "audio" in generated_audio.capabilities
     embedding = next(model for model in discovered if "embedding" in model.capabilities)
     assert embedding.output_modalities == ("embeddings",)
     assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
@@ -449,7 +457,7 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
 
 def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
     price_book = PriceBook(InMemoryConfigStore())
-    discovered_price = DiscoveredModel(
+    expensive = DiscoveredModel(
         "openrouter",
         "priced-by-discovery",
         "KEY_NAME",
@@ -458,9 +466,16 @@ def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
         prompt_price_per_1k=0.2,
         completion_price_per_1k=0.4,
     )
+    cheap = replace(
+        expensive,
+        model_id="cheaper-by-discovery",
+        prompt_price_per_1k=0.01,
+        completion_price_per_1k=0.02,
+    )
 
-    assert select_top_n_cheapest_discovered_agents([discovered_price], price_book, 1) == [
-        discovered_price
+    assert select_top_n_cheapest_discovered_agents([expensive, cheap], price_book, 2) == [
+        cheap,
+        expensive,
     ]
 
 

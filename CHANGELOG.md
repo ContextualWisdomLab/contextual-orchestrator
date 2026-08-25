@@ -8,9 +8,7 @@ artifacts are verified on the same commit.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-## [0.2.0] - 2026-08-25
+## [0.2.0] - Unreleased
 
 ### Added
 

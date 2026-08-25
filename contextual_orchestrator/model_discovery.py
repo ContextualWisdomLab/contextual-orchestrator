@@ -254,16 +254,25 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
-        inputs = tuple(
-            value for value in (architecture.get("input_modalities") or ()) if isinstance(value, str)
-        )
-        outputs = tuple(
-            value for value in (architecture.get("output_modalities") or ()) if isinstance(value, str)
+        raw_inputs = architecture.get("input_modalities")
+        raw_outputs = architecture.get("output_modalities")
+        inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
+        outputs = tuple(value for value in raw_outputs if isinstance(value, str)) if isinstance(raw_outputs, list) else ()
+        if (
+            not outputs
+            and not any(capability != "chat" for capability in source.capabilities)
+            and not is_general_chat_agent_model_id(model_id)
+        ):
+            continue
+        source_capabilities = tuple(
+            capability
+            for capability in source.capabilities
+            if capability != "chat" or not outputs or "text" in outputs
         )
         capabilities = tuple(
             dict.fromkeys(
                 _CAPABILITY_NAMES.get(value, value)
-                for value in (*source.capabilities, *outputs)
+                for value in (*source_capabilities, *outputs)
             )
         )
         prompt_price = _price_per_1k(pricing.get("prompt"))
