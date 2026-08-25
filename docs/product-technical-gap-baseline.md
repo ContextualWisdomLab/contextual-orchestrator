@@ -682,3 +682,23 @@ non-chat capabilities through discovery/agent creation (38 focused tests); #803
 is now `030b4348eb4ecdf85d1017f8891cac9faa5a0394` and restores the exact CPython
 3.12 Atheris lock marker (1 focused test). Both have normal auto-merge enabled
 and remain gated by fresh hosted Checks/review; neither is merged evidence.
+
+### Product/technical specification trace — 2026-08-25 11:02 KST
+
+[#842](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/842)
+head `49d0940e04a680648743d9890f79c7110167e820` normally merged into the #834
+feature stack, advancing #834 to exact head
+`4e0cbca934e7e82cbed56de347853dbc40971f20`. The new
+`docs/model-group-product-technical-spec.md` derives the PRD, user stories,
+acceptance criteria, TRD, normalized persistence model, REST status contract,
+flow/class UML, security/operability boundary, and Admin UI audit from ADR 0026
+and the implemented surfaces. Its focused paper/API/DB/group/capability contract
+set passed 39 tests. Current-head review threads are zero; replacement hosted
+Checks and independent approval remain required.
+
+Research was re-verified against the primary arXiv records for MMR-Bench and
+RouteLLM and current official OpenRouter/OpenCode documentation. The exact
+boundary remains: research supports modality-aware and learned cost/quality
+routing, but does not establish provider-alias identity. OpenCode's own mutable
+catalog currently demonstrates why transient free model identifiers must stay
+out of the production contract.
