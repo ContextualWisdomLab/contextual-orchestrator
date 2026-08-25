@@ -2,7 +2,7 @@
 
 - Status: Implemented on PR #834; protected-main release pending
 - Date: 2026-08-25
-- Normative decision: [ADR 0026](planning/adrs/0026-model-group-cost-aware-discovery.md)
+- Normative decision: [ADR 0027](planning/adrs/0027-model-group-cost-aware-discovery.md)
 - Figma file ID: `vsZMd8WAv42HDRgcZuNcWk`
 
 ## PRD
