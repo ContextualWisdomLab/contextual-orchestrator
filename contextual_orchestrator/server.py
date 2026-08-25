@@ -4564,11 +4564,28 @@ def _strip_trace(payload: Any) -> Any:
     return payload
 
 
+_INTERNAL_PAYLOAD_KEYS = frozenset({"owner_id", "principal_id"})
+
+
+def _strip_internal_fields(value: Any) -> Any:
+    """Recursively drop internal owner metadata from public response bodies."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_internal_fields(item)
+            for key, item in value.items()
+            if key not in _INTERNAL_PAYLOAD_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_internal_fields(item) for item in value]
+    return value
+
+
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
+    public_payload = _strip_internal_fields(safe_payload)
     if include_trace:
-        return safe_payload
-    return _strip_trace(safe_payload)
+        return public_payload
+    return _strip_trace(public_payload)
 
 
 def responses_sse_body(response: dict[str, Any]) -> str:
