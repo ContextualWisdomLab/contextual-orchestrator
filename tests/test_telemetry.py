@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import contextual_orchestrator.orchestrator as orchestrator_module
+import contextual_orchestrator.server as server_module
 import contextual_orchestrator.telemetry as telemetry_module
 from contextual_orchestrator.__main__ import _bootstrap_telemetry_config
 from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
@@ -250,6 +251,24 @@ def test_handler_resets_session_after_each_keep_alive_request(monkeypatch):
         assert current_session_id() == "first-request"
         handler.handle_one_request()
         assert current_session_id() is None
+    finally:
+        server.server_close()
+
+
+def test_handler_replaces_trace_context_on_reauthorization(monkeypatch):
+    """A second authorization cannot leave the first trace context attached."""
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.headers = {}
+    attached = iter(("first-token", "second-token"))
+    detached: list[str] = []
+    monkeypatch.setattr(server_module, "attach_trace_context", lambda _headers: next(attached))
+    monkeypatch.setattr(server_module, "detach_trace_context", detached.append)
+    try:
+        handler._bind_trace()
+        handler._bind_trace()
+        assert detached == ["first-token"]
+        assert handler._trace_token == "second-token"
     finally:
         server.server_close()
 

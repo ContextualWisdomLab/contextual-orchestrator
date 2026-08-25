@@ -4765,6 +4765,12 @@ def build_server(
                 reset_session_id(self._session_token)
             self._session_token = set_session_id(session_id)
 
+        def _bind_trace(self) -> None:
+            """Replace, rather than stack, inbound trace context on this request."""
+            if self._trace_token is not None:
+                detach_trace_context(self._trace_token)
+            self._trace_token = attach_trace_context(self.headers)
+
         def _reset_session(self) -> None:
             """Release request correlation state before a keep-alive request."""
             trace_token, self._trace_token = self._trace_token, None
@@ -6026,7 +6032,7 @@ def build_server(
             (durable for replays), and browser-driven state-changing admin
             requests must pass the same-origin check.
             """
-            self._trace_token = attach_trace_context(self.headers)
+            self._bind_trace()
             self._bind_session(session_id_from_headers(self.headers))
             effective_purpose = purpose or DEFAULT_PURPOSE_BY_SCOPE.get(scope, "")
             try:
