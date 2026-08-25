@@ -148,6 +148,51 @@ def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     assert set(client.agent_ids) == {"free_verifier"}
 
 
+def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -> None:
+    class _ProxyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_ids: list[str] = []
+
+        def proxy_send(self, agent: ModelAgent, endpoint: str, body: dict) -> dict:  # type: ignore[override]
+            self.agent_ids.append(agent.id)
+            return {"choices": [{"message": {"content": '{"decision":"ACCEPT","reason":"free"}'}}]}
+
+    class _StructuredJudge(_ScriptedFastJudge):
+        def judge(self, **_: object) -> object:
+            completion = self.adapter.complete_structured(
+                [{"role": "user", "content": "judge"}],
+                response_format={"type": "json_object"},
+            )
+            return SimpleNamespace(
+                accepted=True,
+                rationale=completion["answer"],
+                criterion_scores={},
+                usage=None,
+                orchestration_mode="route",
+                to_irt_row=lambda *, item_type: (1, 1),
+            )
+
+    client = _ProxyClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_duplicate", "shared-model", tags=("verification",), priority=100),
+            ModelAgent("free_duplicate", "shared-model", tags=("verification", "cost:free")),
+        ],
+        client=client,
+    )
+    components = orchestrator_module.FastMLSIRMJudgeComponents(
+        judge_cls=_StructuredJudge,
+        criterion_cls=_ScriptedCriterion,
+        format_error=ValueError,
+    )
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=components):
+        orchestrator._model_judge_verification(
+            "task", {"verifier_output": "report"}, free_only=True
+        )
+    assert client.agent_ids == ["free_duplicate"]
+
+
 def test_structured_model_judge_rejects() -> None:
     orchestrator, _ = _orch('{"decision":"REJECT","reason":"The migration plan loses writes."}')
     with patch.object(
@@ -351,8 +396,8 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
         "json_schema": {"name": "judge", "strict": True, "schema": {"type": "object"}},
     }
     with patch.object(
-        orchestrator,
-        "proxy_completion",
+        orchestrator.client,
+        "proxy_send",
         return_value={
             "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
@@ -365,12 +410,15 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
         )
 
     proxy.assert_called_once_with(
+        orchestrator._agent("general_agent"),
+        "chat/completions",
         {
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
             "temperature": orchestrator.client.temperature,
             "max_tokens": orchestrator.client.max_output_tokens,
             "response_format": response_format,
+            "stream": False,
         }
     )
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'

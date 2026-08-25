@@ -203,10 +203,13 @@ class _FastMLSIJudgeAdapter:
             "response_format": response_format,
         }
         effort_profile = self.orchestrator._role_effort_profile("judge")
-        response = (
-            self.orchestrator.proxy_completion(request, effort_profile=effort_profile)
-            if effort_profile is not None
-            else self.orchestrator.proxy_completion(request)
+        if effort_profile is not None:
+            request = self.orchestrator.client.apply_effort_profile(
+                agent, request, effort_profile
+            )
+        request["stream"] = False
+        response = self.orchestrator.client.proxy_send(
+            agent, "chat/completions", request
         )
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
