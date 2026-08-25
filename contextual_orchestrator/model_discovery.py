@@ -300,6 +300,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         provider_name=discovered.provider_name,
         tags=(
             "discovered",
+            *(("cost:free",) if discovered.is_free else ()),
             *discovered.capabilities,
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),

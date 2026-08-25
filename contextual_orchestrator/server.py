@@ -23,6 +23,7 @@ from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
+    _coerce_input_text,
     _new_chat_completion_id,
     chat_completion_chunks,
     chat_completion_response,
@@ -1899,6 +1900,12 @@ def _require_pool_model(
     answering with a different pool agent hides capacity/routing mismatches.
     """
     agents = getattr(orchestrator, "agents", None) or []
+    if model_name == TaskOrchestrator.AUTO_MODEL:
+        return model_name
+    if model_name == TaskOrchestrator.FREE_MODEL:
+        if any(orchestrator._is_free_agent(agent) for agent in agents):
+            return model_name
+        raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
@@ -4268,20 +4275,25 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
                     )
                 )
             )
-            summary_omit = (
+            summary_ok = (
                 "summary" not in value
                 or summary is None
-                or (isinstance(summary, str) and not summary.strip())
+                or (
+                    isinstance(summary, str)
+                    and (not summary.strip() or summary.strip().lower() in {"auto", "concise", "detailed"})
+                )
             )
-            if effort_ok and summary_omit:
+            if effort_ok and summary_ok:
                 if isinstance(effort, str) and effort.strip():
                     value["effort"] = effort.strip().lower()
-                    body["reasoning"] = value
+                if isinstance(summary, str) and summary.strip():
+                    value["summary"] = summary.strip().lower()
+                body["reasoning"] = value
                 return
     raise RequestError(
         400,
         "invalid_reasoning",
-        "reasoning.effort must be one of none, minimal, low, medium, high "
+        "reasoning.effort or reasoning.summary is invalid "
         "on /v1/responses",
     )
 
@@ -4553,6 +4565,65 @@ def responses_sse_body(response: dict[str, Any]) -> str:
     emit("response.completed", response=response)
     frames.append("data: [DONE]\n\n")
     return "".join(frames)
+
+
+_REASONING_STAGE_SUMMARIES = {
+    "thinker": "Planning the approach.",
+    "worker": "Executing the selected approach.",
+    "verifier": "Checking the result for errors and unsupported claims.",
+    "synthesizer": "Preparing the verified final answer.",
+}
+
+
+def _orchestrated_response(
+    model: str,
+    result: dict[str, Any],
+    response_id: str,
+    created_at: int,
+    summaries: list[str],
+    *,
+    reasoning_id: str | None = None,
+    message_id: str | None = None,
+) -> dict[str, Any]:
+    """Build the OpenAI Responses shape for an orchestrated plain-text result."""
+    reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
+    message_id = message_id or f"msg_{uuid.uuid4().hex}"
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "model": model,
+        "output": [
+            {
+                "id": reasoning_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{"type": "summary_text", "text": text} for text in summaries],
+            },
+            {
+                "id": message_id,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": result["answer"], "annotations": []}],
+            },
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": "auto"},
+        "store": False,
+        "temperature": None,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "truncation": "disabled",
+        "usage": None,
+        "metadata": {},
+    }
 
 
 def build_server(
@@ -5621,7 +5692,7 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
-                    _validate_responses_model(body)
+                    model_name = _validate_responses_model(body)
                     _validate_responses_conversation_controls(body)
                     if "store" in body:
                         _validate_responses_store(body)
@@ -5765,18 +5836,57 @@ def build_server(
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).
                     # stream=true is not implemented for Responses passthrough.
                     # String/0-1 forms coerce via shared bool helper (parity with chat).
+                    stream = False
                     if "stream" in body:
-                        stream = _coerce_optional_bool(
+                        stream = bool(_coerce_optional_bool(
                             body.get("stream"),
                             error_code="invalid_stream",
                             message="stream must be a boolean",
-                        )
-                        if stream is True:
+                        ))
+                        if stream and model_name not in {
+                            TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL
+                        }:
                             raise RequestError(
                                 400,
                                 "invalid_stream",
-                                "stream is not supported on /v1/responses",
+                                "stream is not supported for this model on /v1/responses; use orchestrator/auto or orchestrator/free",
                             )
+                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+                        if body.get("tools"):
+                            raise RequestError(
+                                400,
+                                "invalid_tools",
+                                "tools are not supported for orchestrated Responses requests",
+                            )
+                        messages = []
+                        instructions = body.get("instructions")
+                        if isinstance(instructions, str) and instructions:
+                            messages.append({"role": "system", "content": instructions})
+                        messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        if stream:
+                            self._stream_orchestrated_response(
+                                orchestrator, security, messages, model_name
+                            )
+                        else:
+                            result = self._run(
+                                lambda: orchestrator.complete(
+                                    messages, mode="auto", model_name=model_name
+                                )
+                            )
+                            summaries = [
+                                _REASONING_STAGE_SUMMARIES.get(step.get("role"), "Processing the request.")
+                                for step in result.get("trace", [])
+                            ]
+                            self._send(
+                                _orchestrated_response(
+                                    model_name,
+                                    result,
+                                    f"resp_{uuid.uuid4().hex}",
+                                    int(time.time()),
+                                    summaries,
+                                )
+                            )
+                        return
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
@@ -5962,6 +6072,164 @@ def build_server(
         def _write_sse(self, frame: str) -> None:
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
+
+        def _stream_orchestrated_response(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+        ) -> None:
+            """Stream orchestration as native Responses reasoning-summary events."""
+            response_id = f"resp_{uuid.uuid4().hex}"
+            reasoning_id = f"rs_{uuid.uuid4().hex}"
+            message_id = f"msg_{uuid.uuid4().hex}"
+            created_at = int(time.time())
+            sequence = 0
+            summaries: list[str] = []
+            open_parts: dict[str, tuple[int, str]] = {}
+
+            def emit(event_type: str, **values: Any) -> None:
+                nonlocal sequence
+                payload = {"type": event_type, "sequence_number": sequence, **values}
+                sequence += 1
+                self._write_sse(
+                    f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                )
+
+            def progress(role: str, status: str) -> None:
+                text = _REASONING_STAGE_SUMMARIES.get(role, "Processing the request.")
+                if status == "started":
+                    index = len(summaries)
+                    summaries.append(text)
+                    open_parts[role] = (index, text)
+                    emit(
+                        "response.reasoning_summary_part.added",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        part={"type": "summary_text", "text": ""},
+                    )
+                    emit(
+                        "response.reasoning_summary_text.delta",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        delta=text,
+                    )
+                elif role in open_parts:
+                    index, text = open_parts.pop(role)
+                    emit(
+                        "response.reasoning_summary_text.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        text=text,
+                    )
+                    emit(
+                        "response.reasoning_summary_part.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        part={"type": "summary_text", "text": text},
+                    )
+
+            security.acquire_run_slot()
+            try:
+                self._begin_sse()
+                created_response = _orchestrated_response(
+                    model_name,
+                    {"answer": ""},
+                    response_id,
+                    created_at,
+                    [],
+                    reasoning_id=reasoning_id,
+                    message_id=message_id,
+                )
+                created_response.update(status="in_progress", output=[])
+                emit(
+                    "response.created",
+                    response=created_response,
+                )
+                reasoning_item = {
+                    "id": reasoning_id,
+                    "type": "reasoning",
+                    "status": "in_progress",
+                    "summary": [],
+                }
+                emit("response.output_item.added", output_index=0, item=reasoning_item)
+                if orchestrator.would_route(messages, "auto", model_name):
+                    progress("worker", "started")
+                    parts = list(orchestrator.stream_route(messages, model_name=model_name))
+                    progress("worker", "completed")
+                    result = {"answer": "".join(parts)}
+                else:
+                    result = orchestrator.conduct(
+                        messages, model_name=model_name, progress=progress
+                    )
+                reasoning_done = {
+                    **reasoning_item,
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": text} for text in summaries],
+                }
+                emit("response.output_item.done", output_index=0, item=reasoning_done)
+                message_item = {
+                    "id": message_id,
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": [],
+                }
+                emit("response.output_item.added", output_index=1, item=message_item)
+                part = {"type": "output_text", "text": "", "annotations": []}
+                emit(
+                    "response.content_part.added",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    part=part,
+                )
+                answer = result["answer"]
+                emit(
+                    "response.output_text.delta",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    delta=answer,
+                )
+                done_part = {**part, "text": answer}
+                emit(
+                    "response.output_text.done",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    text=answer,
+                )
+                emit(
+                    "response.content_part.done",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    part=done_part,
+                )
+                emit(
+                    "response.output_item.done",
+                    output_index=1,
+                    item={**message_item, "status": "completed", "content": [done_part]},
+                )
+                completed = _orchestrated_response(
+                    model_name,
+                    result,
+                    response_id,
+                    created_at,
+                    summaries,
+                    reasoning_id=reasoning_id,
+                    message_id=message_id,
+                )
+                emit("response.completed", response=completed)
+                self._write_sse("data: [DONE]\n\n")
+            finally:
+                security.release_run_slot()
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""

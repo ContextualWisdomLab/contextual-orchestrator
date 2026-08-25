@@ -19,6 +19,16 @@ Stability uses the posterior mean of a Bernoulli success probability under a uni
 
 OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery uses its documented `/zen/v1/models` endpoint; because that response currently omits prices, only identifiers explicitly ending in `-free` or `:free` are classified free. Unknown price is never converted to zero. All discovered models remain available for later policy decisions.
 
+Two durable virtual models replace transient examples: `orchestrator/auto` uses
+the full eligible pool, while `orchestrator/free` admits only models carrying
+discovery's explicit `cost:free` evidence or an operator-configured exact zero
+price. An empty free pool fails closed instead of spending money. Both retain
+role/capability ranking and measured group-member routing. On `/v1/responses`,
+streamed orchestration progress uses OpenAI's
+`response.reasoning_summary_part.*` and
+`response.reasoning_summary_text.*` events. These contain fixed stage summaries,
+not hidden chain-of-thought or intermediate agent output.
+
 ```mermaid
 sequenceDiagram
   participant Client
@@ -62,6 +72,9 @@ erDiagram
 - Gap: provider-reported OpenCode Zen pricing is unavailable in `/models`; retain `unknown` rather than infer paid prices.
 - Gap: response quality is not yet in this intra-model score. Distinct-model composition must use calibrated evaluation evidence (for example fast-mlsirm), not a hand-authored weight.
 - Gap: multi-replica telemetry needs a time-windowed durable store and concurrency-safe aggregation before production horizontal scaling.
+- Gap: final answer deltas for conducted workflows begin after synthesis; true
+  token streaming across dependent workflow steps would require a cancellable
+  asynchronous execution graph.
 
 ## References
 
@@ -72,6 +85,9 @@ Jacobson, V. (1988). Congestion avoidance and control. *ACM SIGCOMM Computer Com
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference data* [Preprint]. arXiv. https://arxiv.org/abs/2406.18665
 
 OpenCode. (2026). *Zen*. https://opencode.ai/docs/zen
+
+OpenAI. (2026). *OpenAI OpenAPI specification: Responses streaming events*.
+https://github.com/openai/openai-openapi/blob/master/openapi.yaml
 
 OpenRouter. (2026). *List all models and their properties*. https://openrouter.ai/docs/api/api-reference/models/get-models
 

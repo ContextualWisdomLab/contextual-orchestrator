@@ -187,7 +187,8 @@ def test_http_models_endpoint_lists_configured_models() -> None:
     # Disabled models are omitted: an inference-scope caller should never see
     # a model it cannot actually call (matches real OpenAI API behavior).
     assert {item["id"] for item in body["data"]} == {
-        "contextual-orchestrator", "mock-planner", "mock-builder", "mock-reviewer"
+        "contextual-orchestrator", "orchestrator/auto", "mock-planner",
+        "mock-builder", "mock-reviewer",
     }
 
 

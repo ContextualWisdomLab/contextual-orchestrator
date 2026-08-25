@@ -1795,6 +1795,9 @@ class TaskOrchestrator:
         "검증",
         "논문",
     )
+    AUTO_MODEL = "orchestrator/auto"
+    FREE_MODEL = "orchestrator/free"
+
     def __init__(
         self,
         agents: list[ModelAgent],
@@ -1825,8 +1828,7 @@ class TaskOrchestrator:
         # and resets on restart, never carrying stale evidence across pools.
         self._group_router = ModelGroupRouter()
         for grouped in self.candidates:
-            if grouped.group_name:
-                self._group_router.register_member(grouped.id)
+            self._group_router.register_member(grouped.id)
         self.client = client or ModelClient()
         if (
             isinstance(tool_retry_attempts, bool)
@@ -1997,7 +1999,9 @@ class TaskOrchestrator:
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
-        if requested_model is None or requested_model == "contextual-orchestrator":
+        if requested_model is None or requested_model in {
+            "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL
+        }:
             return None
         if type(requested_model) is not str or not requested_model:
             raise ValueError("requested model must be a configured non-empty string")
@@ -2044,7 +2048,10 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         if mode == "route" or (
             mode == "auto"
-            and (model_name != "contextual-orchestrator" or not self._needs_workflow(text))
+            and (
+                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                or not self._needs_workflow(text)
+            )
         ):
             return self.route_once(messages, model_name=model_name)
         return self.conduct(messages, model_name=model_name)
@@ -2059,7 +2066,10 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return mode == "route" or (
             mode == "auto"
-            and (model_name != "contextual-orchestrator" or not self._needs_workflow(text))
+            and (
+                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                or not self._needs_workflow(text)
+            )
         )
 
     def stream_route(
@@ -2075,7 +2085,9 @@ class TaskOrchestrator:
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
+        agent = self._requested_agent(model_name) or self._select_agent(
+            text, "worker", free_only=model_name == self.FREE_MODEL
+        )
         parts: list[str] = []
         started_at = time.perf_counter()
         try:
@@ -2083,10 +2095,10 @@ class TaskOrchestrator:
                 parts.append(delta)
                 yield delta
         except Exception:
-            if agent.group_name:
+            if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
             raise
-        if agent.group_name:
+        if agent.group_name or model_name == self.FREE_MODEL:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
         record = {
@@ -2659,9 +2671,18 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
-        agent = self._requested_agent(model_name) or self._select_agent(text, "worker")
+        agent = self._requested_agent(model_name) or self._select_agent(
+            text, "worker", free_only=model_name == self.FREE_MODEL
+        )
         start = time.perf_counter()
-        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
+        free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+        answer, served_id, usage = self._invoke(
+            agent,
+            messages,
+            text=text,
+            role="worker",
+            allowed_agent_ids=free_ids if model_name == self.FREE_MODEL else None,
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -2689,11 +2710,12 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         *,
         model_name: str = "contextual-orchestrator",
+        progress: Any = None,
     ) -> dict[str, Any]:
-        """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
+        """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
         task = self._latest_user_text(messages)
         plan_source = "template"
-        if model_name != "contextual-orchestrator":
+        if model_name not in {"contextual-orchestrator", self.AUTO_MODEL}:
             steps = self._plan(task, model_name=model_name)
         elif self.policy.workflow_planning == "generated":
             try:
@@ -2706,9 +2728,12 @@ class TaskOrchestrator:
             steps = self._plan(task)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
+        free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
 
         for step in steps:
             agent = self._agent(step.agent_id)
+            if progress is not None:
+                progress(step.role, "started")
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
             step_messages = [
                 {
@@ -2725,7 +2750,13 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
+            output, served_id, usage = self._invoke(
+                agent,
+                step_messages,
+                text=task,
+                role=step.role,
+                allowed_agent_ids=free_ids if model_name == self.FREE_MODEL else None,
+            )
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
@@ -2737,6 +2768,8 @@ class TaskOrchestrator:
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
             trace.append(row)
+            if progress is not None:
+                progress(step.role, "completed")
 
         if plan_source == "generated":
             # Generated plans have variable shape: locate roles instead of fixed indices.
@@ -2831,10 +2864,11 @@ class TaskOrchestrator:
         self, task: str, *, model_name: str = "contextual-orchestrator"
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
-        thinker = (requested or self._select_agent(task, "thinker")).id
-        worker = (requested or self._select_agent(task, "worker")).id
-        verifier = (requested or self._select_agent(task, "verifier")).id
-        synthesizer = (requested or self._select_agent(task, "synthesizer")).id
+        free_only = model_name == self.FREE_MODEL
+        thinker = (requested or self._select_agent(task, "thinker", free_only=free_only)).id
+        worker = (requested or self._select_agent(task, "worker", free_only=free_only)).id
+        verifier = (requested or self._select_agent(task, "verifier", free_only=free_only)).id
+        synthesizer = (requested or self._select_agent(task, "synthesizer", free_only=free_only)).id
         return [
             WorkflowStep(0, "thinker", thinker, "Decompose the task and identify the best execution strategy."),
             WorkflowStep(1, "worker", worker, "Execute the core task using the plan.", (0,)),
@@ -2854,10 +2888,19 @@ class TaskOrchestrator:
                 domain_score += 2
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
-    def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
+    def _ranked_agents(self, text: str, role: str, *, free_only: bool = False) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group."""
         lowered = text.lower()
-        static = sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        candidates = [agent for agent in self.agents if not free_only or self._is_free_agent(agent)]
+        if not candidates:
+            raise RuntimeError("no enabled zero-cost model is available")
+        static = sorted(candidates, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        if free_only:
+            by_id = {agent.id: agent for agent in static}
+            return [
+                by_id[agent_id]
+                for agent_id in self._group_router.ranked_member_ids(list(by_id))
+            ]
         groups: dict[str, list[ModelAgent]] = {}
         for agent in static:
             key = canonical_group_name(agent.group_name) if agent.group_name else f"agent:{agent.id}"
@@ -2874,8 +2917,12 @@ class TaskOrchestrator:
                 ranked.extend(by_id[member_id] for member_id in self._group_router.ranked_member_ids(list(by_id)))
         return ranked
 
-    def _select_agent(self, text: str, role: str) -> ModelAgent:
-        selected = self._ranked_agents(text, role)[0]
+    def _is_free_agent(self, agent: ModelAgent) -> bool:
+        """Return true only for explicitly zero-priced configured models."""
+        return "cost:free" in agent.tags or self.price_per_million.get(agent.model) == 0
+
+    def _select_agent(self, text: str, role: str, *, free_only: bool = False) -> ModelAgent:
+        selected = self._ranked_agents(text, role, free_only=free_only)[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
@@ -2964,7 +3011,13 @@ class TaskOrchestrator:
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        allowed_agent_ids: set[str] | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -2973,7 +3026,7 @@ class TaskOrchestrator:
         explicitly idempotent transient calls retry the same agent, and ambiguous
         side effects or policy/permission/argument errors fail closed.
         """
-        candidates = self._failover_candidates(primary, text, role)
+        candidates = self._failover_candidates(primary, text, role, allowed_agent_ids)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
             retry_attempt = 0
@@ -2982,7 +3035,7 @@ class TaskOrchestrator:
                     attempt_start = time.perf_counter()
                     output = self.client.chat(agent, messages)
                 except Exception as exc:
-                    if agent.group_name:
+                    if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
@@ -3018,7 +3071,7 @@ class TaskOrchestrator:
                     break
                 # Success: one Bernoulli observation plus the measured latency
                 # feeding the group router's EWMA (Jacobson 1988 gain).
-                if agent.group_name:
+                if agent.group_name or allowed_agent_ids is not None:
                     self._group_router.observe_success(
                         agent.id, time.perf_counter() - attempt_start
                     )
@@ -3050,8 +3103,16 @@ class TaskOrchestrator:
             event_detail["observed_failure_kind"] = observed_kind.value
         self._append_audit_event("tool_fallback_decision", event_detail)
 
-    def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
+    def _failover_candidates(
+        self,
+        primary: ModelAgent,
+        text: str,
+        role: str,
+        allowed_agent_ids: set[str] | None = None,
+    ) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
+        if allowed_agent_ids is not None:
+            ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
         if primary.group_name:
             ranked = [agent for agent in ranked if agent.group_name == primary.group_name]
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
@@ -3277,7 +3338,20 @@ class TaskOrchestrator:
                 "owned_by": "contextual-orchestrator",
             }
         ]
-        seen: set[str] = {"contextual-orchestrator"}
+        data.append({
+            "id": self.AUTO_MODEL,
+            "object": "model",
+            "created": created,
+            "owned_by": "contextual-orchestrator",
+        })
+        if any(self._is_free_agent(agent) for agent in self.agents):
+            data.append({
+                "id": self.FREE_MODEL,
+                "object": "model",
+                "created": created,
+                "owned_by": "contextual-orchestrator",
+            })
+        seen: set[str] = {item["id"] for item in data}
         # Model-group aliases are addressable model ids (a logical name routes
         # to the best measured member), so advertise them like real models.
         for group in self.list_model_groups():
