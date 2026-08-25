@@ -52,14 +52,14 @@ def test_agent_patch_updates_governance_fields() -> None:
     updated = orchestrator.patch_agent(
         "default",
         "builder_agent",
-        {"status": "disabled", "priority": 9, "tags": ["coding", "orchestration"], "provider_exclusions": ["worker"], "group_name": "ox-alpha"},
+        {"status": "disabled", "priority": 9, "tags": ["coding", "orchestration"], "provider_exclusions": ["worker"], "group_name": "shared-reasoning-model"},
     )
 
     assert updated["status"] == "disabled"
     assert updated["priority"] == 9
     assert updated["tags"] == ["coding", "orchestration"]
     assert updated["provider_exclusions"] == ["worker"]
-    assert updated["group_name"] == "ox_alpha"
+    assert updated["group_name"] == "shared_reasoning_model"
     assert updated["group_routing"]["success_count"] == 0
     assert updated["id"] == "builder_agent"
 

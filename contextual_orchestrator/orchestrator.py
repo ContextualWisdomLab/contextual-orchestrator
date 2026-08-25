@@ -3058,7 +3058,7 @@ class TaskOrchestrator:
             }
         ]
         seen: set[str] = {"contextual-orchestrator"}
-        # Model-group aliases are addressable model ids (model="ox-alpha" routes
+        # Model-group aliases are addressable model ids (a logical name routes
         # to the best measured member), so advertise them like real models.
         for group in self.list_model_groups():
             if not group.get("enabled_member_count"):

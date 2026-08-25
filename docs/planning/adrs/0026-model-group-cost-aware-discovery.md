@@ -6,7 +6,7 @@
 
 ## Product requirement
 
-Operators need one logical model name when several providers expose the same underlying model. For example, an operator can assign OpenRouter `stealth/ox-alpha` and OpenCode Zen `openai/x-preview-f-free` to `ox_alpha`; the mechanism accepts any valid group and member set. Model discovery remains provider-specific and retains the complete catalog; zero-cost entries are additionally classified so cost policy can distinguish free, priced, and unknown-price models.
+Operators need one logical model name when several providers expose the same underlying model under unrelated identifiers. Groups are entirely operator-defined: discovery never infers equivalence from provider or model names, and no model family is built in. Model discovery remains provider-specific and retains the complete catalog; zero-cost entries are additionally classified so cost policy can distinguish free, priced, and unknown-price models.
 
 ## Decision and technical contract
 
@@ -20,10 +20,10 @@ OpenRouter discovery reads its provider-reported per-token prices and recognizes
 sequenceDiagram
   participant Client
   participant Gateway
-  participant Group as ox_alpha
+  participant Group as operator-defined group
   participant OR as OpenRouter
   participant Zen as OpenCode Zen
-  Client->>Gateway: model = ox-alpha
+  Client->>Gateway: model = logical group name
   Gateway->>Group: rank enabled members
   Group->>OR: best measured member
   OR-->>Group: success/failure + latency
@@ -37,7 +37,7 @@ Group membership survives restart in the existing `agent_pool` database payload.
 
 ## Verification and gaps
 
-- Contract tests cover canonical aliases, static tie behavior, measured reordering, snapshot safety, DB/API group persistence, full-catalog discovery, free classification, and both ox-alpha aliases.
+- Contract tests cover canonical aliases, static tie behavior, measured reordering, snapshot safety, DB/API group persistence, full-catalog discovery, free classification, and the absence of implicit grouping.
 - Gap: provider-reported OpenCode Zen pricing is unavailable in `/models`; retain `unknown` rather than infer paid prices.
 - Gap: response quality is not yet in this intra-model score. Distinct-model composition must use calibrated evaluation evidence (for example fast-mlsirm), not a hand-authored weight.
 - Gap: multi-replica telemetry needs a time-windowed durable store and concurrency-safe aggregation before production horizontal scaling.

@@ -15,7 +15,7 @@ def _agent(agent_id: str, model: str, priority: int = 0) -> ModelAgent:
         "https://provider.example/v1",
         provider_name="provider_name",
         priority=priority,
-        group_name="ox_alpha",
+        group_name="shared_reasoning_model",
     )
 
 
@@ -51,16 +51,16 @@ def test_group_router_validates_inputs_and_forgets_departed_members() -> None:
 
 
 def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> None:
-    high = _agent("openrouter_ox_alpha", "stealth/ox-alpha", priority=2)
-    low = _agent("opencode_zen_ox_alpha", "openai/x-preview-f-free", priority=1)
+    high = _agent("provider_one_model", "vendor-one/model-a", priority=2)
+    low = _agent("provider_two_model", "vendor-two/model-b", priority=1)
     other = ModelAgent("other_model", "other/model", "https://other.example/v1", priority=0)
     orchestrator = TaskOrchestrator([high, low, other])
 
-    assert canonical_group_name("ox-alpha") == "ox_alpha"
-    assert orchestrator._requested_agent("ox-alpha") == high
+    assert canonical_group_name("shared-reasoning-model") == "shared_reasoning_model"
+    assert orchestrator._requested_agent("shared-reasoning-model") == high
     orchestrator._group_router.observe_failure(high.id)
     orchestrator._group_router.observe_success(low.id, 0.1)
-    assert orchestrator._requested_agent("ox_alpha") == low
+    assert orchestrator._requested_agent("shared_reasoning_model") == low
     assert orchestrator._ranked_agents("", "worker")[-1] == other
 
 
@@ -71,7 +71,7 @@ def test_group_ranking_keeps_role_excluded_members_after_eligible_members() -> N
         "vendor/excluded",
         "https://provider.example/v1",
         provider_exclusions=("worker",),
-        group_name="ox-alpha",
+        group_name="shared-reasoning-model",
     )
     orchestrator = TaskOrchestrator([eligible, excluded])
     orchestrator._group_router.observe_success(excluded.id, 0.001)
@@ -80,4 +80,4 @@ def test_group_ranking_keeps_role_excluded_members_after_eligible_members() -> N
 
 
 def test_model_agent_stores_canonical_group_name() -> None:
-    assert _agent("canonical_member", "vendor/model").group_name == "ox_alpha"
+    assert _agent("canonical_member", "vendor/model").group_name == "shared_reasoning_model"

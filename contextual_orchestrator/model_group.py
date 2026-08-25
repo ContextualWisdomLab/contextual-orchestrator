@@ -1,8 +1,8 @@
 """Measured speed/stability routing inside a model group.
 
 A *model group* bundles several provider endpoints that serve the same
-underlying model (for example ``ox_alpha`` spans OpenRouter's
-``stealth/ox-alpha`` and OpenCode Zen's ``x-preview-f-free``). Callers may
+underlying model (for example ``shared_reasoning_model`` may span differently
+named provider endpoints). Callers may
 address the group as one logical model; this module decides which member
 endpoint actually serves each request using only measured evidence:
 
@@ -53,8 +53,8 @@ _GROUP_NAME_NORMALIZE_RE = re.compile(r"[-\s]+")
 def canonical_group_name(raw_name: str) -> str:
     """Normalize a group alias to its canonical snake_case name.
 
-    Accepts the hyphenated form clients naturally type (``ox-alpha``) and the
-    stored snake_case form (``ox_alpha``) interchangeably, then enforces this
+    Accepts a hyphenated form clients naturally type and the stored snake_case
+    form interchangeably, then enforces this
     repository's two-or-more-word snake_case object-name convention.
     """
     if not isinstance(raw_name, str):

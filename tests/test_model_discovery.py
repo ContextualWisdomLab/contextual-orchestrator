@@ -142,7 +142,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     payload = {
         "data": [
-            {"id": "stealth/ox-alpha", "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "vendor/free-model", "pricing": {"prompt": "0", "completion": "0"}},
             {"id": "paid/model", "pricing": {"prompt": "0.000001", "completion": "0.000002"}},
             {"id": "request-fee/model", "pricing": {"prompt": "0", "completion": "0", "request": "0.01"}},
         ]
@@ -153,17 +153,17 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
     ):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
 
-    assert [model.model_id for model in discovered] == ["stealth/ox-alpha", "paid/model", "request-fee/model"]
-    assert [model.model_id for model in free_discovered_models(discovered)] == ["stealth/ox-alpha"]
+    assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
+    assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
     assert agent_from_discovered(discovered[0]).group_name == ""
 
 
-def test_opencode_zen_free_suffix_and_ox_alpha_alias_are_discovered() -> None:
+def test_opencode_zen_free_suffix_is_discovered_without_implicit_grouping() -> None:
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     with patch(
         "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        return_value=_Response({"data": [{"id": "openai/x-preview-f-free"}, {"id": "paid-model"}]}),
+        return_value=_Response({"data": [{"id": "provider/example-free"}, {"id": "paid-model"}]}),
     ):
         discovered = discover_provider_models(source)
 
