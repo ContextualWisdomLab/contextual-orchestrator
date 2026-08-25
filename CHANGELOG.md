@@ -61,6 +61,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Make per-request budget checks constant time while preserving exact parity
   with full spend analytics across persisted, replaced, estimated, and
   provider-reported workflow runs.
+- Bound inactive HTTP/1.1 request reads to the configured rate-limit window so
+  slow clients cannot retain unbounded request threads.
 - Reject missing profiles, blank `profile_version`, and fractional seeds.
   Snapshot hashing now fails closed on extra or missing roles. The
   production-default gate returns false on junk reports and on

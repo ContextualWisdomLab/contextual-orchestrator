@@ -10,6 +10,13 @@ HTTP/1.0 connection churn. The gateway now uses the operating system's native
 `SOMAXCONN` backlog and HTTP/1.1 persistent connections. No routing weights or
 performance heuristics were added.
 
+Persistent sockets use `SecurityConfig.rate_limit_window_seconds` as their
+inactivity timeout, binding request-thread lifetime to the operator's existing
+abuse-accounting window instead of introducing a second guessed duration. RFC
+9112 section 9.5 permits servers to close inactive connections and recommends
+reclaiming their resources promptly. A raw-socket regression proves incomplete
+headers cannot retain a thread beyond that configured window.
+
 This is an I/O-concurrency result, not a production capacity promise. The test
 uses only synthetic prompts and a deterministic one-second delayed provider;
 it contains no provider credential, personal data, or production record.

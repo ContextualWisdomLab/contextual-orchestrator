@@ -270,6 +270,8 @@ class SecurityConfig:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
+        if type(self.rate_limit_window_seconds) is not int or self.rate_limit_window_seconds < 1:
+            raise ValueError("rate_limit_window_seconds must be an integer >= 1")
         if type(self.admin_session_ttl_seconds) is not int or self.admin_session_ttl_seconds < 1:
             raise ValueError("admin_session_ttl_seconds must be an integer >= 1")
         if type(self.max_admin_sessions) is not int or self.max_admin_sessions < 1:
@@ -5008,34 +5010,32 @@ def build_server(
             if session_token is not None:
                 reset_session_id(session_token)
 
-        def handle_one_request(self) -> None:
-            """Prevent a keep-alive connection from carrying request state."""
-            try:
-                super().handle_one_request()
-            finally:
-                self._reset_session()
-
-        def finish(self) -> None:
-            """Finish the response and release request correlation state."""
-            try:
-                super().finish()
-            finally:
-                self._reset_session()
+        # Bound inactive request/header reads to the operator-configured abuse
+        # accounting window. StreamRequestHandler applies this to the socket;
+        # BaseHTTPRequestHandler then closes timed-out persistent connections.
+        timeout = float(security.rate_limit_window_seconds)
 
         # HTTP/1.1 keep-alive: every response sets Content-Length, so connections
         # are reusable while provider calls run. The HTTP/1.0 default forces a
-        # TCP handshake + TIME_WAIT socket per request — k6 evidence
+        # TCP handshake + TIME_WAIT socket per request -- k6 evidence
         # (loadtests/k6_gateway_smoke.js): at 200 req/s the CLIENT exhausted
         # local ephemeral ports ("dial: i/o timeout") long before server
         # capacity was reached.
         protocol_version = "HTTP/1.1"
 
         def handle_one_request(self) -> None:
-            """Reset body-consumption state before parsing each persistent request."""
-            self._request_body_consumed = False
-            super().handle_one_request()
+            """Reset per-request state before parsing each persistent request.
 
-        def do_GET(self) -> None:  # noqa: N802
+            Body-consumption tracking must restart per request so an unread
+            declared body still closes the connection, and correlation/trace
+            state must never leak across requests on a reused connection.
+            """
+            self._request_body_consumed = False
+            try:
+                super().handle_one_request()
+            finally:
+                self._reset_session()
+
             """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
