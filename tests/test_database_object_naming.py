@@ -10,11 +10,12 @@ from contextual_orchestrator.conventions import is_two_word_snake_case
 
 ROOT = Path(__file__).resolve().parents[1]
 SQL_IDENTIFIER = r'(?:[A-Za-z][A-Za-z0-9_]*|"[^"]+"|`[^`]+`|\[[^\]]+\])'
+# Case-sensitive on purpose: application SQL is written in upper-case keywords,
+# so lower-case prose words like "constraint" cannot masquerade as DDL.
 CREATE_OBJECT_PATTERN = re.compile(
     r"(?:CREATE\s+(?:(?:UNIQUE\s+)?(?:TABLE|INDEX)|VIEW|SEQUENCE)"
     rf"(?:\s+IF\s+NOT\s+EXISTS)?|CONSTRAINT)\s+(?:{SQL_IDENTIFIER}\.)*"
-    rf"(?P<object_name>{SQL_IDENTIFIER})",
-    re.IGNORECASE,
+    rf"(?P<object_name>{SQL_IDENTIFIER})"
 )
 SQL_CONTROL_WORDS = {"IF", "NOT", "EXISTS"}
 
