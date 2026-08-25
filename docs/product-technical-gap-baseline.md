@@ -4,7 +4,7 @@
 
 | PR | Exact head/base | Current evidence and decision |
 | --- | --- | --- |
-| [#843](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/843) | head `8208f3931a8640090356f851f2db34fd1b41eeba`, base #834 head `99ee64db55be1ee6ee9deb94590a4899cfaec72d` | Open stacked PR. `orchestrator/auto` and `orchestrator/free` are durable virtual models; `free` admits only discovery-tagged `cost:free` models or an operator-configured exact zero price, measures success/latency inside equal role-suitability buckets, carries the free allowlist through failover, normal/structured fast-mlsirm judging, and tools/structured-output passthrough, and fails closed when it is empty. `/v1/responses` streams fixed safe stage summaries with OpenAI `response.reasoning_summary_part.*` and `response.reasoning_summary_text.*` events; raw chain-of-thought and intermediate agent output are excluded, post-header failures terminate with `response.failed`, and prompt-free analytics distinguish completed and failed streams. Free observations survive unrelated pool/group edits, while removed agents are pruned from the measurement ledger. Exact-head full local evidence is `1654 passed in 600.70s`; diff-check and focused passthrough/pool tests passed. All known Devin threads are resolved; exact-head Devin re-review remains pending and independent approval is still required. |
+| [#843](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/843) | head `c262b8d80875969773ba40056217731a72ed688b`, base #834 head `99ee64db55be1ee6ee9deb94590a4899cfaec72d` | Open stacked PR. `orchestrator/auto` and `orchestrator/free` are durable virtual models; `free` admits only discovery-tagged `cost:free` models or an operator-configured exact zero price, measures success/latency inside equal role-suitability buckets, carries the free allowlist through failover, normal/structured fast-mlsirm judging, and tools/structured-output passthrough, and fails closed when it is empty. `/v1/responses` streams fixed safe stage summaries with OpenAI `response.reasoning_summary_part.*` and `response.reasoning_summary_text.*` events; raw chain-of-thought and intermediate agent output are excluded, post-header failures terminate with `response.failed`, and prompt-free analytics distinguish completed and failed streams. Free observations survive unrelated pool/group edits, while removed agents are pruned from the measurement ledger. Exact-head full local evidence is `1654 passed in 614.96s`; diff-check and focused passthrough/pool tests passed. All known Devin threads are resolved; exact-head Devin re-review remains pending and independent approval is still required. |
 | [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | head `99ee64db55be1ee6ee9deb94590a4899cfaec72d`, base current `main` | Parent model-group stack remains the required predecessor of #843. No protected-main or release claim transfers from local or downstream evidence. |
 
 The canonical container entry path is root `compose.yaml`: PostgreSQL 17.6,
@@ -29,6 +29,10 @@ Remaining customer-visible gaps:
 3. The in-process success/latency ledger is not multi-replica evidence. Add a
    normalized time-windowed observation store with explicit retention/decay
    before claiming fleet-wide optimal routing.
+4. Conducted `/v1/responses` streams emit prompt-free request analytics but do
+   not yet aggregate their multi-agent usage into cost-ledger rows. Add a durable
+   workflow-run usage boundary before claiming complete Responses cost rollups;
+   do not estimate provider attribution from the final synthesized answer.
 
 **Snapshot convention:** the initial inventory records its observation time
 below; each live continuation carries its own recheck time.
