@@ -31,6 +31,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
 from .tool_fallback import ToolFallbackStoppedError
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
@@ -256,12 +257,31 @@ class SecurityConfig:
         if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
             raise ValueError("public bind requires --allow-public-bind")
 
-    def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate a bearer token or an opaque, server-side admin session cookie."""
+    def resolve_purpose(self, scope: str, purpose: str | None = None) -> str:
+        """Resolve and validate the route-owned purpose for an authenticated role."""
+        if scope not in PURPOSES_BY_SCOPE:
+            raise RequestError(403, "invalid_scope", "authorization scope is not supported")
+        effective = purpose or DEFAULT_PURPOSE_BY_SCOPE[scope]
+        if effective not in PURPOSES_BY_SCOPE[scope]:
+            raise RequestError(403, "purpose_not_allowed", "purpose is not allowed for this scope")
+        return effective
+
+    def authorize(
+        self,
+        headers: Any,
+        scope: str,
+        client_address: str,
+        purpose: str | None = None,
+    ) -> str:
+        """Validate a bearer token or an opaque admin session; return the authorized purpose."""
+        effective_purpose = self.resolve_purpose(scope, purpose)
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
-            return
+            # An active opaque session authorizes the admin role; the route-owned
+            # purpose is still resolved and validated so a session holder cannot
+            # exceed the scope's purpose allowlist.
+            return effective_purpose
         raw = headers.get("authorization", "")
         if not raw.lower().startswith("bearer "):
             raise RequestError(401, "unauthorized", "bearer token is required")
@@ -281,6 +301,7 @@ class SecurityConfig:
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        return effective_purpose
 
     @staticmethod
     def _extract_bearer_token(headers: Any) -> str:
@@ -4708,7 +4729,7 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
-                self._authorize("admin")
+                self._authorize("admin", purpose=self._admin_purpose(path))
                 if path == "/api/v1/cost_attribution_dimensions":
                     self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})
                     return
@@ -4742,7 +4763,10 @@ def build_server(
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
                 if path == "/admin/state":
-                    state = orchestrator.admin_state()
+                    state = orchestrator.admin_state(
+                        role=getattr(self, "_authorized_role", None),
+                        purpose=getattr(self, "_authorized_purpose", None),
+                    )
                     state["document_viewer"] = (
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
@@ -5887,11 +5911,69 @@ def build_server(
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
-        def _authorize(self, scope: str, *, state_changing: bool = False) -> None:
-            security.check_rate_limit(self.client_address[0])
-            security.authorize(self.headers, scope, self.client_address[0])
-            if state_changing and scope == "admin":
-                security.validate_admin_session_origin(self.headers)
+        @staticmethod
+        def _admin_purpose(path: str) -> str:
+            """Select the least-privileged purpose for an admin GET route."""
+            if (
+                path == "/admin/state"
+                or path == "/api/v1/workflow_runs"
+                or path.startswith("/api/v1/workflow_runs/")
+                or path.startswith("/api/v1/access_reports/")
+                or path.startswith("/api/v1/evaluation_runs/")
+            ):
+                return "audit_replay"
+            return "operator_read"
+
+        def _authorize(
+            self,
+            scope: str,
+            *,
+            purpose: str | None = None,
+            state_changing: bool = False,
+        ) -> None:
+            """Authorize the request and audit denials or sensitive replay access.
+
+            Combines the opaque-session/bearer validation with route-owned
+            purposes: denials and sensitive ``audit_replay`` access are recorded
+            (durable for replays), and browser-driven state-changing admin
+            requests must pass the same-origin check.
+            """
+            effective_purpose = purpose or DEFAULT_PURPOSE_BY_SCOPE.get(scope, "")
+            try:
+                security.check_rate_limit(self.client_address[0])
+                effective_purpose = security.authorize(
+                    self.headers, scope, self.client_address[0], purpose=purpose
+                )
+                if state_changing and scope == "admin":
+                    security.validate_admin_session_origin(self.headers)
+            except RequestError as exc:
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=False,
+                        reason=exc.code,
+                    )
+                except Exception:
+                    pass
+                raise
+            if effective_purpose == "audit_replay":
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=True,
+                        reason="authorized",
+                        durable=True,
+                    )
+                except Exception as exc:
+                    raise RequestError(
+                        503,
+                        "authorization_audit_unavailable",
+                        "authorization audit unavailable",
+                    ) from exc
+            self._authorized_role = scope
+            self._authorized_purpose = effective_purpose
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()

@@ -33,6 +33,14 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .pii_protection import (
+    DEFAULT_PII_KEY_NAME,
+    ENCRYPTED_FIELDS_KEY,
+    PiiFieldEncryptor,
+    PiiProtectionError,
+    is_encrypted_detail,
+    load_pii_encryptor,
+)
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -1685,13 +1693,14 @@ class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
     ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
-    upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
-    on disk while the in-memory deques stay capped — add pruning if db size matters.
+    upsert by key; stream kinds append. Streams saved as durable commit synchronously and use the same bounded
+    retention as their in-memory deques so request traffic cannot grow the DB forever.
     Runtime values (kind, key, payload, limit) are always bound through SQLite
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
+    _STREAM_LIMITS = {"audit": 256, "authorization": 256, "analytics": 256}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -1699,6 +1708,10 @@ class _StateStore:
     _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
     _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
     _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
+    _PRUNE_STREAM_SQL = (
+        "DELETE FROM records WHERE kind = ? AND seq NOT IN ("
+        "SELECT seq FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?)"
+    )
     _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
     _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
 
@@ -1708,16 +1721,82 @@ class _StateStore:
         self._conn.execute(self._CREATE_RECORDS_SQL)
         self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
         self._conn.commit()
+        # Non-durable streams are best-effort, but each keeps its own newest
+        # retention window so an authorization flood cannot evict audit data.
+        # The worker keeps best-effort denial writes off the request thread.
+        self._stream_events: dict[str, deque[tuple[str | None, dict[str, Any]]]] = {
+            kind: deque(maxlen=limit) for kind, limit in self._STREAM_LIMITS.items()
+        }
+        self._stream_condition = threading.Condition()
+        self._stream_closing = False
+        self._stream_writing = False
+        self._next_stream_index = 0
+        self._stream_worker = threading.Thread(
+            target=self._drain_stream_queue,
+            name="contextual-orchestrator-state-store",
+            daemon=True,
+        )
+        self._stream_worker.start()
 
-    def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
+    def save(self, kind: str, key: str | None, payload: dict[str, Any], *, durable: bool = False) -> None:
+        if kind in self._STREAM_LIMITS and not durable:
+            with self._stream_condition:
+                if self._stream_closing:
+                    raise RuntimeError("state store is closed")
+                self._stream_events[kind].append((key, payload))
+                self._stream_condition.notify()
+            return
+        self._save_sync(kind, key, payload)
+
+    def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
         with self._lock:
             if kind in self._KEYED:
                 self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
             self._conn.execute(self._INSERT_SQL, (kind, key, blob))
+            if kind in self._STREAM_LIMITS:
+                limit = self._STREAM_LIMITS[kind]
+                self._conn.execute(self._PRUNE_STREAM_SQL, (kind, kind, limit))
             self._conn.commit()
 
+    def _drain_stream_queue(self) -> None:
+        while True:
+            with self._stream_condition:
+                while not self._stream_closing and not any(self._stream_events.values()):
+                    self._stream_condition.wait()
+                event = self._next_stream_event()
+                if event is None:
+                    return
+                kind, key, payload = event
+                self._stream_writing = True
+            try:
+                self._save_sync(kind, key, payload)
+            except Exception:  # noqa: BLE001 - a best-effort stream write must not stop later persistence.
+                pass
+            finally:
+                with self._stream_condition:
+                    self._stream_writing = False
+                    self._stream_condition.notify_all()
+
+    def _next_stream_event(self) -> tuple[str, str | None, dict[str, Any]] | None:
+        """Return one pending event fairly; caller holds ``_stream_condition``."""
+        kinds = tuple(self._STREAM_LIMITS)
+        for offset in range(len(kinds)):
+            index = (self._next_stream_index + offset) % len(kinds)
+            kind = kinds[index]
+            if self._stream_events[kind]:
+                self._next_stream_index = (index + 1) % len(kinds)
+                key, payload = self._stream_events[kind].popleft()
+                return kind, key, payload
+        return None
+
+    def _flush_streams(self) -> None:
+        with self._stream_condition:
+            while self._stream_writing or any(self._stream_events.values()):
+                self._stream_condition.wait()
+
     def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
+        self._flush_streams()
         with self._lock:
             if limit is None:
                 rows = self._conn.execute(self._SELECT_ALL_SQL, (kind,)).fetchall()
@@ -1728,6 +1807,11 @@ class _StateStore:
 
     def close(self) -> None:
         """Close the sqlite handle so Windows can release the database file."""
+        self._flush_streams()
+        with self._stream_condition:
+            self._stream_closing = True
+            self._stream_condition.notify_all()
+        self._stream_worker.join()
         with self._lock:
             self._conn.close()
 
@@ -1815,6 +1899,7 @@ class TaskOrchestrator:
         tool_retry_attempts: int = 1,
         tool_retry_backoff_seconds: float = 0.25,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
+        pii_key_name: str = DEFAULT_PII_KEY_NAME,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -1864,8 +1949,9 @@ class TaskOrchestrator:
         self.budget_max_cost_usd = budget_max_cost_usd
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
-        self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
+        self._analytics_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
+        self._authorization_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
@@ -1879,6 +1965,10 @@ class TaskOrchestrator:
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
+        if not isinstance(pii_key_name, str) or not pii_key_name:
+            raise ValueError("pii_key_name must be a non-empty string")
+        self._pii_key_name = pii_key_name
+        self._pii_encryptors: dict[str, PiiFieldEncryptor] = {}
         self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
@@ -1947,6 +2037,8 @@ class TaskOrchestrator:
             self._analytics_events.append(event)
         for event in self._store.load("audit", self._audit_events.maxlen):
             self._audit_events.append(event)
+        for event in self._store.load("authorization", self._authorization_events.maxlen):
+            self._authorization_events.append(event)
 
     # Orchestration-only body keys that must not be forwarded to the provider.
     _ORCHESTRATION_ONLY_KEYS = frozenset(
@@ -3031,15 +3123,58 @@ class TaskOrchestrator:
             "verifier_output": verifier_output,
         }
 
-    def _append_audit_event(self, event_type: str, detail: dict[str, Any]) -> None:
+    def _protected_event_detail(self, detail: dict[str, Any], pii_fields: Iterable[str]) -> dict[str, Any]:
+        """Encrypt explicitly declared PII fields before an event enters memory or storage."""
+        fields = tuple(pii_fields)
+        if not fields:
+            return detail
+        encryptor = self._pii_encryptors.get(self._pii_key_name)
+        if encryptor is None:
+            encryptor = load_pii_encryptor(self._pii_key_name)
+            self._pii_encryptors[self._pii_key_name] = encryptor
+        return encryptor.encrypt_fields(detail, fields)
+
+    def _append_audit_event(
+        self,
+        event_type: str,
+        detail: dict[str, Any],
+        *,
+        pii_fields: Iterable[str] = (),
+        stream: str = "audit",
+        durable: bool = True,
+    ) -> None:
+        """Append a durable event to a bounded audit stream by default."""
         event = {
             "created_at": int(time.time()),
             "event_type": event_type,
-            "event_detail": detail,
+            "event_detail": self._protected_event_detail(detail, pii_fields),
         }
-        self._audit_events.append(event)
+        events = self._authorization_events if stream == "authorization" else self._audit_events
+        events.append(event)
         if self._store is not None:
-            self._store.save("audit", None, event)
+            self._store.save(stream, None, event, durable=durable)
+
+    def record_authorization_decision(
+        self,
+        *,
+        scope: str,
+        purpose: str,
+        allowed: bool,
+        reason: str,
+        durable: bool = False,
+    ) -> None:
+        """Record a secret-free role/purpose authorization decision."""
+        self._append_audit_event(
+            "authorization_decision",
+            {
+                "scope": scope,
+                "purpose": purpose,
+                "allowed": bool(allowed),
+                "reason": reason,
+            },
+            stream="authorization",
+            durable=durable,
+        )
 
     def _infer_provider_name(self, base_url: str) -> str:
         if base_url.startswith("mock://"):
@@ -3128,8 +3263,15 @@ class TaskOrchestrator:
         run_ids = list(self._run_order)[start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
 
-    def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
-        """Return recent audit events in newest-first order."""
+    def list_recent_audit_events(
+        self,
+        page_number: int = 1,
+        page_size: int = 25,
+        *,
+        role: str | None = None,
+        purpose: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return recent audit events, decrypting PII only for authorized replay."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         events = list(self._audit_events)
@@ -3138,15 +3280,60 @@ class TaskOrchestrator:
         total = len(events)
         left = max(0, total - end)
         right = max(0, total - start)
+        selected = list(reversed(events[left:right]))
+        if role != "admin" or purpose != "audit_replay":
+            return selected
+        restored: list[dict[str, Any]] = []
+        encryptors: dict[str, Any] = {}
+        for event in selected:
+            detail = event.get("event_detail")
+            if not is_encrypted_detail(detail):
+                restored.append(event)
+                continue
+            restored_event = dict(event)
+            try:
+                metadata = detail.get(ENCRYPTED_FIELDS_KEY)
+                key_name = metadata.get("key_name") if isinstance(metadata, dict) else self._pii_key_name
+                if not isinstance(key_name, str) or not key_name:
+                    raise PiiProtectionError("encrypted field metadata has no valid key name")
+                encryptor = encryptors.get(key_name)
+                if encryptor is None:
+                    encryptor = load_pii_encryptor(key_name)
+                    encryptors[key_name] = encryptor
+                restored_event["event_detail"] = encryptor.decrypt_fields(detail)
+            except PiiProtectionError:
+                restored_event["event_detail"] = {
+                    **detail,
+                    "__pii_protection_error__": "unavailable",
+                }
+            restored.append(restored_event)
+        return restored
+
+    def list_recent_authorization_decisions(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
+        """Return recent secret-free authorization decisions in newest-first order."""
+        if page_number < 1 or page_size < 1:  # pragma: no cover
+            raise ValueError("page_number/page_size must be >= 1")
+        events = list(self._authorization_events)
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        total = len(events)
+        left = max(0, total - end)
+        right = max(0, total - start)
         return list(reversed(events[left:right]))
 
-    def record_analytics_event(self, event_name: str, detail: dict[str, Any]) -> None:
+    def record_analytics_event(
+        self,
+        event_name: str,
+        detail: dict[str, Any],
+        *,
+        pii_fields: Iterable[str] = (),
+    ) -> None:
         """Record a compact in-memory analytics event without prompt or output text."""
         require_object_name(event_name, "analytics.event_name")
         event = {
             "event_time": int(time.time()),
             "event_name": event_name,
-            "event_detail": redact_value(detail),
+            "event_detail": redact_value(self._protected_event_detail(detail, pii_fields)),
         }
         self._analytics_events.append(event)
         if self._store is not None:
@@ -9329,7 +9516,7 @@ class TaskOrchestrator:
             },
         }
 
-    def admin_state(self) -> dict[str, Any]:
+    def admin_state(self, *, role: str | None = None, purpose: str | None = None) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.candidates))
         return {
@@ -9340,7 +9527,8 @@ class TaskOrchestrator:
                 "complex_hints": list(self.COMPLEX_HINTS),
             },
             "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
-            "recent_audit_events": self.list_recent_audit_events(),
+            "recent_audit_events": self.list_recent_audit_events(role=role, purpose=purpose),
+            "recent_authorization_decisions": self.list_recent_authorization_decisions(),
             "spend": self.spend_analytics(),
         }
 
