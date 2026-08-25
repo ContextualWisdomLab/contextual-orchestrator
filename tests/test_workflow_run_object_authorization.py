@@ -34,11 +34,15 @@ def test_workflow_and_access_reads_are_owner_bound() -> None:
     assert orchestrator.list_recent_runs(owner_id="owner_a") == [record]
     assert orchestrator.count_workflow_runs(owner_id="owner_a") == 1
     assert orchestrator.get_access_report(run_id, owner_id="owner_a")["workflow_run_id"] == run_id
+    evaluation = orchestrator.run_evaluation(["one"], owner_id="owner_a")
+    assert orchestrator.get_evaluation_run(evaluation["evaluation_run_id"], owner_id="owner_a") == evaluation
 
     with pytest.raises(KeyError):
         orchestrator.get_workflow_run(run_id, owner_id="owner_b")
     with pytest.raises(KeyError):
         orchestrator.get_access_report(run_id, owner_id="owner_b")
+    with pytest.raises(KeyError):
+        orchestrator.get_evaluation_run(evaluation["evaluation_run_id"], owner_id="owner_b")
     assert orchestrator.list_recent_runs(owner_id="owner_b") == []
     assert orchestrator.count_workflow_runs(owner_id="owner_b") == 0
 
@@ -63,12 +67,19 @@ def test_principal_id_is_a_stable_non_secret_token_digest() -> None:
 
 
 def test_public_payload_removes_internal_owner_metadata_recursively() -> None:
-    """Keep owner lookup keys out of trace-enabled and list response bodies."""
+    """Hide record owners without altering similarly named provider output."""
     payload = _response_payload(
-        {"owner_id": "owner_a", "items": [{"owner_id": "owner_a", "value": "visible"}]},
+        {
+            "owner_id": "owner_a",
+            "items": [{"owner_id": "owner_a", "value": "visible"}],
+            "trace": [{"output": {"owner_id": "provider-authored"}}],
+        },
         include_trace=True,
     )
-    assert payload == {"items": [{"value": "visible"}]}
+    assert payload == {
+        "items": [{"value": "visible"}],
+        "trace": [{"output": {"owner_id": "provider-authored"}}],
+    }
 
 
 if __name__ == "__main__":  # pragma: no cover

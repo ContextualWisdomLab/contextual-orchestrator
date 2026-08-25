@@ -8,7 +8,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
 import json
-import hashlib
 import secrets
 import struct
 import threading
@@ -225,6 +224,7 @@ class SecurityConfig:
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
     _admin_sessions: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _admin_session_principals: dict[str, str] = field(default_factory=dict, init=False, repr=False)
     _session_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -310,7 +310,13 @@ class SecurityConfig:
         raw = headers.get("authorization", "")
         token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
         if not token:
-            raise RequestError(401, "unauthorized", "bearer token is required")
+            session_id = self._extract_admin_session_cookie(headers)
+            if self._admin_session_is_active(session_id):
+                with self._session_lock:
+                    principal = self._admin_session_principals.get(session_id)
+                if principal:
+                    return principal
+            raise RequestError(401, "unauthorized", "authenticated principal is required")
         if self.bearer_verifier is None:
             if self.admin_token and self.inference_token:
                 principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
@@ -354,13 +360,23 @@ class SecurityConfig:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         session_id = secrets.token_urlsafe(32)
         expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
+        if self.bearer_verifier is None:
+            if self.admin_token and self.inference_token:
+                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
+            else:
+                principal_material = f"single:{self.auth_token}"
+        else:
+            principal_material = f"bearer:{presented_token}"
+        principal = hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
         with self._session_lock:
             self._purge_expired_admin_sessions_locked(time.monotonic())
             overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
             if overflow > 0:
                 for session_key, _ in sorted(self._admin_sessions.items(), key=lambda item: item[1])[:overflow]:
                     self._admin_sessions.pop(session_key, None)
+                    self._admin_session_principals.pop(session_key, None)
             self._admin_sessions[session_id] = expires_at
+            self._admin_session_principals[session_id] = principal
         return session_id
 
     def _admin_session_is_active(self, session_id: str) -> bool:
@@ -373,6 +389,7 @@ class SecurityConfig:
                 return False
             if time.monotonic() >= expires_at:
                 self._admin_sessions.pop(session_id, None)
+                self._admin_session_principals.pop(session_id, None)
                 return False
             return True
 
@@ -381,11 +398,14 @@ class SecurityConfig:
         for session_id, expires_at in list(self._admin_sessions.items()):
             if now >= expires_at:
                 self._admin_sessions.pop(session_id, None)
+                self._admin_session_principals.pop(session_id, None)
 
     def revoke_admin_session(self, session_id: str) -> bool:
         """Revoke one opaque admin session without retaining the bearer."""
         with self._session_lock:
-            return self._admin_sessions.pop(session_id, None) is not None if session_id else False
+            removed = self._admin_sessions.pop(session_id, None) is not None if session_id else False
+            self._admin_session_principals.pop(session_id, None)
+            return removed
 
     def admin_session_cookie_header(self, session_id: str, *, max_age: int | None = None) -> str:
         """Return a secure-by-default HttpOnly, same-origin session cookie header."""
@@ -4602,15 +4622,17 @@ _INTERNAL_PAYLOAD_KEYS = frozenset({"owner_id", "principal_id"})
 
 
 def _strip_internal_fields(value: Any) -> Any:
-    """Recursively drop internal owner metadata from public response bodies."""
+    """Drop gateway-owned metadata without rewriting nested provider output."""
     if isinstance(value, dict):
-        return {
-            key: _strip_internal_fields(item)
-            for key, item in value.items()
-            if key not in _INTERNAL_PAYLOAD_KEYS
-        }
-    if isinstance(value, list):
-        return [_strip_internal_fields(item) for item in value]
+        public = {key: item for key, item in value.items() if key not in _INTERNAL_PAYLOAD_KEYS}
+        if isinstance(public.get("items"), list):
+            public["items"] = [
+                {key: item for key, item in row.items() if key not in _INTERNAL_PAYLOAD_KEYS}
+                if isinstance(row, dict)
+                else row
+                for row in public["items"]
+            ]
+        return public
     return value
 
 
@@ -4810,6 +4832,7 @@ def build_server(
                     return
                 if path == "/admin/state":
                     state = orchestrator.admin_state(
+                        owner_id=security.principal_id(self.headers),
                         role=getattr(self, "_authorized_role", None),
                         purpose=getattr(self, "_authorized_purpose", None),
                     )
@@ -4995,9 +5018,10 @@ def build_server(
                     return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
+                    owner_id = security.principal_id(self.headers)
                     self._send(_response_payload({
-                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size),
-                        "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
+                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size, owner_id=owner_id),
+                        "total_count": orchestrator.count_workflow_runs(owner_id=owner_id),
                         "page_number": page_number,
                         "page_size": page_size,
                     }, security.expose_trace_by_default))
@@ -5005,7 +5029,7 @@ def build_server(
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -5022,18 +5046,18 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
                         return
                 if path.startswith("/api/v1/evaluation_runs/"):
                     evaluation_run_id = path.rsplit("/", 1)[-1]
-                    runs = getattr(orchestrator, "_evaluation_runs", {})
-                    if evaluation_run_id in runs:
-                        self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
+                    try:
+                        self._send(_response_payload(orchestrator.get_evaluation_run(evaluation_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
                         return
-                    self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
+                    except KeyError:
+                        self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
                     return
                 if path.startswith("/api/v1/agent_pools/"):
                     segments = [part for part in path.split("/") if part]
@@ -5889,7 +5913,7 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -5899,7 +5923,7 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -5911,7 +5935,7 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
+                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")

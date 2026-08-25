@@ -2603,6 +2603,15 @@ class TaskOrchestrator:
             raise KeyError(workflow_run_id)
         return record
 
+    def get_evaluation_run(
+        self, evaluation_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return an evaluation only when it belongs to the requested owner."""
+        record = self._evaluation_runs[evaluation_run_id]
+        if owner_id is not None and record.get("owner_id") != owner_id:
+            raise KeyError(evaluation_run_id)
+        return record
+
     def get_access_report(
         self, workflow_run_id: str, owner_id: str | None = None
     ) -> dict[str, Any]:
