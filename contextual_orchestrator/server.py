@@ -4825,6 +4825,15 @@ def build_server(
             """Reset body-consumption state before parsing each persistent request."""
             self._request_body_consumed = False
             super().handle_one_request()
+            if (
+                self._request_body_consumed is False
+                and hasattr(self, "headers")
+                and (
+                    self.headers.get("Content-Length") not in (None, "0")
+                    or self.headers.get("Transfer-Encoding")
+                )
+            ):
+                self.close_connection = True
 
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""

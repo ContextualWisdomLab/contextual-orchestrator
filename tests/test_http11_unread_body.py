@@ -151,6 +151,25 @@ def test_zero_length_health_request_keeps_connection_alive() -> None:
     assert response.count(b"HTTP/1.1 200 ") == 2
 
 
+def test_unsupported_method_with_body_closes_connection() -> None:
+    """The stdlib 501 path cannot reinterpret an unread body as a request."""
+    server, thread, port = _start()
+    try:
+        body = b"unread"
+        response = _pipeline(
+            port,
+            b"PUT /healthz HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+            + body,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    _assert_single_closed_response(response, b"501 ")
+
+
 def test_incomplete_request_headers_time_out_within_abuse_window() -> None:
     """A slow client cannot pin a request thread beyond the configured window."""
     server, thread, port = _start(rate_limit_window_seconds=1)
