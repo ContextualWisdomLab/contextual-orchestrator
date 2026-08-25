@@ -184,6 +184,7 @@ def test_admin_session_requests_partition_cache_without_bearer() -> None:
         assert status2 == 201
     finally:
         server.shutdown()
+        thread.join(timeout=5)
 
 def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
