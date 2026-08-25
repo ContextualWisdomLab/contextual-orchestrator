@@ -315,6 +315,8 @@ python tests/test_security_hardening.py
 python tests/test_chat_model_capability_isolation.py
 python tests/test_chat_transport_role_separation.py
 python tests/test_chat_capability_unknown_identifiers.py
+python tests/test_discovery_bootstrap_selection.py
+python tests/test_review_gateway.py
 python tests/test_chat_passthrough_capability_isolation.py
 python tests/test_tool_execution_fallback.py
 python tests/test_repository_security_metadata.py
