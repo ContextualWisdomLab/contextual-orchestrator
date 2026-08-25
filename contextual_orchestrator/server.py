@@ -26,6 +26,7 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
     _new_chat_completion_id,
+    _responses_to_chat_payload,
     chat_completion_chunks,
     chat_completion_response,
     text_completion_response,
@@ -5493,12 +5494,28 @@ def build_server(
                         key in body and body.get(key) is not None
                         for key in PASSTHROUGH_TRIGGER_KEYS
                     ):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                        tool_loop = bool(tools_list)
                         started_at = time.perf_counter()
-                        proxied = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
-                        )
+                        if tool_loop:
+                            proxied = self._run(
+                                lambda: orchestrator.proxy_completion(
+                                    body,
+                                    endpoint="chat/completions",
+                                    single_agent=True,
+                                )
+                            )
+                        else:
+                            structured_messages = _validate_messages(body.get("messages"))
+                            proxied = self._run(
+                                lambda: coordinator.complete(
+                                    structured_messages,
+                                    mode="conduct",
+                                    attribution=_validate_attribution(body.get("attribution")),
+                                    hints=_validate_routing(body.get("routing")),
+                                    model_name=body["model"],
+                                    provider_request=body,
+                                )
+                            )
                         orchestrator.record_analytics_event(
                             "chat_completion_passthrough",
                             {
@@ -5932,9 +5949,28 @@ def build_server(
                                 "stream is not supported on /v1/responses",
                             )
                     started_at = time.perf_counter()
-                    proxied = self._run(
-                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
-                    )
+                    tool_loop = bool(body.get("tools"))
+                    if tool_loop:
+                        proxied = self._run(
+                            lambda: orchestrator.proxy_completion(
+                                body,
+                                endpoint="responses",
+                                single_agent=True,
+                            )
+                        )
+                    else:
+                        responses_messages = _responses_to_chat_payload(body)["messages"]
+                        proxied = self._run(
+                            lambda: coordinator.complete(
+                                responses_messages,
+                                mode="conduct",
+                                attribution=_validate_attribution(body.get("attribution")),
+                                hints=_validate_routing(body.get("routing")),
+                                model_name=body["model"],
+                                provider_request=body,
+                                provider_endpoint="responses",
+                            )
+                        )
                     orchestrator.record_analytics_event(
                         "responses_passthrough",
                         {

@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import _responses_to_chat_payload  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
 
 
@@ -54,8 +55,50 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert result["echo"]["temperature"] == 0.1
     assert "max_tokens" not in result["echo"]
     assert "mode" not in result["echo"]
-    # model overridden to the selected agent's model.
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
+
+
+def test_orchestrated_structured_completion_preserves_native_shape_and_lineage() -> None:
+    """The HTTP opt-in path conducts evidence before provider-native synthesis."""
+    body = {
+        "model": "mock-planner",
+        "messages": [{"role": "user", "content": "extract JSON"}],
+        "response_format": {"type": "json_object"},
+    }
+
+    result = _build().proxy_completion(body, single_agent=False)
+
+    assert result["object"] == "chat.completion"
+    assert result["echo"]["response_format"] == body["response_format"]
+    assert result["orchestration"]["mode"] == "conduct"
+    assert result["orchestration"]["agent_count"] == 5
+
+
+def test_responses_translation_preserves_image_detail() -> None:
+    """Responses multimodal input remains available to evidence agents."""
+    translated = _responses_to_chat_payload(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "inspect"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,AA==",
+                            "detail": "high",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert translated["messages"][0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,AA==", "detail": "high"},
+    }
 
 
 def test_proxy_completion_forwards_tools() -> None:

@@ -125,6 +125,17 @@ class CostRoutingCoordinator:
                 pass
         return "unknown", fallback_model
 
+    @staticmethod
+    def _provider_usage(usage: Any) -> tuple[int, int] | None:
+        """Return validated Chat or Responses token counts."""
+        if not isinstance(usage, dict):
+            return None
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+        completion = usage.get("completion_tokens", usage.get("output_tokens"))
+        if type(prompt) is not int or prompt < 0 or type(completion) is not int or completion < 0:
+            return None
+        return prompt, completion
+
     # ------------------------------------------------------------------
     # Sync + batch completion
     # ------------------------------------------------------------------
@@ -140,6 +151,8 @@ class CostRoutingCoordinator:
         cache_bypass: bool = False,
         cache_partition: Optional[str] = None,
         owner_id: Optional[str] = None,
+        provider_request: Optional[Dict[str, Any]] = None,
+        provider_endpoint: str = "chat/completions",
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -154,7 +167,7 @@ class CostRoutingCoordinator:
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
 
-        if decision.channel == "batch":
+        if decision.channel == "batch" and provider_request is None:
             request = BatchRequest(
                 messages=messages,
                 model=model_name,
@@ -170,6 +183,73 @@ class CostRoutingCoordinator:
                 "status": job.status,
                 "request_count": job.request_count,
             }
+
+        if provider_request is not None:
+            if provider_endpoint not in {"chat/completions", "responses"}:
+                raise ValueError("provider_endpoint must be chat/completions or responses")
+            provider_response = self.orchestrator.proxy_completion(
+                provider_request,
+                endpoint=provider_endpoint,
+                single_agent=False,
+            )
+            lineage = provider_response.get("orchestration")
+            if not isinstance(lineage, dict) or not isinstance(
+                lineage.get("workflow_run_id"), str
+            ):
+                raise RuntimeError("provider completion omitted orchestration lineage")
+            result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
+            records = []
+            for step in result.get("trace", []):
+                if not isinstance(step, dict):
+                    continue
+                counts = self._provider_usage(step.get("usage"))
+                if counts is None:
+                    continue
+                records.append(
+                    self._record_completion(
+                        messages=[],
+                        answer="",
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model(
+                            {"trace": [step]}, model_name
+                        ),
+                        workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0],
+                        completion_tokens=counts[1],
+                    )
+                )
+            if not records:
+                counts = self._provider_usage(provider_response.get("usage"))
+                records.append(
+                    self._record_completion(
+                        messages=messages,
+                        answer=result.get("answer", ""),
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model(result, model_name),
+                        workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                    )
+                )
+            currencies = {record.currency_code for record in records}
+            provider_response["usage_record_ids"] = [
+                record.usage_record_id for record in records
+            ]
+            provider_response["cost"] = {
+                "cost_amount": (
+                    round(sum(record.cost_amount for record in records), 6)
+                    if len(currencies) == 1
+                    else None
+                ),
+                "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+            }
+            return provider_response
 
         run_kwargs = {"mode": mode, "workflow_run_id": workflow_run_id, "owner_id": owner_id}
         if model_name != "contextual-orchestrator":

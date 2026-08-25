@@ -67,6 +67,30 @@ def test_sync_records_derive_provider_and_model_from_served_agent() -> None:
     assert row["upstream_api"] == "mock"
 
 
+def test_structured_provider_workflow_records_each_reported_call() -> None:
+    """Evidence and final synthesis usage share one auditable run lineage."""
+    coordinator = _coordinator()
+    coordinator.orchestrator.client.take_usage = lambda: {
+        "prompt_tokens": 2,
+        "completion_tokens": 1,
+    }
+    result = coordinator.complete(
+        [{"role": "user", "content": "return JSON"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "return JSON"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    records = coordinator.ledger.records()
+    assert result["orchestration"]["workflow_run_id"]
+    assert len(result["usage_record_ids"]) == len(records) > 1
+    assert {record["workflow_run_id"] for record in records} == {
+        result["orchestration"]["workflow_run_id"]
+    }
+
+
 def test_sync_completion_survives_usage_persistence_failure() -> None:
     sink = InMemoryUsageTelemetrySink()
     config = InMemoryConfigStore()
