@@ -224,7 +224,7 @@ def test_http_completions_accepts_echo_stream_whole_float_false() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_include_orchestration_trace_whole_float_false() -> None:
+def test_http_chat_rejects_include_orchestration_trace_whole_float_values() -> None:
     server, thread, port = _server()
     try:
         for value in _FALSEY_WHOLE:
@@ -237,7 +237,8 @@ def test_http_chat_accepts_include_orchestration_trace_whole_float_false() -> No
                     "include_orchestration_trace": value,
                 },
             )
-            assert status == 200, (value, body)
+            assert status == 400, (value, body)
+            assert body["error"]["code"] == "invalid_include_orchestration_trace"
     finally:
         server.shutdown()
         thread.join(timeout=5)
