@@ -1149,7 +1149,7 @@ Summarize this research thread and verify claims.</textarea>
       els.modelGroupMembers.innerHTML = state.agents.map(agent =>
         `<option value="${escapeHtml(agent.id)}" ${selected.has(agent.id) ? "selected" : ""}>${escapeHtml(agent.id)} — ${escapeHtml(agent.model)} [${escapeHtml((agent.tags || []).join(", "))}]</option>`
       ).join("");
-      els.modelGroups.innerHTML = state.modelGroups.map(group => `
+      els.modelGroups.innerHTML = (state.modelGroups || []).map(group => `
         <li><strong>${escapeHtml(group.group_name)}</strong> — ${escapeHtml(group.member_agent_ids.join(", "))}<br>
           <small>${escapeHtml(Object.entries(group.capability_coverage || {}).map(([name, count]) => `${name}: ${count}`).join(" · "))}</small>
           <button class="btn" type="button" data-delete-group="${escapeHtml(group.group_name)}" data-i18n="delete_group">${t("delete_group")}</button>
