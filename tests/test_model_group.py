@@ -106,5 +106,22 @@ def test_group_ranking_keeps_role_excluded_members_after_eligible_members() -> N
     assert orchestrator._select_agent("", "worker") == eligible
 
 
+def test_explicit_group_conduct_keeps_every_step_and_failover_inside_group() -> None:
+    first = ModelAgent("first_member", "vendor/first", group_name="shared_reasoning_model")
+    second = ModelAgent("second_member", "vendor/second", group_name="shared_reasoning_model")
+    outsider = ModelAgent("outside_member", "vendor/outside", priority=99)
+    orchestrator = TaskOrchestrator([first, second, outsider])
+
+    result = orchestrator.complete(
+        [{"role": "user", "content": "analyze, verify, and synthesize"}],
+        mode="conduct",
+        model_name="shared-reasoning-model",
+    )
+
+    assert result["mode"] == "conduct"
+    assert {row["agent_id"] for row in result["trace"]} <= {first.id, second.id}
+    assert outsider not in orchestrator._failover_candidates(first, "task", "worker")
+
+
 def test_model_agent_stores_canonical_group_name() -> None:
     assert _agent("canonical_member", "vendor/model").group_name == "shared_reasoning_model"

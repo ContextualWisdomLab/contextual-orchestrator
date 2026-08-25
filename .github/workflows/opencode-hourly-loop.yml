@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
   issues: write
 
@@ -25,6 +25,10 @@ jobs:
     name: Run OpenCode maintenance agent through the local gateway
     runs-on: ubuntu-latest
     timeout-minutes: 55
+    permissions:
+      contents: write # required for reviewed branch fixes; scoped to this job
+      pull-requests: write
+      issues: write
     env:
       # Bootstrap transport only: these flow into the process-local KV registry
       # (see scripts/ci/serve_seeded_gateway.py); the gateway never reads them
