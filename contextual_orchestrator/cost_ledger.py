@@ -209,6 +209,8 @@ class PriceBook:
             if (
                 "prompt_price_per_1k" not in raw
                 or "completion_price_per_1k" not in raw
+                or isinstance(raw["prompt_price_per_1k"], bool)
+                or isinstance(raw["completion_price_per_1k"], bool)
             ):
                 return None
             prompt_price = float(raw["prompt_price_per_1k"])
