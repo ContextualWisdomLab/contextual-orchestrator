@@ -94,7 +94,7 @@ jobs:
           cat > ~/.config/opencode/opencode.json <<JSON
           {
             "\$schema": "https://opencode.ai/config.json",
-            "model": "contextual_orchestrator_gateway/contextual-orchestrator",
+            "model": "contextual_orchestrator_gateway/orchestrator/auto",
             "provider": {
               "contextual_orchestrator_gateway": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -104,7 +104,7 @@ jobs:
                   "apiKey": "${GATEWAY_BEARER_TOKEN}"
                 },
                 "models": {
-                  "contextual-orchestrator": { "name": "gateway default" }
+                  "orchestrator/auto": { "name": "measured automatic orchestration" }
                 }
               }
             }
@@ -115,7 +115,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/contextual-orchestrator \
+          ./node_modules/.bin/opencode run --model contextual_orchestrator_gateway/orchestrator/auto \
             "$(cat .github/opencode/hourly-loop-prompt.md)"
 
       - name: Dump gateway log on failure
