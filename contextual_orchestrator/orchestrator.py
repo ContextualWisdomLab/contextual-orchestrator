@@ -2545,10 +2545,10 @@ class TaskOrchestrator:
         self.agents = updated_agents
         if patched.group_name != current.group_name:
             self._group_router.reset_members({worker_agent_id})
-        grouped_ids = {agent.id for agent in updated_candidates if agent.group_name}
-        for agent_id in grouped_ids:
+        candidate_ids = {agent.id for agent in updated_candidates}
+        for agent_id in candidate_ids:
             self._group_router.register_member(agent_id)
-        self._group_router.forget_members(grouped_ids)
+        self._group_router.forget_members(candidate_ids)
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self._append_audit_event(
@@ -2644,7 +2644,7 @@ class TaskOrchestrator:
                     self._pool_store.save(agent)
             elif agent.id in previous and self._pool_store is not None:
                 self._pool_store.save(agent)
-        self._group_router.forget_members({agent.id for agent in updated if agent.group_name})
+        self._group_router.forget_members({agent.id for agent in updated})
         self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
         return self.get_model_group(name)
 
@@ -2660,7 +2660,7 @@ class TaskOrchestrator:
             for agent in self.candidates:
                 if agent.id in member_ids:
                     self._pool_store.save(agent)
-        self._group_router.forget_members({agent.id for agent in self.candidates if agent.group_name})
+        self._group_router.forget_members({agent.id for agent in self.candidates})
         self._append_audit_event("model_group_deleted", {"group_name": name})
         return {"group_name": name, "deleted": True}
 
@@ -2681,8 +2681,7 @@ class TaskOrchestrator:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
-        if agent.group_name:
-            self._group_router.register_member(agent.id)
+        self._group_router.register_member(agent.id)
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
@@ -2721,6 +2720,8 @@ class TaskOrchestrator:
                 self._pool_store.save(agent)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        for agent in discovered_agents:
+            self._group_router.register_member(agent.id)
         if added or updated:
             self._append_audit_event(
                 "agents_discovered",

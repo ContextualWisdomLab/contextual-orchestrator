@@ -5864,6 +5864,7 @@ def build_server(
                         if isinstance(instructions, str) and instructions:
                             messages.append({"role": "system", "content": instructions})
                         messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        started_at = time.perf_counter()
                         if stream:
                             self._stream_orchestrated_response(
                                 orchestrator, security, messages, model_name
@@ -5887,6 +5888,17 @@ def build_server(
                                     summaries,
                                 )
                             )
+                        orchestrator.record_analytics_event(
+                            "responses_orchestrated",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "model_name": model_name,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                "response_streamed": stream,
+                            },
+                        )
                         return
                     started_at = time.perf_counter()
                     proxied = self._run(

@@ -69,6 +69,12 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         "Preparing the verified final answer.",
     ]
     assert all("[" not in summary for summary in summaries)
+    assert any(
+        event["event_name"] == "responses_orchestrated"
+        and event["event_detail"]["model_name"] == model
+        and event["event_detail"]["response_streamed"] is True
+        for event in orchestrator._analytics_events
+    )
     if model == "orchestrator/free":
         assert {step["agent_id"] for step in orchestrator.conduct(
             [{"role": "user", "content": "Research and verify this."}], model_name=model
@@ -93,6 +99,17 @@ def test_free_ranking_keeps_role_eligibility_ahead_of_measurements() -> None:
     for _ in range(5):
         orchestrator._group_router.observe_success(excluded.id, 0.001)
     assert orchestrator._select_agent("verify", "verifier", free_only=True) == eligible
+
+
+def test_free_measurements_survive_unrelated_pool_edits() -> None:
+    free = ModelAgent("measured_free", "free-model", tags=("cost:free",))
+    paid = ModelAgent("edited_paid", "paid-model")
+    orchestrator = TaskOrchestrator([free, paid])
+    orchestrator._group_router.observe_success(free.id, 0.1)
+    before = orchestrator._group_router.member_report(free.id)
+    orchestrator.patch_agent("default", paid.id, {"priority": 2})
+    after = orchestrator._group_router.member_report(free.id)
+    assert after == before
 
 
 def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
