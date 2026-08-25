@@ -5156,8 +5156,7 @@ def build_server(
                 scope = (
                     "admin"
                     if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
-                    or path.startswith("/api/v1/agent_pools/")
-                    or path.startswith("/api/v1/model_groups")
+                    or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups"))
                     else "inference"
                 )
                 self._authorize(scope, state_changing=True)
