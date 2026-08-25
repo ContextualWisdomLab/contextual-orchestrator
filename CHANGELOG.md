@@ -38,11 +38,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - A shared four-attempt ceiling now bounds the configured same-agent tool retry budget.
 - Fail-closed tool decisions now have dedicated JSON and SSE error contracts, and preserve the observed failure kind in secret-free audit evidence.
 - Missing or unavailable tools move to the next eligible agent instead of terminating the workflow immediately.
+- Return the same `agent_not_found` error code for GET, PATCH, and DELETE worker
+  agent requests that address an unknown or unauthorized pool member.
 
 ### Security
 
-- Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
-- Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
+  - Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
+  - Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
+  - Worker-agent pool boundaries are enforced beside object lookup so a
+    different-pool id can no longer read or mutate another pool's agent.
 
 ### References
 
