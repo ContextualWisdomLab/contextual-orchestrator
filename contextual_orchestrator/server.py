@@ -4971,7 +4971,9 @@ def build_server(
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
                         try:
-                            payload = orchestrator._agent_to_admin_payload(orchestrator._agent(worker_agent_id))
+                            payload = orchestrator._agent_to_admin_payload(
+                                orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
+                            )
                             payload["agent_pool_id"] = agent_pool_id
                             self._send(payload)
                             return
@@ -5028,7 +5030,7 @@ def build_server(
             except (ValueError, TypeError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
-                self._send_error(404, "resource_not_found", str(exc))
+                self._send_error(404, "agent_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -5058,7 +5060,7 @@ def build_server(
             except (ValueError, TypeError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
-                self._send_error(404, "resource_not_found", str(exc))
+                self._send_error(404, "agent_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -5095,7 +5097,11 @@ def build_server(
                     if len(segments) != 5 or segments[:3] != ["api", "v1", "agent_pools"]:
                         raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
                     _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
-                    self._send(orchestrator.add_agent(segments[3], body), 201)
+                    try:
+                        created_agent = orchestrator.add_agent(segments[3], body)
+                    except KeyError as exc:
+                        raise RequestError(404, "agent_not_found", str(exc)) from exc
+                    self._send(created_agent, 201)
                     return
 
                 if path == "/v1/completions":

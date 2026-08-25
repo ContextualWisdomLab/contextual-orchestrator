@@ -24,6 +24,11 @@ available through a public gateway error or an exception cause.
 5. Provider diagnostics may be counted by allowlisted type/code in internal
    telemetry, but raw bodies, exception text, credentials, and prompts are not
    persisted or returned.
+6. Streaming and Batch API paths follow the same boundary: a mid-stream or
+   batch failure surfaces one package-owned error (`provider <id> streaming
+   request failed` / `provider <id> batch request failed`) because a stream may
+   already have emitted bytes (no retry, no failover), and raw connection
+   resets outside ``URLError`` map to the same stable ``transport_error`` code.
 
 ## Consequences
 
@@ -35,10 +40,10 @@ responses have a wider audience than provider credentials and request data.
 
 ## Verification
 
-`tests/test_model_discovery.py`, `tests/test_provider_reliability.py`, and
-`tests/test_model_judge.py` assert that provider response text is absent from
-public messages and causes, while the full suite must remain green before
-merge.
+`tests/test_model_discovery.py`, `tests/test_provider_reliability.py`,
+`tests/test_true_streaming.py`, and `tests/test_model_judge.py` assert that
+provider response text is absent from public messages and causes, while the
+full suite must remain green before merge.
 
 ## References
 
