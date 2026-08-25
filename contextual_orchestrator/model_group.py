@@ -15,13 +15,11 @@ endpoint actually serves each request using only measured evidence:
   end-to-end request latency with smoothing gain 1/8 -- the SRTT estimator of
   Jacobson (1988), *Congestion Avoidance and Control*, SIGCOMM '88. The same
   EWMA form is applied to observed generation throughput: when a provider
-  reports completion token counts, tokens-per-second samples are averaged;
-  otherwise latency-only evidence yields responses-per-second. Both are
-  measured physical quantities; no scaling constants are introduced.
-- **Score** is their product, ``P(success | data) * throughput``: the expected
-  number of successful output units per second, where an output unit is one
-  completion token when token evidence exists for the member and one response
-  otherwise. It has physical units, uses no hand-tuned weights, and
+  reports completion token counts, tokens-per-second samples are retained as
+  diagnostic evidence. Routing consistently uses latency-derived
+  responses-per-second.
+- **Score** is ``P(success | data) / EWMA latency``: expected successful
+  responses per second. It has consistent physical units, uses no hand-tuned weights, and
   degenerates gracefully -- members without any observation share one
   identical neutral score, so ordering falls back to the caller's static
   ranking until real evidence exists.
@@ -214,10 +212,6 @@ class ModelGroupRouter:
         alpha = float(state["alpha"])
         beta = float(state["beta"])
         stability = alpha / (alpha + beta)
-        ewma_tps = state["ewma_tps"]
-        if ewma_tps is not None:
-            # Token evidence exists: score in expected successful tokens/second.
-            return stability * float(ewma_tps)
         ewma = state["ewma"]
         if ewma is None:
             # Unobserved members share one neutral reference latency so their

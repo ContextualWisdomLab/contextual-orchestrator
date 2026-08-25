@@ -1,29 +1,29 @@
 ---
-title: "Measured routing evidence: TPS ledgers, semantic affinity, triage, real-time judging"
+title: "Measured routing evidence: latency ledgers, semantic affinity, triage, real-time judging"
 status: "implemented"
 date: "2026-08-25"
-scope: "PR (stacked on #834), ADR 0027"
+scope: "PR (stacked on #834), ADR 0034"
 ---
 
 # Measured routing evidence
 
 ## Decision
 
-ADR 0027 removes every task-keyword heuristic from the routing path and
+ADR 0034 removes every task-keyword heuristic from the routing path and
 replaces it with an evidence ladder: operator-declared eligibility, exact
 tag/priority/cosine ordering, and measured member behavior inside model
 groups. Two measurement systems feed the ladder:
 
-- **Transport ledger** — Beta(1,1)-posterior success stability times EWMA
-  tokens-per-second, using Jacobson's (1988) 1/8 gain and a floor at
+- **Transport ledger** — Beta(1,1)-posterior success stability divided by
+  EWMA latency, using Jacobson's (1988) 1/8 gain and a floor at
   `MIN_ROUTING_LATENCY_SECONDS` so division never amplifies noise.
 - **Quality ledger** — the same Beta-Bernoulli arithmetic fed by the
   real-time fast-mlsirm judge on direct-route answers, so judged
   acceptability (not just transport success) steers intra-group order.
 
-The ranking quantity `stability x ewma_tokens_per_second` has the unit
-expected successful output tokens per second; no arbitrary cross-metric
-weight appears anywhere. Workflow triage is a strict structured call that
+The ranking quantity `stability / ewma_latency_seconds` has the unit expected
+successful responses per second across every member. Token throughput remains
+diagnostic evidence and is not mixed into that score. Workflow triage is a strict structured call that
 fails closed to conducted orchestration when its reply violates the exact
 `{"workflow_required": bool}` schema.
 

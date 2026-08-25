@@ -12,11 +12,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-- Anti-heuristic routing evidence ladder (ADR 0027): `DOMAIN_HINTS` and
+- Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and
   `COMPLEX_HINTS` keyword tables are deleted; ordering is now
   eligibility contracts -> declaration priority/capability fit/cosine
   affinity over operator-declared metadata (cached dense embeddings) ->
-  measured intra-group quality then tokens-per-second. Workflow triage is
+  measured intra-group quality then successful responses per second, with
+  token throughput retained as diagnostic evidence. Workflow triage is
   a strict structured call that fails closed to conducted orchestration;
   verdicts are memoized by content hash. Real-time fast-mlsirm judging on
   direct routes feeds a second Beta-Bernoulli quality ledger and drives

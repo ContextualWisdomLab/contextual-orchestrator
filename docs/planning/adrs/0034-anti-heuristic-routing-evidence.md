@@ -1,6 +1,6 @@
-# ADR 0027: Anti-heuristic routing with measured evidence ledgers
+# ADR 0034: Anti-heuristic routing with measured evidence ledgers
 
-- Status: Proposed; stacked on ADR 0026 (PR #834)
+- Status: Proposed; stacked on ADR 0032 (PR #834)
 - Date: 2026-08-25
 - Figma file ID: `vsZMd8WAv42HDRgcZuNcWk` (no new visual pattern; Admin routing-evidence table gains a token-throughput column)
 - Doctoring record: [`docs/doctoring/measured-routing-evidence.md`](../../doctoring/measured-routing-evidence.md)
@@ -36,10 +36,10 @@ The replacement ordering ladder is evidence-only:
    hash with an LRU bound so repeated requests cost no additional calls.
 3. **Measured intra-group order** — inside one logical model group, members
    are ordered by judged answer quality first (real-time judge feeding the
-   quality Beta-Bernoulli ledger) and transport throughput second
-   (`stability x EWMA tokens-per-second`, both from ADR 0026's measured
-   arithmetic). The unit is expected successful output units per second:
-   no arbitrary cross-metric weight exists anywhere in the ladder.
+   quality Beta-Bernoulli ledger) and transport evidence second. Both ledgers
+   rank by posterior stability divided by EWMA latency, in expected successful
+   responses per second. Token throughput remains separately observable and
+   never changes the comparable-unit score.
 
 ### Workflow triage without keywords
 
@@ -90,7 +90,7 @@ flowchart LR
   Tri -- false / cache hit --> Rank[evidence ladder]
   Rank --> E1[eligibility partition]
   E1 --> E2[declaration order<br/>+ cosine affinity]
-  E2 --> E3[measured group order<br/>quality then TPS]
+  E2 --> E3[measured group order<br/>quality then successful responses/sec]
   E3 --> Serve[serve answer]
   Serve --> Judge{real-time judge}
   Judge -- accepted --> LedgerQ[quality ledger +1 success]
@@ -100,7 +100,7 @@ flowchart LR
 ## Acceptance evidence
 
 - `tests/test_measured_routing_evidence.py`: 29 tests covering exact
-  Jacobson TPS arithmetic, Laplace-prior stability products, cosine
+  Jacobson EWMA arithmetic, Laplace-prior stability products, cosine
   ordering, strict triage parsing, verdict caching, and judge-driven
   failover within budget.
 - `tests/test_chat_model_capability_isolation.py::test_stale_embedding_agent_cannot_win_synthesizer_selection`

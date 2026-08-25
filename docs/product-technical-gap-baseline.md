@@ -25,7 +25,7 @@ kept for audit lineage only.
 | Gap | Buyer impact | State | Evidence |
 | --- | --- | --- | --- |
 | G-01 Logical model groups + measured routing | One model name across providers; routing decisions auditable via measured ledgers instead of folklore. | in-flight — PR #834 (ADR 0026) | `tests/test_model_group.py`, Admin routing-evidence table |
-| G-02 Anti-heuristic evidence ladder | "Why this model?" answers cite declarations, cosine affinity over declared metadata, and measured quality/throughput — no keyword tables to rot. | in-flight — ADR 0027 branch (stacked on #834) | `tests/test_measured_routing_evidence.py` |
+| G-02 Anti-heuristic evidence ladder | "Why this model?" answers cite declarations, cosine affinity over declared metadata, and measured quality/throughput — no keyword tables to rot. | in-flight — ADR 0034 branch (stacked on #834) | `tests/test_measured_routing_evidence.py` |
 | G-03 Token-counting correctness | Billing estimates match provider accounting per strategy; buyers trust cost reports. | in-flight — PR #821 | `tests/test_token_counting*.py` |
 | G-04 Session correlation across services | OTel traces join gateway sessions with caller systems for incident forensics. | in-flight — PR #818 (**conflicting**, needs rebase) | `tests/*otel*` |
 | G-05 Descriptive DB object naming | Every persisted object name is multi-word snake_case; schema reviews pass enterprise data-governance gates. | in-flight — PR #794 (**conflicting**) | `tests/test_object_name_convention*` |

@@ -1,6 +1,6 @@
-"""Measured routing evidence: TPS ledger, semantic affinity, triage, real-time judge.
+"""Measured routing evidence: latency ledger, affinity, triage, real-time judge.
 
-Covers the anti-heuristic routing stack (ADR 0027):
+Covers the anti-heuristic routing stack (ADR 0034):
 
 - tokens-per-second EWMA in :class:`ModelGroupRouter` with exact Jacobson
   (1988) gain arithmetic and strict input validation;
@@ -49,23 +49,20 @@ def test_tps_ewma_matches_exact_jacobson_arithmetic() -> None:
     assert report["ewma_tokens_per_second"] == pytest.approx(expected, rel=1e-6)
 
 
-def test_tps_score_is_stability_times_expected_tokens_per_second() -> None:
+def test_score_remains_successful_responses_per_second_with_token_evidence() -> None:
     fast = ModelGroupRouter()
     slow = ModelGroupRouter()
 
     for router in (fast, slow):
         router.observe_success("scorer", 0.5, output_tokens=10)
 
-    # One success on the Laplace prior: stability = (1+1)/(1+1+1+1)... after a
-    # single success alpha=2, beta=1 -> 2/3. TPS = 10/0.5 = 20.
-    assert fast.member_score("scorer") == pytest.approx((2.0 / 3.0) * 20.0, rel=1e-9)
+    assert fast.member_score("scorer") == pytest.approx((2.0 / 3.0) / 0.5, rel=1e-9)
 
     slow.observe_success("scorer", 0.5, output_tokens=30)
     stability_two_successes = (BETA_PRIOR_SUCCESS_COUNT + 2.0) / (
         BETA_PRIOR_SUCCESS_COUNT + 2.0 + BETA_PRIOR_FAILURE_COUNT
     )
-    ewma_tps = (1 - EWMA_LATENCY_GAIN) * 20.0 + EWMA_LATENCY_GAIN * (30 / 0.5)
-    assert slow.member_score("scorer") == pytest.approx(stability_two_successes * ewma_tps, rel=1e-9)
+    assert slow.member_score("scorer") == pytest.approx(stability_two_successes / 0.5, rel=1e-9)
 
 
 def test_latency_only_members_keep_responses_per_second_score() -> None:
@@ -79,10 +76,10 @@ def test_latency_only_members_keep_responses_per_second_score() -> None:
     assert report["ewma_tokens_per_second"] is None
 
 
-def test_higher_tokens_per_second_wins_under_equal_stability() -> None:
+def test_token_volume_does_not_change_latency_based_order() -> None:
     router = ModelGroupRouter()
-    router.observe_success("slow_writer", 1.0, output_tokens=50)
-    router.observe_success("fast_writer", 1.0, output_tokens=150)
+    router.observe_success("slow_writer", 1.0, output_tokens=500)
+    router.observe_success("fast_writer", 0.5, output_tokens=50)
     ordered = router.ranked_member_ids(["slow_writer", "fast_writer"])
     assert ordered[0] == "fast_writer"
 
@@ -161,6 +158,28 @@ def test_role_fit_beats_priority_but_not_exclusions() -> None:
         "review this patch", "verifier"
     )
     assert ranked2[0] is fitting_low  # exclusion always trails eligibility
+
+
+def test_measured_affinity_precedes_missing_affinity_in_same_tier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    measured = ModelAgent("measured_agent", "mock", tags=("reasoning",))
+    missing = ModelAgent("missing_agent", "mock", tags=("reasoning",))
+    orchestrator = _orch(missing, measured)
+    monkeypatch.setattr(
+        orchestrator,
+        "_semantic_affinities",
+        lambda *_: {"missing_agent": None, "measured_agent": 0.1},
+    )
+    assert orchestrator._ranked_agents("task", "worker")[0] is measured
+
+
+def test_chat_ranking_excludes_non_chat_models_but_capability_routing_keeps_them() -> None:
+    chat = ModelAgent("chat_agent", "mock-chat", tags=("reasoning",))
+    embedding = ModelAgent("embedding_agent", "mock-embed", tags=("embedding",))
+    orchestrator = _orch(embedding, chat)
+    assert orchestrator._ranked_agents("task", "worker") == [chat]
+    assert orchestrator._capability_agents("embedding", None) == [embedding]
 
 
 # --- structured triage -------------------------------------------------------
@@ -329,7 +348,8 @@ def test_disabled_realtime_judge_keeps_legacy_verification_shape() -> None:
         "judge": "model",
     }
     quality = orchestrator._quality_router.member_report("worker_agent")
-    assert quality["success_count"] == 1  # transport success still recorded
+    assert quality["success_count"] == 0
+    assert orchestrator._quality_router.member_observation_count("worker_agent") == 0
 
 
 def test_admin_state_exposes_both_routing_ledgers() -> None:

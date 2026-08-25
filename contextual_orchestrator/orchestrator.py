@@ -2086,7 +2086,7 @@ class _ResponseCache:
 class TaskOrchestrator:
     """Coordinate model routing, conducted workflows, governance, and audit state.
 
-    Routing evidence policy (ADR 0027): ordering inputs are limited to
+    Routing evidence policy (ADR 0034): ordering inputs are limited to
     (a) operator-declared configuration -- ``priority``, capability tags,
     provider exclusions, model groups, (b) literature-standard similarity --
     cosine similarity between task and agent-metadata embeddings
@@ -3245,7 +3245,6 @@ class TaskOrchestrator:
                 self._quality_router.observe_failure(served_id)
 
         if not self.policy.realtime_judge:
-            _record(True)
             return {
                 "accepted": True,
                 "reason": "single route path",
@@ -3530,11 +3529,18 @@ class TaskOrchestrator:
         priority = agent.priority
         if isinstance(priority, bool) or not isinstance(priority, (int, float)):
             priority = 0
-        has_affinity = 0 if affinity is None else 1
+        has_affinity = 1 if affinity is None else 0
         negated_affinity = 0.0 if affinity is None else -float(affinity)
         return (-role_fit, -int(priority), has_affinity, negated_affinity, agent.id)
 
-    def _ranked_agents(self, text: str, role: str, *, free_only: bool = False) -> list[ModelAgent]:
+    def _ranked_agents(
+        self,
+        text: str,
+        role: str,
+        *,
+        free_only: bool = False,
+        chat_only: bool = True,
+    ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group.
 
         Ordering ladder, all evidence-based:
@@ -3544,10 +3550,19 @@ class TaskOrchestrator:
            :meth:`_static_rank_key` (priority -> capability fit -> cosine).
         3. Inside one logical model group, measured ledgers refine member
            order (:meth:`_measured_member_order`: judged quality first, then
-           transport throughput/stability).
+           successful responses per second).
         """
-        candidates = [agent for agent in self.agents if not free_only or self._is_free_agent(agent)]
+        candidates = [
+            agent
+            for agent in self.agents
+            if (not free_only or self._is_free_agent(agent))
+            and (not chat_only or is_general_chat_agent_model_id(agent.model))
+        ]
         if not candidates:
+            if free_only:
+                raise RuntimeError("no enabled zero-cost model is available")
+            if chat_only:
+                raise RuntimeError("no chat-compatible agent available")
             raise RuntimeError("no enabled zero-cost model is available")
         affinities = self._semantic_affinities(text, candidates)
         static = sorted(
@@ -3822,7 +3837,9 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {model_name!r} is not configured")
         ranked = [
             agent
-            for agent in self._ranked_agents("", capability, free_only=free_only)
+            for agent in self._ranked_agents(
+                "", capability, free_only=free_only, chat_only=False
+            )
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions
