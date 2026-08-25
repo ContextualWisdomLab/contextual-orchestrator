@@ -1,7 +1,7 @@
 """Budget enforcement — operator spend cap that refuses runs once exhausted.
 
-Enterprise gateways gate spend. This reuses spend_analytics totals as the meter
-(no separate accounting), refuses new runs when over the cap, surfaces the state,
+Enterprise gateways gate spend. This maintains a constant-time meter with exact
+parity to spend analytics, refuses new runs when over the cap, surfaces the state,
 and maps to a 429 over HTTP. Default (no cap) is unchanged.
 """
 
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import random
 import sys
 import threading
 import urllib.error
@@ -73,6 +74,70 @@ def test_cost_budget_blocks() -> None:
     except BudgetExceededError:
         raised = True
     assert raised
+
+
+def test_budget_meter_matches_randomized_recorded_run_analytics() -> None:
+    """Incremental token/cost state equals the authoritative full aggregation."""
+    agents = [ModelAgent("agent_one", "model-one"), ModelAgent("agent_two", "model-two")]
+    orchestrator = TaskOrchestrator(
+        agents,
+        price_per_million={"model-one": 0.75, "model-two": 3.25},
+        budget_max_output_tokens=10_000,
+        budget_max_cost_usd=10.0,
+    )
+    rng = random.Random(846)
+    for index in range(100):
+        steps = []
+        for step_index in range(rng.randint(1, 4)):
+            agent = rng.choice(agents)
+            output = "x" * rng.randint(0, 80)
+            step = {"agent_id": agent.id, "output": output}
+            if rng.choice((True, False)):
+                step["usage"] = {"completion_tokens": rng.randint(0, 50)}
+            steps.append(step)
+        orchestrator._replace_workflow_run(
+            {
+                "workflow_run_id": f"run_{index % 31}",
+                "prompt_text": "p" * rng.randint(0, 30),
+                "trace": steps,
+            }
+        )
+        assert orchestrator.budget_status() == orchestrator.spend_analytics()["budget"]
+
+
+def test_budget_status_does_not_scan_recorded_runs() -> None:
+    """The per-request gate remains independent of workflow-run cardinality."""
+    orchestrator = TaskOrchestrator([_agent()], budget_max_output_tokens=1)
+    orchestrator.run([{"role": "user", "content": "record one run"}])
+    orchestrator.spend_analytics = lambda: (_ for _ in ()).throw(
+        AssertionError("budget_status scanned workflow runs")
+    )  # type: ignore[method-assign]
+    assert orchestrator.budget_status()["spent_output_tokens"] > 0
+
+
+def test_budget_meter_rebuilds_from_persisted_runs(tmp_path: Path) -> None:
+    """Restarted gates recover the same meter from durable workflow records."""
+    state_db = str(tmp_path / "budget_state.db")
+    first = TaskOrchestrator(
+        [_agent()],
+        state_db=state_db,
+        price_per_million={"test-model": 2.5},
+        budget_max_output_tokens=100,
+    )
+    first.run([{"role": "user", "content": "persist budget evidence"}])
+    expected = first.spend_analytics()["budget"]
+    first.close()
+
+    restored = TaskOrchestrator(
+        [_agent()],
+        state_db=state_db,
+        price_per_million={"test-model": 2.5},
+        budget_max_output_tokens=100,
+    )
+    try:
+        assert restored.budget_status() == expected
+    finally:
+        restored.close()
 
 
 def test_http_over_budget_returns_429() -> None:

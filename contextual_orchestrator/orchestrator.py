@@ -121,6 +121,15 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
+def _step_output_tokens(step: Mapping[str, Any]) -> tuple[int, bool]:
+    """Return provider-reported output tokens or the existing text estimate."""
+    usage = step.get("usage")
+    reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if isinstance(reported, int):
+        return reported, True
+    return estimate_tokens(step.get("output", "")), False
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -2014,6 +2023,10 @@ class TaskOrchestrator:
         self.budget_max_output_tokens = budget_max_output_tokens
         self.budget_max_cost_usd = budget_max_cost_usd
         self._workflow_runs: dict[str, dict[str, Any]] = {}
+        self._budget_spend_lock = threading.Lock()
+        self._budget_spent_output_tokens = 0
+        self._budget_spent_cost_usd = 0.0
+        self._budget_model_output_tokens: dict[str, int] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
@@ -2098,7 +2111,7 @@ class TaskOrchestrator:
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
-            self._workflow_runs[record["workflow_run_id"]] = record
+            self._replace_workflow_run(record)
             self._run_order.appendleft(record["workflow_run_id"])
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
@@ -2279,7 +2292,7 @@ class TaskOrchestrator:
         )
         if owner_id is not None:
             record["owner_id"] = owner_id
-        self._workflow_runs[record["workflow_run_id"]] = record
+        self._replace_workflow_run(record)
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
             "workflow_run_created",
@@ -2354,7 +2367,7 @@ class TaskOrchestrator:
         )
         if owner_id is not None:
             record["owner_id"] = owner_id
-        self._workflow_runs[record["workflow_run_id"]] = record
+        self._replace_workflow_run(record)
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
             self._store.save("workflow_run", record["workflow_run_id"], record)
@@ -2453,7 +2466,7 @@ class TaskOrchestrator:
                     "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
                 }
             )
-            self._workflow_runs[record["workflow_run_id"]] = record
+            self._replace_workflow_run(record)
             self._run_order.appendleft(record["workflow_run_id"])
             if self._store is not None:
                 self._store.save("workflow_run", record["workflow_run_id"], record)
@@ -3553,6 +3566,39 @@ class TaskOrchestrator:
         if self._store is not None:
             self._store.save("analytics", None, event)
 
+    def _run_budget_output_by_model(self, record: Mapping[str, Any]) -> dict[str, int]:
+        """Return the exact per-model output-token contribution of one run."""
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        output_by_model: dict[str, int] = {}
+        for step in record.get("trace", []):
+            model = model_by_agent.get(step.get("agent_id"), "unknown")
+            output_tokens, _reported = _step_output_tokens(step)
+            output_by_model[model] = output_by_model.get(model, 0) + output_tokens
+        return output_by_model
+
+    def _replace_workflow_run(self, record: dict[str, Any]) -> None:
+        """Store one run and update its constant-time budget meter atomically."""
+        run_id = record["workflow_run_id"]
+        with self._budget_spend_lock:
+            previous = self._workflow_runs.get(run_id)
+            for sign, run in ((-1, previous), (1, record)):
+                if run is None:
+                    continue
+                for model, output_tokens in self._run_budget_output_by_model(run).items():
+                    before = self._budget_model_output_tokens.get(model, 0)
+                    after = before + sign * output_tokens
+                    price = self.price_per_million.get(model)
+                    if price is not None:
+                        self._budget_spent_cost_usd += round(after / 1_000_000 * price, 6) - round(
+                            before / 1_000_000 * price, 6
+                        )
+                    if after:
+                        self._budget_model_output_tokens[model] = after
+                    else:
+                        self._budget_model_output_tokens.pop(model, None)
+                    self._budget_spent_output_tokens += sign * output_tokens
+            self._workflow_runs[run_id] = record
+
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
 
@@ -3579,11 +3625,7 @@ class TaskOrchestrator:
                 if isinstance(reported_prompt, int):
                     reported_prompt_tokens += reported_prompt
                     any_reported_prompt = True
-                reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported, int):
-                    effective, is_reported = reported, True
-                else:
-                    effective, is_reported = estimated, False
+                effective, is_reported = _step_output_tokens(step)
                 bucket = by_model.setdefault(
                     model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
                 )
@@ -3663,7 +3705,13 @@ class TaskOrchestrator:
 
     def budget_status(self) -> dict[str, Any]:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
-        return self.spend_analytics()["budget"]
+        with self._budget_spend_lock:
+            spent_tokens = self._budget_spent_output_tokens
+            spent_cost = self._budget_spent_cost_usd
+        return self._budget_block(
+            spent_tokens,
+            round(spent_cost, 6) if self.price_per_million else None,
+        )
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
