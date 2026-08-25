@@ -52,6 +52,7 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     # response_format + temperature forwarded; orchestration-only 'mode' stripped.
     assert result["echo"]["response_format"] == body["response_format"]
     assert result["echo"]["temperature"] == 0.1
+    assert "max_tokens" not in result["echo"]
     assert "mode" not in result["echo"]
     # model overridden to the selected agent's model.
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
@@ -113,6 +114,7 @@ def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
     assert result["object"] == "response"
     assert result["output"][0]["role"] == "assistant"
     assert result["echo"]["response_format"] == {"type": "text"}
+    assert "max_tokens" not in result["echo"]
 
 
 # -- HTTP server -------------------------------------------------------------
