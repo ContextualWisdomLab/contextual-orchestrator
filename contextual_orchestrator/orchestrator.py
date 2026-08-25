@@ -3081,13 +3081,15 @@ class TaskOrchestrator:
         capability = {"embeddings": "embedding"}.get(capability, capability)
         if not capability:
             raise ValueError("capability must be a non-empty string")
+        virtual_model = model_name in {self.AUTO_MODEL, self.FREE_MODEL}
+        free_only = model_name == self.FREE_MODEL
         exact_models = {agent.model for agent in self.candidates}
         requested_group = (
             canonical_group_name(model_name)
-            if model_name is not None and model_name not in exact_models
+            if model_name is not None and model_name not in exact_models and not virtual_model
             else None
         )
-        if model_name is not None and not any(
+        if model_name is not None and not virtual_model and not any(
             agent.model == model_name
             or (
                 agent.group_name
@@ -3099,12 +3101,12 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {model_name!r} is not configured")
         ranked = [
             agent
-            for agent in self._ranked_agents("", capability)
+            for agent in self._ranked_agents("", capability, free_only=free_only)
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions
             and (
-                model_name is None or agent.model == model_name
+                model_name is None or virtual_model or agent.model == model_name
                 or (
                     agent.group_name
                     and requested_group is not None
