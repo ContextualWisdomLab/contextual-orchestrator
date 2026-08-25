@@ -13,10 +13,11 @@ tokens-per-second remains diagnostic evidence rather than an arbitrary weight.
 
 | PR | Exact head | Current gate and customer consequence |
 | --- | --- | --- |
+| [#850](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/850) | `8bb115d6c4d20a4507523993f1f8673cbc271c0d` | Constant-time budget status preserves exact randomized analytics parity, replacement semantics, provider/estimated usage, per-model price rounding, and restart recovery. Exact-head local evidence is `1879 passed in 622.79s`; independent review and protected checks remain pending with auto-merge enabled. |
 | [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `1addd42c24e911febd43c34d2dac8ea80f5bc9bf` | k6 measured 64 concurrent inference requests: 128/128 inference and 100/100 health requests succeeded with 0/228 HTTP failures at 25.068 inference req/s and 10.85 ms health p99. HTTP/1.1 persistence plus native `socket.SOMAXCONN` raised the initial measured inference rate by 54.61%; rejected unread bodies close the connection, zero-length requests preserve keep-alive, and incomplete headers expire within the configured abuse-accounting window. Independent review and protected checks remain pending with auto-merge enabled. |
 | [#848](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/848) | `9632a682644516b784e77b253cd47583b74ff7a3` | Latest-main merge applied; independent exact-head review and required checks are pending with auto-merge enabled. Until this lands, planning ADR identifiers are not mechanically unique. |
 | [#845](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/845) | `44305d069c0c4ef9f1dd4a166e585a3db4401787` | Latest-main merge applied; exact-head review and checks are pending with auto-merge enabled. Until this lands, hourly provider-catalog refresh cannot claim reliable run-scoped KV fallback. |
-| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | `7fa07ac22c0482a8f7770df90b9813396e2d86bf` | Contains the reviewed #847 remediation, validates throughput evidence before mutating routing state, binds external-PR validation to the fetched exact head, and removes the last CLI claim that model-name suffixes prove free cost. Focused discovery/CLI evidence is `33 passed`; `docker compose -f compose.yaml config --quiet` renders successfully with required bootstrap inputs. Independent exact-head review and protected checks are pending with auto-merge enabled. This is not protected-main evidence yet. |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | `7fa07ac22c0482a8f7770df90b9813396e2d86bf` | Contains the reviewed #847 remediation, validates throughput evidence before mutating routing state, binds external-PR validation to the fetched exact head, and removes the last CLI claim that model-name suffixes prove free cost. The exact-tree model-group/REST/DB/eight-capability/Responses-stream suite is `119 passed`; `docker compose -f compose.yaml config --quiet` renders successfully with required bootstrap inputs. Independent exact-head review and protected checks are pending with auto-merge enabled. This is not protected-main evidence yet. |
 | [#818](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/818) | `9888b33d108d3eb030572f8e7e89f8fa47366bd2` | Streaming and passthrough spans now use the OpenTelemetry well-known `chat`, `text_completion`, and `generate_content` operation names; independent approval and exact-head checks remain pending with auto-merge enabled. Telemetry correlation is not release evidence yet. |
 | [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | `ca3b3283617ae66a6a08a2a476e20343210758d6` | Shared DB-API connection access is serialized, concurrent SQLite writes have a regression test, and incomplete flattened schemas fail with named missing columns before rename; exact-head checks are queued and auto-merge enabled. Database naming/persistence migrations remain unreleased. |
 | [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | this commit supersedes `b6d1f1958338a5fb8162ebd3d5e16a365b8cb61a` | This baseline refresh must pass exact-head checks before it becomes protected-main product evidence. |
@@ -38,12 +39,11 @@ evidence model defines currency, valuation date, comparable transactions,
 revenue/retention assumptions, and uncertainty; never relabel one as the other.
 
 Issue [#846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846)
-records fixes stranded on the closed #765 stack. Recover them as separate
-current-main PRs, beginning with constant-time budget status because every
-request-facing budget check must not rescan the growing usage ledger. Acceptance
-requires exact numerical parity with `spend_analytics()["budget"]` over
-randomized recorded runs plus a timing-shape regression; do not reuse the stale
-stack's review or check evidence.
+records fixes stranded on the closed #765 stack. PR #850 recovers only the
+constant-time budget-status slice on current main with randomized numerical
+parity and no-scan timing-shape evidence. The remaining passthrough failover and
+structured-provider fixes require separate current-main PRs; stale stack review
+or check evidence does not transfer.
 
 ## 2026-08-25 exact-head review continuation
 
