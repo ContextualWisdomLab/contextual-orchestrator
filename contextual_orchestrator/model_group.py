@@ -77,6 +77,8 @@ class ModelGroupRouter:
     ) -> None:
         if not 0 < ewma_gain <= 1:
             raise ValueError("ewma_gain must be within (0, 1]")
+        if not math.isfinite(min_latency_seconds) or min_latency_seconds <= 0:
+            raise ValueError("min_latency_seconds must be finite and positive")
         self._ewma_gain = float(ewma_gain)
         self._min_latency_seconds = float(min_latency_seconds)
         self._lock = threading.Lock()

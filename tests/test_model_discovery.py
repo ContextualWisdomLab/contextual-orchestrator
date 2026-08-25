@@ -26,6 +26,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _price_per_1k,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -244,6 +245,13 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
 
 
+def test_price_per_1k_rejects_underflowing_positive_value() -> None:
+    """A nonzero per-token price that underflows to 0.0 in float stays unknown."""
+    assert _price_per_1k("1e-10000") is None
+    assert _price_per_1k(0) == 0.0
+    assert _price_per_1k(0.000001) == pytest.approx(0.001)
+
+
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     payload = {
@@ -436,7 +444,7 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
     price_book.set_price(PriceEntry("openrouter", "known", 0.1, 0.1))
 
     assert select_cheapest_discovered_agent([unknown, known], price_book) is known
-    assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known]
+    assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known, unknown]
 
 
 def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
@@ -484,6 +492,13 @@ def test_sync_discovered_agents_adds_and_updates_idempotently() -> None:
     assert stored.priority == 7
     # No duplicate rows were appended on the update pass.
     assert len(orchestrator.candidates) == 2
+
+    orchestrator.set_model_group(
+        "shared_reasoning_model", ["openrouter_meta_llama_3_3"]
+    )
+    orchestrator.sync_discovered_agents([agent_v1])
+    stored = next(a for a in orchestrator.candidates if a.id == "openrouter_meta_llama_3_3")
+    assert stored.group_name == "shared_reasoning_model"
 
 
 def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None:

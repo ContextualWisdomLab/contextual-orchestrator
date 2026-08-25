@@ -41,7 +41,7 @@ def seed_credentials_from_bootstrap_env() -> list[str]:
     set_backend(InMemoryCredentialBackend())
     seeded: list[str] = []
     for credential_name in PROVIDER_KEY_ENV_NAMES:
-        value = os.environ.get(credential_name)
+        value = os.environ.pop(credential_name, None)
         # Bootstrap transport only: the CI job injects secrets.<NAME> into this
         # process environment; nothing reads os.environ again after this.
         if value:

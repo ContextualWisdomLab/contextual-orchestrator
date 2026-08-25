@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
-import hashlib
 import http.client
 import io
 import ipaddress
@@ -31,9 +30,21 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+from .chat_capability import (
+    is_chat_compatible_model_id,
+    is_general_chat_agent_model_id,
+)
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .model_group import ModelGroupRouter, canonical_group_name
+from .pii_protection import (
+    DEFAULT_PII_KEY_NAME,
+    ENCRYPTED_FIELDS_KEY,
+    PiiFieldEncryptor,
+    PiiProtectionError,
+    is_encrypted_detail,
+    load_pii_encryptor,
+)
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -44,6 +55,7 @@ from .tool_fallback import (
     classify_tool_failure,
     downgrade_to_failover,
 )
+from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .reasoning_effort_profile import (
     ReasoningEffortProfile,
     apply_request_profile,
@@ -788,7 +800,7 @@ class ModelClient:
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.default_temperature = 0.2
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -854,6 +866,32 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    def request_settings_snapshot(self) -> dict[str, Any]:
+        """Return this thread's effective request-scoped provider settings."""
+        scoped = getattr(self._local, "request_settings", {})
+        return {
+            "temperature": scoped.get("temperature", self.default_temperature),
+            "top_p": scoped.get("top_p", self.default_top_p),
+            "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
+            "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
+            "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
+        }
+
+    @contextmanager
+    def request_settings(self, **overrides: Any):
+        """Apply provider settings to only the current server request thread."""
+        previous = getattr(self._local, "request_settings", None)
+        current = self.request_settings_snapshot()
+        current.update({key: value for key, value in overrides.items() if value is not None})
+        self._local.request_settings = current
+        try:
+            yield
+        finally:
+            if previous is None:
+                del self._local.request_settings
+            else:
+                self._local.request_settings = previous
+
     def chat(
         self,
         agent: ModelAgent,
@@ -868,12 +906,15 @@ class ModelClient:
         ``default_top_p`` are used so request-scoped Completions sampling can be
         applied without threading kwargs through every orchestrator hop.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        settings = self.request_settings_snapshot()
+        effective_temperature = settings["temperature"] if temperature is None else temperature
+        effective_top_p = settings["top_p"] if top_p is None else top_p
+        effective_presence = settings["presence_penalty"]
+        effective_frequency = settings["frequency_penalty"]
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -894,7 +935,7 @@ class ModelClient:
             "messages": messages,
             "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": settings["max_output_tokens"],
         }
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
@@ -936,6 +977,15 @@ class ModelClient:
         """
         probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
+        if not is_chat_compatible_model_id(agent.model):
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "not_ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": "ValueError",
+                "failure_code": "non_chat_model",
+            }
         self._local.usage = None
         failure_code = "provider_probe_failed"
         try:
@@ -1190,6 +1240,10 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1197,12 +1251,13 @@ class ModelClient:
             return
 
         destination = self._validate_provider(agent)  # pragma: no cover
+        settings = self.request_settings_snapshot()
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
+            "temperature": settings["temperature"] if temperature is None else temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": settings["max_output_tokens"],
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
@@ -1268,12 +1323,22 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
+        normalized_endpoint = endpoint.strip("/")
+        if normalized_endpoint.startswith("v1/"):
+            normalized_endpoint = normalized_endpoint[3:]
+        if (
+            normalized_endpoint in {"chat/completions", "completions", "responses"}
+            and not is_chat_compatible_model_id(agent.model)
+        ):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
-            return self._mock_raw(agent, endpoint, payload)
+            return self._mock_raw(agent, normalized_endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+        if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
             if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                 chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -1282,7 +1347,7 @@ class ModelClient:
                 )
             return _chat_to_responses_payload(chat_response, payload)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, endpoint, payload, destination)
+            return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
 
     def proxy_send_bytes(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -1477,6 +1542,10 @@ class ModelClient:
         workloads (24h completion window, ~half the price); real-time chat should keep
         using ``chat``. The mock path answers synchronously so tests and local runs work.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             results = {
                 custom_id: {"content": self._mock(agent, messages), "usage": None}
@@ -1508,18 +1577,20 @@ class ModelClient:
         effort_profile: ReasoningEffortProfile | None,
     ) -> dict[str, dict[str, Any]]:
         """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        request_settings = self.request_settings_snapshot()
+
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
-            content = (
-                self.chat(
-                    agent,
-                    messages,
-                    temperature=temperature,
-                    effort_profile=effort_profile,
-                )
-                if effort_profile is not None
-                else self.chat(agent, messages, temperature=temperature)
-            )
-            return custom_id, {"content": content, "usage": self.take_usage()}
+            with self.request_settings(**request_settings):
+                if effort_profile is not None:
+                    content = self.chat(
+                        agent,
+                        messages,
+                        temperature=temperature,
+                        effort_profile=effort_profile,
+                    )
+                else:
+                    content = self.chat(agent, messages, temperature=temperature)
+                return custom_id, {"content": content, "usage": self.take_usage()}
 
         if self.local_concurrency == 1 or len(requests) <= 1:
             return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
@@ -1538,6 +1609,7 @@ class ModelClient:
         effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
+        settings = self.request_settings_snapshot()
         lines = [
             json.dumps({
                 "custom_id": custom_id,
@@ -1546,7 +1618,8 @@ class ModelClient:
                 "body": self.apply_effort_profile(agent, {
                     "model": agent.model,
                     "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
+                    "temperature": settings["temperature"] if temperature is None else temperature,
+                    "max_tokens": settings["max_output_tokens"],
                 }, effort_profile),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
@@ -1700,7 +1773,9 @@ class _AgentPoolStore:
     @staticmethod
     def _migrate_legacy_groups(conn: sqlite3.Connection) -> None:
         """Move legacy payload group names into the normalized membership relation."""
-        for agent_id, raw_payload in conn.execute("SELECT agent_id, payload FROM agent_pool"):
+        for agent_id, raw_payload in list(
+            conn.execute("SELECT agent_id, payload FROM agent_pool")
+        ):
             payload = json.loads(raw_payload)
             group_name = payload.pop("group_name", "")
             if not group_name:
@@ -1769,13 +1844,14 @@ class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
     ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
-    upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
-    on disk while the in-memory deques stay capped — add pruning if db size matters.
+    upsert by key; stream kinds append. Streams saved as durable commit synchronously and use the same bounded
+    retention as their in-memory deques so request traffic cannot grow the DB forever.
     Runtime values (kind, key, payload, limit) are always bound through SQLite
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
+    _STREAM_LIMITS = {"audit": 256, "authorization": 256, "analytics": 256}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -1783,6 +1859,10 @@ class _StateStore:
     _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
     _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
     _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
+    _PRUNE_STREAM_SQL = (
+        "DELETE FROM records WHERE kind = ? AND seq NOT IN ("
+        "SELECT seq FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?)"
+    )
     _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
     _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
 
@@ -1792,16 +1872,82 @@ class _StateStore:
         self._conn.execute(self._CREATE_RECORDS_SQL)
         self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
         self._conn.commit()
+        # Non-durable streams are best-effort, but each keeps its own newest
+        # retention window so an authorization flood cannot evict audit data.
+        # The worker keeps best-effort denial writes off the request thread.
+        self._stream_events: dict[str, deque[tuple[str | None, dict[str, Any]]]] = {
+            kind: deque(maxlen=limit) for kind, limit in self._STREAM_LIMITS.items()
+        }
+        self._stream_condition = threading.Condition()
+        self._stream_closing = False
+        self._stream_writing = False
+        self._next_stream_index = 0
+        self._stream_worker = threading.Thread(
+            target=self._drain_stream_queue,
+            name="contextual-orchestrator-state-store",
+            daemon=True,
+        )
+        self._stream_worker.start()
 
-    def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
+    def save(self, kind: str, key: str | None, payload: dict[str, Any], *, durable: bool = False) -> None:
+        if kind in self._STREAM_LIMITS and not durable:
+            with self._stream_condition:
+                if self._stream_closing:
+                    raise RuntimeError("state store is closed")
+                self._stream_events[kind].append((key, payload))
+                self._stream_condition.notify()
+            return
+        self._save_sync(kind, key, payload)
+
+    def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
         with self._lock:
             if kind in self._KEYED:
                 self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
             self._conn.execute(self._INSERT_SQL, (kind, key, blob))
+            if kind in self._STREAM_LIMITS:
+                limit = self._STREAM_LIMITS[kind]
+                self._conn.execute(self._PRUNE_STREAM_SQL, (kind, kind, limit))
             self._conn.commit()
 
+    def _drain_stream_queue(self) -> None:
+        while True:
+            with self._stream_condition:
+                while not self._stream_closing and not any(self._stream_events.values()):
+                    self._stream_condition.wait()
+                event = self._next_stream_event()
+                if event is None:
+                    return
+                kind, key, payload = event
+                self._stream_writing = True
+            try:
+                self._save_sync(kind, key, payload)
+            except Exception:  # noqa: BLE001 - a best-effort stream write must not stop later persistence.
+                pass
+            finally:
+                with self._stream_condition:
+                    self._stream_writing = False
+                    self._stream_condition.notify_all()
+
+    def _next_stream_event(self) -> tuple[str, str | None, dict[str, Any]] | None:
+        """Return one pending event fairly; caller holds ``_stream_condition``."""
+        kinds = tuple(self._STREAM_LIMITS)
+        for offset in range(len(kinds)):
+            index = (self._next_stream_index + offset) % len(kinds)
+            kind = kinds[index]
+            if self._stream_events[kind]:
+                self._next_stream_index = (index + 1) % len(kinds)
+                key, payload = self._stream_events[kind].popleft()
+                return kind, key, payload
+        return None
+
+    def _flush_streams(self) -> None:
+        with self._stream_condition:
+            while self._stream_writing or any(self._stream_events.values()):
+                self._stream_condition.wait()
+
     def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
+        self._flush_streams()
         with self._lock:
             if limit is None:
                 rows = self._conn.execute(self._SELECT_ALL_SQL, (kind,)).fetchall()
@@ -1812,6 +1958,11 @@ class _StateStore:
 
     def close(self) -> None:
         """Close the sqlite handle so Windows can release the database file."""
+        self._flush_streams()
+        with self._stream_condition:
+            self._stream_closing = True
+            self._stream_condition.notify_all()
+        self._stream_worker.join()
         with self._lock:
             self._conn.close()
 
@@ -1901,7 +2052,9 @@ class TaskOrchestrator:
         cache_max_entries: int = 256,
         tool_retry_attempts: int = 1,
         tool_retry_backoff_seconds: float = 0.25,
+        cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
+        pii_key_name: str = DEFAULT_PII_KEY_NAME,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -1958,8 +2111,9 @@ class TaskOrchestrator:
         self.budget_max_cost_usd = budget_max_cost_usd
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
-        self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
+        self._analytics_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
+        self._authorization_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
@@ -1969,10 +2123,17 @@ class TaskOrchestrator:
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
+        if cache_provider is not None and cache_ttl:
+            raise ValueError("cache_provider and cache_ttl cannot both be configured")
+        self._cache_provider = cache_provider
         self._cache = _ResponseCache(cache_ttl, cache_max_entries) if cache_ttl and cache_ttl > 0 else None
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
+        if not isinstance(pii_key_name, str) or not pii_key_name:
+            raise ValueError("pii_key_name must be a non-empty string")
+        self._pii_key_name = pii_key_name
+        self._pii_encryptors: dict[str, PiiFieldEncryptor] = {}
         self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
@@ -2041,6 +2202,8 @@ class TaskOrchestrator:
             self._analytics_events.append(event)
         for event in self._store.load("audit", self._audit_events.maxlen):
             self._audit_events.append(event)
+        for event in self._store.load("authorization", self._authorization_events.maxlen):
+            self._authorization_events.append(event)
 
     # Orchestration-only body keys that must not be forwarded to the provider.
     _ORCHESTRATION_ONLY_KEYS = frozenset(
@@ -2098,7 +2261,19 @@ class TaskOrchestrator:
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        return self.client.proxy_send(agent, endpoint, upstream)
+        measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
+        started_at = time.perf_counter()
+        try:
+            result = self.client.proxy_send(agent, endpoint, upstream)
+        except Exception:
+            if measured:
+                self._group_router.observe_failure(agent.id)
+            raise
+        if measured:
+            self._group_router.observe_success(
+                agent.id, time.perf_counter() - started_at
+            )
+        return result
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
@@ -2129,17 +2304,49 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         mode: str = "auto",
         *,
+        bypass_cache: bool = False,
         model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
-        if self._cache is None:
-            return self._dispatch(messages, mode, model_name)
-        key = self._cache_key(messages, mode, model_name)
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
+        if not isinstance(bypass_cache, bool):
+            raise TypeError("bypass_cache must be a boolean")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError("model_name must be a non-empty string")
+        if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
+            raise ValueError("cache_partition must be a non-empty string when provided")
+        cache = self._cache_provider if self._cache_provider is not None else self._cache
+        if cache is None or bypass_cache:
+            result = self._dispatch(messages, mode, model_name)
+            result["cache_status"] = "bypass" if bypass_cache else "disabled"
+            return result
+        try:
+            key = self._cache_key(messages, mode, model_name, cache_partition)
+        except (TypeError, ValueError):
+            # Cache key serialization is an optimization boundary; unusual but
+            # valid caller objects must still reach the live provider path.
+            result = self._dispatch(messages, mode, model_name)
+            result["cache_status"] = "miss"
+            return result
+        try:
+            cached = cache.get(key)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            cached = None
+        if (
+            isinstance(cached, Mapping)
+            and isinstance(cached.get("mode"), str)
+            and isinstance(cached.get("answer"), str)
+            and isinstance(cached.get("trace"), list)
+        ):
+            result = copy.deepcopy(dict(cached))
+            result["cache_status"] = "hit"
+            return result
         result = self._dispatch(messages, mode, model_name)
-        self._cache.put(key, result)
+        try:
+            cache.put(key, result)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            pass
+        result["cache_status"] = "miss"
         return result
 
     def _dispatch(
@@ -2243,13 +2450,23 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         mode: str,
         model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
     ) -> str:
-        payload = json.dumps(
-            {"mode": mode, "model": model_name, "messages": messages},
-            sort_keys=True,
-            ensure_ascii=False,
+        snapshot = getattr(self.client, "request_settings_snapshot", None)
+        parameters = snapshot() if callable(snapshot) else {
+            "temperature": getattr(self.client, "default_temperature", None),
+            "top_p": getattr(self.client, "default_top_p", None),
+            "presence_penalty": getattr(self.client, "default_presence_penalty", None),
+            "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
+            "max_output_tokens": getattr(self.client, "max_output_tokens", None),
+        }
+        return build_response_cache_key(
+            messages,
+            mode,
+            model=model_name,
+            parameters=parameters,
+            partition=cache_partition,
         )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def run(
         self,
@@ -2257,14 +2474,22 @@ class TaskOrchestrator:
         mode: str = "auto",
         workflow_run_id: str | None = None,
         *,
+        bypass_cache: bool = False,
         model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode, model_name=model_name)
+        result = self.complete(
+            messages,
+            mode=mode,
+            bypass_cache=bypass_cache,
+            model_name=model_name,
+            cache_partition=cache_partition,
+        )
         prompt = self._latest_user_text(messages)
         record = self._with_effort_snapshot(
             {
@@ -2274,6 +2499,7 @@ class TaskOrchestrator:
                 "policy_mode": mode,
                 "prompt_text": prompt,
                 "answer": result["answer"],
+                "cache_status": result.get("cache_status", "disabled"),
                 "trace": result["trace"],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": result.get("verification"),
@@ -2742,6 +2968,10 @@ class TaskOrchestrator:
                 updated_candidates.append(agent)
                 added.append(agent.id)
             else:
+                agent = replace(
+                    agent,
+                    group_name=updated_candidates[index].group_name,
+                )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
             if self._pool_store is not None:
@@ -2970,6 +3200,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
+            if is_general_chat_agent_model_id(agent.model)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -3001,7 +3232,7 @@ class TaskOrchestrator:
         raw_steps = data.get("steps")
         if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
             raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
-        known_agents = {agent.id for agent in self.agents}
+        known_agents = {agent.id: agent for agent in self.agents}
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
             if int(item.get("id", -1)) != index:
@@ -3016,8 +3247,9 @@ class TaskOrchestrator:
             if any(value < 0 or value >= index for value in access):
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
-            if agent_id not in known_agents:
-                # The planner named an unknown agent: reselect honestly instead of failing the plan.
+            assigned = known_agents.get(agent_id)
+            if assigned is None or not is_general_chat_agent_model_id(assigned.model):
+                # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
         if steps[-1].role not in {"synthesizer", "worker"}:
@@ -3052,12 +3284,25 @@ class TaskOrchestrator:
                 domain_score += 2
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
-    def _ranked_agents(self, text: str, role: str, *, free_only: bool = False) -> list[ModelAgent]:
+    def _ranked_agents(
+        self,
+        text: str,
+        role: str,
+        *,
+        free_only: bool = False,
+        chat_only: bool = True,
+    ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group."""
         lowered = text.lower()
-        candidates = [agent for agent in self.agents if not free_only or self._is_free_agent(agent)]
+        candidates = [
+            agent
+            for agent in self.agents
+            if (not chat_only or is_general_chat_agent_model_id(agent.model))
+            and (not free_only or self._is_free_agent(agent))
+        ]
         if not candidates:
-            raise RuntimeError("no enabled zero-cost model is available")
+            detail = "zero-cost " if free_only else "chat-compatible "
+            raise RuntimeError(f"no enabled {detail}model is available")
         static = sorted(candidates, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
         if free_only:
             eligible = [agent for agent in static if role not in agent.provider_exclusions]
@@ -3099,7 +3344,10 @@ class TaskOrchestrator:
         ) == 1
 
     def _select_agent(self, text: str, role: str, *, free_only: bool = False) -> ModelAgent:
-        selected = self._ranked_agents(text, role, free_only=free_only)[0]
+        ranked = self._ranked_agents(text, role, free_only=free_only)
+        if not ranked:
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        selected = ranked[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
@@ -3132,7 +3380,9 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {model_name!r} is not configured")
         ranked = [
             agent
-            for agent in self._ranked_agents("", capability, free_only=free_only)
+            for agent in self._ranked_agents(
+                "", capability, free_only=free_only, chat_only=False
+            )
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions
@@ -3210,6 +3460,8 @@ class TaskOrchestrator:
         candidates = self._failover_candidates(
             primary, text, eligibility_role or role, allowed_agent_ids
         )
+        if not candidates:
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
             retry_attempt = 0
@@ -3301,13 +3553,22 @@ class TaskOrchestrator:
         ranked = self._ranked_agents(text, role, free_only=allowed_agent_ids is not None)
         if allowed_agent_ids is not None:
             ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
-        if primary.group_name:
-            ranked = [agent for agent in ranked if agent.group_name == primary.group_name]
+        if allowed_agent_ids is None:
+            ranked = [
+                agent
+                for agent in ranked
+                if (
+                    canonical_group_name(agent.group_name)
+                    == canonical_group_name(primary.group_name)
+                    if primary.group_name and agent.group_name
+                    else not primary.group_name and not agent.group_name
+                )
+            ]
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible or [primary]
+        return healthy or eligible
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
@@ -3490,15 +3751,58 @@ class TaskOrchestrator:
             "verifier_output": verifier_output,
         }
 
-    def _append_audit_event(self, event_type: str, detail: dict[str, Any]) -> None:
+    def _protected_event_detail(self, detail: dict[str, Any], pii_fields: Iterable[str]) -> dict[str, Any]:
+        """Encrypt explicitly declared PII fields before an event enters memory or storage."""
+        fields = tuple(pii_fields)
+        if not fields:
+            return detail
+        encryptor = self._pii_encryptors.get(self._pii_key_name)
+        if encryptor is None:
+            encryptor = load_pii_encryptor(self._pii_key_name)
+            self._pii_encryptors[self._pii_key_name] = encryptor
+        return encryptor.encrypt_fields(detail, fields)
+
+    def _append_audit_event(
+        self,
+        event_type: str,
+        detail: dict[str, Any],
+        *,
+        pii_fields: Iterable[str] = (),
+        stream: str = "audit",
+        durable: bool = True,
+    ) -> None:
+        """Append a durable event to a bounded audit stream by default."""
         event = {
             "created_at": int(time.time()),
             "event_type": event_type,
-            "event_detail": detail,
+            "event_detail": self._protected_event_detail(detail, pii_fields),
         }
-        self._audit_events.append(event)
+        events = self._authorization_events if stream == "authorization" else self._audit_events
+        events.append(event)
         if self._store is not None:
-            self._store.save("audit", None, event)
+            self._store.save(stream, None, event, durable=durable)
+
+    def record_authorization_decision(
+        self,
+        *,
+        scope: str,
+        purpose: str,
+        allowed: bool,
+        reason: str,
+        durable: bool = False,
+    ) -> None:
+        """Record a secret-free role/purpose authorization decision."""
+        self._append_audit_event(
+            "authorization_decision",
+            {
+                "scope": scope,
+                "purpose": purpose,
+                "allowed": bool(allowed),
+                "reason": reason,
+            },
+            stream="authorization",
+            durable=durable,
+        )
 
     def _infer_provider_name(self, base_url: str) -> str:
         if base_url.startswith("mock://"):
@@ -3619,8 +3923,15 @@ class TaskOrchestrator:
         run_ids = list(self._run_order)[start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
 
-    def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
-        """Return recent audit events in newest-first order."""
+    def list_recent_audit_events(
+        self,
+        page_number: int = 1,
+        page_size: int = 25,
+        *,
+        role: str | None = None,
+        purpose: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return recent audit events, decrypting PII only for authorized replay."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         events = list(self._audit_events)
@@ -3629,15 +3940,60 @@ class TaskOrchestrator:
         total = len(events)
         left = max(0, total - end)
         right = max(0, total - start)
+        selected = list(reversed(events[left:right]))
+        if role != "admin" or purpose != "audit_replay":
+            return selected
+        restored: list[dict[str, Any]] = []
+        encryptors: dict[str, Any] = {}
+        for event in selected:
+            detail = event.get("event_detail")
+            if not is_encrypted_detail(detail):
+                restored.append(event)
+                continue
+            restored_event = dict(event)
+            try:
+                metadata = detail.get(ENCRYPTED_FIELDS_KEY)
+                key_name = metadata.get("key_name") if isinstance(metadata, dict) else self._pii_key_name
+                if not isinstance(key_name, str) or not key_name:
+                    raise PiiProtectionError("encrypted field metadata has no valid key name")
+                encryptor = encryptors.get(key_name)
+                if encryptor is None:
+                    encryptor = load_pii_encryptor(key_name)
+                    encryptors[key_name] = encryptor
+                restored_event["event_detail"] = encryptor.decrypt_fields(detail)
+            except PiiProtectionError:
+                restored_event["event_detail"] = {
+                    **detail,
+                    "__pii_protection_error__": "unavailable",
+                }
+            restored.append(restored_event)
+        return restored
+
+    def list_recent_authorization_decisions(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
+        """Return recent secret-free authorization decisions in newest-first order."""
+        if page_number < 1 or page_size < 1:  # pragma: no cover
+            raise ValueError("page_number/page_size must be >= 1")
+        events = list(self._authorization_events)
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        total = len(events)
+        left = max(0, total - end)
+        right = max(0, total - start)
         return list(reversed(events[left:right]))
 
-    def record_analytics_event(self, event_name: str, detail: dict[str, Any]) -> None:
+    def record_analytics_event(
+        self,
+        event_name: str,
+        detail: dict[str, Any],
+        *,
+        pii_fields: Iterable[str] = (),
+    ) -> None:
         """Record a compact in-memory analytics event without prompt or output text."""
         require_object_name(event_name, "analytics.event_name")
         event = {
             "event_time": int(time.time()),
             "event_name": event_name,
-            "event_detail": redact_value(detail),
+            "event_detail": redact_value(self._protected_event_detail(detail, pii_fields)),
         }
         self._analytics_events.append(event)
         if self._store is not None:
@@ -9820,7 +10176,7 @@ class TaskOrchestrator:
             },
         }
 
-    def admin_state(self) -> dict[str, Any]:
+    def admin_state(self, *, role: str | None = None, purpose: str | None = None) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.candidates))
         return {
@@ -9831,7 +10187,8 @@ class TaskOrchestrator:
                 "complex_hints": list(self.COMPLEX_HINTS),
             },
             "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
-            "recent_audit_events": self.list_recent_audit_events(),
+            "recent_audit_events": self.list_recent_audit_events(role=role, purpose=purpose),
+            "recent_authorization_decisions": self.list_recent_authorization_decisions(),
             "spend": self.spend_analytics(),
         }
 

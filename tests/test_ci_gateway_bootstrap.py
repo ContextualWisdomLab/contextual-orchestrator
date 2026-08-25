@@ -28,5 +28,7 @@ def test_seed_credentials_copies_present_provider_keys_into_kv(monkeypatch) -> N
         "OPENROUTER_API_KEY",
         "OPENCODE_ZEN_API_KEY",
     ]
+    assert "OPENROUTER_API_KEY" not in module.os.environ
+    assert "OPENCODE_ZEN_API_KEY" not in module.os.environ
     monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "changed-after-bootstrap")
     assert get_credential("OPENCODE_ZEN_API_KEY") == "zen-secret"

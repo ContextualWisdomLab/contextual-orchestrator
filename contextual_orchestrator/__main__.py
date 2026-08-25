@@ -17,7 +17,7 @@ from .model_discovery import (
     discover_all_models,
     free_discovered_models,
     refresh_price_book,
-    select_top_n_cheapest_discovered_agents,
+    select_bootstrap_discovered_agents,
 )
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
@@ -214,7 +214,7 @@ def _discover_models_command(argv: list[str]) -> None:
         type=_non_negative_int,
         default=0,
         metavar="N",
-        help="Enable the N cheapest discovered agents in --agents-db (auto-optimization bootstrap; "
+        help="Enable a price-honest, provider-diverse discovered agent pool in --agents-db (auto-optimization bootstrap; "
         "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
     )
     parser.add_argument(
@@ -240,7 +240,7 @@ def _discover_models_command(argv: list[str]) -> None:
         )
         bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in reported])
         if args.enable_cheapest:
-            for model in select_top_n_cheapest_discovered_agents(reported, price_book, args.enable_cheapest):
+            for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
                 agent_id = agent_id_for(model)
                 bootstrap.patch_agent("default", agent_id, {"status": "active"})
                 enabled_agent_ids.append(agent_id)

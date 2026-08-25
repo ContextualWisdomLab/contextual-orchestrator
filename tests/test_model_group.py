@@ -29,6 +29,12 @@ def test_group_router_prefers_measured_success_throughput_and_snapshots() -> Non
     assert router.snapshot()["fast_member"]["failure_count"] == 1
 
 
+@pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan")])
+def test_group_router_rejects_nonpositive_or_nonfinite_latency_floor(value: float) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        ModelGroupRouter(min_latency_seconds=value)
+
+
 def test_group_router_validates_inputs_and_forgets_departed_members() -> None:
     for value, error in [(None, TypeError), ("---", ValueError), ("single", ValueError)]:
         with pytest.raises(error):
@@ -121,10 +127,24 @@ def test_explicit_group_conduct_keeps_every_step_and_failover_inside_group() -> 
     assert result["mode"] == "conduct"
     assert {row["agent_id"] for row in result["trace"]} <= {first.id, second.id}
     assert outsider not in orchestrator._failover_candidates(first, "task", "worker")
+    assert first not in orchestrator._failover_candidates(outsider, "task", "worker")
 
 
 def test_model_agent_stores_canonical_group_name() -> None:
     assert _agent("canonical_member", "vendor/model").group_name == "shared_reasoning_model"
+
+
+def test_group_passthrough_records_measured_success() -> None:
+    member = ModelAgent(
+        "measured_member", "vendor/model", "mock://provider", group_name="shared_reasoning_model"
+    )
+    orchestrator = TaskOrchestrator([member])
+
+    orchestrator.proxy_completion(
+        {"model": "shared_reasoning_model", "messages": [{"role": "user", "content": "hi"}]}
+    )
+
+    assert orchestrator._group_router.snapshot()[member.id]["success_count"] == 1
 
 
 def test_group_membership_changes_reset_but_keep_candidate_measurement_rows() -> None:

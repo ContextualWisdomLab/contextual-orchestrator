@@ -4,7 +4,9 @@ version = "0.2.0"
 description = "Paper-grounded model orchestration lab with an enterprise admin console."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "cryptography>=43.0",
+]
 
 [project.optional-dependencies]
 test = [
@@ -18,6 +20,7 @@ db = [
   "SQLAlchemy>=2.0",
   "alembic>=1.17",
   "psycopg[binary]>=3.2",
+  "greenlet>=3.2",
 ]
 fuzz = [
   "atheris==3.1.0; python_version >= '3.12'",
