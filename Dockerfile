@@ -12,10 +12,10 @@
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
 
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml requirements.lock README.md LICENSE ./
 COPY contextual_orchestrator/ contextual_orchestrator/
 COPY examples/ examples/
-RUN pip install --no-cache-dir ".[db]"
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 ENV AGENTS_FILE=/app/examples/agents.mock.json \
     PORT=8000

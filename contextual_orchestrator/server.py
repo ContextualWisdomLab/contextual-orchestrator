@@ -1900,12 +1900,28 @@ def _require_pool_model(
     answering with a different pool agent hides capacity/routing mismatches.
     """
     agents = getattr(orchestrator, "agents", None) or []
-    if model_name == TaskOrchestrator.AUTO_MODEL:
-        return model_name
-    if model_name == TaskOrchestrator.FREE_MODEL:
-        if any(orchestrator._is_free_agent(agent) for agent in agents):
-            return model_name
-        raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
+    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+        if required_capability is None:
+            if model_name == TaskOrchestrator.AUTO_MODEL or any(
+                orchestrator._is_free_agent(agent) for agent in agents
+            ):
+                return model_name
+            raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
+        try:
+            capability_agents = orchestrator._capability_agents(required_capability)
+        except RuntimeError:
+            capability_agents = []
+        if model_name == TaskOrchestrator.FREE_MODEL:
+            capability_agents = [
+                agent for agent in capability_agents if orchestrator._is_free_agent(agent)
+            ]
+        if capability_agents:
+            return capability_agents[0].model
+        raise RequestError(
+            400,
+            "invalid_model",
+            f"no enabled {required_capability} model is available for {model_name}",
+        )
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue

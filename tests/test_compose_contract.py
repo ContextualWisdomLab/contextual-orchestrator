@@ -14,5 +14,7 @@ def test_compose_uses_postgres_kv_and_secret_bootstrap() -> None:
 
 
 def test_gateway_image_installs_postgres_driver_and_ignores_secrets() -> None:
-    assert 'pip install --no-cache-dir ".[db]"' in Path("Dockerfile").read_text()
+    dockerfile = Path("Dockerfile").read_text()
+    assert "COPY pyproject.toml requirements.lock README.md LICENSE ./" in dockerfile
+    assert "pip install --no-cache-dir --require-hashes -r requirements.lock" in dockerfile
     assert ".secrets" in Path(".dockerignore").read_text().splitlines()

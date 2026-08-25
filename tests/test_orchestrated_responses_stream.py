@@ -11,7 +11,12 @@ import urllib.error
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
-from contextual_orchestrator.server import SecurityConfig, build_server
+from contextual_orchestrator.server import (
+    RequestError,
+    SecurityConfig,
+    _require_pool_model,
+    build_server,
+)
 
 
 def _post(server: ThreadingHTTPServer, token: str, model: str) -> str:
@@ -110,6 +115,24 @@ def test_free_measurements_survive_unrelated_pool_edits() -> None:
     orchestrator.patch_agent("default", paid.id, {"priority": 2})
     after = orchestrator._group_router.member_report(free.id)
     assert after == before
+
+
+def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
+    orchestrator = TaskOrchestrator([
+        ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",), priority=10),
+        ModelAgent("free_embedding", "free-embedding", tags=("embedding", "cost:free")),
+        ModelAgent("free_text", "free-text", tags=("text", "cost:free")),
+    ])
+    assert _require_pool_model(
+        orchestrator, "orchestrator/auto", required_capability="embedding"
+    ) == "paid-embedding"
+    assert _require_pool_model(
+        orchestrator, "orchestrator/free", required_capability="embedding"
+    ) == "free-embedding"
+    with pytest.raises(RequestError, match="no enabled video model"):
+        _require_pool_model(
+            orchestrator, "orchestrator/free", required_capability="video"
+        )
 
 
 def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
