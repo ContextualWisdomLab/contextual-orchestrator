@@ -3,13 +3,14 @@
 The orchestrator consumes untrusted input at a handful of well-defined seams:
 HTTP request bodies, agent-pool configuration, arbitrary prompt text, trace
 payloads that pass through secret/PII redaction, untrusted model-generated
-judge verdicts, and a remote provider's model-list HTTP response. Those seams
+judge verdicts, a remote provider's model-list HTTP response, and reasoning-
+effort profiles. Those seams
 are fuzzed with two complementary, permissively licensed tools.
 
 | Tool | License | Role |
 | --- | --- | --- |
-| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`), covering all six targets below. Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
-| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.12 (the first Atheris 3.1.0 wheel; also the pin the central CPython 3.14 coverage-evidence image preflights). Covers targets 1-5; target 6 currently has Hypothesis coverage only. |
+| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`), covering all seven targets below. Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
+| [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.12 (the first Atheris 3.1.0 wheel; also the pin the central CPython 3.14 coverage-evidence image preflights). Covers targets 1-5 and 7; target 6 currently has Hypothesis coverage only. |
 
 Both drivers call the same invariant checks in [`fuzz/targets.py`](../fuzz/targets.py),
 so a bug found by either tool reproduces under the other.
@@ -32,7 +33,13 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
-5. **Reasoning-effort profile** — `parse_reasoning_effort_profile` (issue #568).
+5. **Model-judge verdict** — `_parse_model_judge_reply`. Arbitrary model text
+   must either produce a strict verdict or fail closed with a documented parse
+   error.
+6. **Provider model-list response** — `_parse_openai_compatible` / `_parse_bytez`.
+   Arbitrary provider-controlled JSON must produce validated model records or
+   reject malformed rows without crashing discovery.
+7. **Reasoning-effort profile** — `parse_reasoning_effort_profile` (issue #568).
    Arbitrary decoded JSON must yield a finite `ReasoningEffortProfile` or raise
    `EffortProfileError` / `TypeError` / `ValueError`. Never crash on NaN,
    infinity, bool-as-number, or unknown keys.
