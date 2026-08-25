@@ -305,3 +305,40 @@ def test_virtual_effort_profile_selects_a_supported_provider() -> None:
 
     assert result["model"] == "supported-model"
     assert [agent_id for agent_id, _ in client.calls] == ["supported_agent"]
+
+
+def test_effort_support_filter_precedes_same_provider_deduplication() -> None:
+    """A lower-ranked supported alias remains eligible for its provider."""
+    client = SequencedProxyClient(
+        {"supported_alias": {"model": "supported-model"}}
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "unsupported_alias",
+                "unsupported-model",
+                priority=10,
+                provider_name="shared",
+                reasoning_effort_supported=False,
+            ),
+            ModelAgent(
+                "supported_alias",
+                "supported-model",
+                priority=1,
+                provider_name="shared",
+                reasoning_effort_supported=True,
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {"messages": [{"role": "user", "content": "x"}]},
+        effort_profile=ReasoningEffortProfile(
+            reasoning_effort="medium",
+            unsupported_provider_fallback="error",
+        ),
+    )
+
+    assert result["model"] == "supported-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["supported_alias"]
