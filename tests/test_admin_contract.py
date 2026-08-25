@@ -63,6 +63,8 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'role="status" aria-live="polite"' in ADMIN_HTML
     assert 'fetch("/api/v1/model_groups")' in ADMIN_HTML
     assert "(state.modelGroups || []).map" in ADMIN_HTML
+    assert "hintCount" not in ADMIN_HTML
+    assert "complex_hints" not in ADMIN_HTML
     assert 'method: exists ? "PATCH" : "POST"' in ADMIN_HTML
     assert 'method: "DELETE"' in ADMIN_HTML
     for key in (

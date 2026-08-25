@@ -227,7 +227,6 @@ ADMIN_TRANSLATIONS = {
         "status_healthy": "Healthy",
         "status_degraded": "Degraded",
         "latency_threshold": "Latency P95 route threshold",
-        "workflow_hints": "Workflow trigger hints",
         "verifier_required": "Verifier required",
         "agent_exclusion": "Agent exclusion policy",
         "timeline_tab": "Timeline",
@@ -476,7 +475,6 @@ ADMIN_TRANSLATIONS = {
         "status_healthy": "정상",
         "status_degraded": "저하",
         "latency_threshold": "라우팅 P95 지연 임계값",
-        "workflow_hints": "워크플로 트리거 힌트",
         "verifier_required": "검증 단계 필수",
         "agent_exclusion": "에이전트 제외 정책",
         "timeline_tab": "타임라인",
@@ -929,7 +927,6 @@ ADMIN_HTML = r"""<!doctype html>
             </div>
             <div class="metric source"><span data-i18n="source_basis">Source basis</span><strong data-i18n="source_basis_text">Fugu: one interface. TRINITY: thinker, worker, verifier. Conductor: access-list workflow visibility.</strong></div>
             <div class="metric"><span data-i18n="latency_threshold">Latency P95 route threshold</span><strong>2.50s</strong></div>
-            <div class="metric"><span data-i18n="workflow_hints">Workflow trigger hints</span><strong id="hintCount">0</strong></div>
             <div class="metric"><span data-i18n="verifier_required">Verifier required</span><strong>Yes</strong></div>
             <div class="metric"><span data-i18n="agent_exclusion">Agent exclusion policy</span><strong>Config</strong></div>
           </div>
@@ -1063,7 +1060,6 @@ Summarize this research thread and verify claims.</textarea>
       agentCount: document.querySelector("#agentCount"),
       agentSearch: document.querySelector("#agentSearch"),
       statusFilter: document.querySelector("#statusFilter"),
-      hintCount: document.querySelector("#hintCount"),
       prompt: document.querySelector("#prompt"),
       mode: document.querySelector("#mode"),
       run: document.querySelector("#run"),
@@ -1586,7 +1582,6 @@ Summarize this research thread and verify claims.</textarea>
       await refreshModelGroups();
       await refreshAnalytics();
       await refreshReadiness();
-      els.hintCount.textContent = state.policy.complex_hints.length;
       renderAgents();
       renderSecondaryViews();
       await simulate();
