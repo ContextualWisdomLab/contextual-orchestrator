@@ -273,6 +273,19 @@ def test_handler_replaces_trace_context_on_reauthorization(monkeypatch):
         server.server_close()
 
 
+def test_serve_forwards_telemetry_coordinator(monkeypatch):
+    """CLI-provided telemetry configuration reaches the server builder."""
+    built = MagicMock()
+    build_server = MagicMock(return_value=built)
+    monkeypatch.setattr(server_module, "build_server", build_server)
+    coordinator = MagicMock()
+
+    server_module.serve(SimpleNamespace(), coordinator=coordinator)
+
+    assert build_server.call_args.kwargs["coordinator"] is coordinator
+    built.serve_forever.assert_called_once_with()
+
+
 def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
     """HTTP diagnostics keep request correlation local and omit the raw session value."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
