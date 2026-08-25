@@ -26,9 +26,9 @@ python tests/test_api_contract.py
 
 Keep domain language consistent:
 
-- Agent: configured worker model with identity, model id, provider endpoint, tags, and priority.
+- ModelAgent: configured worker model with identity, model id, provider endpoint, tags, and priority.
 - WorkflowStep: one delegated subtask with role, assigned agent, and access list.
-- Orchestrator: application service that routes or conducts.
+- TaskOrchestrator: application service that routes or conducts.
 - ModelClient: infrastructure adapter for mock and OpenAI-compatible workers.
 
 No interface or factory until a second real implementation exists.
