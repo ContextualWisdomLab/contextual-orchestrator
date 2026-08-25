@@ -9,7 +9,12 @@ from typing import Any
 
 import pytest
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import (
+    ModelAgent,
+    ReasoningEffortProfile,
+    TaskOrchestrator,
+)
+from contextual_orchestrator.orchestrator import ModelClient
 
 
 class SequencedProxyClient:
@@ -31,6 +36,15 @@ class SequencedProxyClient:
         return deepcopy(outcome)
 
     proxy_send = proxy_send_once
+
+    def apply_effort_profile(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        profile: ReasoningEffortProfile,
+    ) -> dict[str, Any]:
+        """Reuse the production profile contract for mixed-provider coverage."""
+        return ModelClient().apply_effort_profile(agent, payload, profile)
 
 
 def _http_error(status: int) -> urllib.error.HTTPError:
@@ -233,3 +247,61 @@ def test_only_temporary_dns_failures_advance(
             _build(client).proxy_completion(
                 {"messages": [{"role": "user", "content": "x"}]}
             )
+
+
+def test_ambiguous_timeout_is_not_replayed() -> None:
+    """A timeout may follow provider acceptance, so passthrough fails closed."""
+    failure = TimeoutError("provider outcome unknown")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+
+    with pytest.raises(TimeoutError, match="outcome unknown"):
+        _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_virtual_effort_profile_selects_a_supported_provider() -> None:
+    """Mixed pools skip unsupported candidates instead of aborting valid routing."""
+    client = SequencedProxyClient(
+        {
+            "unsupported_agent": {"model": "unsupported-model"},
+            "supported_agent": {"model": "supported-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "unsupported_agent",
+                "unsupported-model",
+                base_url="https://unsupported.example/v1",
+                priority=10,
+                provider_name="unsupported",
+                reasoning_effort_supported=False,
+            ),
+            ModelAgent(
+                "supported_agent",
+                "supported-model",
+                base_url="https://supported.example/v1",
+                priority=1,
+                provider_name="supported",
+                reasoning_effort_supported=True,
+            ),
+        ],
+        client=client,
+    )
+    profile = ReasoningEffortProfile(
+        reasoning_effort="medium",
+        unsupported_provider_fallback="error",
+    )
+
+    result = orchestrator.proxy_completion(
+        {"messages": [{"role": "user", "content": "x"}]}, effort_profile=profile
+    )
+
+    assert result["model"] == "supported-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["supported_agent"]

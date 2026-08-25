@@ -765,19 +765,20 @@ def is_transient_error(exc: BaseException) -> bool:
 
 
 def _is_passthrough_failover_error(exc: BaseException) -> bool:
-    """Recognize transient or stale-model failures through bounded wrapper chains."""
+    """Recognize failures proving that a passthrough request was not accepted."""
     current: BaseException | None = exc
     seen: set[int] = set()
     for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
         if current is None or id(current) in seen:
             return False
         seen.add(id(current))
-        if is_transient_error(current):
-            return True
         if (
             isinstance(current, urllib.error.HTTPError)
-            and current.code in _PASSTHROUGH_UNAVAILABLE_STATUS
+            and current.code
+            in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
         ):
+            return True
+        if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
             return True
         if current.__cause__ is not None:
             current = current.__cause__
@@ -2237,6 +2238,21 @@ class TaskOrchestrator:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
+        if (
+            effort_profile is not None
+            and effort_profile.unsupported_provider_fallback != "omit"
+        ):
+            supported = [
+                candidate
+                for candidate in candidates
+                if candidate.reasoning_effort_supported is True
+                or (
+                    candidate.reasoning_effort_supported is None
+                    and candidate.base_url.startswith("mock://")
+                )
+            ]
+            if supported:
+                candidates = supported
         last_error: Exception | None = None
         for candidate in candidates:
             candidate_payload = dict(upstream)

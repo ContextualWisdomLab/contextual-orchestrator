@@ -20,8 +20,9 @@ claim to reproduce the learning systems in the cited work.
 Virtual-model passthrough requests use that same provider-diverse pool for
 tools, structured output, and Responses payloads. Each candidate receives one
 attempt: RFC 9110 section 9.2.2 does not permit blind automatic replay of a
-non-idempotent request, while a rejected 429/5xx or stale 404/410 candidate can
-advance without changing an explicitly requested concrete model.
+non-idempotent request, so ambiguous timeout and connection outcomes fail
+closed. A rejected 429/5xx, stale 404/410 candidate, or temporary pre-request
+DNS failure can advance without changing an explicitly requested concrete model.
 
 ## Research-to-code mapping
 
