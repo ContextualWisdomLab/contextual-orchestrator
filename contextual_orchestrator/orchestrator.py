@@ -1211,6 +1211,10 @@ class ModelClient:
         except Exception as exc:  # noqa: BLE001 - provider error boundary
             if isinstance(exc, ToolFallbackStoppedError):
                 raise
+            if isinstance(exc, urllib.error.HTTPError) and _is_tool_execution_stopped(exc):
+                # Terminal provider tool-stop contract: translate before the
+                # generic stream boundary swallows the dedicated error shape.
+                raise _provider_tool_execution_stopped(agent) from None
             # A stream may already have emitted bytes, so it cannot be retried or
             # fail over. Keep the provider body and exception cause inside the
             # gateway while preserving one stable library error for callers.
