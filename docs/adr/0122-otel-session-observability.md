@@ -25,13 +25,15 @@ Telemetry deployment settings may enter the process KV during bootstrap from non
    caller-controlled baggage never crosses the provider egress boundary. Raw
    session identifiers never enter telemetry attributes, spans, logs, or OTLP
    exports; only the bounded correlation hash may be emitted.
-3. Add the bounded session correlation to provider spans for chat and embedding
-   calls. Follow the current OpenTelemetry GenAI span convention: emit CLIENT
-   spans named `chat {model}` or `embeddings {model}`, include the required
+3. Add the bounded session correlation to remote chat provider spans. Follow
+   the current OpenTelemetry GenAI span convention: emit CLIENT spans named
+   `chat {model}`, include the required
    `gen_ai.operation.name` and `gen_ai.provider.name` attributes, and use
    `server.address` / `server.port` for the transport destination. Record
    `error.type` on failure, but never prompt, answer, request body, API key, or
-   raw provider response.
+   raw provider response. The current local embedding backend performs no
+   provider HTTP call, so it emits no CLIENT span; a future remote embedding
+   transport must add `embeddings {model}` spans at that network boundary.
 4. Keep structured-output, Responses API, VISION, embedding, and multi-agent
    requests on the same orchestration path. Telemetry observes that path; it
    does not introduce a single-agent fallback or a second credential source.
