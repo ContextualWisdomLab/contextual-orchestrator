@@ -55,6 +55,22 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Role reasoning-effort profiles (2026-08-16)
+
+Issue #568 needs a provider-neutral `reasoning_effort_profile` and an
+equal-budget ablation against true parameters. Sampling temperature is not
+reasoning effort.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Profile object | Existing `OrchestrationPolicy` dataclass; OpenAI `reasoning_effort` enum; Anthropic thinking-token budget | New stdlib module `reasoning_effort_profile.py` with a frozen dataclass, fail-closed parser, role catalog, and snapshot hash. No production-default change until the RMSE gate passes. | New dependency, provider SDK, treating temperature as an effort proxy, a second policy factory. |
+| Ablation | Fugu latency-vs-quality frontier; TRINITY role split; Conductor steps/access lists; Baker (2001) IRT true-θ RMSE | Deterministic offline θ̂ = (1−λ)θ with RMSE(θ̂, θ). Access-list scope and recursion depth change λ. Record quality, budget, estimated tokens used, and `measurement_status=estimated`. Persist the same snapshot on `run` / `stream_route` / `batch_route`. | Live NVIDIA NIM calls in this slice (issue #86 evidence plane); changing `OrchestrationPolicy` defaults. |
+| Doctoring | Sakana Fugu (2026); Xu et al. (2025) TRINITY arXiv:2512.04695; Nielsen et al. (2025) Conductor arXiv:2512.04388 | APA 7th citations in `docs/architecture.md` and `docs/papers/README.md`. PDFs are not vendored when redistribution is unclear. | Training a learned coordinator. |
+
+Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_ablation()`
+and keep route/conduct defaults unchanged until `production_default_change_allowed`
+returns true.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

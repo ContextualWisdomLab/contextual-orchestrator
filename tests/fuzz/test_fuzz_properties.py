@@ -22,6 +22,7 @@ from fuzz.targets import (
     exercise_orchestration,
     exercise_pii_key,
     exercise_provider_model_payload,
+    exercise_reasoning_effort_profile,
     exercise_redaction,
     exercise_request_body,
 )
@@ -129,3 +130,9 @@ def test_orchestration_on_arbitrary_prompt(prompt: str, mode: str) -> None:
 @given(st.text(max_size=4096))
 def test_model_judge_parser_rejects_or_validates_arbitrary_text(reply: str) -> None:
     exercise_model_judge_reply(reply)
+
+
+@_SETTINGS
+@given(_json_values)
+def test_reasoning_effort_profile_never_crashes(value: object) -> None:
+    exercise_reasoning_effort_profile(value)

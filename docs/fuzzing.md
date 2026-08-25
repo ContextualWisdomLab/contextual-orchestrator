@@ -33,6 +33,10 @@ deserialize request config validate untrusted input"`):
    produce a JSON-serialisable record whose SSE framing round-trips.
 5. **PII key boundary** — unprefixed encryption-key text must be rejected;
    accepted key material must declare `base64:`, `hex:`, or `passphrase:`.
+5. **Reasoning-effort profile** — `parse_reasoning_effort_profile` (issue #568).
+   Arbitrary decoded JSON must yield a finite `ReasoningEffortProfile` or raise
+   `EffortProfileError` / `TypeError` / `ValueError`. Never crash on NaN,
+   infinity, bool-as-number, or unknown keys.
 
 ## Running locally
 
@@ -52,6 +56,7 @@ python fuzz/fuzz_agent_config.py  -max_total_time=60 fuzz/corpus/agent_config
 python fuzz/fuzz_redaction.py     -max_total_time=60 fuzz/corpus/redaction
 python fuzz/fuzz_orchestration.py -max_total_time=60 fuzz/corpus/orchestration
 python fuzz/fuzz_pii_key.py       -max_total_time=60 fuzz/corpus/pii_key
+python fuzz/fuzz_reasoning_effort_profile.py -max_total_time=60 fuzz/corpus/reasoning_effort_profile
 ```
 
 Seed corpora live in `fuzz/corpus/<target>/`.
