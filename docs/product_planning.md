@@ -19,8 +19,8 @@ Enterprise teams want the benefit of collective model intelligence without makin
 
 ## Primary Product Bets
 
-1. Single API compatibility is the adoption wedge. API consumers should keep calling `/v1/chat/completions`.
-2. The agent pool is a managed enterprise asset. Operators need provider, model, capability, priority, health, and exclusion metadata in one place.
+1. OpenAI API compatibility is the adoption wedge. API consumers keep their compatible text, Responses, image, video, speech, transcription, embeddings, rerank, and audio request shapes.
+2. The model inventory is a managed enterprise asset. Operators need provider, model, logical model-group membership, modality, measured health, cost evidence, priority, and exclusion metadata in one place.
 3. Fast versus deep orchestration is a workload policy decision. Product UI should expose latency budgets, deep-workflow triggers, and mode overrides.
 4. Traceability is the core enterprise differentiator. Every workflow run needs role, subtask, worker, access list, verifier outcome, and final synthesis evidence.
 5. Compliance is runtime evidence, not a static checkbox. Provider exclusions and access-list exposure should sit next to the run that used them.
@@ -42,6 +42,7 @@ Enterprise teams want the benefit of collective model intelligence without makin
 |---|---|
 | Admin dashboard | Fugu says the user should see one model; enterprise operators still need internal evidence. |
 | Agent pool | Fugu report makes pool configurability and provider exclusion first-class. |
+| Model groups | Operators assert provider-neutral equivalence, then inspect and edit measured member routing without relying on transient example model names. |
 | Orchestration policy | Fugu and Fugu Ultra define the latency-quality frontier that operators must tune. |
 | Workflow run trace | TRINITY and Conductor both make role/step behavior central to coordination quality. |
 | Access list inspector | Conductor access lists are the concrete mechanism for context visibility and auditability. |
@@ -62,7 +63,7 @@ Enterprise teams want the benefit of collective model intelligence without makin
 
 - Product planning, screen design, user stories, and API design all cite paper-backed requirements.
 - The management console prioritizes traceability and policy control over decorative SaaS chrome.
-- Every new product surface maps to one of: single API adoption, pool management, policy control, trace audit, access-list evidence, evaluation replay, or i18n.
+- Every new product surface maps to one of: compatible API adoption, model/group pool management, cost and policy control, trace audit, access-list evidence, evaluation replay, or i18n.
 - Local runtime analytics are clearly labeled as process-local evidence and not production telemetry.
 - Sales readiness is reported as local enterprise-pilot evidence with pass/warn/fail remediation, not as a production compliance certificate.
 - Commercial readiness is reported as high-value buyer due-diligence evidence with a KRW 2,000,000,000 target value caveat, not as a sale guarantee.
