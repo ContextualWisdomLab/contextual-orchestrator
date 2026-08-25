@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+_CAPABILITY_NAMES = {"embeddings": "embedding"}
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -69,7 +70,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openrouter",
         credential_name="OPENROUTER_API_KEY",
-        list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
+        list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
     ),
@@ -117,6 +118,8 @@ class DiscoveredModel:
     chat_base_url: str
     auth_scheme: str
     capabilities: tuple[str, ...] = ()
+    input_modalities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
@@ -180,6 +183,12 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if type(model_id) is not str or not model_id:
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
+        architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        inputs = tuple(value for value in architecture.get("input_modalities", ()) if isinstance(value, str))
+        outputs = tuple(value for value in architecture.get("output_modalities", ()) if isinstance(value, str))
+        capabilities = tuple(
+            dict.fromkeys(_CAPABILITY_NAMES.get(value, value) for value in (*source.capabilities, *inputs, *outputs))
+        )
         prompt_price = _price_per_1k(pricing.get("prompt"))
         completion_price = _price_per_1k(pricing.get("completion"))
         discovered.append(
@@ -189,7 +198,9 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
-                capabilities=source.capabilities,
+                capabilities=capabilities,
+                input_modalities=inputs,
+                output_modalities=outputs,
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 is_free=_pricing_is_free(pricing, model_id),
@@ -283,7 +294,12 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
-        tags=("discovered", *discovered.capabilities),
+        tags=(
+            "discovered",
+            *discovered.capabilities,
+            *(f"input:{value}" for value in discovered.input_modalities),
+            *(f"output:{value}" for value in discovered.output_modalities),
+        ),
         priority=priority,
         disabled=True,
     )

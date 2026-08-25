@@ -158,6 +158,32 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        **{
+            path: {
+                "post": {
+                    "operationId": operation_id,
+                    "summary": summary,
+                    "security": [{"inference_bearer_auth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": {"type": "object"}}},
+                    },
+                    "responses": {
+                        "200": {"description": "Capability response"},
+                        "400": {"description": "Invalid request"},
+                        "503": {"description": "No capable model group member is available"},
+                    },
+                }
+            }
+            for path, operation_id, summary in (
+                ("/v1/images/generations", "create_image", "Generate an image"),
+                ("/v1/videos", "create_video", "Submit video generation"),
+                ("/v1/audio/speech", "create_speech", "Synthesize speech"),
+                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio"),
+                ("/v1/rerank", "create_rerank", "Rerank documents"),
+                ("/v1/audio/generations", "create_audio", "Generate audio"),
+            )
+        },
         "/v1/responses": {
             "post": {
                 "operationId": "create_response",

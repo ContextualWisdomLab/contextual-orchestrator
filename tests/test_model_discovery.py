@@ -78,7 +78,7 @@ EMBEDDING_SOURCE = ProviderModelSource(
 OPENROUTER_SOURCE = ProviderModelSource(
     provider_name="openrouter",
     credential_name="OPENROUTER_API_KEY",
-    list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
+    list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
     chat_base_url="https://openrouter.ai/api/v1",
     capabilities=("chat",),
 )
@@ -118,13 +118,42 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
         discovered = discover_provider_models(OPENROUTER_SOURCE)
 
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-router"
-    assert seen_requests[0].full_url == "https://openrouter.ai/api/v1/models?output_modalities=text"
+    assert seen_requests[0].full_url == "https://openrouter.ai/api/v1/models?output_modalities=all"
     assert [m.model_id for m in discovered] == ["meta/llama-3.3", "no-pricing-model"]
     priced = discovered[0]
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
     assert all(model.capabilities == ("chat",) for model in discovered)
+
+
+def test_openrouter_discovery_preserves_every_declared_modality() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    rows = [
+        {"id": f"provider/{output}", "architecture": {"input_modalities": [input_], "output_modalities": [output]}}
+        for input_, output in [
+            ("text", "text"),
+            ("text", "image"),
+            ("text", "video"),
+            ("text", "speech"),
+            ("audio", "transcription"),
+            ("text", "embeddings"),
+            ("text", "rerank"),
+            ("text", "audio"),
+        ]
+    ]
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"data": rows}),
+    ):
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert {capability for model in discovered for capability in model.capabilities} >= {
+        "text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"
+    }
+    embedding = next(model for model in discovered if "embedding" in model.capabilities)
+    assert embedding.output_modalities == ("embeddings",)
+    assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
 
 
 def test_discovery_preserves_operator_declared_source_capabilities() -> None:
@@ -184,12 +213,12 @@ def test_explicit_nonzero_price_overrides_free_model_suffix() -> None:
     assert discovered[0].is_free is False
 
 
-def test_default_sources_activate_only_provider_filtered_chat_catalogs() -> None:
+def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
 
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
-    assert sources["openrouter"].list_url.endswith("?output_modalities=text")
+    assert sources["openrouter"].list_url.endswith("?output_modalities=all")
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)

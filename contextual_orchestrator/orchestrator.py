@@ -1212,6 +1212,25 @@ class ModelClient:
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             return self._send_raw_with_retry(agent, endpoint, payload, destination)
 
+    def proxy_send_bytes(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> tuple[bytes, str]:
+        """Passthrough a provider response whose body is binary media."""
+        if agent.base_url.startswith("mock://"):
+            return b"mock audio", "audio/mpeg"
+        api_key = _provider_credential(agent)  # pragma: no cover
+        headers = {"content-type": "application/json"}  # pragma: no cover
+        if api_key:  # pragma: no cover
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(  # pragma: no cover
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
+            return response.read(), response.headers.get_content_type()
+
     def _send_raw_with_retry(
         self,
         agent: ModelAgent,
@@ -2800,21 +2819,76 @@ class TaskOrchestrator:
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
 
-    def select_capability_agent(self, capability: str) -> ModelAgent:
-        """Select an enabled agent carrying an explicit capability tag."""
+    def _capability_agents(self, capability: str, model_name: str | None = None) -> list[ModelAgent]:
+        """Return measured candidates supporting a capability, optionally within one group."""
         capability = capability.strip().lower()
+        capability = {"embeddings": "embedding"}.get(capability, capability)
         if not capability:
             raise ValueError("capability must be a non-empty string")
+        exact_models = {agent.model for agent in self.candidates}
+        requested_group = (
+            canonical_group_name(model_name)
+            if model_name is not None and model_name not in exact_models
+            else None
+        )
         ranked = [
             agent
             for agent in self._ranked_agents("", capability)
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions
+            and (
+                model_name is None or agent.model == model_name
+                or (
+                    agent.group_name
+                    and requested_group is not None
+                    and canonical_group_name(agent.group_name) == requested_group
+                )
+            )
         ]
         if not ranked:
             raise RuntimeError(f"no enabled agent available for capability={capability}")
-        return ranked[0]
+        return ranked
+
+    def select_capability_agent(self, capability: str, model_name: str | None = None) -> ModelAgent:
+        """Select a measured member supporting a capability, optionally within one group."""
+        return self._capability_agents(capability, model_name)[0]
+
+    def proxy_capability(
+        self,
+        body: dict[str, Any],
+        *,
+        capability: str,
+        endpoint: str,
+        binary: bool = False,
+    ) -> dict[str, Any] | tuple[bytes, str]:
+        """Route one capability request with measured group-member failover."""
+        requested_model = body.get("model")
+        candidates = self._capability_agents(capability, requested_model)
+        last_error: Exception | None = None
+        for agent in candidates:
+            payload = {**body, "model": agent.model}
+            provider_endpoint = (
+                "images"
+                if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                else endpoint
+            )
+            started_at = time.perf_counter()
+            try:
+                result = (
+                    self.client.proxy_send_bytes(agent, provider_endpoint, payload)
+                    if binary
+                    else self.client.proxy_send(agent, provider_endpoint, payload)
+                )
+            except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
+                last_error = exc
+                if agent.group_name:
+                    self._group_router.observe_failure(agent.id)
+                continue
+            if agent.group_name:
+                self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            return result
+        raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str

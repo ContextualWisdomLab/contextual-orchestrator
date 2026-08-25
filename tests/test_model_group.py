@@ -125,3 +125,18 @@ def test_explicit_group_conduct_keeps_every_step_and_failover_inside_group() -> 
 
 def test_model_agent_stores_canonical_group_name() -> None:
     assert _agent("canonical_member", "vendor/model").group_name == "shared_reasoning_model"
+
+
+@pytest.mark.parametrize(
+    "capability",
+    ["text", "image", "video", "speech", "transcription", "embeddings", "rerank", "audio"],
+)
+def test_group_selects_measured_member_for_every_model_capability(capability: str) -> None:
+    tag = "embedding" if capability == "embeddings" else capability
+    first = ModelAgent("first_member", "provider/first", tags=(tag,), group_name="shared_model")
+    second = ModelAgent("second_member", "provider/second", tags=(tag,), group_name="shared_model")
+    orchestrator = TaskOrchestrator([first, second])
+    orchestrator._group_router.observe_failure(first.id)
+    orchestrator._group_router.observe_success(second.id, 0.1)
+
+    assert orchestrator.select_capability_agent(capability, "shared-model") == second
