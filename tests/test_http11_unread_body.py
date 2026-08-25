@@ -11,7 +11,11 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 
-def _start(*, rate_limit_requests: int = 100) -> tuple[object, threading.Thread, int]:
+def _start(
+    *,
+    rate_limit_requests: int = 100,
+    rate_limit_window_seconds: int = 60,
+) -> tuple[object, threading.Thread, int]:
     """Start an authenticated gateway with a deterministic local model."""
     server = build_server(
         TaskOrchestrator([ModelAgent("persistent_agent", "mock-persistent")]),
@@ -19,6 +23,7 @@ def _start(*, rate_limit_requests: int = 100) -> tuple[object, threading.Thread,
         security=SecurityConfig(
             auth_token="persistent-token",
             rate_limit_requests=rate_limit_requests,
+            rate_limit_window_seconds=rate_limit_window_seconds,
         ),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -129,3 +134,18 @@ def test_rate_limit_rejection_closes_connection_with_unread_body() -> None:
         server.server_close()
         thread.join(timeout=5)
     _assert_single_closed_response(response, b"429 ")
+
+
+def test_incomplete_request_headers_time_out_within_abuse_window() -> None:
+    """A slow client cannot pin a request thread beyond the configured window."""
+    server, thread, port = _start(rate_limit_window_seconds=1)
+    assert server.RequestHandlerClass.timeout == 1.0
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as connection:
+            connection.settimeout(3)
+            connection.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow: ")
+            assert connection.recv(1) == b""
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

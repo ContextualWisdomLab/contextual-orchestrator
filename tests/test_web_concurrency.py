@@ -98,3 +98,14 @@ def test_slow_provider_calls_do_not_block_liveness_or_overload_rejection() -> No
         server.shutdown()
         server.server_close()
         server_thread.join(timeout=5)
+
+
+def test_request_timeout_must_be_a_positive_integer_window() -> None:
+    """Reject invalid timeout values before the server accepts connections."""
+    for invalid in (0, -1, True, 1.5, "1"):
+        try:
+            SecurityConfig(rate_limit_window_seconds=invalid)  # type: ignore[arg-type]
+        except ValueError as exc:
+            assert "rate_limit_window_seconds" in str(exc)
+        else:
+            raise AssertionError(f"accepted invalid window: {invalid!r}")

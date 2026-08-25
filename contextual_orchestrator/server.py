@@ -250,6 +250,8 @@ class SecurityConfig:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
+        if type(self.rate_limit_window_seconds) is not int or self.rate_limit_window_seconds < 1:
+            raise ValueError("rate_limit_window_seconds must be an integer >= 1")
         if type(self.admin_session_ttl_seconds) is not int or self.admin_session_ttl_seconds < 1:
             raise ValueError("admin_session_ttl_seconds must be an integer >= 1")
         if type(self.max_admin_sessions) is not int or self.max_admin_sessions < 1:
@@ -4809,6 +4811,11 @@ def build_server(
 
     class Handler(BaseHTTPRequestHandler):
         """Handle authenticated orchestration, administration, and health routes."""
+
+        # Bound inactive request/header reads to the operator-configured abuse
+        # accounting window. StreamRequestHandler applies this to the socket;
+        # BaseHTTPRequestHandler then closes timed-out persistent connections.
+        timeout = float(security.rate_limit_window_seconds)
 
         # All non-SSE responses carry Content-Length; HTTP/1.1 therefore lets
         # browsers and API clients reuse connections while provider calls run.
