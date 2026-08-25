@@ -11,7 +11,7 @@ Usage:
     python scripts/ci/serve_seeded_gateway.py [extra server args...]
 
 Provider key environment variables (all optional; missing ones are skipped):
-    OPENAI_API_KEY, OPENROUTER_API_KEY, BYTEZ_API_KEY,
+    OPENAI_API_KEY, OPENROUTER_API_KEY, OPENCODE_ZEN_API_KEY, BYTEZ_API_KEY,
     NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB
 """
 
@@ -32,6 +32,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 PROVIDER_KEY_ENV_NAMES = (
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
+    "OPENCODE_ZEN_API_KEY",
     "BYTEZ_API_KEY",
     "NVIDIA_NIM_API_KEY",
     "NVIDIA_NIM_API_KEY_SUB",

@@ -2,7 +2,7 @@ name: OpenCode hourly maintenance loop
 
 # Hourly autonomous maintenance: an OpenCode agent whose model traffic is
 # served by THIS repository's gateway (contextual-orchestrator) with
-# auto-discovered providers and measured ox-alpha model-group routing.
+# auto-discovered providers and operator-managed model-group routing.
 # The agent works the PR queue (review -> fix -> recheck -> merge), root-causes
 # failing checks, and advances docs/product-technical-gap-baseline.md items.
 
@@ -31,11 +31,12 @@ jobs:
       # from the environment again after seeding. See docs/kv-credentials.md.
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
       BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
       NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
       NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
       GATEWAY_BEARER_TOKEN: ${{ secrets.GATEWAY_BEARER_TOKEN || format('loop-{0}', github.run_id) }}
-      OPENCODE_VERSION: "latest" # pin to an exact version once first run reports it
+      OPENCODE_VERSION: "1.18.22"
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -68,7 +69,7 @@ jobs:
             --auth-token "$GATEWAY_BEARER_TOKEN" \
             --host 127.0.0.1 --port 8000 \
             > /tmp/gateway.log 2>&1 &
-          for attempt in $(seq 1 30); do
+          for _attempt in $(seq 1 30); do
             if curl -fsS -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
               http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
               echo "gateway ready"
@@ -78,23 +79,6 @@ jobs:
           done
           echo "::error::gateway did not become healthy"; tail -50 /tmp/gateway.log; exit 1
 
-      - name: Assign the ox-alpha measured-routing group
-        run: |
-          set -euo pipefail
-          members="$(curl -fsS -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
-            http://127.0.0.1:8000/admin/state \
-            | jq -c '[.agents[].agent | select(.model == "stealth/ox-alpha" or .model == "openai/x-preview-f-free") | .id]')"
-          echo "ox_alpha_members=${members}"
-          if [ "${members}" = "[]" ]; then
-            echo "::warning::no ox-alpha member models discovered; skipping group assignment"
-            exit 0
-          fi
-          curl -fsS -X POST \
-            -H "Authorization: Bearer ${GATEWAY_BEARER_TOKEN}" \
-            -H "content-type: application/json" \
-            -d "{\"group_name\": \"ox-alpha\", \"member_agent_ids\": ${members}}" \
-            http://127.0.0.1:8000/api/v1/model_groups
-
       - name: Point OpenCode at the local gateway
         run: |
           set -euo pipefail
@@ -102,7 +86,7 @@ jobs:
           cat > ~/.config/opencode/opencode.json <<JSON
           {
             "\$schema": "https://opencode.ai/config.json",
-            "model": "contextual_orchestrator_gateway/ox-alpha",
+            "model": "contextual_orchestrator_gateway/contextual-orchestrator",
             "provider": {
               "contextual_orchestrator_gateway": {
                 "npm": "@ai-sdk/openai-compatible",
@@ -112,7 +96,6 @@ jobs:
                   "apiKey": "${GATEWAY_BEARER_TOKEN}"
                 },
                 "models": {
-                  "ox-alpha": { "name": "ox-alpha (measured model group)" },
                   "contextual-orchestrator": { "name": "gateway default" }
                 }
               }
@@ -124,7 +107,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          opencode run --model contextual_orchestrator_gateway/ox-alpha \
+          opencode run --model contextual_orchestrator_gateway/contextual-orchestrator \
             "$(cat .github/opencode/hourly-loop-prompt.md)"
 
       - name: Dump gateway log on failure
