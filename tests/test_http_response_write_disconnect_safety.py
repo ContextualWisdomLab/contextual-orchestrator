@@ -111,6 +111,39 @@ def test_write_response_still_propagates_unrelated_errors() -> None:
         server.server_close()
 
 
+def test_binary_response_swallows_a_disconnect() -> None:
+    """Audio writes use the same disconnect boundary as JSON and SSE writes."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    handler_cls = server.RequestHandlerClass
+
+    class DisconnectedHandler:
+        wfile = None
+
+        def send_response(self, _status):
+            return None
+
+        def send_header(self, _name, _value):
+            return None
+
+        def _send_security_headers(self):
+            return None
+
+        def end_headers(self):
+            return None
+
+        def write(self, _payload):
+            raise BrokenPipeError("simulated audio client disconnect")
+
+        _write_response = handler_cls._write_response
+
+    try:
+        handler = DisconnectedHandler()
+        handler.wfile = handler
+        handler_cls._send_bytes(handler, b"audio", "audio/mpeg")
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":
     test_write_response_swallows_a_broken_pipe_from_a_disconnected_client()
     test_write_response_still_propagates_unrelated_errors()

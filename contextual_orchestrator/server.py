@@ -6431,12 +6431,15 @@ def build_server(
             self._write_response(_write)
 
         def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
-            self.send_response(status)
-            self.send_header("content-type", content_type)
-            self.send_header("content-length", str(len(payload)))
-            self._send_security_headers()
-            self.end_headers()
-            self.wfile.write(payload)
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(payload)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(payload)
+
+            self._write_response(_write)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
             raw = body.encode("utf-8")
