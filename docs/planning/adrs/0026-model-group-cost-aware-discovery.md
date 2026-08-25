@@ -12,6 +12,8 @@ Operators need one logical model name when several providers expose the same und
 
 `ModelAgent.group_name` is persisted by the existing Agent Pool database, accepted by its create/PATCH APIs, and shown with measured routing evidence in the Admin web table. Static role/capability ranking chooses a logical model group before its members are ordered by observed successful responses per second. An explicit group alias resolves to the currently preferred enabled member. Failover and circuit-breaker behavior remain intact. Discovery never guesses that differently named provider models are equivalent; an operator or future verified canonical-identity feed must assert that relationship.
 
+Capability routing is modality-aware rather than model-name-aware. Discovery preserves provider-declared input and output modalities and exposes `text`, `image`, `video`, `speech`, `transcription`, `embedding`, `rerank`, and `audio` tags; it does not infer a missing modality from a model identifier. The same measured group-member selection and failover path serves text/chat, images, videos, speech, transcription, embeddings, reranking, and audio. OpenRouter is queried with `output_modalities=all`, because its API otherwise defaults to text-only discovery. Provider-declared direction is retained as `input:<modality>` and `output:<modality>` tags so an input-capable vision model is not mistaken for an image generator.
+
 Stability uses the posterior mean of a Bernoulli success probability under a uniform Beta(1, 1) prior. Latency uses Jacobson's exponentially weighted estimator with gain 1/8. The ranking quantity `posterior success probability / EWMA seconds` has the interpretable unit expected successful responses per second and contains no arbitrary cross-metric weight. This quotient is a gateway design decision, not a claim reproduced from the cited routing studies. RouteLLM and FrugalGPT support learned cost/quality routing between distinct models; they motivate the later quality-aware layer but do not validate treating provider aliases as different model quality.
 
 OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery uses its documented `/zen/v1/models` endpoint; because that response currently omits prices, only identifiers explicitly ending in `-free` or `:free` are classified free. Unknown price is never converted to zero. All discovered models remain available for later policy decisions.
@@ -38,6 +40,7 @@ Group membership survives restart in the existing `agent_pool` database payload.
 ## Verification and gaps
 
 - Contract tests cover canonical aliases, static tie behavior, measured reordering, snapshot safety, DB/API group persistence, full-catalog discovery, free classification, and the absence of implicit grouping.
+- Capability tests cover all eight requested model surfaces, group-scoped measured selection, binary speech preservation, and OpenRouter modality metadata without paid inference. An opt-in live test may use a currently free model, but the deterministic contract suite never assumes that a transient free model will remain listed.
 - Gap: provider-reported OpenCode Zen pricing is unavailable in `/models`; retain `unknown` rather than infer paid prices.
 - Gap: response quality is not yet in this intra-model score. Distinct-model composition must use calibrated evaluation evidence (for example fast-mlsirm), not a hand-authored weight.
 - Gap: multi-replica telemetry needs a time-windowed durable store and concurrency-safe aggregation before production horizontal scaling.
@@ -53,3 +56,15 @@ Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous, 
 OpenCode. (2026). *Zen*. https://opencode.ai/docs/zen
 
 OpenRouter. (2026). *List all models and their properties*. https://openrouter.ai/docs/api/api-reference/models/get-models
+
+OpenRouter. (2026). *Create speech*. https://openrouter.ai/docs/api/api-reference/speech/create-audio-speech
+
+OpenRouter. (2026). *Image generation*. https://openrouter.ai/docs/guides/overview/multimodal/image-generation
+
+OpenRouter. (2026). *Create transcription*. https://openrouter.ai/docs/api/api-reference/transcriptions/create-audio-transcriptions
+
+OpenRouter. (2026). *Submit a rerank request*. https://openrouter.ai/docs/api/api-reference/rerank/create-rerank
+
+OpenRouter. (2026). *Submit a video generation request*. https://openrouter.ai/docs/api/api-reference/video-generation/create-videos
+
+Ma, H., Lai, G., & Ye, H.-J. (2026). *MMR-Bench: A comprehensive benchmark for multimodal LLM routing* [Preprint]. arXiv. https://arxiv.org/abs/2601.17814

@@ -1859,6 +1859,36 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
+    """Validate the required trust-boundary fields for media/rerank passthrough."""
+    model = body.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    required_strings = {
+        "/v1/images/generations": ("prompt",),
+        "/v1/videos": ("prompt",),
+        "/v1/audio/speech": ("input", "voice"),
+        "/v1/rerank": ("query",),
+    }.get(path, ())
+    for field in required_strings:
+        if not isinstance(body.get(field), str) or not body[field].strip():
+            raise RequestError(400, f"invalid_{field}", f"{field} must be a non-empty string")
+    if path == "/v1/audio/transcriptions":
+        audio = body.get("input_audio")
+        if not isinstance(audio, dict) or not all(
+            isinstance(audio.get(field), str) and audio[field] for field in ("data", "format")
+        ):
+            raise RequestError(400, "invalid_input_audio", "input_audio.data and input_audio.format are required")
+    if path == "/v1/rerank":
+        documents = body.get("documents")
+        if not isinstance(documents, list) or not documents:
+            raise RequestError(400, "invalid_documents", "documents must be a non-empty array")
+    if path == "/v1/audio/generations":
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise RequestError(400, "invalid_messages", "messages must be a non-empty array")
+
+
 
 def _require_pool_model(
     orchestrator: Any, model_name: str, *, required_capability: str | None = None
@@ -4998,6 +5028,29 @@ def build_server(
                     self._send(created_group, 201)
                     return
 
+                capability_routes = {
+                    "/v1/images/generations": ("image", "images/generations", False),
+                    "/v1/videos": ("video", "videos", False),
+                    "/v1/audio/speech": ("speech", "audio/speech", True),
+                    "/v1/audio/transcriptions": ("transcription", "audio/transcriptions", False),
+                    "/v1/rerank": ("rerank", "rerank", False),
+                    "/v1/audio/generations": ("audio", "chat/completions", False),
+                }
+                if path in capability_routes:
+                    _validate_capability_request(path, body)
+                    capability, endpoint, binary = capability_routes[path]
+                    result = self._run(
+                        lambda: orchestrator.proxy_capability(
+                            body, capability=capability, endpoint=endpoint, binary=binary
+                        )
+                    )
+                    if binary:
+                        raw, content_type = result
+                        self._send_bytes(raw, content_type)
+                    else:
+                        self._send(result)
+                    return
+
                 if path == "/v1/completions":
                     # Legacy OpenAI Completions: prompt → route → text_completion.
                     _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
@@ -5869,6 +5922,14 @@ def build_server(
             self._send_security_headers()
             self.end_headers()
             self.wfile.write(raw)
+
+        def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+            self.send_response(status)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(payload)))
+            self._send_security_headers()
+            self.end_headers()
+            self.wfile.write(payload)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
             raw = body.encode("utf-8")
