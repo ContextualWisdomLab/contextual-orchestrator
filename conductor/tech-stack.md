@@ -29,8 +29,8 @@ Production target dependencies after this lab hardens:
 
 DDD, kept minimal:
 
-- Domain entities/value objects: `Agent`, `WorkflowStep`
-- Application service: `Orchestrator`
+- Domain entities/value objects: `ModelAgent`, `WorkflowStep`
+- Application service: `TaskOrchestrator`
 - Infrastructure adapter: `ModelClient`
 - Delivery adapter: `server.py`
 

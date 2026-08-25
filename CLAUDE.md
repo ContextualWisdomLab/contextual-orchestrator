@@ -37,7 +37,7 @@ python -m pytest tests/test_self_check.py -q
 # Hypothesis property tests (always-on fuzz seams)
 python -m pytest tests/fuzz -q
 
-# Atheris coverage-guided fuzzing (Python < 3.13, needs Clang/libFuzzer)
+# Atheris coverage-guided fuzzing (Python >= 3.12, needs Clang/libFuzzer)
 python fuzz/fuzz_request_body.py -max_total_time=60 fuzz/corpus/request_body
 
 # CLI one-shot completion (mock agents, fully offline)
@@ -92,6 +92,7 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 - `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the stdlib HTTP/admin surface remains sufficient).
 - `credentials.py` / `kv_config.py` — the KV seam: `get_credential`/`register_credential` over pluggable backends (`InMemoryCredentialBackend` default; pgcrypto-encrypted `PostgresCredentialBackend`, selected via `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`).
 - `cost_ledger.py` / `cost_router.py` / `batch_routing.py` / `token_counting.py` — the cost-review + routing hub: prompt-safe usage ledger with seven attribution dimensions, `RoutingPolicy` (sync vs batch from request hints + KV thresholds), and the [pg-llm-batch](https://github.com/ContextualWisdomLab/pg-llm-batch) batch/embeddings backends (a local in-process backend keeps the standalone path working with no external service).
+- `model_discovery.py` — auto-discovers models per KV-registered provider credential (OpenAI, OpenRouter, NVIDIA NIM + its `_SUB` sibling, Bytez) via `discover_all_models`, then ranks discovered models by honest price (`select_cheapest_discovered_agent`/`select_top_n_cheapest_discovered_agents`) for first-boot pool bootstrapping.
 - `api_contract.py` / `conventions.py` — API-shape and naming-rule enforcement helpers.
 - `__main__.py` — the single entry point: CLI completion, `--serve`, `--eval`, and the `register-credential` bootstrap subcommand.
 
@@ -108,3 +109,9 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 - **Ponytail design gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the stdlib or an already selected library covers the need; no interface or factory until a second real implementation exists.
 - **Honest metrics**: spend/analytics surfaces label estimates (`usage_source`, `measurement_status`) and never fabricate prices — preserve this when touching analytics.
 - **Fuzz seams**: untrusted-input parsers (request body, agent config, redaction, orchestration) share invariant checks in `fuzz/targets.py`, driven by both Hypothesis (`tests/fuzz/`) and Atheris (`fuzz/`). New parsing seams should get a target there (see `docs/fuzzing.md`).
+- **ADR location**: new product-planning decisions live in
+  `docs/planning/adrs/NNNN-slug.md`; `docs/adr/` retains the earlier research
+  and API decision series and is not renumbered into the planning series.
+  Planning filenames use four digits and must be unique across current `main`
+  and every open PR. A same-number collision is a rename, not a redesign; the
+  executable uniqueness contract lands in PR #848.

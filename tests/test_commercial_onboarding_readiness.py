@@ -154,7 +154,15 @@ def test_commercial_onboarding_readiness_endpoint_openapi_admin_and_docs_contrac
     assert "onboarding_items" in onboarding
 
 
+def test_commercial_onboarding_blocked_rule_names_document_mismatch() -> None:
+    orchestrator = build()
+    report = orchestrator.commercial_onboarding_readiness_report(target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW)
+    rules = {row["onboarding_status"]: row["rule"] for row in report["onboarding_status_rules"]}
+    assert "document mismatch" in rules["commercial_onboarding_blocked"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_commercial_onboarding_readiness_report_turns_open_inputs_into_actions()
     test_commercial_onboarding_readiness_endpoint_openapi_admin_and_docs_contract()
+    test_commercial_onboarding_blocked_rule_names_document_mismatch()
     print("ok")

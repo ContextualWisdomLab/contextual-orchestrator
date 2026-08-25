@@ -44,7 +44,7 @@ Do not create a separate library, Git submodule, or extracted package now. The l
 
 ## Analytics Guardrail
 
-`commercial_launch_external_input_count` counts buyer-environment, production-telemetry, and commercial-signature input groups. It is `proposed_until_buyer_specific` because those values cannot be measured honestly from this repository alone.
+`launch_summary.external_input_group_count` counts buyer-environment, production-telemetry, and commercial-signature input groups. It is `proposed_until_buyer_specific` because those values cannot be measured honestly from this repository alone.
 
 ## Figma Artifact
 
