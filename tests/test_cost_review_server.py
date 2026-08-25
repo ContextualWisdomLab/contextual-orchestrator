@@ -179,6 +179,39 @@ def test_chat_completion_reports_real_usage_and_records_cost() -> None:
         server.shutdown()
 
 
+def test_structured_chat_cost_records_keep_service_and_account_attribution() -> None:
+    """Structured workflow calls roll up under the same chat dimensions."""
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _request(
+            "POST",
+            f"{base}/v1/chat/completions",
+            token,
+            {
+                "model": "mock-a",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+                "user": "account_123",
+            },
+        )
+        assert status == 200, body
+
+        for dimension, expected in (
+            ("service", "chat_completions_api"),
+            ("account", "account_123"),
+        ):
+            status, report = _request(
+                "GET",
+                f"{base}/api/v1/cost_reports/rollup?dimension={dimension}",
+                token,
+            )
+            assert status == 200, report
+            assert {item["dimension_value"] for item in report["items"]} == {expected}
+    finally:
+        server.shutdown()
+
+
 def test_batch_routing_via_chat_completion_and_results_retrieval() -> None:
     server, port, token = _serve()
     base = f"http://127.0.0.1:{port}"

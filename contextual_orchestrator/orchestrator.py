@@ -2402,7 +2402,7 @@ class TaskOrchestrator:
                 required_tags=required_tags,
             )
         elif any(tag not in final_agent.tags for tag in required_tags):
-            raise RuntimeError(
+            raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
                 + ", ".join(required_tags)
             )

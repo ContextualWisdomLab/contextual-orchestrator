@@ -5506,16 +5506,41 @@ def build_server(
                             )
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
-                            proxied = self._run(
-                                lambda: coordinator.complete(
-                                    structured_messages,
-                                    mode="conduct",
-                                    attribution=_validate_attribution(body.get("attribution")),
-                                    hints=_validate_routing(body.get("routing")),
-                                    model_name=body["model"],
-                                    provider_request=body,
+                            structured_routing = _validate_routing(body.get("routing"))
+                            if structured_routing and (
+                                structured_routing.get("channel") == "batch"
+                                or structured_routing.get("latency_tolerant") is True
+                            ):
+                                raise RequestError(
+                                    400,
+                                    "invalid_routing",
+                                    "batch routing is not supported for structured chat responses",
                                 )
+                            structured_attribution = dict(
+                                _validate_attribution(body.get("attribution")) or {}
                             )
+                            end_user_id = _validate_completions_user(body)
+                            if end_user_id is not None and not structured_attribution.get("account"):
+                                structured_attribution["account"] = end_user_id
+                            structured_attribution.setdefault("model_name", body["model"])
+                            structured_attribution.setdefault("service", "chat_completions_api")
+                            with orchestrator.client.request_settings(
+                                max_output_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                presence_penalty=presence_penalty,
+                                frequency_penalty=frequency_penalty,
+                            ):
+                                proxied = self._run(
+                                    lambda: coordinator.complete(
+                                        structured_messages,
+                                        mode="conduct",
+                                        attribution=structured_attribution,
+                                        hints=structured_routing,
+                                        model_name=body["model"],
+                                        provider_request=body,
+                                    )
+                                )
                         orchestrator.record_analytics_event(
                             "chat_completion_passthrough",
                             {
@@ -5960,17 +5985,44 @@ def build_server(
                         )
                     else:
                         responses_messages = _responses_to_chat_payload(body)["messages"]
-                        proxied = self._run(
-                            lambda: coordinator.complete(
-                                responses_messages,
-                                mode="conduct",
-                                attribution=_validate_attribution(body.get("attribution")),
-                                hints=_validate_routing(body.get("routing")),
-                                model_name=body["model"],
-                                provider_request=body,
-                                provider_endpoint="responses",
-                            )
+                        responses_attribution = dict(
+                            _validate_attribution(body.get("attribution")) or {}
                         )
+                        responses_user_id = _validate_completions_user(body)
+                        if responses_user_id is not None and not responses_attribution.get("account"):
+                            responses_attribution["account"] = responses_user_id
+                        responses_attribution.setdefault("model_name", body["model"])
+                        responses_attribution.setdefault("service", "responses_api")
+                        response_max_tokens = next(
+                            (
+                                body.get(key)
+                                for key in (
+                                    "max_output_tokens",
+                                    "max_completion_tokens",
+                                    "max_tokens",
+                                )
+                                if body.get(key) is not None
+                            ),
+                            None,
+                        )
+                        with orchestrator.client.request_settings(
+                            max_output_tokens=response_max_tokens,
+                            temperature=body.get("temperature"),
+                            top_p=body.get("top_p"),
+                            presence_penalty=body.get("presence_penalty"),
+                            frequency_penalty=body.get("frequency_penalty"),
+                        ):
+                            proxied = self._run(
+                                lambda: coordinator.complete(
+                                    responses_messages,
+                                    mode="conduct",
+                                    attribution=responses_attribution,
+                                    hints=_validate_routing(body.get("routing")),
+                                    model_name=body["model"],
+                                    provider_request=body,
+                                    provider_endpoint="responses",
+                                )
+                            )
                     orchestrator.record_analytics_event(
                         "responses_passthrough",
                         {
