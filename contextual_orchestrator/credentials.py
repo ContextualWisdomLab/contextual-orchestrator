@@ -131,7 +131,7 @@ class PostgresCredentialBackend:
         return self._dsn
 
     @classmethod
-    def from_env(cls) -> "PostgresCredentialBackend":
+    def from_env(cls) -> PostgresCredentialBackend:
         """Build the backend from bootstrap transport env vars (the only allowed env use).
 
         ``CONTEXTUAL_ORCHESTRATOR_KV_DSN`` and
@@ -143,17 +143,17 @@ class PostgresCredentialBackend:
             passphrase=os.environ.get("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", ""),
         )
 
-    def _connect(self):  # pragma: no cover - requires a live Postgres
+    def _connect(self):
         try:
             import psycopg
-        except ImportError as exc:  # pragma: no cover
+        except ImportError as exc:
             raise NotConfigured(
                 "PostgresCredentialBackend needs the 'db' extra (psycopg); "
                 "install contextual-orchestrator[db]"
             ) from exc
         return psycopg.connect(self._dsn)
 
-    def _ensure_schema(self, conn) -> None:  # pragma: no cover - requires a live Postgres
+    def _ensure_schema(self, conn) -> None:
         if self._ensured:
             return
         with conn.cursor() as cur:
@@ -161,7 +161,7 @@ class PostgresCredentialBackend:
         conn.commit()
         self._ensured = True
 
-    def get(self, name: str) -> str | None:  # pragma: no cover - requires a live Postgres
+    def get(self, name: str) -> str | None:
         """Decrypt and return the secret for ``name`` via pgcrypto, or ``None``."""
         with self._connect() as conn:
             self._ensure_schema(conn)
@@ -177,7 +177,7 @@ class PostgresCredentialBackend:
         value = row[0]
         return value.decode("utf-8") if isinstance(value, (bytes, bytearray)) else value
 
-    def set(self, name: str, value: str) -> None:  # pragma: no cover - requires a live Postgres
+    def set(self, name: str, value: str) -> None:
         """Encrypt ``value`` with pgcrypto and upsert it under ``name``."""
         with self._connect() as conn:
             self._ensure_schema(conn)
