@@ -172,6 +172,18 @@ def test_opencode_zen_free_suffix_and_ox_alpha_alias_are_discovered() -> None:
     assert agent_from_discovered(discovered[0]).group_name == ""
 
 
+def test_explicit_nonzero_price_overrides_free_model_suffix() -> None:
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"data": [{"id": "vendor/paid-free", "pricing": {"prompt": "0.1"}}]}),
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is False
+
+
 def test_default_sources_activate_only_provider_filtered_chat_catalogs() -> None:
     sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
 

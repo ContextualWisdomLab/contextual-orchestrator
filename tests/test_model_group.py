@@ -62,3 +62,22 @@ def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> No
     orchestrator._group_router.observe_success(low.id, 0.1)
     assert orchestrator._requested_agent("ox_alpha") == low
     assert orchestrator._ranked_agents("", "worker")[-1] == other
+
+
+def test_group_ranking_keeps_role_excluded_members_after_eligible_members() -> None:
+    eligible = _agent("eligible_member", "vendor/eligible")
+    excluded = ModelAgent(
+        "excluded_member",
+        "vendor/excluded",
+        "https://provider.example/v1",
+        provider_exclusions=("worker",),
+        group_name="ox-alpha",
+    )
+    orchestrator = TaskOrchestrator([eligible, excluded])
+    orchestrator._group_router.observe_success(excluded.id, 0.001)
+
+    assert orchestrator._select_agent("", "worker") == eligible
+
+
+def test_model_agent_stores_canonical_group_name() -> None:
+    assert _agent("canonical_member", "vendor/model").group_name == "ox_alpha"

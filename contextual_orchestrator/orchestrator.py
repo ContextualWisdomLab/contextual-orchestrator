@@ -280,7 +280,7 @@ class ModelAgent:
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
         if self.group_name:
-            canonical_group_name(self.group_name)
+            object.__setattr__(self, "group_name", canonical_group_name(self.group_name))
         if type(self.local_credential_key) is not str:
             raise TypeError("local_credential_key must be a string")
         if self.local_credential_key and urlparse(self.base_url).scheme != "local":
@@ -2714,8 +2714,11 @@ class TaskOrchestrator:
             if not members[0].group_name:
                 ranked.extend(members)
                 continue
-            by_id = {member.id: member for member in members}
-            ranked.extend(by_id[member_id] for member_id in self._group_router.ranked_member_ids(list(by_id)))
+            eligible = [member for member in members if role not in member.provider_exclusions]
+            excluded = [member for member in members if role in member.provider_exclusions]
+            for partition in (eligible, excluded):
+                by_id = {member.id: member for member in partition}
+                ranked.extend(by_id[member_id] for member_id in self._group_router.ranked_member_ids(list(by_id)))
         return ranked
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:

@@ -161,13 +161,13 @@ def _price_per_1k(value: Any) -> float | None:
 
 def _pricing_is_free(pricing: dict[str, Any], model_id: str) -> bool:
     """Classify explicit free variants or provider price vectors that are entirely zero."""
-    if model_id.endswith((":free", "-free")):
-        return True
     try:
         values = [float(value) for value in pricing.values() if value is not None]
     except (TypeError, ValueError):
         return False
-    return bool(values) and all(value == 0.0 for value in values)
+    if values:
+        return all(value == 0.0 for value in values)
+    return model_id.endswith((":free", "-free"))
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:

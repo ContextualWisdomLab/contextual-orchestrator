@@ -4913,6 +4913,7 @@ def build_server(
                     body = self._read_json()
                     _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_PATCH_KEYS)
                     name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    orchestrator.get_model_group(name)
                     self._send(orchestrator.set_model_group(name, body.get("member_agent_ids")))
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -5755,6 +5756,8 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
+            except KeyError as exc:
+                self._send_error(404, "resource_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
