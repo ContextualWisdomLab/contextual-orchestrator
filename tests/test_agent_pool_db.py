@@ -160,6 +160,9 @@ def test_http_model_group_crud_uses_arbitrary_member_names() -> None:
         assert status == 201 and created["group_name"] == "vendor_neutral_example"
         assert set(created["member_agent_ids"]) == {"general_agent", "coding_agent"}
 
+        status, duplicate = _call(base, "POST", token, {"group_name": "vendor-neutral-example", "member_agent_ids": ["coding_agent"]})
+        assert status == 409 and duplicate["error"]["code"] == "model_group_exists"
+
         status, listed = _call(base, "GET", token)
         assert status == 200 and listed["total_count"] == 1
 

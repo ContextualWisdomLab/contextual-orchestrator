@@ -4967,8 +4967,13 @@ def build_server(
                     return
                 if path == "/api/v1/model_groups":
                     _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_KEYS)
-                    self._send(orchestrator.set_model_group(body.get("group_name"), body.get("member_agent_ids")), 201)
-                    return
+                    group_name = body.get("group_name")
+                    try:
+                        orchestrator.get_model_group(group_name)
+                    except KeyError:
+                        self._send(orchestrator.set_model_group(group_name, body.get("member_agent_ids")), 201)
+                        return
+                    raise RequestError(409, "model_group_exists", "model group already exists; use PATCH")
 
                 if path == "/v1/completions":
                     # Legacy OpenAI Completions: prompt → route → text_completion.

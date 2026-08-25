@@ -2,7 +2,7 @@
 
 - Status: Proposed on the active feature head
 - Date: 2026-08-25
-- Figma file ID: Not applicable; this change extends the existing embedded admin table and introduces no new design artifact.
+- Figma file ID: `vsZMd8WAv42HDRgcZuNcWk`; this change reuses the existing Agent Pool table rather than introducing a new visual pattern.
 
 ## Product requirement
 
