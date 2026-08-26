@@ -11,6 +11,7 @@ from contextual_orchestrator.credentials import (
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.privacy_policy_analysis import (
+    _wardnet_browser_proxy,
     analyze_discovered_privacy_policies,
     crawl_policy_document,
 )
@@ -151,6 +152,7 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
     for name, value in {
         "WARDNET_API_URL": "http://127.0.0.1:8080",
         "WARDNET_ADMIN_TOKEN": "wardnet-test-token",
+        "WARDNET_EGRESS_PROXY_URL": "http://127.0.0.1:8081",
         "CAMOUFOX_MCP_URL": "http://127.0.0.1:9377/mcp",
         "CAMOUFOX_MCP_TOKEN": "camoufox-test-token",
     }.items():
@@ -164,7 +166,14 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
                 "https://provider.example/privacy",
                 camoufox_renderer=lambda _url: "<html><body>Rendered policy.</body></html>",
             )
+            proxy = _wardnet_browser_proxy()
     finally:
         set_backend(None)
 
     assert text == "Rendered policy."
+    assert proxy == {
+        "host": "127.0.0.1",
+        "port": "8081",
+        "username": "wardnet",
+        "password": "wardnet-test-token",
+    }

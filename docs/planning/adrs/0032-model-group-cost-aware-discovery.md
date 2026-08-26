@@ -46,8 +46,10 @@ document. The analyzer may enrich no-training and no-prompt-retention fields;
 optional ZDR availability is reported as policy analysis and never substituted
 for proof that an account enabled ZDR.
 An optional Camoufox MCP renderer handles client-rendered policy pages after
-Wardnet approval; it fails back to the bounded static document and requires
-restricted browser egress because Wardnet does not pin the browser's connection.
+Wardnet approval. Each browser tab uses Wardnet's authenticated egress proxy;
+deployment also assigns Wardnet as the Camoufox container DNS resolver and
+blocks direct egress. Rendering fails back to the bounded static document when
+that full boundary is unavailable.
 
 Durable provider-catalog refreshes store explicit cost, capability, and directed
 modality evidence in normalized serving-tag rows. Last-known-good reads reconstruct

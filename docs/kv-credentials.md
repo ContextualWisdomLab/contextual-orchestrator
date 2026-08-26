@@ -48,17 +48,20 @@ If either Wardnet credential, a grounded quote, or a ZDR analysis route is
 missing, policy-derived fields remain unknown.
 
 For JavaScript-rendered policies, install the `policy-browser` extra and
-register an authenticated Camoufox MCP Streamable HTTP endpoint. Wardnet must
-approve the URL first; Camoufox is only a rendering enhancement, and discovery
-falls back to Wardnet's static response if MCP is unavailable. Run the browser
-service in a restricted egress network because its own navigation is not a
-substitute for Wardnet's DNS-pinned fetch.
+register an authenticated Camoufox MCP Streamable HTTP endpoint and
+`WARDNET_EGRESS_PROXY_URL`. Wardnet must approve the URL first, and every
+Camoufox tab receives the authenticated Wardnet proxy using the admin token from
+KV. Deploy Camoufox with Wardnet as its container DNS resolver and block direct
+egress; the proxy and resolver are complementary controls. Discovery falls back
+to Wardnet's static response if MCP or the proxy is unavailable.
 
 ```bash
 printf '%s' 'http://127.0.0.1:8080' | python -m contextual_orchestrator \
   register-credential --name WARDNET_API_URL --value-stdin
 printf '%s' "$WARDNET_ADMIN_TOKEN" | python -m contextual_orchestrator \
   register-credential --name WARDNET_ADMIN_TOKEN --value-stdin
+printf '%s' 'http://wardnet:8081' | python -m contextual_orchestrator \
+  register-credential --name WARDNET_EGRESS_PROXY_URL --value-stdin
 printf '%s' 'http://127.0.0.1:9377/mcp' | python -m contextual_orchestrator \
   register-credential --name CAMOUFOX_MCP_URL --value-stdin
 printf '%s' "$CAMOUFOX_MCP_TOKEN" | python -m contextual_orchestrator \

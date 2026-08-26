@@ -22,6 +22,7 @@ MAX_POLICY_SOURCES = 8
 MAX_ANALYZER_CANDIDATES = 4
 WARDNET_API_URL_CREDENTIAL = "WARDNET_API_URL"
 WARDNET_ADMIN_TOKEN_CREDENTIAL = "WARDNET_ADMIN_TOKEN"
+WARDNET_EGRESS_PROXY_URL_CREDENTIAL = "WARDNET_EGRESS_PROXY_URL"
 CAMOUFOX_MCP_URL_CREDENTIAL = "CAMOUFOX_MCP_URL"
 CAMOUFOX_MCP_TOKEN_CREDENTIAL = "CAMOUFOX_MCP_TOKEN"
 
@@ -86,6 +87,32 @@ def _mcp_text_payload(result: Any) -> dict[str, Any]:
     raise ValueError("Camoufox MCP tool returned no JSON text")
 
 
+def _wardnet_browser_proxy() -> dict[str, str]:
+    """Build Camoufox's proxy override from credential-registry values."""
+    proxy_url = get_credential(WARDNET_EGRESS_PROXY_URL_CREDENTIAL)
+    token = get_credential(WARDNET_ADMIN_TOKEN_CREDENTIAL)
+    if not proxy_url or not token:
+        raise ValueError("Wardnet browser egress is not configured")
+    proxy = urlsplit(proxy_url)
+    if (
+        proxy.scheme != "http"
+        or not proxy.hostname
+        or proxy.port is None
+        or proxy.username
+        or proxy.password
+        or proxy.path not in {"", "/"}
+        or proxy.query
+        or proxy.fragment
+    ):
+        raise ValueError("Wardnet egress proxy URL is invalid")
+    return {
+        "host": proxy.hostname,
+        "port": str(proxy.port),
+        "username": "wardnet",
+        "password": token,
+    }
+
+
 async def _render_policy_document_with_camoufox(url: str) -> str:
     """Render one Wardnet-approved policy URL through the configured Camoufox MCP."""
     from mcp import Client
@@ -110,7 +137,15 @@ async def _render_policy_document_with_camoufox(url: str) -> str:
     async with create_mcp_http_client(headers=headers) as http_client:
         transport = streamable_http_client(mcp_url, http_client=http_client)
         async with Client(transport) as client:
-            created = _mcp_text_payload(await client.call_tool("create_tab", {"url": url}))
+            created = _mcp_text_payload(
+                await client.call_tool(
+                    "create_tab",
+                    {
+                        "url": url,
+                        "proxy": _wardnet_browser_proxy(),
+                    },
+                )
+            )
             tab_id = created.get("tabId")
             if not isinstance(tab_id, str) or not tab_id:
                 raise ValueError("Camoufox MCP omitted the tab id")
@@ -184,8 +219,13 @@ def crawl_policy_document(
     if len(raw) > MAX_POLICY_BYTES:
         raise ValueError("policy source exceeds the size limit")
     text = raw.decode("utf-8", errors="replace")
-    if get_credential(CAMOUFOX_MCP_URL_CREDENTIAL) and get_credential(
-        CAMOUFOX_MCP_TOKEN_CREDENTIAL
+    if all(
+        get_credential(name)
+        for name in (
+            CAMOUFOX_MCP_URL_CREDENTIAL,
+            CAMOUFOX_MCP_TOKEN_CREDENTIAL,
+            WARDNET_EGRESS_PROXY_URL_CREDENTIAL,
+        )
     ):
         try:
             rendered = (
