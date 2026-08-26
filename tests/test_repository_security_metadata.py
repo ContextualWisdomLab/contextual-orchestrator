@@ -193,13 +193,17 @@ def test_local_full_suite_installs_runtime_and_test_lockfiles():
 def test_native_token_packer_is_built_from_source_not_tracked():
     """Platform-specific PyO3 output must remain a reproducible build artifact."""
     ignore_text = read_text(".gitignore")
-    tracked_files = subprocess.run(
-        ["git", "ls-files"],
-        cwd=ROOT_DIR,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
+    if (ROOT_DIR / ".git").exists():
+        tracked_files = subprocess.run(
+            ["git", "ls-files"],
+            cwd=ROOT_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+    else:
+        assert ".git" in read_text(".dockerignore").splitlines()
+        tracked_files = [str(path.relative_to(ROOT_DIR)) for path in ROOT_DIR.rglob("*")]
 
     assert "contextual_orchestrator/_token_packer*.so" in ignore_text
     assert not any(
