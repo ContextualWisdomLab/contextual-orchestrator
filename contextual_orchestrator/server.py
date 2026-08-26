@@ -4154,13 +4154,6 @@ def _validate_tool_function_fields(
         expected_types=(str,),
         error_message=f"{name_prefix}.description must be a string when provided",
     )
-    description = function.get("description")
-    if isinstance(description, str) and len(description) > 1024:
-        raise RequestError(
-            400,
-            "invalid_tools",
-            f"{name_prefix}.description must be at most 1024 characters",
-        )
 
 
 def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
