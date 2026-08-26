@@ -70,6 +70,17 @@ def test_request_body_size_rejects_transfer_encoding_even_without_content_length
     assert error.code == "invalid_request_framing"
 
 
+def test_security_config_rejects_invalid_request_body_limits() -> None:
+    """Every construction path keeps the framing ceiling a positive integer."""
+    for value in (0, -1, True, 1.0):
+        try:
+            SecurityConfig(max_body_bytes=value)  # type: ignore[arg-type]
+        except ValueError as exc:
+            assert str(exc) == "max_body_bytes must be a positive integer"
+        else:
+            raise AssertionError(f"accepted invalid max_body_bytes: {value!r}")
+
+
 def _start_server() -> tuple[object, threading.Thread, int]:
     """Start a small authenticated mock server for raw socket framing tests."""
     server = build_server(
