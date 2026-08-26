@@ -12,6 +12,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Commercial evidence and handoff resources now use customer-facing canonical
+  REST and Python names; the former `buyer_*` entry points remain explicit
+  deprecated aliases so existing integrations can migrate without disruption.
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and

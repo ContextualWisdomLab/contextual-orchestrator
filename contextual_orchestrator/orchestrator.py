@@ -5986,13 +5986,13 @@ class TaskOrchestrator:
             "sales_readiness": sales_readiness,
         }
 
-    def buyer_evidence_manifest_report(
+    def commercial_evidence_manifest_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the buyer-facing evidence index for high-value commercial review."""
+        """Return the evidence index for commercial readiness review."""
         commercial = self.commercial_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
@@ -6130,7 +6130,7 @@ class TaskOrchestrator:
                 "buyer_evidence_manifest",
                 "Buyer evidence manifest",
                 "Deal owner",
-                ["docs/commercial_buyer_evidence_manifest.md", "/api/v1/buyer_evidence_manifests/latest"],
+                ["docs/commercial_buyer_evidence_manifest.md", "/api/v1/commercial_evidence_manifests/latest"],
                 "measured_local",
                 "ready" if has_file("docs/commercial_buyer_evidence_manifest.md") else "blocked",
                 "Buyer evidence is indexed by owner, source, evidence type, and completion state.",
@@ -6194,14 +6194,14 @@ class TaskOrchestrator:
             },
         }
 
-    def buyer_handoff_bundle_report(
+    def commercial_handoff_bundle_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return a buyer handoff bundle that packages sale-readiness evidence."""
-        manifest = self.buyer_evidence_manifest_report(
+        """Return the commercial handoff bundle for sale-readiness evidence."""
+        manifest = self.commercial_evidence_manifest_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
@@ -6221,7 +6221,7 @@ class TaskOrchestrator:
                 [
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
                     "/api/v1/analytics_snapshots/latest",
                 ],
                 "measured_local",
@@ -6387,6 +6387,32 @@ class TaskOrchestrator:
             },
         }
 
+    def buyer_evidence_manifest_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the deprecated manifest alias for existing Python consumers."""
+        return self.commercial_evidence_manifest_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+
+    def buyer_handoff_bundle_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the deprecated handoff alias for existing Python consumers."""
+        return self.commercial_handoff_bundle_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+
     def saleability_decision_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
@@ -6394,7 +6420,7 @@ class TaskOrchestrator:
         security_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer-facing saleability decision for high-value review."""
-        handoff = self.buyer_handoff_bundle_report(
+        handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
@@ -6444,12 +6470,12 @@ class TaskOrchestrator:
                 {
                     "basis_name": "buyer_handoff_bundle",
                     "status": handoff["bundle_status"],
-                    "source": "/api/v1/buyer_handoff_bundles/latest",
+                    "source": "/api/v1/commercial_handoff_bundles/latest",
                 },
                 {
                     "basis_name": "buyer_evidence_manifest",
                     "status": handoff["related_runtime_reports"]["buyer_manifest_status"],
-                    "source": "/api/v1/buyer_evidence_manifests/latest",
+                    "source": "/api/v1/commercial_evidence_manifests/latest",
                 },
                 {
                     "basis_name": "commercial_readiness",
@@ -6531,8 +6557,8 @@ class TaskOrchestrator:
                 [
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "/api/v1/saleability_decisions/latest",
                     "/api/v1/analytics_snapshots/latest",
                 ],
@@ -6704,8 +6730,8 @@ class TaskOrchestrator:
                     "/api/v1/analytics_snapshots/latest",
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "/api/v1/saleability_decisions/latest",
                     "/api/v1/commercial_evidence_exports/latest",
                 ],
@@ -6927,8 +6953,8 @@ class TaskOrchestrator:
                     "/api/v1/analytics_snapshots/latest",
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "/api/v1/saleability_decisions/latest",
                     "/api/v1/commercial_evidence_exports/latest",
                     "/api/v1/commercial_acceptance_checks/latest",
@@ -8840,7 +8866,7 @@ class TaskOrchestrator:
             locale_bundles=locale_bundles,
             security_profile=security_profile,
         )
-        handoff = self.buyer_handoff_bundle_report(
+        handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
@@ -8927,7 +8953,7 @@ class TaskOrchestrator:
                 "owner": "Evidence owner",
                 "sources": [
                     "/api/v1/commercial_evidence_exports/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "docs/commercial_evidence_export.md",
                     "docs/commercial_buyer_handoff_bundle.md",
                 ],
@@ -9719,7 +9745,7 @@ class TaskOrchestrator:
             locale_bundles=locale_bundles,
             security_profile=security_profile,
         )
-        handoff = self.buyer_handoff_bundle_report(
+        handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,

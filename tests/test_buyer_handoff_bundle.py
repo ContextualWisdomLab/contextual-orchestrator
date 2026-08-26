@@ -89,7 +89,7 @@ def test_buyer_handoff_bundle_report_packages_sale_evidence() -> None:
     assert report["included_artifacts"][0]["sources"] == [
         "/api/v1/sales_readiness/latest",
         "/api/v1/commercial_readiness/latest",
-        "/api/v1/buyer_evidence_manifests/latest",
+        "/api/v1/commercial_evidence_manifests/latest",
         "/api/v1/analytics_snapshots/latest",
     ]
     assert items["repository_packet"]["evidence_type"] == "repository_artifact"
@@ -101,17 +101,25 @@ def test_buyer_handoff_bundle_report_packages_sale_evidence() -> None:
 
 
 def test_buyer_handoff_bundle_endpoint_openapi_admin_and_docs_contract() -> None:
+    canonical_path = "/api/v1/commercial_handoff_bundles/latest"
+    legacy_path = "/api/v1/buyer_handoff_bundles/latest"
+    assert canonical_path in OPENAPI_SPEC["paths"]
+    assert OPENAPI_SPEC["paths"][canonical_path]["get"]["operationId"] == (
+        "get_latest_commercial_handoff_bundle"
+    )
     assert "/api/v1/buyer_handoff_bundles/latest" in OPENAPI_SPEC["paths"]
     assert OPENAPI_SPEC["paths"]["/api/v1/buyer_handoff_bundles/latest"]["get"]["operationId"] == (
         "get_latest_buyer_handoff_bundle"
     )
-    assert "/api/v1/buyer_handoff_bundles/latest" in ADMIN_HTML
+    assert OPENAPI_SPEC["paths"][legacy_path]["get"]["deprecated"] is True
+    assert canonical_path in ADMIN_HTML
+    assert legacy_path not in ADMIN_HTML
     assert "buyer_handoff_bundle_title" in ADMIN_TRANSLATIONS["en"]
     assert "buyer_handoff_bundle_title" in ADMIN_TRANSLATIONS["ko"]
 
     bundle_doc = Path("docs/commercial_buyer_handoff_bundle.md").read_text(encoding="utf-8")
     assert "Commercial Buyer Handoff Bundle" in bundle_doc
-    assert "/api/v1/buyer_handoff_bundles/latest" in bundle_doc
+    assert canonical_path in bundle_doc
     assert "KRW 2B Buyer Handoff Bundle Workflow" in bundle_doc
     assert "Figma Code Connect is not used" in bundle_doc
     assert "Review process is not a blocker" in bundle_doc
@@ -132,9 +140,17 @@ def test_buyer_handoff_bundle_endpoint_openapi_admin_and_docs_contract() -> None
             "inference_secret",
         )
         bundle_status, bundle = get_json(
-            f"http://127.0.0.1:{port}/api/v1/buyer_handoff_bundles/latest",
+            f"http://127.0.0.1:{port}{canonical_path}",
             "admin_secret",
         )
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{legacy_path}",
+            headers={"authorization": "Bearer admin_secret", "connection": "close"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            legacy_bundle = json.loads(response.read().decode("utf-8"))
+            assert response.headers["Deprecation"] == "true"
+            assert canonical_path in response.headers["Link"]
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -149,6 +165,14 @@ def test_buyer_handoff_bundle_endpoint_openapi_admin_and_docs_contract() -> None
     }
     assert bundle["measurement_status"] == "local_buyer_handoff_bundle"
     assert "included_artifacts" in bundle
+    assert legacy_bundle == bundle
+
+
+def test_deprecated_python_handoff_alias_preserves_payload() -> None:
+    orchestrator = build()
+    assert orchestrator.buyer_handoff_bundle_report() == (
+        orchestrator.commercial_handoff_bundle_report()
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
