@@ -1816,8 +1816,11 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        started = time.monotonic()
         with self._open_provider(request, destination) as response:
-            return json.loads(response.read().decode("utf-8"))
+            data = json.loads(response.read().decode("utf-8"))
+        _record_provider_response_telemetry(data, started)
+        return data
 
     def _mock_raw(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]

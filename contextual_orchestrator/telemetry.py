@@ -36,6 +36,9 @@ _CURRENT_SESSION: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_session_id", default=None
 )
 _CONFIGURED = False
+# Match the OpenTelemetry SDK's default span-attribute budget so a single
+# sequence-valued attribute cannot exceed the span's default evidence budget.
+_MAX_ATTRIBUTE_SEQUENCE_ITEMS = 128
 _ALLOWED_ATTRIBUTE_KEYS = frozenset(
     {
         "gen_ai.operation.name",
@@ -165,7 +168,11 @@ def _safe_attributes(
         ):
             continue
         if key == "gen_ai.response.finish_reasons" and isinstance(value, (list, tuple)):
-            reasons = [item[:256] for item in value if isinstance(item, str) and item]
+            reasons = [
+                item[:256]
+                for item in value[:_MAX_ATTRIBUTE_SEQUENCE_ITEMS]
+                if isinstance(item, str) and item
+            ]
             if reasons:
                 result[key] = reasons
             continue

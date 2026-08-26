@@ -75,7 +75,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `gen_ai.usage.input_tokens/output_tokens/total_tokens` from provider-reported
   counts, served `gen_ai.response.model`, `gen_ai.response.finish_reasons`,
   request latency, and classified `error.type` plus upstream status on
-  failures — replacing exception-class-only error labels.
+  failures — replacing exception-class-only error labels. Chat, streaming,
+  and passthrough responses share this evidence path, and finish-reason arrays
+  are bounded to the OpenTelemetry default span-attribute budget.
 - Orchestration traces now include per-step telemetry evidence: streamed,
   batched, routed, and conducted steps record `model`, `provider`, and
   `latency_ms` alongside usage so workflow runs answer which model served a

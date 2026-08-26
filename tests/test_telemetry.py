@@ -615,3 +615,47 @@ def test_provider_response_telemetry_accepts_empty_and_multiple_choices(monkeypa
 
     assert "gen_ai.response.finish_reasons" not in captured[0]
     assert captured[1]["gen_ai.response.finish_reasons"] == ["stop", "length"]
+
+
+def test_finish_reason_sequence_respects_span_attribute_budget() -> None:
+    """One provider response cannot create an unbounded sequence attribute."""
+    reasons = [f"reason-{index}" for index in range(256)]
+    attributes = telemetry_module._safe_attributes(
+        {"gen_ai.response.finish_reasons": reasons}
+    )
+    assert attributes["gen_ai.response.finish_reasons"] == reasons[:128]
+
+
+def test_passthrough_response_records_provider_telemetry(monkeypatch) -> None:
+    """Feature-rich passthrough responses emit the same evidence as chat."""
+    captured: list[dict] = []
+    client = ModelClient()
+    agent = ModelAgent(
+        "worker_agent",
+        "gpt-x",
+        base_url="https://provider.example/v1",
+        credential_key="",
+    )
+
+    @contextmanager
+    def fake_open(request, destination):  # noqa: ARG001
+        yield io.BytesIO(
+            json.dumps(
+                {
+                    "model": "gpt-x-served",
+                    "choices": [{"finish_reason": "stop"}],
+                    "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+                }
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr(client, "_open_provider", fake_open)
+    monkeypatch.setattr(orchestrator_module, "annotate_current_span", captured.append)
+    monkeypatch.setattr(orchestrator_module, "record_provider_usage", lambda usage: captured.append(dict(usage)))
+
+    response = client._send_raw(agent, "responses", {"input": "hello"})
+
+    assert response["model"] == "gpt-x-served"
+    assert captured[0]["gen_ai.response.model"] == "gpt-x-served"
+    assert captured[0]["gen_ai.response.finish_reasons"] == ["stop"]
+    assert captured[1] == {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5}
