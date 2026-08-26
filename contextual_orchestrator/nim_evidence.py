@@ -152,12 +152,13 @@ def publish_artifact_set(
     _recover_publication(final)
     staging = final.parent / f".{final.name}.staging-{uuid.uuid4().hex}"
     staging.mkdir(mode=0o777)
-    if final.exists():
-        staging.chmod(stat.S_IMODE(final.stat().st_mode))
+    final_mode = stat.S_IMODE(final.stat().st_mode) if final.exists() else None
     backup: Path | None = None
     try:
         for name, payload in artifacts.items():
             (staging / name).write_bytes(payload)
+        if final_mode is not None:
+            staging.chmod(final_mode)
         if final.exists():
             backup = final.parent / f".{final.name}.backup-{uuid.uuid4().hex}"
             os.replace(final, backup)

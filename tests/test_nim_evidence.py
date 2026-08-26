@@ -140,6 +140,16 @@ def test_successful_replacement_preserves_mode_and_ignores_backup_cleanup_failur
     assert (target / "benchmark_report.json").read_bytes() == b"{}"
 
 
+def test_replacement_preserves_read_only_directory_mode(tmp_path: Path) -> None:
+    target = tmp_path / "nim_evidence"
+    target.mkdir(mode=0o500)
+
+    publish_artifact_set(target, _artifacts())
+
+    assert target.stat().st_mode & 0o777 == 0o500
+    assert (target / "benchmark_report.json").read_bytes() == b"{}"
+
+
 def test_publication_rejects_invalid_payloads_and_targets(tmp_path: Path) -> None:
     empty = _artifacts()
     empty["benchmark_report.json"] = b""
