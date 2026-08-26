@@ -1070,8 +1070,11 @@ class ModelClient:
             },
         ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
             remaining = self.remaining_request_timeout()
-            provider_timeout = self.timeout if remaining is None else min(self.timeout, remaining)
-            return self._send_with_retry(agent, payload, destination, timeout=provider_timeout)
+            if remaining is None:
+                return self._send_with_retry(agent, payload, destination)
+            return self._send_with_retry(
+                agent, payload, destination, timeout=min(self.timeout, remaining)
+            )
 
     def apply_effort_profile(
         self,
@@ -1241,13 +1244,10 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        effective_timeout = timeout
-        if effective_timeout is None:
-            effective_timeout = getattr(self._local, "provider_transport_timeout", None)
         opened = (
             self._open_provider(request, destination)
-            if effective_timeout is None
-            else self._open_provider(request, destination, timeout=effective_timeout)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
         )
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -1322,7 +1322,11 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
-        connection_timeout = self.timeout if timeout is None else timeout
+        connection_timeout = timeout
+        if connection_timeout is None:
+            connection_timeout = getattr(
+                self._local, "provider_transport_timeout", self.timeout
+            )
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
