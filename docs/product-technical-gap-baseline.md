@@ -1,5 +1,47 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-27 02:48 KST live queue evidence
+
+Protected `main` remains exact commit
+`5a01759165be20ab38c05c2321d8a9f00ec331ea`. This refresh is limited to
+observable exact-head state. A local run, a requested retry, or an unpushed
+repair is recorded as work in progress and is not promoted to hosted or
+protected-main evidence.
+
+The current queue heads are #888
+`ceb5d38f4e8891de04074676e2befcb580cf5f39`, #889
+`a310ce09e523b5d42899f6091fc93391ad5152ac`, #890
+`3fef47b74700f1fdc2401e39491e0077f3423ec4`, #880
+`380958dadee0bb3bdbfa9f94a3303bb8135e5c44`, #857
+`f61b58e68d3f7a0a07cd9384e664ee9873505001`, #876
+`73a5510f099742003f7242b6f2c55e10f8ff9dab`, and #849
+`ede33b5d4c23070f2d5ee961acf7bd7ee03fabf0`. No current head has an
+independent approval.
+
+#888 and #889 still have their full suites and required hosted jobs queued;
+neither has full-suite success evidence. #890 has exact-tree local evidence of
+`2366 passed`, while its hosted full suite and other required jobs remain
+pending and independent approval is absent. That local result is regression
+evidence only, not a successful hosted Check or merge authority. #880 has a
+successful hosted full suite, but several required-workflow jobs were cancelled
+and approval is absent; normal auto-merge remains enabled.
+
+#857's remote exact head still shows failed full/fuzz jobs. Another agent's
+root-cause repairs after `f61b58e6` remain local and pending push, so their
+intent and any local verification do not change the remote evidence recorded
+here. #849 and #876 retain successful exact-head full/security evidence but a
+failed Strix result. Exact-head Strix retries are pending; until a retry
+finishes successfully, the failure remains the authoritative hosted result.
+Auto-merge remains enabled for #849 and #876 without bypass.
+
+The buyer gaps behind [issue #86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86)
+and [issue #103](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/103)
+remain open. #86 still requires KV-backed live NVIDIA NIM capability,
+cost-provenance, failure-class, and quality evidence. #103 still requires a
+release-readiness path that fails closed on stale head, absent independent
+review, or incomplete exact-head Checks. Queue activity and local test results
+do not close either acceptance gap.
+
 ## 2026-08-27 02:03 KST protected-main and exact-head queue evidence
 
 Protected `main` is exact commit
