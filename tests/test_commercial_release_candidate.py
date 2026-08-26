@@ -47,6 +47,8 @@ def valid_release_authority() -> dict[str, object]:
         ],
         "review_policy": {
             "required_independent_approval_count": 1,
+            "require_last_push_approval": False,
+            "last_pusher_login": None,
             "author_login": "author",
             "head_sha": AUTHORITY_HEAD,
         },

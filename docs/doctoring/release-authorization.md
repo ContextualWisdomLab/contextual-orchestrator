@@ -11,6 +11,8 @@ The evaluator fails closed when any of these is absent or inconsistent:
 - verified ruleset and non-synthetic merge evidence;
 - every required check completed successfully on the exact head;
 - qualifying independent approval on the exact head;
+- when an active ruleset requires last-push approval, the qualifying reviewer
+  is not the principal who pushed the last contributor commit;
 - a positive independent-approval requirement; a missing or zero-review policy
   is invalid and remains blocked;
 - complete human, CodeRabbit, GitHub Advanced Security, Dependabot, OpenCode,

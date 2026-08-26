@@ -12,6 +12,10 @@ separate fail-closed release-authority result. It never treats a missing,
 queued, stale, synthetic, predecessor-head, author-only, or unresolved-finding
 snapshot as release-ready.
 
+Active ruleset semantics are combined fail-closed: the highest required
+approval count applies, and any last-push approval rule excludes the last
+pusher from the qualifying reviewer set.
+
 The evaluator is a pure policy boundary. A trusted CI governance collector is
 responsible for obtaining the current protected-head, ruleset, checks, review,
 and finding evidence. The evaluator returns only machine-readable blocker codes

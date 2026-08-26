@@ -54,6 +54,8 @@ def authority() -> dict[str, object]:
         ],
         "review_policy": {
             "required_independent_approval_count": 1,
+            "require_last_push_approval": False,
+            "last_pusher_login": None,
             "author_login": "author",
             "head_sha": HEAD,
         },
@@ -140,6 +142,20 @@ def test_zero_required_approvals_cannot_authorize_release() -> None:
 
     assert result["authorized"] is False
     assert {"review_policy_invalid", "independent_approval_missing"}.issubset(result["blockers"])
+
+
+def test_last_pusher_cannot_supply_required_last_push_approval() -> None:
+    """A ruleset last-push gate requires approval from a different principal."""
+    evidence = authority()
+    evidence["review_policy"] = {
+        **evidence["review_policy"],
+        "require_last_push_approval": True,
+        "last_pusher_login": "reviewer",
+    }
+    assert "independent_approval_missing" in evaluate_release_authorization(evidence)["blockers"]
+
+    evidence["review_policy"]["last_pusher_login"] = "pusher"
+    assert evaluate_release_authorization(evidence)["authorized"] is True
 
 
 def test_queued_stale_and_synthetic_check_evidence_blocks() -> None:

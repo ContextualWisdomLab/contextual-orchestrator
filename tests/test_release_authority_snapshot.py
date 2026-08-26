@@ -137,7 +137,10 @@ def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPat
                     },
                     {
                         "type": "required_pull_request_reviews",
-                        "parameters": {"required_approving_review_count": 1},
+                        "parameters": {
+                            "required_approving_review_count": 1,
+                            "require_last_push_approval": True,
+                        },
                     },
                 ],
             }
@@ -150,6 +153,8 @@ def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPat
             return responses["reviews"]
         if "check-runs" in endpoint:
             return responses["check-runs"]
+        if "/commits" in endpoint:
+            return [{"committer": {"login": "pusher"}}]
         if "rulesets" in endpoint:
             return responses["rulesets"]
         if "pulls/7" in endpoint:
@@ -163,6 +168,8 @@ def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPat
     assert snapshot["checks"][0]["conclusion"] == "success"
     assert snapshot["reviewers"][0]["state"] == "approved"
     assert snapshot["review_policy"]["required_independent_approval_count"] == 1
+    assert snapshot["review_policy"]["require_last_push_approval"] is True
+    assert snapshot["review_policy"]["last_pusher_login"] == "pusher"
     assert collector._review_rows(["bad"], head_sha=head, author_login="author") == []
     assert collector._review_rows([{"user": None, "state": "DISMISSED"}], head_sha=head, author_login="author")[0]["dismissed"] is True
     assert collector._review_rows([{"user": {"login": "reviewer"}, "state": "APPROVED"}], head_sha=head, author_login="author")[0]["head_sha"] is None
@@ -177,6 +184,8 @@ def test_collect_authority_rejects_head_change_during_collection(monkeypatch: py
     def fake_api(repository: str, endpoint: str):
         nonlocal pull_calls
         if endpoint.endswith("/reviews"):
+            return []
+        if endpoint.endswith("/commits?per_page=100"):
             return []
         if "check-runs" in endpoint:
             return {"check_runs": []}
@@ -213,6 +222,7 @@ def test_pagination_and_ruleset_helpers_flatten_and_fail_closed() -> None:
     assert collector._rulesets_are_verified(rulesets) is True
     assert collector._required_check_names(rulesets) == ["Tests"]
     assert collector._required_approval_count(rulesets) == 2
+    assert collector._requires_last_push_approval(rulesets) is False
     approval_rulesets = [
         {
             "enforcement": "active",
@@ -233,6 +243,8 @@ def test_pagination_and_ruleset_helpers_flatten_and_fail_closed() -> None:
         ]
     )
     assert collector._required_approval_count(approval_rulesets) == 2
+    approval_rulesets[0]["rules"][0]["parameters"]["require_last_push_approval"] = True
+    assert collector._requires_last_push_approval(approval_rulesets) is True
     assert collector._rulesets_are_verified([{"enforcement": "active", "conditions": {}, "rules": []}]) is False
 
 
@@ -287,6 +299,7 @@ def test_helper_edge_cases_remain_fail_closed(monkeypatch: pytest.MonkeyPatch, t
     ]
     assert collector._required_check_names(rulesets) == ["Tests"]
     assert collector._required_approval_count(rulesets) == 0
+    assert collector._requires_last_push_approval(rulesets) is False
 
 
 def test_collect_authority_rejects_invalid_expected_and_final_heads(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -301,7 +314,7 @@ def test_collect_authority_rejects_invalid_expected_and_final_heads(monkeypatch:
         nonlocal pull_calls
         if "check-runs" in endpoint:
             return {"check_runs": []}
-        if "rulesets" in endpoint or endpoint.endswith("/reviews"):
+        if "rulesets" in endpoint or endpoint.endswith("/reviews") or "/commits" in endpoint:
             return []
         pull_calls += 1
         if pull_calls == 1:
@@ -320,6 +333,8 @@ def test_collect_authority_handles_missing_ruleset_and_head_mismatch(monkeypatch
     def fake_api(repository: str, endpoint: str):
         if "pulls/7/reviews" in endpoint:
             return {}
+        if "pulls/7/commits" in endpoint:
+            return []
         if "rulesets" in endpoint:
             raise RuntimeError("unavailable")
         if "check-runs" in endpoint:

@@ -214,12 +214,22 @@ def evaluate_release_authorization(
     required_approval_count = 1
     independent_approval_count = 0
     author_login: Any = None
+    require_last_push_approval = True
+    last_pusher_login: Any = None
     if not isinstance(review_policy, Mapping):
         blockers.append("review_policy_unavailable")
     else:
         required_approval_count = review_policy.get("required_independent_approval_count")
         author_login = review_policy.get("author_login")
-        if type(required_approval_count) is not int or required_approval_count < 1 or type(author_login) is not str:
+        require_last_push_approval = review_policy.get("require_last_push_approval")
+        last_pusher_login = review_policy.get("last_pusher_login")
+        if (
+            type(required_approval_count) is not int
+            or required_approval_count < 1
+            or type(author_login) is not str
+            or type(require_last_push_approval) is not bool
+            or (require_last_push_approval and (type(last_pusher_login) is not str or not last_pusher_login))
+        ):
             blockers.append("review_policy_invalid")
             # A malformed or zero-review policy must never turn the release
             # gate into an approval-free authorization path.
@@ -251,6 +261,7 @@ def evaluate_release_authorization(
             and reviewer.get("association") in _APPROVED_ASSOCIATIONS
             and type(author_login) is str
             and reviewer["login"] != author_login
+            and (not require_last_push_approval or reviewer["login"] != last_pusher_login)
         )
         if qualifies:
             independent_approval_count += 1

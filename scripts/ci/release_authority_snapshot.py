@@ -223,6 +223,23 @@ def _required_approval_count(rulesets: list[Any]) -> int:
     return max(counts, default=0)
 
 
+def _requires_last_push_approval(rulesets: list[Any]) -> bool:
+    """Return whether any active-main review rule excludes the last pusher."""
+    for ruleset in rulesets:
+        if not isinstance(ruleset, dict) or not _main_ref(ruleset):
+            continue
+        rules = ruleset.get("rules", [])
+        if not isinstance(rules, list):
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict) or rule.get("type") not in {"pull_request", "required_pull_request_reviews"}:
+                continue
+            parameters = rule.get("parameters")
+            if isinstance(parameters, dict) and parameters.get("require_last_push_approval") is True:
+                return True
+    return False
+
+
 def collect_authority(
     repository: str,
     pull_request_number: int,
@@ -265,6 +282,12 @@ def collect_authority(
         required_check_names = _required_check_names(rulesets)
     reviews = _gh_json(repository, f"repos/{repository}/pulls/{pull_request_number}/reviews?per_page=100")
     review_rows = _page_items(reviews)
+    commits = _page_items(_gh_json(repository, f"repos/{repository}/pulls/{pull_request_number}/commits?per_page=100"))
+    last_commit = commits[-1] if commits else None
+    last_commit_user = last_commit.get("committer") if isinstance(last_commit, dict) else None
+    if not isinstance(last_commit_user, dict):
+        last_commit_user = last_commit.get("author") if isinstance(last_commit, dict) else None
+    last_pusher_login = last_commit_user.get("login") if isinstance(last_commit_user, dict) else None
     final_pull = _gh_json(repository, f"repos/{repository}/pulls/{pull_request_number}")
     final_head = final_pull.get("head") if isinstance(final_pull, dict) else None
     final_head_sha = final_head.get("sha") if isinstance(final_head, dict) else None
@@ -285,6 +308,8 @@ def collect_authority(
         "checks": _check_rows(checks),
         "review_policy": {
             "required_independent_approval_count": _required_approval_count(rulesets),
+            "require_last_push_approval": _requires_last_push_approval(rulesets),
+            "last_pusher_login": last_pusher_login,
             "author_login": author_login,
             "head_sha": head_sha,
         },
