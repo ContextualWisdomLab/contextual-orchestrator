@@ -284,10 +284,6 @@ class CostRoutingCoordinator:
             raise ValueError("agent_ids must be a non-empty list of agent identifiers")
         if len(set(agent_ids)) != len(agent_ids):
             raise ValueError("agent_ids must not contain duplicates")
-        from .orchestrator import MAX_LOCAL_CONCURRENCY
-
-        if len(agent_ids) > MAX_LOCAL_CONCURRENCY:
-            raise ValueError("agent_ids exceeds the declared concurrency boundary")
         if capability_code not in {"chat", "structured"}:
             raise ValueError("capability_code must be chat or structured")
         known = {agent.id for agent in self.orchestrator.candidates}

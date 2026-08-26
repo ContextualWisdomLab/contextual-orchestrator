@@ -149,6 +149,45 @@ def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
         else:  # pragma: no cover
             raise AssertionError("implicit or unknown readiness scope must fail closed")
 
+
+def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> None:
+    """Access-list size is body-bounded; provider calls obey configured concurrency."""
+
+    lock = threading.Lock()
+    counters = {"active": 0, "maximum": 0}
+
+    class BoundedProbeClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(local_concurrency=2)
+
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            with lock:
+                counters["active"] += 1
+                counters["maximum"] = max(counters["maximum"], counters["active"])
+            time.sleep(0.001)
+            with lock:
+                counters["active"] -= 1
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    agents = [ModelAgent(f"declared_{index}", "mock") for index in range(65)]
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator(agents, client=BoundedProbeClient())
+    )
+    job = coordinator.submit_provider_readiness_refresh(
+        agent_ids=[agent.id for agent in agents],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+    for _ in range(200):
+        document = coordinator.provider_readiness_refresh_document(job["job_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+    assert document["ready_count"] == len(agents)
+    assert counters["maximum"] == 2
+
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
     """Dataclasses, dataclass lists, and JSON scalars all survive the trip."""
     client = FakeValkeyClient()
