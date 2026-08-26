@@ -151,6 +151,34 @@ def test_embedding_endpoints_apply_the_caller_deadline() -> None:
     assert all(deadline is not None for deadline in observed)
 
 
+def test_http_poll_fields_do_not_mutate_cached_embedding_document() -> None:
+    server, port, token, coordinator = _serve()
+    try:
+        status, created = _request(
+            "POST",
+            f"http://127.0.0.1:{port}/v1/batch/embeddings",
+            token,
+            {"model": "text-embedding-test", "inputs": ["evidence"]},
+        )
+        assert status == 200
+        assert created["poll_after_ms"] == 1_000
+
+        cached = coordinator.embeddings_batch_document(created["batch_id"])
+        assert "poll_after_ms" not in cached
+        assert "job_retention_ms" not in cached
+
+        status, _polled = _request(
+            "GET",
+            f"http://127.0.0.1:{port}/v1/batch/embeddings/{created['batch_id']}",
+            token,
+        )
+        assert status == 200
+        assert "poll_after_ms" not in cached
+        assert "job_retention_ms" not in cached
+    finally:
+        server.shutdown()
+
+
 def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> None:
     server, port, token, _coordinator = _serve()
     try:
