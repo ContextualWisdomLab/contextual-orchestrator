@@ -33,6 +33,7 @@ DISCOVERY_TIMEOUT_SECONDS = 15.0
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
 _MODELS_DEV_OPENCODE_PROVIDER = "opencode"
+_OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -452,6 +453,39 @@ def discover_all_models(
         except ProviderDiscoveryError as exc:
             errors.append(exc)
     return _deduplicate_discovered_models(discovered), errors
+
+
+def openrouter_paid_inference_available(
+    *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+) -> bool | None:
+    """Return whether OpenRouter attests a strictly positive credit balance."""
+    api_key = get_credential("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+    try:
+        payload = _fetch_json(
+            _OPENROUTER_CREDITS_URL,
+            api_key=api_key,
+            timeout=timeout,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return None
+        total_credits = Decimal(str(data["total_credits"]))
+        total_usage = Decimal(str(data["total_usage"]))
+        if not total_credits.is_finite() or not total_usage.is_finite():
+            return None
+        return total_credits - total_usage > 0
+    except (
+        ArithmeticError,
+        KeyError,
+        TypeError,
+        ValueError,
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+    ):
+        return None
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")

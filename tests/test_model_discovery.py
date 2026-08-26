@@ -33,6 +33,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
+    openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
@@ -99,6 +100,26 @@ BYTEZ_SOURCE = ProviderModelSource(
 
 def test_discover_provider_models_skips_when_credential_missing() -> None:
     assert discover_provider_models(OPENAI_SOURCE) == []
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"data": {"total_credits": 10, "total_usage": 9}}, True),
+        ({"data": {"total_credits": 10, "total_usage": 10}}, False),
+        ({"data": {"total_credits": 10, "total_usage": 11}}, False),
+        ({"data": {"total_credits": "invalid", "total_usage": 0}}, None),
+    ],
+)
+def test_openrouter_paid_inference_uses_attested_remaining_credit(
+    payload: dict, expected: bool | None
+) -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        assert openrouter_paid_inference_available() is expected
 
 
 def test_discover_openai_compatible_parses_models_and_pricing() -> None:

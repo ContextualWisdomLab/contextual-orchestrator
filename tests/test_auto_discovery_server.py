@@ -1,5 +1,7 @@
 """Server-startup model discovery activates discovered runtime agents."""
 
+from dataclasses import replace
+
 from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
@@ -42,6 +44,36 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
     assert all(not candidate.base_url.startswith("mock://") for candidate in orchestrator.agents)
     assert "bootstrap_agent" in result["updated"]
+
+
+def test_auto_discovery_disables_paid_openrouter_without_credit(monkeypatch) -> None:
+    """Catalog availability cannot promote an unaffordable paid deployment."""
+    paid = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid-chat",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat", "response_format"),
+    )
+    free = replace(paid, model_id="provider/free-chat", is_free=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([paid, free], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.openrouter_paid_inference_available",
+        lambda: False,
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    by_model = {agent.model: agent for agent in orchestrator.candidates}
+    assert by_model[paid.model_id].disabled is True
+    assert by_model[free.model_id].disabled is False
 
 
 def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
