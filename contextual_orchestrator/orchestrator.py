@@ -5147,7 +5147,11 @@ class TaskOrchestrator:
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
         race_members = self._equivalent_race_members(candidates, capability=capability)
-        if race_members:
+        # Async video submission creates provider-side work that cannot be
+        # raced safely without loser cancellation: every accepted loser would
+        # become an unowned, billable job.  A selection sink marks this
+        # ownership-producing path, so use measured sequential failover below.
+        if race_members and selection_sink is None:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
                 raise ValueError(
                     "immediate_race endpoint count exceeds the supported concurrency capacity"

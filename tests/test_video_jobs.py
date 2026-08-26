@@ -39,6 +39,36 @@ def test_register_replaces_provider_id_and_preserves_owner() -> None:
     assert owner.gateway_job_id == response["id"]
 
 
+def test_public_response_replaces_nested_provider_job_identity() -> None:
+    """Provider job ids never escape through nested metadata or URL strings."""
+    factory = _SharedRegistryFactory()
+    registry = VideoJobRegistry(factory)
+
+    response = registry.register(
+        {
+            "id": "provider-job",
+            "metadata": {
+                "job_id": "provider-job",
+                "status_url": "https://provider.invalid/videos/provider-job",
+                "progress": 5,
+            },
+            "related": ["provider-job"],
+        },
+        "declared_video_agent",
+    )
+
+    gateway_job_id = response["id"]
+    assert response == {
+        "id": gateway_job_id,
+        "metadata": {
+            "job_id": gateway_job_id,
+            "status_url": f"https://provider.invalid/videos/{gateway_job_id}",
+            "progress": 5,
+        },
+        "related": [gateway_job_id],
+    }
+
+
 @pytest.mark.parametrize("provider_id", [None, "", "   ", 7])
 def test_register_rejects_untrackable_provider_result(provider_id: object) -> None:
     registry = VideoJobRegistry(_SharedRegistryFactory())
@@ -52,4 +82,3 @@ def test_unknown_gateway_job_remains_unknown() -> None:
 
     with pytest.raises(KeyError):
         registry.owner("videojob_unknown")
-

@@ -64,6 +64,15 @@ def _get(port: int, path: str) -> tuple[int, bytes, str]:
         return response.status, response.read(), response.headers.get_content_type()
 
 
+def _get_error(port: int, path: str) -> tuple[int, dict]:
+    """Issue one authenticated GET request and decode its error envelope."""
+    try:
+        _get(port, path)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+    raise AssertionError("request unexpectedly succeeded")
+
+
 @pytest.mark.parametrize(
     ("path", "capability", "payload"),
     [
@@ -139,7 +148,13 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
     orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
         lambda agent, endpoint: (
             followups.append((agent.id, endpoint))
-            or {"id": "provider-video-123", "status": "completed"}
+            or {
+                "id": "provider-video-123",
+                "status": "completed",
+                "metadata": {
+                    "status_url": "https://provider.invalid/videos/provider-video-123"
+                },
+            }
         )
     )
     orchestrator.client.proxy_get_bytes = (  # type: ignore[method-assign]
@@ -164,7 +179,13 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
 
         status, raw, content_type = _get(port, f"/v1/videos/{gateway_job_id}")
         assert status == 200 and content_type == "application/json"
-        assert json.loads(raw) == {"id": gateway_job_id, "status": "completed"}
+        assert json.loads(raw) == {
+            "id": gateway_job_id,
+            "status": "completed",
+            "metadata": {
+                "status_url": f"https://provider.invalid/videos/{gateway_job_id}"
+            },
+        }
 
         status, raw, content_type = _get(
             port, f"/v1/videos/{gateway_job_id}/content"
@@ -174,6 +195,74 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
             ("second_video", "videos/provider-video-123"),
             ("second_video", "videos/provider-video-123/content"),
         ]
+    finally:
+        server.shutdown()
+
+
+def test_video_submission_does_not_race_uncancellable_async_jobs() -> None:
+    """Equivalent endpoints submit one owned async job, never orphan losers."""
+    agents = [
+        ModelAgent(
+            "first_video",
+            "provider/shared",
+            tags=("video",),
+            group_name="video_group",
+            endpoint_equivalence=_equivalence("video"),
+        ),
+        ModelAgent(
+            "second_video",
+            "provider/shared",
+            tags=("video",),
+            group_name="video_group",
+            endpoint_equivalence=_equivalence("video"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    submissions: list[str] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda agent, _endpoint, _payload: (
+            submissions.append(agent.id)
+            or {"id": f"job-{agent.id}", "status": "queued"}
+        )
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, raw, _ = _post(
+            server.server_address[1],
+            "/v1/videos",
+            {"model": "video-group", "prompt": "product walkthrough"},
+        )
+        assert status == 200
+        assert json.loads(raw)["id"].startswith("videojob_")
+        assert submissions == ["first_video"]
+    finally:
+        server.shutdown()
+
+
+def test_video_provider_outage_returns_documented_503() -> None:
+    """A configured owner that cannot answer remains unavailable, not a 500."""
+    agent = ModelAgent("video_owner", "provider/video", tags=("video",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, _payload: {"id": "provider-job", "status": "queued"}
+    )
+    orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint: (_ for _ in ()).throw(ConnectionError("offline"))
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        _, raw, _ = _post(port, "/v1/videos", {"prompt": "demo"})
+        gateway_job_id = json.loads(raw)["id"]
+        status, body = _get_error(port, f"/v1/videos/{gateway_job_id}")
+        assert status == 503
+        assert body["error"]["code"] == "video_provider_unavailable"
     finally:
         server.shutdown()
 
@@ -267,7 +356,6 @@ def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
     ("capability", "endpoint", "binary"),
     [
         ("image", "images/generations", False),
-        ("video", "videos", False),
         ("speech", "audio/speech", True),
         ("transcription", "audio/transcriptions", False),
         ("embedding", "embeddings", False),

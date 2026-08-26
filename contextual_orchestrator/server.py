@@ -5107,20 +5107,27 @@ def build_server(
                         )
                         return
                     provider_path = f"videos/{urllib.parse.quote(owner.provider_job_id, safe='')}"
-                    if content_request:
-                        raw, content_type = self._run(
-                            lambda: orchestrator.client.proxy_get_bytes(
-                                agent, f"{provider_path}/content"
+                    try:
+                        if content_request:
+                            raw, content_type = self._run(
+                                lambda: orchestrator.client.proxy_get_bytes(
+                                    agent, f"{provider_path}/content"
+                                )
                             )
-                        )
-                        self._send_bytes(raw, content_type)
-                    else:
-                        result = self._run(
-                            lambda: orchestrator.client.proxy_get_json(agent, provider_path)
-                        )
-                        result = dict(result)
-                        result["id"] = gateway_job_id
-                        self._send(result)
+                            self._send_bytes(raw, content_type)
+                        else:
+                            result = self._run(
+                                lambda: orchestrator.client.proxy_get_json(
+                                    agent, provider_path
+                                )
+                            )
+                            self._send(video_jobs.public_response(result, owner))
+                    except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                        raise RequestError(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        ) from exc
                     return
                 self._authorize("admin", purpose=self._admin_purpose(path))
                 if path == "/api/v1/cost_attribution_dimensions":

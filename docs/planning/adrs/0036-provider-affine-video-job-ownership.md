@@ -38,12 +38,23 @@ the existing job-registry boundary. Status and content requests resolve that
 record and call the recorded agent without routing again. The provider id is
 not returned to the client.
 
+Video submission does not use immediate speculative racing when provider-side
+job cancellation is unavailable. It follows the measured sequential failover
+order and stops after the first accepted job, so no losing provider can retain
+an unowned billable job. Synchronous capabilities may still use an
+operator-declared equivalent-endpoint race under ADR 0034.
+
 A provider response without a non-empty job id fails with 502 instead of
 creating an untrackable resource. An unknown gateway id returns 404. If the
 recorded agent was removed from configuration, follow-up returns 503 with an
 operator action; it never selects a replacement provider. Disabling an agent
 prevents new selection but does not invalidate ownership of work it already
 accepted.
+
+A configured owner that is temporarily unreachable also returns the same
+redacted 503 rather than a generic 500. Provider responses are recursively
+rewritten so an exact provider job id repeated in nested metadata or URLs is
+replaced by the gateway id before crossing the public boundary.
 
 The registry inherits the existing operator-configured lifecycle. With Valkey
 configured, ownership survives process restart and is shared across replicas;
@@ -64,4 +75,3 @@ durability claim. This decision adds no inferred TTL or new retention policy.
 Fielding, R. T. (2000). *Architectural styles and the design of network-based
 software architectures* (Doctoral dissertation, University of California,
 Irvine). https://www.ics.uci.edu/~fielding/pubs/dissertation/top.htm
-

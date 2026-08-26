@@ -44,8 +44,31 @@ class VideoJobRegistry:
             agent_id=agent_id,
             submitted_at=int(time.time()),
         )
-        response = dict(provider_result)
-        response["id"] = gateway_job_id
+        return self.public_response(provider_result, self._owners[gateway_job_id])
+
+    @staticmethod
+    def public_response(
+        provider_result: dict[str, Any], owner: VideoJobOwner
+    ) -> dict[str, Any]:
+        """Replace every occurrence of the provider job id in a JSON document.
+
+        Providers may repeat their job identifier in nested metadata or URLs.
+        The gateway ownership identifier is the only job identity exposed to
+        clients, so exact occurrences are replaced recursively before a
+        provider document crosses the public boundary.
+        """
+
+        def replace(value: Any) -> Any:
+            if isinstance(value, str):
+                return value.replace(owner.provider_job_id, owner.gateway_job_id)
+            if isinstance(value, list):
+                return [replace(item) for item in value]
+            if isinstance(value, dict):
+                return {replace(key): replace(item) for key, item in value.items()}
+            return value
+
+        response = replace(provider_result)
+        response["id"] = owner.gateway_job_id
         return response
 
     def owner(self, gateway_job_id: str) -> VideoJobOwner:
