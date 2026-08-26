@@ -35,6 +35,7 @@ from .model_discovery import (
     agent_id_for,
     discover_all_models,
     is_discovered_chat_candidate,
+    privacy_tags_for_discovered,
     refresh_price_book,
 )
 from .orchestrator import ModelAgent, TaskOrchestrator
@@ -178,12 +179,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
             (
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
-                *(("privacy:zdr",) if model.supports_zero_data_retention is True else ()),
-                *(("privacy:no_zdr",) if model.supports_zero_data_retention is False else ()),
-                *(("privacy:no_training",) if model.supports_no_training is True else ()),
-                *(("privacy:training_only",) if model.supports_no_training is False else ()),
-                *(("privacy:no_retention",) if model.supports_no_prompt_retention is True else ()),
-                *(("privacy:retention_only",) if model.supports_no_prompt_retention is False else ()),
+                *privacy_tags_for_discovered(model),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
