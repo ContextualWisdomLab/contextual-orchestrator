@@ -23,6 +23,45 @@ fn checked_token_total(current: usize, additional: usize) -> PyResult<usize> {
 }
 
 #[pyfunction]
+fn sum_token_counts(values: Vec<usize>) -> PyResult<usize> {
+    values.into_iter().try_fold(0usize, checked_token_total)
+}
+
+#[pyfunction]
+fn weighted_average_embeddings(parts: Vec<(Vec<f64>, usize)>) -> PyResult<Vec<f64>> {
+    let vectors: Vec<&Vec<f64>> = parts
+        .iter()
+        .filter_map(|(vector, _weight)| (!vector.is_empty()).then_some(vector))
+        .collect();
+    if vectors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dimension = vectors.iter().map(|vector| vector.len()).max().unwrap_or(0);
+    let weights: Vec<usize> = parts
+        .iter()
+        .map(|(_vector, weight)| (*weight).max(1))
+        .collect();
+    let total_weight = sum_token_counts(weights.clone())?;
+    (0..dimension)
+        .map(|offset| {
+            let weighted_sum = parts
+                .iter()
+                .zip(weights.iter())
+                .map(|((vector, _weight), weight)| {
+                    vector.get(offset).copied().unwrap_or(0.0) * (*weight as f64)
+                })
+                .sum::<f64>();
+            let reduced = weighted_sum / (total_weight as f64);
+            if reduced.is_finite() {
+                Ok((reduced * 100_000_000.0).round() / 100_000_000.0)
+            } else {
+                Err(PyValueError::new_err("embedding reduction is not finite"))
+            }
+        })
+        .collect()
+}
+
+#[pyfunction]
 fn pack_cl100k(
     texts: Vec<String>,
     max_tokens_per_input: usize,
@@ -86,6 +125,8 @@ fn pack_cl100k(
 fn _token_packer(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PackedPart>()?;
     module.add_function(wrap_pyfunction!(pack_cl100k, module)?)?;
+    module.add_function(wrap_pyfunction!(sum_token_counts, module)?)?;
+    module.add_function(wrap_pyfunction!(weighted_average_embeddings, module)?)?;
     Ok(())
 }
 
@@ -181,6 +222,22 @@ mod tests {
 
     #[test]
     fn checked_total_fails_closed_on_integer_overflow() {
-        Python::with_gil(|_| assert!(checked_token_total(usize::MAX, 1).is_err()));
+        Python::with_gil(|_| {
+            assert!(checked_token_total(usize::MAX, 1).is_err());
+            assert!(sum_token_counts(vec![usize::MAX, 1]).is_err());
+        });
+    }
+
+    #[test]
+    fn vector_reduction_and_token_sum_are_rust_owned() {
+        Python::with_gil(|_| {
+            assert_eq!(sum_token_counts(vec![2, 3, 5]).unwrap(), 10);
+            assert_eq!(
+                weighted_average_embeddings(vec![(vec![1.0, 3.0], 1), (vec![3.0, 5.0], 3)])
+                    .unwrap(),
+                vec![2.5, 4.5]
+            );
+            assert!(weighted_average_embeddings(vec![(vec![f64::INFINITY], 1)]).is_err());
+        });
     }
 }

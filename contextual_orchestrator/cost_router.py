@@ -126,7 +126,7 @@ class CostRoutingCoordinator:
                 if capability is None:
                     return orchestrator.client.embed_with_usage(agent, texts)
                 vectors: List[List[float]] = []
-                total_tokens = 0
+                provider_token_counts: List[int] = []
                 shards: List[List[EmbeddingBatchRequest]] = []
                 for request in requests:
                     if request.token_count > capability.max_tokens_per_input:
@@ -172,8 +172,8 @@ class CostRoutingCoordinator:
                                 "provider_tokens": used,
                             }
                     vectors.extend(chunk_vectors)
-                    total_tokens += used
-                return vectors, total_tokens
+                    provider_token_counts.append(used)
+                return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
             except Exception as exc:
                 max_inputs = getattr(exc, "max_inputs", None)
                 if type(max_inputs) is not int or max_inputs < 1 or len(texts) <= max_inputs:
@@ -184,14 +184,14 @@ class CostRoutingCoordinator:
                     max_inputs,
                 )
                 vectors: List[List[float]] = []
-                total_tokens = 0
+                provider_token_counts = []
                 for offset in range(0, len(texts), max_inputs):
                     chunk_vectors, chunk_tokens = orchestrator.client.embed_with_usage(
                         agent, texts[offset : offset + max_inputs]
                     )
                     vectors.extend(chunk_vectors)
-                    total_tokens += chunk_tokens
-                return vectors, total_tokens
+                    provider_token_counts.append(chunk_tokens)
+                return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
 
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
             embed,
@@ -633,6 +633,12 @@ class CostRoutingCoordinator:
             "max_chars_per_part": max_chars,
         }
 
+    def _rust_embedding_core(self) -> RustCl100kPacker:
+        """Return the owned Rust boundary for embedding token/vector arithmetic."""
+        if self._cl100k_packer is None:
+            self._cl100k_packer = RustCl100kPacker()
+        return self._cl100k_packer
+
     def _embedding_request_limits(self) -> tuple[int, int]:
         """Return configured per-provider-call embedding ceilings.
 
@@ -901,7 +907,9 @@ class CostRoutingCoordinator:
                 token_counts.append(0)
                 continue
             attribution = dict(parts[0]["attribution"])
-            prompt_tokens = sum(int(part["prompt_tokens"]) for part in parts)
+            prompt_tokens = self._rust_embedding_core().sum_token_counts(
+                [int(part["prompt_tokens"]) for part in parts]
+            )
             model_name = str(parts[0]["model"])
             provider = str(
                 attribution.get("provider") or attribution.get("upstream_api") or "unknown"
@@ -925,7 +933,7 @@ class CostRoutingCoordinator:
             embeddings.append(
                 {
                     "index": source_index,
-                    "embedding": _weighted_average_embedding(
+                    "embedding": self._rust_embedding_core().weighted_average_embeddings(
                         [(part["embedding"], int(part["prompt_tokens"])) for part in parts]
                     ),
                     "attribution": attribution,
@@ -969,7 +977,7 @@ class CostRoutingCoordinator:
             "total_tokens": (
                 provider_batch_tokens
                 if provider_batch_tokens is not None
-                else sum(token_counts)
+                else self._rust_embedding_core().sum_token_counts(token_counts)
             ),
             "batch_token_count": provider_batch_tokens,
             "part_count": len(requests),
@@ -1093,21 +1101,3 @@ def _positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
-
-
-def _weighted_average_embedding(parts: List[tuple[List[float], int]]) -> List[float]:
-    """Reduce mapped chunk vectors into one deterministic embedding vector."""
-    vectors = [vector for vector, _weight in parts if vector]
-    if not vectors:
-        return []
-    dimension = max(len(vector) for vector in vectors)
-    # Every weight clamps to at least 1, so a non-empty part list always
-    # yields a positive total.
-    total_weight = sum(max(1, int(weight)) for _vector, weight in parts)
-    reduced: List[float] = []
-    for offset in range(dimension):
-        weighted_sum = 0.0
-        for vector, weight in parts:
-            weighted_sum += (vector[offset] if offset < len(vector) else 0.0) * max(1, int(weight))
-        reduced.append(round(weighted_sum / total_weight, 8))
-    return reduced
