@@ -123,6 +123,7 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     )
     assert 'id="sessionAction"' in ADMIN_HTML
     assert "els.sessionAction.hidden = false" in ADMIN_HTML
+    assert "if (res.ok && els.sessionAction) els.sessionAction.hidden = false" in ADMIN_HTML
     assert 'els.sessionAction?.addEventListener("click", () => showView("integrations"))' in ADMIN_HTML
     explanatory_keys = (
         "doc_viewer_desc",

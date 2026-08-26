@@ -1719,6 +1719,7 @@ Summarize this research thread and verify claims.</textarea>
         method: "DELETE"
       });
       els.sessionStatus.textContent = res.ok ? t("session_status_missing") : "Session logout failed";
+      if (res.ok && els.sessionAction) els.sessionAction.hidden = false;
     }
     async function runEvaluation() {
       const prompts = els.evaluationPrompts.value.split("\n").map(item => item.trim()).filter(Boolean);
