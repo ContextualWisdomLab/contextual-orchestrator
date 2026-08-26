@@ -1,18 +1,45 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+All notable changes to `contextual-orchestrator` are documented here. The
+project follows Semantic Versioning; a version is released only after the
+protected `main` branch, required Checks, independent review, and release
+artifacts are verified on the same commit.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - Unreleased
 
 ### Added
 
+- Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and
+  `COMPLEX_HINTS` keyword tables are deleted; ordering is now
+  eligibility contracts -> declaration priority/capability fit/cosine
+  affinity over operator-declared metadata (cached dense embeddings) ->
+  measured intra-group quality then successful responses per second, with
+  token throughput retained as diagnostic evidence. Workflow triage is
+  a strict structured call that fails closed to conducted orchestration;
+  verdicts are memoized by content hash. Real-time fast-mlsirm judging on
+  direct routes feeds a second Beta-Bernoulli quality ledger and drives
+  failover within the retry budget; `--no-realtime-judge` preserves the
+  legacy verification shape. APA 7 references live in
+  `docs/doctoring/measured-routing-evidence.md`.
+- Product & technical gap baseline (`docs/product-technical-gap-baseline.md`)
+  indexing buyer-visible gaps against open PRs/issues with update protocol.
 - Citation-backed `docs/adr` set: APA 7th references on the tool-execution fallback policy, plus accepted control-plane, cost-aware sync-versus-batch, and MSA-leaf composition ADRs, indexed from `docs/adr/README.md`.
-- Structured tool failure categories, stable fallback actions, and public adapter exceptions.
+- Structured tool failure categories, stable fallback actions, and public
+  adapter exceptions.
 - Secret-free `tool_fallback_decision` audit events.
 - Exact regression coverage for the Strix `Tool execute_command not found in agent strix` failure.
+- Operator-managed model groups: `ModelAgent.group_name`, measured intra-group
+  routing (Beta(1,1) posterior success probability over Jacobson-gain EWMA
+  latency), group-alias model resolution, `/api/v1/model_groups` CRUD with
+  normalized persistence, Admin editing, and routing-evidence display across
+  text, image, video, speech, transcription, embeddings, rerank, and audio.
+  (#834, ADR 0032)
+- OpenCode Zen provider discovery plus explicit free-tier classification from
+  structured Models.dev zero-price metadata; `discover-models --free-only`.
+  (#834)
 - Versioned `reasoning_effort_profile` catalog (issue #568) with fail-closed
   parse, per-role bindings, replayable snapshot hash, and an equal-budget
   true-θ RMSE ablation that emits θ̂ and RMSE(θ̂, θ). Sampling temperature
@@ -43,13 +70,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Missing or unavailable tools move to the next eligible agent instead of terminating the workflow immediately.
 - Return the same `agent_not_found` error code for GET, PATCH, and DELETE worker
   agent requests that address an unknown or unauthorized pool member.
+- Strix B105 false positives eliminated at the source: KV credential-name
+  constants renamed `*_CREDENTIAL_NAME`; readiness label keys renamed
+  `readiness_ok/warning/failure`. (#833)
 
 ### Security
 
-  - Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
-  - Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
-  - Worker-agent pool boundaries are enforced beside object lookup so a
-    different-pool id can no longer read or mutate another pool's agent.
+- Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
+- Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
+- Worker-agent pool boundaries are enforced beside object lookup so a
+  different-pool id can no longer read or mutate another pool's agent.
 
 ### References
 
@@ -64,3 +94,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
   ERIC Clearinghouse on Assessment and Evaluation.
   https://eric.ed.gov/?id=ED458219
+
+## [0.1.0] - Unreleased
+
+This is the current development baseline, not a published release. It
+provides the OpenAI-compatible gateway, route/conduct orchestration, workflow
+and access evidence, provider credential boundaries, cost and readiness
+reporting, and security-focused contract tests.

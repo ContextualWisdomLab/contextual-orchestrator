@@ -202,8 +202,9 @@ def test_stream_disconnect_stops_consuming_upstream_deltas() -> None:
         def flush(self) -> None:
             return None
 
-    def stream_route(_messages, *, workflow_run_id: str):
+    def stream_route(_messages, *, workflow_run_id: str, model_name: str = "m-model"):
         assert workflow_run_id.startswith("run_")
+        del model_name
         try:
             for delta in ("first", "second"):
                 consumed.append(delta)

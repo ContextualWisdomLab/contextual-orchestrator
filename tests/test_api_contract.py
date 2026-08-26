@@ -69,6 +69,22 @@ def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> Non
     ]
 
 
+def test_openapi_capability_requests_have_endpoint_specific_contracts() -> None:
+    expected_required = {
+        "/v1/images/generations": ["prompt"],
+        "/v1/videos": ["prompt"],
+        "/v1/audio/speech": ["input", "voice"],
+        "/v1/audio/transcriptions": ["input_audio"],
+        "/v1/rerank": ["query", "documents"],
+        "/v1/audio/generations": ["messages"],
+    }
+    for path, required in expected_required.items():
+        schema = OPENAPI_SPEC["paths"][path]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        assert schema["required"] == required
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
     test_openapi_uses_resource_oriented_operation_ids()

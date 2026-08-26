@@ -219,7 +219,7 @@ class LocalBatchBackend:
     """In-process batch backend that runs each request via an injected runner.
 
     Preserves the mock/local path: no external service, no Postgres. The runner
-    is any callable ``(messages, mode) -> {"answer": str, "mode": str}`` — the
+    is any callable ``(messages, mode, model) -> {"answer": str, "mode": str}`` — the
     orchestrator's own ``complete`` fits directly. Results are computed eagerly
     on submit and returned verbatim on retrieve, so the batch lifecycle is fully
     observable in tests.
@@ -229,7 +229,7 @@ class LocalBatchBackend:
 
     def __init__(
         self,
-        runner: Callable[[List[Dict[str, str]], str], Dict[str, Any]],
+        runner: Callable[[List[Dict[str, str]], str, str], Dict[str, Any]],
         *,
         max_concurrency: int = 1,
         job_registry: Any = None,
@@ -250,7 +250,7 @@ class LocalBatchBackend:
         """Run every request in-process and stash the results under a job id."""
         job_id = f"localbatch_{uuid.uuid4().hex}"
         def run(request: BatchRequest) -> BatchResultItem:
-            result = self._runner(request.messages, request.mode)
+            result = self._runner(request.messages, request.mode, request.model)
             answer = result.get("answer", "")
             return BatchResultItem(
                 custom_id=request.custom_id,

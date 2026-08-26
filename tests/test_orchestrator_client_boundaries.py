@@ -15,7 +15,6 @@ from contextual_orchestrator.orchestrator import (
     MAX_PROVIDER_PROBE_TIMEOUT,
     ModelAgent,
     ModelClient,
-    OrchestrationPolicy,
     TaskOrchestrator,
     _FastMLSIJudgeAdapter,
     _coerce_input_text,
@@ -162,13 +161,6 @@ def test_model_agent_rejects_bad_local_credential_key_and_effort_flag() -> None:
         ModelAgent(id="agent_two", model="m", local_credential_key=123)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="reasoning_effort_supported must be"):
         ModelAgent(id="agent_two", model="m", reasoning_effort_supported="yes")  # type: ignore[arg-type]
-
-
-def test_policy_rejects_non_positive_route_text_threshold() -> None:
-    with pytest.raises(ValueError, match="route_text_length_threshold"):
-        OrchestrationPolicy(route_text_length_threshold=0)
-    with pytest.raises(ValueError, match="route_text_length_threshold"):
-        OrchestrationPolicy(route_text_length_threshold="5")  # type: ignore[arg-type]
 
 
 def test_batch_results_must_be_a_mapping() -> None:

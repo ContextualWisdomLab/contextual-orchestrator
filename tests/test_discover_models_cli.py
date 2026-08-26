@@ -33,6 +33,22 @@ class _Response:
         return self._body
 
 
+def test_free_only_help_rejects_name_inference() -> None:
+    """CLI guidance matches the fail-closed structured-price contract."""
+    stdout = StringIO()
+    with (
+        patch.object(sys, "argv", ["contextual-orchestrator", "discover-models", "--help"]),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 0
+    help_text = " ".join(stdout.getvalue().split())
+    assert "structured provider/catalog price metadata" in help_text
+    assert "-free/:free" not in help_text
+
+
 def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None:
     set_backend(InMemoryCredentialBackend())
     stdout = StringIO()
@@ -50,6 +66,7 @@ def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None
         "priced_count": 0,
         "providers_with_errors": [],
         "enabled_agent_ids": [],
+        "free_tier_count": 0,
         "models": [],
     }
 
@@ -75,7 +92,9 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
         set_backend(None)
     report = json.loads(stdout.getvalue())
     assert report["discovered_count"] == 1
-    assert report["models"] == [{"provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5"}]
+    assert report["models"] == [
+        {"provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5", "is_free": False}
+    ]
 
 
 def test_discover_models_persists_to_agents_db(tmp_path) -> None:
