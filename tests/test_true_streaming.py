@@ -172,6 +172,17 @@ def test_stream_route_yields_and_persists() -> None:
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
 
 
+def test_stream_route_uses_canonical_provider_name_in_trace() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "m-model", base_url="mock://provider/path")]
+    )
+
+    list(orchestrator.stream_route([{"role": "user", "content": "stream"}]))
+
+    trace = next(iter(orchestrator._workflow_runs.values()))["trace"]
+    assert trace[0]["provider"] == "mock-provider/path"
+
+
 def test_stream_route_persists_owner() -> None:
     """Authenticated streaming lineage retains its owner boundary."""
     orchestrator = TaskOrchestrator(

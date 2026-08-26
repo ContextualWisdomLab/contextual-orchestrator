@@ -3594,7 +3594,7 @@ class TaskOrchestrator:
                         "role": "worker",
                         "agent_id": agent.id,
                         "model": agent.model,
-                        "provider": agent.provider_name or agent.base_url.split("://", 1)[-1],
+                        "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
                         "subtask": "Direct route (streamed)",
                         "access": [],
                         "latency_ms": round(latency_seconds * 1000, 2),
@@ -3815,7 +3815,7 @@ class TaskOrchestrator:
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
                 "model": agent.model,
-                "provider": agent.provider_name or agent.base_url.split("://", 1)[-1],
+                "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
                 "subtask": "Direct route (batched)", "access": [], "output": result["content"],
             }
             if result.get("usage") is not None:
@@ -4328,7 +4328,7 @@ class TaskOrchestrator:
                 "role": "worker",
                 "agent_id": candidate.id,
                 "model": candidate.model,
-                "provider": candidate.provider_name or candidate.base_url.split("://", 1)[-1],
+                "provider": candidate.provider_name or self._infer_provider_name(candidate.base_url),
                 "subtask": "Direct route",
                 "access": [],
                 "latency_ms": round(latency_seconds * 1000, 2),
@@ -4540,7 +4540,7 @@ class TaskOrchestrator:
             row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
             row["model"] = agent.model
-            row["provider"] = agent.provider_name or agent.base_url.split("://", 1)[-1]
+            row["provider"] = agent.provider_name or self._infer_provider_name(agent.base_url)
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
