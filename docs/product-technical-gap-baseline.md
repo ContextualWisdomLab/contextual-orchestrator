@@ -5,7 +5,7 @@
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
 The open queue was re-read at exact heads #855 `f2e66db7`, #851 `d42172b3`,
 #850 `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845 `24219ace`,
-and #834 parent `7896ac2f`. Auto-merge is enabled without bypass on every PR.
+and #834 `e563920a`. Auto-merge is enabled without bypass on every PR.
 The shared stale-table contract is stacked onto #845, #848, #849, and #850;
 #849 also makes the documented k6 traffic compatible with its isolated rate
 limit and validates programmatic request budgets, while #848 now rejects every
@@ -23,7 +23,10 @@ The same head now treats a disconnected Responses reasoning-summary stream as
 cancellation evidence: it stops before the next orchestration stage and always
 releases the bounded execution slot. The disconnect, Responses stream, and
 passthrough slice is `32 passed`; this prevents paid work from continuing after
-the customer can no longer receive it.
+the customer can no longer receive it. The complete exact tree passes `2253`
+tests after aligning four stale boundary assertions with the model-aware batch
+runner, normalized persistence table, measured routing policy, and public agent
+selection contract.
 
 ## 2026-08-26 10:00 KST customer-copy and responsive evidence
 
