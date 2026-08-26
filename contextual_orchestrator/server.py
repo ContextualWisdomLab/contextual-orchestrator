@@ -2116,13 +2116,24 @@ def _require_pool_model(
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
+    Virtual orchestrator-owned ids (:data:`TaskOrchestrator.GATEWAY_DEFAULT_MODEL`,
+    :data:`TaskOrchestrator.AUTO_MODEL`, :data:`TaskOrchestrator.FREE_MODEL`)
+    resolve through routing instead of an exact agent match — the gateway
+    default and auto behave identically (orchestrator-owned auto selection),
+    while the free id additionally requires a zero-cost agent. With a
+    ``required_capability`` the virtual ids resolve to a concrete capable agent
+    model because capability callers need a real deployment to forward to.
     """
     agents = getattr(orchestrator, "agents", None) or []
-    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+    virtual_ids = {
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        TaskOrchestrator.AUTO_MODEL,
+        TaskOrchestrator.FREE_MODEL,
+    }
+    if model_name in virtual_ids:
         if required_capability is None:
-            if model_name == TaskOrchestrator.AUTO_MODEL or any(
-                orchestrator._is_free_agent(agent) for agent in agents
-            ):
+            free_only = model_name == TaskOrchestrator.FREE_MODEL
+            if not free_only or any(orchestrator._is_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
         try:
@@ -2946,7 +2957,7 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = body.get("model", "contextual-orchestrator")
+    default_model = body.get("model", TaskOrchestrator.GATEWAY_DEFAULT_MODEL)
     if not isinstance(default_model, str) or not default_model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     default_model = default_model.strip()
@@ -4695,7 +4706,7 @@ def _openai_embeddings_response(
     return {
         "object": "list",
         "data": data,
-        "model": model or document.get("model") or "contextual-orchestrator",
+        "model": model or document.get("model") or TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
         "usage": {
             "prompt_tokens": total_tokens,
             "total_tokens": total_tokens,

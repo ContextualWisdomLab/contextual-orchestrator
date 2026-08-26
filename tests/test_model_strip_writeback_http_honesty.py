@@ -109,6 +109,43 @@ def test_http_chat_tools_accepts_padded_model() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_accepts_advertised_gateway_default_model() -> None:
+    """The gateway-default id advertised on /v1/models must be callable on chat.
+
+    Regression: ``_require_pool_model`` special-cased only
+    :data:`TaskOrchestrator.AUTO_MODEL`/:data:`TaskOrchestrator.FREE_MODEL`,
+    so the first entry of the advertised model list — the literal
+    ``contextual-orchestrator`` default every batch request already used —
+    was rejected with 400 on the general chat surface. Callers could submit
+    batch jobs but never hold a conversation: the endpoint contract matched
+    the async batch-routing API only.
+    """
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                "messages": [{"role": "user", "content": "gateway default chat"}],
+            },
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
+        # The advertised list must keep offering exactly this id first.
+        models_request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/models",
+            headers={"authorization": f"Bearer {_TEST_AUTH_TOKEN}"},
+        )
+        with urllib.request.urlopen(models_request, timeout=10) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+        assert listed["data"][0]["id"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_response_format_accepts_padded_model() -> None:
     server, thread, port = _server()
     try:

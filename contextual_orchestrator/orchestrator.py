@@ -2478,6 +2478,11 @@ class TaskOrchestrator:
         "synthesizer": ("writing", "reasoning", "planning"),
         "embedding": ("embedding",),
     }
+    #: Gateway-default virtual model name advertised on ``/v1/models`` and
+    #: accepted by every inference endpoint as orchestrator-owned auto
+    #: selection. Kept beside :data:`AUTO_MODEL` because both are virtual ids:
+    #: neither maps to a concrete agent until routing resolves one.
+    GATEWAY_DEFAULT_MODEL = "contextual-orchestrator"
     AUTO_MODEL = "orchestrator/auto"
     FREE_MODEL = "orchestrator/free"
 
@@ -2743,7 +2748,7 @@ class TaskOrchestrator:
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
-            "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL
+            self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL
         }:
             return None
         if type(requested_model) is not str or not requested_model:
@@ -2770,7 +2775,7 @@ class TaskOrchestrator:
         mode: str = "auto",
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
@@ -2818,13 +2823,13 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         ):
@@ -2835,14 +2840,14 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str = "auto",
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
         return mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         )
@@ -2852,7 +2857,7 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         workflow_run_id: str | None = None,
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         owner_id: str | None = None,
     ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
@@ -2930,7 +2935,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> str:
         snapshot = getattr(self.client, "request_settings_snapshot", None)
@@ -2956,7 +2961,7 @@ class TaskOrchestrator:
         workflow_run_id: str | None = None,
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
         owner_id: str | None = None,
     ) -> dict[str, Any]:
@@ -3533,7 +3538,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace.
 
@@ -3686,7 +3691,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         progress: Any = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
@@ -3697,7 +3702,7 @@ class TaskOrchestrator:
             if message.get("role") == "system" and isinstance(message.get("content"), str)
         )
         plan_source = "template"
-        if model_name not in {"contextual-orchestrator", self.AUTO_MODEL}:
+        if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
             steps = self._plan(task, model_name=model_name)
         elif self.policy.workflow_planning == "generated":
             try:
@@ -3901,7 +3906,7 @@ class TaskOrchestrator:
         return steps
 
     def _plan(
-        self, task: str, *, model_name: str = "contextual-orchestrator"
+        self, task: str, *, model_name: str = GATEWAY_DEFAULT_MODEL
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
         free_only = model_name == self.FREE_MODEL
@@ -4740,7 +4745,7 @@ class TaskOrchestrator:
         created = 1_700_000_000  # stable epoch so list responses are deterministic
         data: list[dict[str, Any]] = [
             {
-                "id": "contextual-orchestrator",
+                "id": self.GATEWAY_DEFAULT_MODEL,
                 "object": "model",
                 "created": created,
                 "owned_by": "contextual-orchestrator",
