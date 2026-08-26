@@ -159,7 +159,7 @@ def test_batch_route_persists_runs_when_a_state_db_is_configured(tmp_path) -> No
     connection = sqlite3.connect(db_path)
     try:
         rows = connection.execute(
-            "SELECT COUNT(*) FROM records WHERE kind = 'workflow_run'"
+            "SELECT COUNT(*) FROM orchestration_records WHERE kind = 'workflow_run'"
         ).fetchone()
         assert rows[0] == 1
     finally:
