@@ -65,7 +65,10 @@ only.
 7. **Rust owns exact packing.** The owned `rust/` Cargo workspace builds a
    typed PyO3 extension with pinned Rust 1.97.1. It performs cl100k
    tokenization, token-boundary child chunking, source token-range retention,
-   and request sharding with Rayon; Python only orchestrates the returned
+   and request sharding with Rayon. A part boundary retreats to the nearest
+   decodable UTF-8 scalar boundary without exceeding the token ceiling; if no
+   non-empty decodable part fits, packing fails closed instead of corrupting
+   the source text. Python only orchestrates the returned
    typed parts. Completed provider shards are checkpointed under an atomic
    leased claim so retries neither repeat their provider cost nor reorder
    outputs. The separate 50,000-input OpenAI Batch-file limit does not apply to
