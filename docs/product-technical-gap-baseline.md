@@ -51,6 +51,15 @@ scrubbed observations prove the local discovery and routing contracts, not a
 protected merge or production deployment; current-head hosted checks and an
 independent approval remain required.
 
+Scheduled provider-catalog run `32960451916` failed before discovery because
+the workflow supplied five credentials while the fixed bootstrap inventory had
+expanded to six with OpenCode Zen. The workflow now supplies, validates, and
+leak-checks the same complete inventory derived by `PROVIDER_CREDENTIAL_NAMES`;
+the focused bootstrap/workflow contract is `39 passed` and `actionlint` is
+clean. Local NIM credentials are unavailable, so this repair is not live NIM
+catalog evidence. The next scheduled exact-main run must record non-secret NIM
+model/capability/error counts before the P1 live-evidence gap can close.
+
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.

@@ -67,6 +67,15 @@ def test_catalog_sync_leak_guard_matches_secret_normalization() -> None:
     assert "os.environ[name] and os.environ[name] in report" not in workflow
 
 
+def test_catalog_sync_supplies_the_complete_provider_inventory() -> None:
+    """Workflow inputs, report validation, and leak guard cover every provider."""
+    workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert all(workflow.count(name) >= 3 for name in PROVIDER_CREDENTIAL_NAMES)
+
+
 def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() -> None:
     """Scheduled discovery must run without falsely claiming durable storage."""
     workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(

@@ -83,6 +83,7 @@ jobs:
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
@@ -104,6 +105,7 @@ jobs:
               'NVIDIA_NIM_API_KEY_SUB',
               'BYTEZ_API_KEY',
               'OPENROUTER_API_KEY',
+              'OPENCODE_ZEN_API_KEY',
               'OPENAI_API_KEY',
           }
           registered = set(report['registered_credentials'])
@@ -137,6 +139,7 @@ jobs:
               'NVIDIA_NIM_API_KEY_SUB',
               'BYTEZ_API_KEY',
               'OPENROUTER_API_KEY',
+              'OPENCODE_ZEN_API_KEY',
               'OPENAI_API_KEY',
           )
           leaked = [
