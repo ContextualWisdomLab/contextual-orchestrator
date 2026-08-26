@@ -8,17 +8,20 @@ remains in the ordinary orchestrator.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from decimal import Decimal
 import hashlib
 import math
 import re
 import threading
 import uuid
-from typing import Callable, Mapping, Protocol, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
 
 from .model_discovery import DiscoveredModel, ProviderModelSource
+
+if TYPE_CHECKING:
+    from .privacy_policy_analysis import PrivacyPolicyAssessment
 
 
 PROVIDER_CATALOG_SCHEMA_SQL = """
@@ -63,6 +66,20 @@ CREATE TABLE IF NOT EXISTS model_policy_source (
     provider_model_id text NOT NULL
         REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
     policy_source_url text NOT NULL,
+    PRIMARY KEY (provider_model_id, policy_source_url)
+);
+
+CREATE TABLE IF NOT EXISTS model_policy_assessment (
+    provider_model_id text NOT NULL
+        REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
+    policy_source_url text NOT NULL,
+    zero_data_retention_available boolean,
+    supports_no_training boolean,
+    supports_no_prompt_retention boolean,
+    verified_quote text NOT NULL,
+    analyzer_provider text NOT NULL,
+    analyzer_model text NOT NULL,
+    observed_at timestamptz NOT NULL,
     PRIMARY KEY (provider_model_id, policy_source_url)
 );
 
@@ -136,6 +153,21 @@ class ProviderCatalogStore(Protocol):
         source: ProviderModelSource,
     ) -> list[DiscoveredModel]:
         """Return enabled, serving-eligible last-known-good models."""
+        ...
+
+    def record_privacy_assessment_success(
+        self,
+        source: ProviderModelSource,
+        assessments: Sequence["PrivacyPolicyAssessment"],
+    ) -> None:
+        """Atomically replace successful subject/source assessments."""
+        ...
+
+    def privacy_assessments(
+        self,
+        source: ProviderModelSource,
+    ) -> tuple["PrivacyPolicyAssessment", ...]:
+        """Return persisted grounded privacy evidence without secret values."""
         ...
 
     def refresh_evidence(self) -> tuple[CatalogRefreshEvidence, ...]:
@@ -323,6 +355,32 @@ def _deduplicate_models(
     return result
 
 
+def _normalize_privacy_assessments(
+    source: ProviderModelSource,
+    assessments: Sequence["PrivacyPolicyAssessment"],
+) -> tuple["PrivacyPolicyAssessment", ...]:
+    """Validate account-local grounded evidence and deduplicate subject/source rows."""
+    unique: dict[tuple[str, str], "PrivacyPolicyAssessment"] = {}
+    for assessment in assessments:
+        if (
+            assessment.subject_provider != source.provider_name
+            or assessment.subject_credential != source.credential_name
+        ):
+            raise ProviderCatalogError("privacy assessment belongs to a different account")
+        if not assessment.subject_model.strip() or not assessment.source_url.strip():
+            raise ProviderCatalogError("privacy assessment identity is incomplete")
+        if not assessment.evidence_quote.strip():
+            raise ProviderCatalogError("privacy assessment quote is empty")
+        if not assessment.analyzer_provider.strip() or not assessment.analyzer_model.strip():
+            raise ProviderCatalogError("privacy assessment analyzer identity is incomplete")
+        if assessment.observed_at.tzinfo is None:
+            raise ProviderCatalogError("privacy assessment timestamp must be timezone-aware")
+        unique[(assessment.subject_model, assessment.source_url)] = assessment
+    if not unique:
+        raise ProviderCatalogError("successful privacy assessment cannot be empty")
+    return tuple(unique[key] for key in sorted(unique))
+
+
 class InMemoryProviderCatalogStore:
     """Thread-safe deterministic provider catalog for tests and standalone use."""
 
@@ -332,6 +390,7 @@ class InMemoryProviderCatalogStore:
         self._eligible: dict[str, set[str]] = {}
         self._tags: dict[tuple[str, str], tuple[str, ...]] = {}
         self._refreshes: list[CatalogRefreshEvidence] = []
+        self._privacy: dict[tuple[str, str, str], "PrivacyPolicyAssessment"] = {}
         self._lock = threading.RLock()
 
     @property
@@ -425,6 +484,36 @@ class InMemoryProviderCatalogStore:
         """Return persisted generic serving tags for one model."""
         with self._lock:
             return self._tags.get((provider_account_id(source), model_name), ())
+
+    def record_privacy_assessment_success(
+        self,
+        source: ProviderModelSource,
+        assessments: Sequence["PrivacyPolicyAssessment"],
+    ) -> None:
+        """Atomically replace successful in-memory subject/source evidence."""
+        normalized = _normalize_privacy_assessments(source, assessments)
+        account_id = provider_account_id(source)
+        with self._lock:
+            known_models = self._models.get(account_id, {})
+            if any(item.subject_model not in known_models for item in normalized):
+                raise ProviderCatalogError("privacy assessment model is not persisted")
+            updated = dict(self._privacy)
+            for item in normalized:
+                updated[(account_id, item.subject_model, item.source_url)] = item
+            self._privacy = updated
+
+    def privacy_assessments(
+        self,
+        source: ProviderModelSource,
+    ) -> tuple["PrivacyPolicyAssessment", ...]:
+        """Return deterministic persisted in-memory privacy evidence."""
+        account_id = provider_account_id(source)
+        with self._lock:
+            return tuple(
+                self._privacy[key]
+                for key in sorted(self._privacy)
+                if key[0] == account_id
+            )
 
     def refresh_evidence(self) -> tuple[CatalogRefreshEvidence, ...]:
         """Return immutable refresh evidence in insertion order."""
@@ -722,6 +811,87 @@ class PostgresProviderCatalogStore:
             ), tags_by_model.get(row[0], ()))
             for row in rows
         ]
+
+    def record_privacy_assessment_success(
+        self,
+        source: ProviderModelSource,
+        assessments: Sequence["PrivacyPolicyAssessment"],
+    ) -> None:
+        """Atomically upsert successful PostgreSQL subject/source evidence."""
+        normalized = _normalize_privacy_assessments(source, assessments)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                for item in normalized:
+                    cursor.execute(
+                        "INSERT INTO model_policy_assessment ("
+                        "provider_model_id, policy_source_url, "
+                        "zero_data_retention_available, supports_no_training, "
+                        "supports_no_prompt_retention, verified_quote, "
+                        "analyzer_provider, analyzer_model, observed_at"
+                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (provider_model_id, policy_source_url) DO UPDATE SET "
+                        "zero_data_retention_available = EXCLUDED.zero_data_retention_available, "
+                        "supports_no_training = EXCLUDED.supports_no_training, "
+                        "supports_no_prompt_retention = EXCLUDED.supports_no_prompt_retention, "
+                        "verified_quote = EXCLUDED.verified_quote, "
+                        "analyzer_provider = EXCLUDED.analyzer_provider, "
+                        "analyzer_model = EXCLUDED.analyzer_model, "
+                        "observed_at = EXCLUDED.observed_at",
+                        (
+                            provider_model_id(source, item.subject_model),
+                            item.source_url,
+                            item.zero_data_retention_available,
+                            item.supports_no_training,
+                            item.supports_no_prompt_retention,
+                            item.evidence_quote,
+                            item.analyzer_provider,
+                            item.analyzer_model,
+                            item.observed_at,
+                        ),
+                    )
+            connection.commit()
+
+    def privacy_assessments(
+        self,
+        source: ProviderModelSource,
+    ) -> tuple["PrivacyPolicyAssessment", ...]:
+        """Read deterministic grounded privacy evidence for one provider account."""
+        from .privacy_policy_analysis import PrivacyPolicyAssessment
+
+        account_id = provider_account_id(source)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pm.model_name, mpa.policy_source_url, "
+                    "mpa.zero_data_retention_available, mpa.supports_no_training, "
+                    "mpa.supports_no_prompt_retention, mpa.verified_quote, "
+                    "mpa.analyzer_provider, mpa.analyzer_model, mpa.observed_at "
+                    "FROM model_policy_assessment AS mpa "
+                    "JOIN provider_model AS pm "
+                    "ON pm.provider_model_id = mpa.provider_model_id "
+                    "WHERE pm.provider_account_id = %s "
+                    "ORDER BY pm.model_name, mpa.policy_source_url",
+                    (account_id,),
+                )
+                rows = cursor.fetchall()
+        return tuple(
+            PrivacyPolicyAssessment(
+                subject_provider=source.provider_name,
+                subject_credential=source.credential_name,
+                subject_model=row[0],
+                source_url=row[1],
+                zero_data_retention_available=row[2],
+                supports_no_training=row[3],
+                supports_no_prompt_retention=row[4],
+                evidence_quote=row[5],
+                analyzer_provider=row[6],
+                analyzer_model=row[7],
+                observed_at=row[8],
+            )
+            for row in rows
+        )
 
     def refresh_evidence(self) -> tuple[CatalogRefreshEvidence, ...]:
         """Return evidence emitted by this store instance."""

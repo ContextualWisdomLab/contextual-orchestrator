@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -12,10 +13,11 @@ from contextual_orchestrator.model_discovery import (
     ProviderModelSource,
     _currency_is_comparable,
 )
+from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
 from contextual_orchestrator.provider_catalog_store import (
+    PROVIDER_CATALOG_SCHEMA_SQL,
     InMemoryProviderCatalogStore,
     PostgresProviderCatalogStore,
-    PROVIDER_CATALOG_SCHEMA_SQL,
     ProviderCatalogError,
     normalize_discovered_model,
     provider_account_id,
@@ -58,6 +60,7 @@ def test_schema_is_normalized_and_contains_no_secret_value_column() -> None:
         "provider_model",
         "model_serving_tag",
         "model_policy_source",
+        "model_policy_assessment",
         "catalog_refresh_run",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in PROVIDER_CATALOG_SCHEMA_SQL
@@ -232,14 +235,78 @@ def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
     assert restored[0].supports_zero_data_retention is False
 
 
+def _assessment(
+    source: ProviderModelSource,
+    *,
+    quote: str = "Prompts are not retained.",
+) -> PrivacyPolicyAssessment:
+    return PrivacyPolicyAssessment(
+        subject_provider=source.provider_name,
+        subject_credential=source.credential_name,
+        subject_model="model-a",
+        source_url="https://provider.example/privacy",
+        zero_data_retention_available=True,
+        supports_no_training=True,
+        supports_no_prompt_retention=True,
+        evidence_quote=quote,
+        analyzer_provider="openrouter",
+        analyzer_model="zdr-analyzer",
+        observed_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+    )
+
+
+def test_memory_privacy_evidence_replaces_success_and_survives_failure() -> None:
+    """Only a complete successful assessment may replace last-known-good evidence."""
+    source = _source()
+    model = replace(
+        _model(source, "model-a"),
+        privacy_policy_urls=("https://provider.example/privacy",),
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source, [model], eligible_model_ids={model.model_id}, serving_tags={}
+    )
+    store.record_privacy_assessment_success(source, [_assessment(source)])
+    original = store.privacy_assessments(source)
+
+    store.record_failure(source, error_code="provider_discovery_error")
+    assert store.privacy_assessments(source) == original
+
+    replacement = _assessment(source, quote="Inputs are not used for training.")
+    store.record_privacy_assessment_success(source, [replacement])
+    assert store.privacy_assessments(source) == (replacement,)
+
+
+def test_memory_privacy_evidence_rejects_partial_batch_atomically() -> None:
+    """One invalid row rejects the batch before any successful row is written."""
+    source = _source()
+    model = replace(
+        _model(source, "model-a"),
+        privacy_policy_urls=("https://provider.example/privacy",),
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source, [model], eligible_model_ids={model.model_id}, serving_tags={}
+    )
+    invalid = replace(_assessment(source), subject_provider="other")
+    with pytest.raises(ProviderCatalogError, match="different account"):
+        store.record_privacy_assessment_success(
+            source, [_assessment(source), invalid]
+        )
+    assert store.privacy_assessments(source) == ()
+
+
 class _FakeCursor:
     """Minimal DB-API cursor recording parameterized catalog statements."""
 
-    def __init__(self, rows=None, tag_rows=None, policy_source_rows=None) -> None:
+    def __init__(
+        self, rows=None, tag_rows=None, policy_source_rows=None, privacy_rows=None
+    ) -> None:
         self.calls: list[tuple[str, object]] = []
         self.rows = list(rows or [])
         self.tag_rows = list(tag_rows or [])
         self.policy_source_rows = list(policy_source_rows or [])
+        self.privacy_rows = list(privacy_rows or [])
         self._current_rows = self.rows
 
     def __enter__(self):
@@ -253,6 +320,8 @@ class _FakeCursor:
         self._current_rows = (
             self.tag_rows
             if "FROM model_serving_tag AS mst" in statement
+            else self.privacy_rows
+            if "FROM model_policy_assessment AS mpa" in statement
             else self.policy_source_rows
             if "FROM model_policy_source AS mps" in statement
             else self.rows
@@ -265,8 +334,12 @@ class _FakeCursor:
 class _FakeConnection:
     """Minimal transaction object exercising the PostgreSQL adapter."""
 
-    def __init__(self, rows=None, tag_rows=None, policy_source_rows=None) -> None:
-        self.cursor_object = _FakeCursor(rows, tag_rows, policy_source_rows)
+    def __init__(
+        self, rows=None, tag_rows=None, policy_source_rows=None, privacy_rows=None
+    ) -> None:
+        self.cursor_object = _FakeCursor(
+            rows, tag_rows, policy_source_rows, privacy_rows
+        )
         self.commits = 0
 
     def __enter__(self):
@@ -403,6 +476,53 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
     assert "FROM model_policy_source AS mps" in policy_query
     assert "serving_eligible_flag = true" in model_query
     assert model_params == tag_params == policy_params == (provider_account_id(source),)
+
+
+def test_postgres_privacy_evidence_is_parameterized_and_read_only() -> None:
+    """PostgreSQL upserts grounded fields and reconstructs the accessor contract."""
+    source = _source()
+    assessment = _assessment(source)
+    write_connection = _FakeConnection()
+    store = PostgresProviderCatalogStore(
+        "postgresql://catalog.example/db",
+        connection_factory=lambda: write_connection,
+    )
+    store.record_privacy_assessment_success(source, [assessment])
+    inserts = [
+        (statement, params)
+        for statement, params in write_connection.cursor_object.calls
+        if "INSERT INTO model_policy_assessment" in statement
+    ]
+    assert len(inserts) == 1
+    assert "ON CONFLICT" in inserts[0][0]
+    assert inserts[0][1][1:] == (
+        assessment.source_url,
+        True,
+        True,
+        True,
+        assessment.evidence_quote,
+        assessment.analyzer_provider,
+        assessment.analyzer_model,
+        assessment.observed_at,
+    )
+
+    read_connection = _FakeConnection(
+        privacy_rows=[
+            (
+                assessment.subject_model,
+                assessment.source_url,
+                True,
+                True,
+                True,
+                assessment.evidence_quote,
+                assessment.analyzer_provider,
+                assessment.analyzer_model,
+                assessment.observed_at,
+            )
+        ]
+    )
+    store._connection_factory = lambda: read_connection
+    assert store.privacy_assessments(source) == (assessment,)
 
 
 if __name__ == "__main__":  # pragma: no cover
