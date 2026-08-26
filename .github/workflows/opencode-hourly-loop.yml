@@ -88,7 +88,7 @@ jobs:
       - name: Install OpenCode CLI
         run: |
           npm ci --ignore-scripts
-          node node_modules/opencode-ai/postinstall.mjs
+          node scripts/ci/install_locked_opencode.mjs
 
       - name: Generate ephemeral loopback gateway token
         run: |

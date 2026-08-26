@@ -19,6 +19,13 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     ):
         assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
-    assert "node node_modules/opencode-ai/postinstall.mjs" in workflow
+    assert "node scripts/ci/install_locked_opencode.mjs" in workflow
+    installer = Path("scripts/ci/install_locked_opencode.mjs").read_text()
+    assert "optionalDependencies" in installer
+    assert "installed.version !== expectedVersion" in installer
+    assert "npm install" not in installer
+    assert "child_process" not in installer
+    assert "fetch(" not in installer
+    assert "postinstall.mjs" not in workflow
     assert "pull-requests: write" in workflow
     assert "docs/product-technical-gap-baseline.md" in workflow
