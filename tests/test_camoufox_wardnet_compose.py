@@ -24,7 +24,7 @@ def test_camoufox_browser_has_only_internal_networks_and_wardnet_dns() -> None:
 
 def test_artifacts_are_immutable_and_boundaries_are_separately_authenticated() -> None:
     text = COMPOSE.read_text(encoding="utf-8")
-    assert "wardnet.git#3f8717fe9061990b1951b800a452bad1f7bb18b1" in text
+    assert "wardnet.git#233c831bb26fc57b6c4be3435f54306f56fd37a8" in text
     assert text.count("rust:1.88-bookworm@sha256:af306cfa") == 2
     assert "cargo build --locked --release" in text
     assert (
@@ -53,7 +53,7 @@ def test_rendered_compose_keeps_browser_off_the_default_network() -> None:
         "CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE": "test-only",
         "WARDNET_ADMIN_TOKEN": "test-only",
         "WARDNET_EGRESS_PROXY_TOKEN": "test-only",
-        "WARDNET_CONTROL_PLANE_DATABASE_URL": "postgresql://test.invalid/db",
+        "WARDNET_CONTROL_PLANE_DATABASE_URL": "postgresql://test.invalid/db?sslmode=require",
         "CAMOFOX_API_KEY": "test-only",
         "CAMOFOX_MCP_TOKEN": "test-only",
     }
@@ -78,7 +78,11 @@ def test_rendered_compose_keeps_browser_off_the_default_network() -> None:
     )
     rendered = json.loads(result.stdout)
     browser = rendered["services"]["camofox-browser"]
+    wardnet = rendered["services"]["wardnet"]
     assert set(browser["networks"]) == {"camoufox_control", "camoufox_egress"}
     assert browser["dns"] == ["172.30.0.2"]
     assert browser["platform"] == "linux/amd64"
+    assert wardnet["environment"]["CONTROL_PLANE_DATABASE_URL"].endswith(
+        "?sslmode=require"
+    )
     assert rendered["networks"]["camoufox_egress"]["internal"] is True

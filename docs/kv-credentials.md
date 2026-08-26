@@ -65,7 +65,10 @@ dual-homed for upstream DNS and HTTPS, so browser subprocesses cannot reach
 external DNS or TCP 80/443 without Wardnet.
 
 Start the overlay after registering matching KV values and supplying its
-dedicated deployment secrets plus Wardnet's PostgreSQL URL:
+dedicated deployment secrets plus Wardnet's PostgreSQL URL. Because Wardnet
+binds non-loopback interfaces in this profile, the URL must use `postgres://`
+or `postgresql://` and explicitly select `sslmode=require`, `verify-ca`, or
+`verify-full`; an omitted mode or `sslmode=disable` fails startup:
 
 ```bash
 docker compose -f compose.yaml -f compose.camoufox-wardnet.yaml up -d

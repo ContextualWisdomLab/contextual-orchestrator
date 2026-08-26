@@ -47,7 +47,9 @@ implementation is accepted in this repository.
 The optional `compose.camoufox-wardnet.yaml` overlay now makes that deployment
 contract inspectable: immutable Camofox browser/MCP artifacts, an immutable
 Wardnet build revision, dedicated auth boundaries, Wardnet port-53 DNS, and a
-browser attached only to Docker `internal` networks. Compose rendering and
+browser attached only to Docker `internal` networks. Its non-loopback Wardnet
+bind also requires an explicit TLS PostgreSQL mode (`require`, `verify-ca`, or
+`verify-full`). Compose rendering and
 static contract tests prove the topology; a successfully started stack plus
 denied direct-DNS/direct-443 probes remain required runtime acceptance evidence.
 

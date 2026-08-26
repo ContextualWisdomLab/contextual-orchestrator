@@ -1,7 +1,7 @@
 services:
   wardnet:
     build:
-      context: https://github.com/ContextualWisdomLab/wardnet.git#3f8717fe9061990b1951b800a452bad1f7bb18b1
+      context: https://github.com/ContextualWisdomLab/wardnet.git#233c831bb26fc57b6c4be3435f54306f56fd37a8
       dockerfile_inline: |
         FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS build
         WORKDIR /app
@@ -20,7 +20,7 @@ services:
       EGRESS_DNS_BIND_ADDR: 0.0.0.0:53
       ADMIN_TOKEN: ${WARDNET_ADMIN_TOKEN:?set the dedicated Wardnet admin token}
       EGRESS_PROXY_TOKEN: ${WARDNET_EGRESS_PROXY_TOKEN:?set the dedicated Wardnet egress token}
-      CONTROL_PLANE_DATABASE_URL: ${WARDNET_CONTROL_PLANE_DATABASE_URL:?set the Wardnet PostgreSQL URL}
+      CONTROL_PLANE_DATABASE_URL: ${WARDNET_CONTROL_PLANE_DATABASE_URL:?set the Wardnet PostgreSQL URL with sslmode=require or stricter}
     cap_add: [NET_BIND_SERVICE]
     networks:
       default: {}
