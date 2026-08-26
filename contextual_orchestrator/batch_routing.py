@@ -686,7 +686,7 @@ class ProviderEmbeddingBatchBackend:
                 if len(vectors) != len(requests):
                     raise ValueError("provider embedding batch result count did not match inputs")
                 dimensions = {len(vector) for vector in vectors}
-                if not vectors or dimensions == {0} or len(dimensions) != 1:
+                if vectors and (dimensions == {0} or len(dimensions) != 1):
                     raise ValueError("provider embedding batch dimensions were inconsistent")
                 items = []
                 for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
@@ -717,7 +717,7 @@ class ProviderEmbeddingBatchBackend:
                         }
                         self._states[job_id] = "failed"
             finally:
-                event = self._terminal_events.get(job_id)
+                event = self._terminal_events.pop(job_id, None)
                 if event is not None:
                     event.set()
 
@@ -748,7 +748,7 @@ class ProviderEmbeddingBatchBackend:
                 self._cancellations[job.job_id] = {"reason": reason}
                 self._states[job.job_id] = "cancelled"
                 status = "cancelled"
-                event = self._terminal_events.get(job.job_id)
+                event = self._terminal_events.pop(job.job_id, None)
                 if event is not None:
                     event.set()
         return {

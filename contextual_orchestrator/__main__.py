@@ -378,7 +378,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--auto-discover-model-agents",
         action="store_true",
-        help="discover source-declared chat-capable models at startup and activate them",
+        help="discover source-declared chat- and embedding-capable models at startup and activate them",
     )
     args = parser.parse_args(arguments)
 

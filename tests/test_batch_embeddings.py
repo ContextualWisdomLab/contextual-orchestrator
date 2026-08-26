@@ -262,6 +262,15 @@ def test_provider_batch_exposes_failed_terminal_state() -> None:
     assert backend.retrieve(job) == []
 
 
+def test_provider_empty_batch_completes_and_releases_wait_event() -> None:
+    """A remote empty batch is valid and retains no terminal Event after completion."""
+    backend = ProviderEmbeddingBatchBackend(lambda requests: ([], 0))
+    job = backend.submit([])
+    assert backend.wait(job, timeout=1.0)["status"] == "completed"
+    assert backend.retrieve(job) == []
+    assert job.job_id not in backend._terminal_events
+
+
 def test_identical_submission_retries_after_backend_terminal_failure() -> None:
     class FailedBackend:
         name = "failed-provider"
