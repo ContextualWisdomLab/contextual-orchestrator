@@ -272,6 +272,37 @@ def test_invoke_preserves_final_classified_failure_across_candidates() -> None:
         raise AssertionError("the final classified failure must survive failover")
 
 
+def test_invoke_does_not_retry_nonretryable_provider_failure_on_same_agent() -> None:
+    """A classified auth failure advances to the backup without repeating it."""
+
+    class AuthThenBackup(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "primary_worker":
+                raise classify_provider_failure(
+                    _http_error(401), agent_id=agent.id, model=agent.model
+                )
+            return "backup answer"
+
+    client = AuthThenBackup()
+    agents = [
+        ModelAgent("primary_worker", "mock-a", tags=("reasoning",), priority=2),
+        ModelAgent("backup_worker", "mock-b", tags=("reasoning",), priority=1),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=client, tool_retry_attempts=2)
+    orchestrator._triage_fn = lambda text: False
+
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+
+    assert result["answer"] == "backup answer"
+    assert client.calls[0:2] == ["primary_worker", "backup_worker"]
+    assert client.calls.count("primary_worker") == 1
+
+
 # -- server error surface ------------------------------------------------------
 
 

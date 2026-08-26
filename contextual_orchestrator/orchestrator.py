@@ -5395,6 +5395,13 @@ class TaskOrchestrator:
                         last_upstream_error = exc
                     decision = classify_tool_failure(exc)
                     action = decision.action
+                    if (
+                        isinstance(exc, ProviderUpstreamError)
+                        and not exc.retryable
+                        and action is ToolFallbackAction.RETRY_SAME_AGENT
+                    ):
+                        decision = downgrade_to_failover(decision)
+                        action = decision.action
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
                     if (
