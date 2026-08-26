@@ -76,12 +76,13 @@ ADMIN_TRANSLATIONS = {
         "provider_exclusion_miss_rate": "Provider exclusion miss rate",
         "locale_key_parity": "Locale key parity",
         "readiness_summary": "Readiness summary",
+        "readiness_summary_text": "Criteria passed: {pass}. Need attention: {warn}. Failed: {fail}. See the rows below to fix what failed.",
         "readiness_source": "Readiness source",
         "readiness_measurement_status": "Measurement status",
         "readiness_remediation_label": "Remediation",
-        "sales_readiness": "sales_readiness",
+        "sales_readiness": "Sales readiness",
         "sales_readiness_title": "Sales Readiness",
-        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness": "Commercial readiness",
         "commercial_readiness_title": "Commercial Readiness",
         "buyer_evidence_manifest_title": "Buyer Evidence Manifest",
         "buyer_handoff_bundle_title": "Buyer Handoff Bundle",
@@ -212,7 +213,7 @@ ADMIN_TRANSLATIONS = {
         "policy_header": "Policy",
         "metric_header": "Metric",
         "value_header": "Value",
-        "locale_bundle": "Locale Bundle",
+        "locale_bundle": "Languages",
         "safe_trace_default": "Trace hidden by default",
         "single_api_status": "OpenAI-compatible endpoint active",
         "no_trace": "Run a conduct trace to populate workflow evidence.",
@@ -323,13 +324,14 @@ ADMIN_TRANSLATIONS = {
         "agent_health_coverage": "모델 상태 커버리지",
         "provider_exclusion_miss_rate": "공급자 제외 누락률",
         "locale_key_parity": "로케일 키 일치율",
-        "readiness_summary": "판매 준비 지표",
-        "readiness_source": "근거",
+        "readiness_summary": "준비도 요약",
+        "readiness_summary_text": "통과 기준 {pass}개, 주의 {warn}개, 실패 {fail}개. 아래 행에서 실패 항목을 해결하세요.",
+        "readiness_source": "준비 근거",
         "readiness_measurement_status": "측정 상태",
         "readiness_remediation_label": "보완 조치",
-        "sales_readiness": "sales_readiness",
+        "sales_readiness": "판매 준비도",
         "sales_readiness_title": "판매 준비도",
-        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness": "상용 준비도",
         "commercial_readiness_title": "상용 준비도",
         "buyer_evidence_manifest_title": "구매자 증거 매니페스트",
         "buyer_handoff_bundle_title": "구매자 인수인계 번들",
@@ -436,7 +438,7 @@ ADMIN_TRANSLATIONS = {
         "api_compatibility": "OpenAI 호환 API",
         "admin_evidence": "운영자 근거 화면",
         "trace_evidence": "워크플로 트레이스 근거",
-        "security_posture": "보안 자세",
+        "security_posture": "보안 태세",
         "analytics_truthfulness": "분석 지표 진실성",
         "locale_readiness": "로케일 준비도",
         "provider_egress_safety": "공급자 송신 안전성",
@@ -460,7 +462,7 @@ ADMIN_TRANSLATIONS = {
         "policy_header": "정책",
         "metric_header": "지표",
         "value_header": "값",
-        "locale_bundle": "로케일 번들",
+        "locale_bundle": "언어",
         "safe_trace_default": "트레이스는 기본 숨김",
         "single_api_status": "OpenAI 호환 엔드포인트 활성",
         "no_trace": "conduct 트레이스를 실행하면 워크플로 근거가 채워집니다.",
@@ -1155,7 +1157,7 @@ Summarize this research thread and verify claims.</textarea>
         body: JSON.stringify(exists ? {member_agent_ids: memberIds} : {group_name: groupName, member_agent_ids: memberIds})
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message || "Could not save model group");
+      if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
       els.modelGroupFeedback.textContent = t("group_saved");
       await refreshModelGroups();
     }
@@ -1250,11 +1252,23 @@ Summarize this research thread and verify claims.</textarea>
       renderSpend();
       renderReadiness();
     }
+    const MEASUREMENT_STATUS_LABELS = {
+      local_runtime_estimate: "Estimated on this server",
+      local_runtime_snapshot: "Measured on this server",
+      estimate: "Estimated",
+      unknown: "Unknown"
+    };
+    function statusLabel(raw) {
+      if (!raw) return MEASUREMENT_STATUS_LABELS.estimate;
+      if (MEASUREMENT_STATUS_LABELS[raw]) return MEASUREMENT_STATUS_LABELS[raw];
+      if (String(raw).startsWith("local_")) return "Generated locally on this server";
+      return String(raw);
+    }
     function renderSpend() {
       const spend = state.spend || {};
       const totals = spend.totals || {};
       const statusEl = document.getElementById("spendStatus");
-      if (statusEl) statusEl.textContent = spend.measurement_status || "estimate";
+      if (statusEl) statusEl.textContent = statusLabel(spend.measurement_status);
       const totalsEl = document.getElementById("spendTotals");
       if (totalsEl) {
         const cost = totals.estimated_cost_usd == null ? "—" : ("$" + totals.estimated_cost_usd);
@@ -1269,7 +1283,7 @@ Summarize this research thread and verify claims.</textarea>
       if (rowsEl) {
         rowsEl.innerHTML = (spend.by_model || []).map(row => {
           const price = row.price_per_million_usd == null ? "&mdash;" : escapeHtml(row.price_per_million_usd);
-          const cost = row.estimated_cost_usd == null ? '<span class="chip">unpriced</span>' : ("$" + escapeHtml(row.estimated_cost_usd));
+          const cost = row.estimated_cost_usd == null ? '<span class="chip" title="Add provider pricing to estimate cost.">No price set</span>' : ("$" + escapeHtml(row.estimated_cost_usd));
           return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.estimated_output_tokens)}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
         }).join("") || `<tr><td colspan="5">${t("no_trace")}</td></tr>`;
       }
@@ -1490,11 +1504,14 @@ Summarize this research thread and verify claims.</textarea>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${escapeHtml(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+          <strong>${statusLabel(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
-          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0} | saleability ${saleabilitySummary.blocked_count || 0}/${saleabilitySummary.warning_count || 0} | export ${exportSummary.blocked_count || 0}/${exportSummary.warning_count || 0} | acceptance ${acceptanceSummary.blocked_count || 0}/${acceptanceSummary.warning_count || 0} | release ${releaseSummary.blocked_count || 0}/${releaseSummary.warning_count || 0} | gaps ${gapSummary.total_gap_count || 0}/${gapSummary.blocked_count || 0} | procurement ${procurementSummary.warning_count || 0}/${procurementSummary.blocked_count || 0} | contract ${contractSummary.warning_count || 0}/${contractSummary.blocked_count || 0} | onboarding ${onboardingSummary.warning_count || 0}/${onboardingSummary.blocked_count || 0} | operations ${operationsSummary.warning_count || 0}/${operationsSummary.blocked_count || 0} | security ${securitySummary.warning_count || 0}/${securitySummary.blocked_count || 0} | value ${valueSummary.warning_count || 0}/${valueSummary.blocked_count || 0} | close ${closeSummary.warning_count || 0}/${closeSummary.blocked_count || 0} | gtm ${gtmSummary.warning_count || 0}/${gtmSummary.blocked_count || 0} | launch ${launchSummary.warning_count || 0}/${launchSummary.blocked_count || 0} | completion ${completionSummary.warning_count || 0}/${completionSummary.blocked_count || 0} | workflow ${workflowSummary.warning_count || 0}/${workflowSummary.blocked_count || 0} | demo ${demoSummary.warning_count || 0}/${demoSummary.blocked_count || 0} | proposal ${proposalSummary.warning_count || 0}/${proposalSummary.blocked_count || 0} | approval ${purchaseApprovalSummary.warning_count || 0}/${purchaseApprovalSummary.blocked_count || 0} | diligence ${dueDiligenceSummary.warning_count || 0}/${dueDiligenceSummary.blocked_count || 0} | committee ${investmentCommitteeSummary.warning_count || 0}/${investmentCommitteeSummary.blocked_count || 0}</strong>
+          <strong>${t("readiness_summary_text")
+            .replace("{pass}", String((readinessSummary.pass || 0) + (commercialSummary.pass || 0)))
+            .replace("{warn}", String((readinessSummary.warn || 0) + (commercialSummary.warn || 0)))
+            .replace("{fail}", String((readinessSummary.fail || 0) + (commercialSummary.fail || 0)))}</strong>
         </div>
         <div class="readiness-grid">
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
