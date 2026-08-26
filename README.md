@@ -345,7 +345,8 @@ Grounding papers (LLM cost, routing, load balancing) live in
 
 ## Check
 
-Run the full suite with the same hash-locked pytest toolchain as CI:
+Run the full suite with the same hash-locked pytest toolchain as CI. The target
+builds and installs the Rust token/vector extension before pytest:
 
 ```bash
 make test
