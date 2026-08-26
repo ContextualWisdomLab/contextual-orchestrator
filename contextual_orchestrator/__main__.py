@@ -326,23 +326,21 @@ def _discover_models_command(argv: list[str]) -> None:
                 "model": model.model_id,
                 "agent_id": agent_id_for(model),
                 "is_free": model.is_free,
-                "data_privacy": (
-                    {
-                        "zero_data_retention": (
-                            "supported" if model.supports_zero_data_retention is True else
-                            "unsupported" if model.supports_zero_data_retention is False else "unknown"
-                        ),
-                        "no_training": (
-                            "supported" if model.supports_no_training is True else
-                            "unsupported" if model.supports_no_training is False else "unknown"
-                        ),
-                        "no_prompt_retention": (
-                            "supported" if model.supports_no_prompt_retention is True else
-                            "unsupported" if model.supports_no_prompt_retention is False else "unknown"
-                        ),
-                        "policy_sources": list(model.privacy_policy_urls),
-                    }
-                ) if model.is_free else None,
+                "data_privacy": {
+                    "zero_data_retention": (
+                        "supported" if model.supports_zero_data_retention is True else
+                        "unsupported" if model.supports_zero_data_retention is False else "unknown"
+                    ),
+                    "no_training": (
+                        "supported" if model.supports_no_training is True else
+                        "unsupported" if model.supports_no_training is False else "unknown"
+                    ),
+                    "no_prompt_retention": (
+                        "supported" if model.supports_no_prompt_retention is True else
+                        "unsupported" if model.supports_no_prompt_retention is False else "unknown"
+                    ),
+                    "policy_sources": list(model.privacy_policy_urls),
+                },
             }
             for model in reported
         ],

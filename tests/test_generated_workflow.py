@@ -14,11 +14,16 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    BudgetExceededError,
+    ModelClient,
+)
 
 
 PLAN = {
@@ -87,6 +92,27 @@ def test_planner_prompt_lists_the_agent_pool() -> None:
     planner_system = client.calls[0][0]["content"]
     assert "workflow conductor" in planner_system
     assert "general_agent" in planner_system  # pool advertised to the planner
+
+
+def test_generated_plan_stops_before_next_call_when_budget_is_spent() -> None:
+    """A completed step is charged before another generated step can start."""
+    orchestrator, client = _orch(json.dumps(PLAN))
+    orchestrator.budget_max_output_tokens = 1
+
+    original_chat = client.chat
+
+    def measured_chat(agent, messages, temperature=0.2):
+        output = original_chat(agent, messages, temperature)
+        client._local.usage = {"completion_tokens": 1}
+        return output
+
+    with patch.object(client, "chat", side_effect=measured_chat), patch.object(
+        orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None
+    ):
+        with pytest.raises(BudgetExceededError):
+            orchestrator.conduct([{"role": "user", "content": "stay within budget"}])
+
+    assert len(client.calls) == 2  # planner plus one completed workflow provider call
 
 
 def test_invalid_plan_falls_back_to_template() -> None:

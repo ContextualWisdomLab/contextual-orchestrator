@@ -121,7 +121,13 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
     assert report["models"] == [
         {
             "provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5",
-            "is_free": False, "data_privacy": None,
+            "is_free": False,
+            "data_privacy": {
+                "zero_data_retention": "unknown",
+                "no_training": "unknown",
+                "no_prompt_retention": "unknown",
+                "policy_sources": [],
+            },
         }
     ]
 

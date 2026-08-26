@@ -42,11 +42,11 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
 )
 
 
-def test_openrouter_zdr_metadata_distinguishes_supported_models() -> None:
-    payload = {"data": [{"id": "free/private"}, {"id": "free/training"}]}
+def test_openrouter_zdr_metadata_covers_paid_and_free_models() -> None:
+    payload = {"data": [{"id": "paid/private"}, {"id": "free/training"}]}
 
     merged = _merge_openrouter_zdr_metadata(
-        payload, {"data": [{"model_id": "free/private"}]}
+        payload, {"data": [{"model_id": "paid/private"}]}
     )
 
     assert [row["supports_zero_data_retention"] for row in merged["data"]] == [True, False]
