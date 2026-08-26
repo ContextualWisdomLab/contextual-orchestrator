@@ -42,7 +42,15 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
 
 def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None:
     """Logical-model pricing requires complete consensus across deployments."""
-    payload = {"data": [{"id": "shared-model"}]}
+    payload = {
+        "data": [
+            {
+                "id": "shared-model",
+                "pricing": {"prompt": 0, "completion": 0},
+                "architecture": {"output_modalities": ["text", "embedding"]},
+            }
+        ]
+    }
     metadata = {
         "data": [
             {
@@ -71,7 +79,14 @@ def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None
 
 
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
-    payload = {"data": [{"id": "shared-model"}]}
+    payload = {
+        "data": [
+            {
+                "id": "shared-model",
+                "architecture": {"output_modalities": ["text", "embedding"]},
+            }
+        ]
+    }
     metadata = {
         "data": [
             {"model_name": "shared-model", "model_info": {"mode": "chat"}},

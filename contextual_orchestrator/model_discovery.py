@@ -428,6 +428,11 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str):
             continue
+        # The generic listing cannot prove that one price/capability applies to
+        # every deployment behind a logical id. Only reviewed full consensus
+        # below may restore these fields.
+        row.pop("pricing", None)
+        row.pop("architecture", None)
         model_details = by_name.get(row["id"], [])
         deployment_outputs: list[tuple[str, ...]] = []
         deployment_inputs: list[tuple[str, ...]] = []

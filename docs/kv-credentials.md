@@ -222,6 +222,9 @@ host is listed in `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`. It promotes
 runtime routing then read the key only from KV. The full capability catalog and
 model-info pricing remain visible, while `--free-only` selects only structured
 zero-price evidence.
+When serving the persisted agents, pass the same host with
+`--allowed-provider-host`; startup discovery reads this injected runtime policy
+and never re-reads or promotes gateway environment values.
 
 Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
