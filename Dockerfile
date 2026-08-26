@@ -8,17 +8,12 @@
 # see docs/kv-credentials.md for the bootstrap flow.
 # Agents: defaults to the bundled mock pool; mount your own and set AGENTS_FILE:
 #           -v ./agents.json:/app/agents.json -e AGENTS_FILE=/app/agents.json
-# Rust is build-only; the runtime remains the pinned slim Python image.
-FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf AS token-builder
-RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-       sh -s -- -y --profile minimal --default-toolchain 1.97.1
-ENV PATH=/root/.cargo/bin:$PATH
+# Rust and maturin are build-only and pinned by an immutable multi-architecture
+# image digest; the runtime remains the pinned slim Python image.
+FROM ghcr.io/pyo3/maturin@sha256:b6c8b59a0170b77eb31a35b56034abd39972483ad0ebfff344deaa42a85f3bd3 AS token-builder
 COPY rust/token_counter/ /build/token_counter/
 WORKDIR /build/token_counter
-RUN python -m pip install --no-cache-dir 'maturin>=1.8,<2' \
-    && maturin build --locked --release --out /build/wheels
+RUN maturin build --locked --release --out /build/wheels
 
 # python:3.12-slim
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
