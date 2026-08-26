@@ -9,6 +9,7 @@ from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from functools import wraps
 import http.client
 import io
@@ -129,6 +130,11 @@ def _step_output_tokens(step: Mapping[str, Any]) -> tuple[int, bool]:
     if isinstance(reported, int):
         return reported, True
     return estimate_tokens(step.get("output", "")), False
+
+
+def _cost_usd_decimal(output_tokens: int, price_per_million: float) -> Decimal:
+    """Return exact decimal USD for tokens at a USD-per-million price."""
+    return Decimal(output_tokens) * Decimal(str(price_per_million)) / Decimal(1_000_000)
 
 
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
@@ -2358,7 +2364,7 @@ class TaskOrchestrator:
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._budget_spend_lock = threading.Lock()
         self._budget_spent_output_tokens = 0
-        self._budget_spent_cost_usd = 0.0
+        self._budget_spent_cost_usd = Decimal(0)
         self._budget_model_output_tokens: dict[str, int] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=256)
@@ -3911,16 +3917,23 @@ class TaskOrchestrator:
 
     def _run_budget_output_by_model(self, record: Mapping[str, Any]) -> dict[str, int]:
         """Return the exact per-model output-token contribution of one run."""
-        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        model_by_agent = {agent.id: agent.model for agent in self.candidates}
         output_by_model: dict[str, int] = {}
         for step in record.get("trace", []):
-            model = model_by_agent.get(step.get("agent_id"), "unknown")
+            model = step.get("model_name") or model_by_agent.get(
+                step.get("served_agent_id") or step.get("agent_id"), "unknown"
+            )
             output_tokens, _reported = _step_output_tokens(step)
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
         return output_by_model
 
     def _replace_workflow_run(self, record: dict[str, Any]) -> None:
         """Store one run and update its constant-time budget meter atomically."""
+        model_by_agent = {agent.id: agent.model for agent in self.candidates}
+        for step in record.get("trace", []):
+            if not step.get("model_name"):
+                agent_id = step.get("served_agent_id") or step.get("agent_id")
+                step["model_name"] = model_by_agent.get(agent_id, "unknown")
         run_id = record["workflow_run_id"]
         with self._budget_spend_lock:
             previous = self._workflow_runs.get(run_id)
@@ -3932,9 +3945,9 @@ class TaskOrchestrator:
                     after = before + sign * output_tokens
                     price = self.price_per_million.get(model)
                     if price is not None:
-                        self._budget_spent_cost_usd += round(after / 1_000_000 * price, 6) - round(
-                            before / 1_000_000 * price, 6
-                        )
+                        self._budget_spent_cost_usd += _cost_usd_decimal(
+                            after, price
+                        ) - _cost_usd_decimal(before, price)
                     if after:
                         self._budget_model_output_tokens[model] = after
                     else:
@@ -3952,9 +3965,12 @@ class TaskOrchestrator:
             self._budget_model_output_tokens = output_by_model
             self._budget_spent_output_tokens = sum(output_by_model.values())
             self._budget_spent_cost_usd = sum(
-                round(output_tokens / 1_000_000 * self.price_per_million[model], 6)
-                for model, output_tokens in output_by_model.items()
-                if model in self.price_per_million
+                (
+                    _cost_usd_decimal(output_tokens, self.price_per_million[model])
+                    for model, output_tokens in output_by_model.items()
+                    if model in self.price_per_million
+                ),
+                start=Decimal(0),
             )
 
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
@@ -3966,7 +3982,7 @@ class TaskOrchestrator:
         floor for spend observability, not a billing system.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
-        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        model_by_agent = {agent.id: agent.model for agent in self.candidates}
         by_model: dict[str, dict[str, Any]] = {}
         total_output_tokens = 0
         total_prompt_tokens = 0
@@ -3976,7 +3992,9 @@ class TaskOrchestrator:
         for run in self._workflow_runs.values():
             total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
             for step in run["trace"]:
-                model = model_by_agent.get(step.get("agent_id"), "unknown")
+                model = step.get("model_name") or model_by_agent.get(
+                    step.get("served_agent_id") or step.get("agent_id"), "unknown"
+                )
                 estimated = estimate_tokens(step.get("output", ""))
                 usage = step.get("usage")
                 reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
@@ -3995,14 +4013,19 @@ class TaskOrchestrator:
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
-        total_cost = 0.0
+        total_cost_usd = Decimal(0)
         for model, bucket in sorted(by_model.items()):
             price = prices.get(model)
-            cost = round(bucket["output_tokens"] / 1_000_000 * price, 6) if price is not None else None
+            cost_decimal = (
+                _cost_usd_decimal(bucket["output_tokens"], price)
+                if price is not None
+                else None
+            )
+            cost = float(cost_decimal) if cost_decimal is not None else None
             if price is None:
                 unpriced.append(model)
             else:
-                total_cost += cost
+                total_cost_usd += cost_decimal
             if bucket["reported_steps"] == 0:
                 usage_source = "estimated"
             elif bucket["reported_steps"] == bucket["step_count"]:
@@ -4032,12 +4055,15 @@ class TaskOrchestrator:
                 "estimated_prompt_tokens": total_prompt_tokens,
                 "reported_prompt_tokens": reported_prompt_tokens,
                 "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
-                "estimated_cost_usd": round(total_cost, 6) if prices else None,
+                "estimated_cost_usd": float(total_cost_usd) if prices else None,
                 "currency": "USD",
             },
             "by_model": rows,
             "unpriced_models": unpriced,
-            "budget": self._budget_block(total_output_tokens, round(total_cost, 6) if prices else None),
+            "budget": self._budget_block(
+                total_output_tokens,
+                float(total_cost_usd) if prices else None,
+            ),
         }
 
     def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
@@ -4065,10 +4091,10 @@ class TaskOrchestrator:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
         with self._budget_spend_lock:
             spent_tokens = self._budget_spent_output_tokens
-            spent_cost = self._budget_spent_cost_usd
+            spent_cost = float(self._budget_spent_cost_usd)
         return self._budget_block(
             spent_tokens,
-            round(spent_cost, 6) if self.price_per_million else None,
+            spent_cost if self.price_per_million else None,
         )
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:

@@ -141,7 +141,7 @@ def test_budget_meter_rebuilds_from_persisted_runs(tmp_path: Path) -> None:
 
 
 def test_budget_meter_reconciles_after_agent_status_change() -> None:
-    """Rare pool mutations preserve parity with analytics' active-agent view."""
+    """Pool mutations preserve historical spend and analytics parity."""
     priced = ModelAgent("priced_agent", "priced-model")
     fallback = ModelAgent("fallback_agent", "fallback-model")
     orchestrator = TaskOrchestrator(
@@ -156,9 +156,40 @@ def test_budget_meter_reconciles_after_agent_status_change() -> None:
             "trace": [{"agent_id": priced.id, "output": "priced output"}],
         }
     )
+    before = orchestrator.budget_status()
     orchestrator.patch_agent("default", priced.id, {"status": "disabled"})
+    assert orchestrator.budget_status() == before
+    orchestrator.remove_agent("default", priced.id)
+
+    assert orchestrator.budget_status() == before == orchestrator.spend_analytics()["budget"]
+
+
+def test_replacing_a_run_does_not_accumulate_fractional_cost_drift() -> None:
+    """Repeated replacements retain exact decimal cost accounting."""
+    agents = [ModelAgent("agent_one", "model-one"), ModelAgent("agent_two", "model-two")]
+    orchestrator = TaskOrchestrator(
+        agents,
+        price_per_million={"model-one": 0.1, "model-two": 0.2},
+        budget_max_cost_usd=1.0,
+    )
+    for index in range(10_000):
+        agent = agents[index % 2]
+        orchestrator._replace_workflow_run(
+            {
+                "workflow_run_id": "replaced_run",
+                "prompt_text": "",
+                "trace": [
+                    {
+                        "agent_id": agent.id,
+                        "output": "x",
+                        "usage": {"completion_tokens": 1},
+                    }
+                ],
+            }
+        )
 
     assert orchestrator.budget_status() == orchestrator.spend_analytics()["budget"]
+    assert orchestrator.budget_status()["spent_cost_usd"] == 0.0000002
 
 
 def test_http_over_budget_returns_429() -> None:
