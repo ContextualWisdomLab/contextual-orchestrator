@@ -25,6 +25,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
+    NoViableAgentError,
     ProviderResponseError,
     RequestDeadlineExceeded,
     is_transient_error,
@@ -679,6 +680,72 @@ def test_success_clears_prior_failures() -> None:
     orchestrator._record_success("primary_worker")
     assert orchestrator._circuit_open("primary_worker") is False
     assert "primary_worker" not in orchestrator._circuit
+
+
+def test_conduct_defers_without_probing_unready_discovered_pool() -> None:
+    """A large discovered pool is metadata, not permission to call providers."""
+
+    class CountingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.chat_calls = 0
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            self.chat_calls += 1
+            raise AssertionError("unprobed provider must not receive a completion")
+
+    client = CountingClient()
+    agents = [
+        ModelAgent(
+            f"discovered_{index}",
+            f"provider/model-{index}",
+            base_url="https://provider.example/v1",
+            tags=("reasoning", "writing", "verification"),
+        )
+        for index in range(455)
+    ]
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.conduct([{"role": "user", "content": "structured task"}])
+
+    assert client.chat_calls == 0
+
+
+def test_conduct_attempts_only_ready_candidates_once_after_failures() -> None:
+    """Two readiness-admitted candidates produce at most two failed calls."""
+
+    class FailingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.called: list[str] = []
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            self.called.append(agent.id)
+            raise ProviderResponseError("sanitized provider failure")
+
+    client = FailingClient()
+    agents = [
+        ModelAgent(
+            f"ready_{index}",
+            f"provider/ready-{index}",
+            base_url="https://provider.example/v1",
+            tags=("reasoning", "writing", "verification"),
+            group_name="declared_group",
+        )
+        for index in range(2)
+    ]
+    orchestrator = TaskOrchestrator(agents, client=client)
+    orchestrator._structured_readiness = {
+        agent.id: {"status": "ready", "checked_at": 0.0} for agent in agents
+    }
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.conduct([{"role": "user", "content": "structured task"}])
+
+    assert sorted(client.called) == sorted(agent.id for agent in agents)
 
 
 def test_circuit_breaker_counts_concurrent_failures() -> None:

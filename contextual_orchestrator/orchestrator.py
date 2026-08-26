@@ -2870,6 +2870,9 @@ class TaskOrchestrator:
         self._request_failed_agents: ContextVar[set[str] | None] = ContextVar(
             f"request_failed_agents_{id(self)}", default=None
         )
+        self._request_admitted_agents: ContextVar[frozenset[str] | None] = ContextVar(
+            f"request_admitted_agents_{id(self)}", default=None
+        )
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -3013,6 +3016,22 @@ class TaskOrchestrator:
                 "status": "not_ready",
                 "checked_at": time.monotonic(),
             }
+
+    def _structured_admitted_agent_ids(self) -> frozenset[str]:
+        """Return agents with current structured-readiness evidence.
+
+        A conducted request must never turn discovery rows into live provider
+        calls merely to discover whether they work.  Mock transports are an
+        explicit deterministic test capability; every external transport must
+        have a recent successful structured probe.
+        """
+        with self._provider_readiness_lock:
+            return frozenset(
+                agent.id
+                for agent in self.agents
+                if agent.base_url.startswith("mock://")
+                or self._structured_readiness.get(agent.id, {}).get("status") == "ready"
+            )
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
@@ -4072,12 +4091,19 @@ class TaskOrchestrator:
             return self._conduct_request(
                 messages, model_name=model_name, progress=progress
             )
+        admitted = self._structured_admitted_agent_ids()
+        if not admitted:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
         token = self._request_failed_agents.set(set())
+        admitted_token = self._request_admitted_agents.set(admitted)
         try:
             return self._conduct_request(
                 messages, model_name=model_name, progress=progress
             )
         finally:
+            self._request_admitted_agents.reset(admitted_token)
             self._request_failed_agents.reset(token)
 
     def _conduct_request(
@@ -4371,6 +4397,9 @@ class TaskOrchestrator:
             if (not free_only or self._is_free_agent(agent))
             and (not chat_only or is_general_chat_agent_model_id(agent.model))
         ]
+        admitted = self._request_admitted_agents.get()
+        if admitted is not None:
+            candidates = [agent for agent in candidates if agent.id in admitted]
         if not candidates:
             if free_only:
                 raise RuntimeError("no enabled zero-cost model is available")
