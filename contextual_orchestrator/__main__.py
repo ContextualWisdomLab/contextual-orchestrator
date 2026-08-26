@@ -218,7 +218,7 @@ def _bootstrap_discovery_sources() -> tuple[ProviderModelSource, ...]:
         return PROVIDER_MODEL_SOURCES
     secret = os.environ.get(CONFIGURED_GATEWAY_CREDENTIAL_NAME, "")
     if secret.strip():
-        register_credential(CONFIGURED_GATEWAY_CREDENTIAL_NAME, secret.rstrip("\r\n"))
+        register_credential(CONFIGURED_GATEWAY_CREDENTIAL_NAME, secret.strip())
     return (*PROVIDER_MODEL_SOURCES, source)
 
 

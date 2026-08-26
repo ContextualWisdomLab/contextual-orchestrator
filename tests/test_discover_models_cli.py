@@ -106,7 +106,7 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
     environment = {
         "LLM_GATEWAY_API_URL": "https://gateway.example/v1",
         "LLM_GATEWAY_URL": "https://gateway.example/v1/",
-        "LLM_GATEWAY_API_KEY": "gateway-secret\n",
+        "LLM_GATEWAY_API_KEY": "  gateway-secret\n",
         "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "gateway.example",
     }
 
