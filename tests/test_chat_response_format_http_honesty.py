@@ -213,6 +213,7 @@ def test_http_chat_fails_closed_when_provider_violates_valid_json_schema() -> No
                         "schema": {
                             "type": "object",
                             "properties": {"amount": {"type": "number"}},
+                            "required": ["amount"],
                         },
                         "strict": True,
                     },

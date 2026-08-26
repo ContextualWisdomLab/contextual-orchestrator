@@ -171,6 +171,30 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
 
 
+def test_non_text_model_does_not_gain_structured_response_capability() -> None:
+    """A provider parameter alone cannot make an image-only model a synthesizer."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {
+                "id": "provider/image-only",
+                "architecture": {
+                    "input_modalities": ["text"],
+                    "output_modalities": ["image"],
+                },
+                "supported_parameters": ["response_format"],
+            }
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert discovered[0].capabilities == ("image",)
+
+
 def test_discovery_treats_null_modality_arrays_as_unspecified() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     with patch(
@@ -445,6 +469,20 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
     )
 
     assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
+
+
+def test_response_format_metadata_does_not_make_non_chat_model_eligible() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="embedding-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat", "response_format"),
+    )
+
+    with pytest.raises(ValueError, match="not eligible"):
+        agent_from_discovered(discovered)
 
 
 def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:

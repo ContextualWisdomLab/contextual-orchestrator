@@ -65,6 +65,24 @@ def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(m
     assert [agent.id for agent in orchestrator.agents] == ["bootstrap_agent"]
 
 
+def test_auto_discovery_preserves_sole_real_bootstrap_seed(monkeypatch) -> None:
+    """A seed cannot count itself as the replacement that retires it."""
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([], []),
+    )
+    seed = ModelAgent(
+        "bootstrap_agent",
+        "bootstrap-model",
+        base_url="https://provider.invalid/v1",
+        tags=("bootstrap_seed",),
+    )
+    orchestrator = TaskOrchestrator([seed])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert orchestrator.agents == [seed]
+
+
 def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> None:
     """Startup discovery must not replace an operator-managed agent."""
     discovered = DiscoveredModel(

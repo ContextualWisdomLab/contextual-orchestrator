@@ -3348,6 +3348,10 @@ class TaskOrchestrator:
         repair_step: dict[str, Any] | None = None
         response_format = chat_body.get("response_format")
         contract_error = _structured_output_error(synthesis_output, response_format)
+        if contract_error == "schema_missing":
+            raise ProviderResponseError(
+                "response_format.json_schema is missing a schema"
+            )
         if contract_error is not None:
             in_flight_tokens, in_flight_cost = self._trace_budget_spend(
                 [*workflow["trace"], synthesis_step]
@@ -3445,7 +3449,7 @@ class TaskOrchestrator:
                 "verification": workflow.get("verification"),
             }
         )
-        self._workflow_runs[workflow_run_id] = record
+        self._replace_workflow_run(record)
         self._run_order.appendleft(workflow_run_id)
         if self._store is not None:
             self._store.save("workflow_run", workflow_run_id, record)

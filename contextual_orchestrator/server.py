@@ -6537,7 +6537,7 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    self._send(proxied)
+                    self._send(_response_payload(proxied, include_trace=False))
                     return
 
                 if path == "/admin/simulate":

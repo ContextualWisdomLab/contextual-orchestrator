@@ -297,7 +297,9 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         else {"added": [], "updated": []}
     )
     has_real_runtime_agent = any(
-        not candidate.base_url.startswith("mock://")
+        not candidate.disabled
+        and not candidate.base_url.startswith("mock://")
+        and "bootstrap_seed" not in candidate.tags
         for candidate in orchestrator.agents
     )
     for candidate in tuple(orchestrator.agents):

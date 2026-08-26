@@ -346,6 +346,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     *(
                         ("response_format",)
                         if "response_format" in supported_parameters
+                        and (not outputs or "text" in outputs)
                         else ()
                     ),
                 )
@@ -468,7 +469,10 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
     """Build a disabled capability agent or reject a chat-ineligible record."""
-    if not any(capability != "chat" for capability in discovered.capabilities) and not (
+    if not any(
+        capability not in {"chat", "response_format"}
+        for capability in discovered.capabilities
+    ) and not (
         is_general_chat_agent_model_id(discovered.model_id)
     ):
         raise ValueError("model is not eligible for a general chat agent")
