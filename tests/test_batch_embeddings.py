@@ -230,6 +230,38 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         server.shutdown()
 
 
+def test_batch_embeddings_http_preserves_index_aligned_input_context() -> None:
+    """Bulk HTTP outputs retain each input's session metadata and attribution."""
+    server, port, token, coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/batch/embeddings",
+            token,
+            {
+                "model": "text-embedding-test",
+                "inputs": ["first", "second"],
+                "input_attributions": [{"team": "alpha"}, {"team": "beta"}],
+                "input_metadata": [
+                    {"session_id": "session-a"},
+                    {"session_id": "session-b"},
+                ],
+            },
+        )
+        assert status == 200, document
+        assert [item["metadata"]["session_id"] for item in document["embeddings"]] == [
+            "session-a",
+            "session-b",
+        ]
+        assert [record["team_name"] for record in coordinator.ledger.records()] == [
+            "alpha",
+            "beta",
+        ]
+    finally:
+        server.shutdown()
+
+
 def test_pending_batch_preserves_resolved_model_identity() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
     coordinator = CostRoutingCoordinator(
@@ -341,3 +373,38 @@ def test_batch_embeddings_char_guard_splits_no_whitespace_input() -> None:
     assert [request.input_text for request in backend.requests] == ["abcde", "fghij", "kl"]
     assert document["part_count"] == 3
     assert document["input_part_counts"] == [3]
+
+
+def test_batch_embeddings_preserves_per_input_provenance_and_cost_attribution() -> None:
+    """Each reduced output keeps the context aligned to its source input index."""
+    agents = [
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning",),
+            priority=1,
+        )
+    ]
+    coordinator = CostRoutingCoordinator(TaskOrchestrator(agents), InMemoryConfigStore())
+
+    document = coordinator.complete_embeddings_batch(
+        ["first source", "second source"],
+        input_attributions=[{"team": "alpha"}, {"team": "beta"}],
+        input_metadata=[{"session_id": "session-a"}, {"session_id": "session-b"}],
+    )
+
+    assert [item["index"] for item in document["embeddings"]] == [0, 1]
+    assert [item["attribution"]["team"] for item in document["embeddings"]] == [
+        "alpha",
+        "beta",
+    ]
+    assert [item["metadata"]["session_id"] for item in document["embeddings"]] == [
+        "session-a",
+        "session-b",
+    ]
+    assert [record["team_name"] for record in coordinator.ledger.records()] == [
+        "alpha",
+        "beta",
+    ]

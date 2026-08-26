@@ -438,6 +438,7 @@ class EmbeddingBatchRequest:
     model: str = "contextual-orchestrator"
     custom_id: str = field(default_factory=lambda: f"emb_{uuid.uuid4().hex}")
     attribution: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     source_index: int = 0
     part_index: int = 0
     part_count: int = 1

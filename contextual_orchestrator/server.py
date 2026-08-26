@@ -93,7 +93,7 @@ ALLOWED_RESPONSES_KEYS = {
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "input_metadata", "input_attributions", "user", "encoding_format", "dimensions", "routing"}
 ALLOWED_EMBEDDINGS_KEYS = {
     "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing",
 }
@@ -4727,6 +4727,42 @@ def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _validate_embedding_input_context(
+    body: dict[str, Any], input_count: int
+) -> tuple[list[dict[str, Any]] | None, list[dict[str, str]] | None]:
+    """Validate optional index-aligned attribution and metadata for bulk inputs."""
+    raw_attributions = body.get("input_attributions")
+    raw_metadata = body.get("input_metadata")
+    if raw_attributions is not None and (
+        not isinstance(raw_attributions, list) or len(raw_attributions) != input_count
+    ):
+        raise RequestError(
+            400,
+            "invalid_attribution",
+            "input_attributions must contain one object per embedding input",
+        )
+    if raw_metadata is not None and (
+        not isinstance(raw_metadata, list) or len(raw_metadata) != input_count
+    ):
+        raise RequestError(
+            400,
+            "invalid_metadata",
+            "input_metadata must contain one object per embedding input",
+        )
+    attributions = (
+        [_validate_attribution(item) or {} for item in raw_attributions]
+        if raw_attributions is not None
+        else None
+    )
+    metadata = None
+    if raw_metadata is not None:
+        metadata = []
+        for item in raw_metadata:
+            holder = {"metadata": item}
+            metadata.append(_validate_openai_metadata(holder) or {})
+    return attributions, metadata
+
+
 def _strip_trace(payload: Any) -> Any:
     if isinstance(payload, list):
         return [_strip_trace(item) for item in payload]
@@ -6028,6 +6064,9 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
+                    input_attributions, input_metadata = _validate_embedding_input_context(
+                        body, len(inputs)
+                    )
                     model_name = _validate_embeddings_model(body, orchestrator)
                     _require_pool_model(
                         orchestrator, model_name, required_capability="embedding"
@@ -6062,6 +6101,8 @@ def build_server(
                                 attribution=attribution,
                                 metadata=submit_metadata,
                                 routing_agent_id=agent.id,
+                                input_attributions=input_attributions,
+                                input_metadata=input_metadata,
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc

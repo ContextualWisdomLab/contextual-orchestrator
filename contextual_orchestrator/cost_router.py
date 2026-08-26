@@ -363,6 +363,8 @@ class CostRoutingCoordinator:
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         routing_agent_id: str | None = None,
+        input_attributions: Optional[List[Dict[str, Any]]] = None,
+        input_metadata: Optional[List[Dict[str, Any]]] = None,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -377,6 +379,8 @@ class CostRoutingCoordinator:
             model=model,
             attribution=shared_attribution,
             routing_agent_id=routing_agent_id,
+            input_attributions=input_attributions,
+            input_metadata=input_metadata,
         )
         backend = self._embedding_backend_for_model(model)
         job = backend.submit(requests, metadata=metadata)
@@ -396,12 +400,19 @@ class CostRoutingCoordinator:
         model: str,
         attribution: Dict[str, Any],
         routing_agent_id: str | None = None,
+        input_attributions: Optional[List[Dict[str, Any]]] = None,
+        input_metadata: Optional[List[Dict[str, Any]]] = None,
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
         requests: List[EmbeddingBatchRequest] = []
         part_counts: List[int] = []
         for source_index, text in enumerate(inputs):
+            source_attribution = {
+                **attribution,
+                **(input_attributions[source_index] if input_attributions else {}),
+            }
+            source_metadata = input_metadata[source_index] if input_metadata else {}
             source_text = str(text)
             parts = self._split_embedding_input(
                 source_text, model=model, max_tokens=max_tokens, max_chars=max_chars
@@ -413,7 +424,8 @@ class CostRoutingCoordinator:
                     EmbeddingBatchRequest(
                         input_text=part_text,
                         model=model,
-                        attribution=dict(attribution),
+                        attribution=dict(source_attribution),
+                        metadata=dict(source_metadata),
                         source_index=source_index,
                         part_index=part_index,
                         part_count=part_count,
@@ -605,6 +617,7 @@ class CostRoutingCoordinator:
                     "prompt_tokens": max(0, prompt_tokens),
                     "model": item.model,
                     "attribution": dict(request.attribution) if request else {},
+                    "metadata": dict(request.metadata) if request else {},
                 }
             )
 
@@ -643,6 +656,8 @@ class CostRoutingCoordinator:
                     "embedding": _weighted_average_embedding(
                         [(part["embedding"], int(part["prompt_tokens"])) for part in parts]
                     ),
+                    "attribution": attribution,
+                    "metadata": dict(parts[0]["metadata"]),
                 }
             )
 
@@ -675,6 +690,8 @@ class CostRoutingCoordinator:
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         routing_agent_id: str | None = None,
+        input_attributions: Optional[List[Dict[str, Any]]] = None,
+        input_metadata: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -689,6 +706,8 @@ class CostRoutingCoordinator:
             attribution=attribution,
             metadata=metadata,
             routing_agent_id=routing_agent_id,
+            input_attributions=input_attributions,
+            input_metadata=input_metadata,
         )
         return self.embeddings_batch_document(job.job_id)
 

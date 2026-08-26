@@ -63,6 +63,8 @@ def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> Non
     assert embeddings_schema["required"] == ["input"]
     assert "503" in OPENAPI_SPEC["paths"]["/v1/embeddings"]["post"]["responses"]
     assert "model" not in batch_schema.get("required", [])
+    assert "input_attributions" in batch_schema["properties"]
+    assert "input_metadata" in batch_schema["properties"]
     assert "503" in OPENAPI_SPEC["paths"]["/v1/batch/embeddings"]["post"]["responses"]
     assert "Optional enabled embedding-capable pool model" in embeddings_schema["properties"]["model"][
         "description"

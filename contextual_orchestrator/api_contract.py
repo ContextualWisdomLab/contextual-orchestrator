@@ -728,6 +728,16 @@ OPENAPI_SPEC = {
                                         ]
                                     },
                                     "inputs": {"type": "array", "items": {"type": "string"}},
+                                    "input_attributions": {
+                                        "type": "array",
+                                        "items": {"type": "object"},
+                                        "description": "Index-aligned cost attribution for each input.",
+                                    },
+                                    "input_metadata": {
+                                        "type": "array",
+                                        "items": {"type": "object"},
+                                        "description": "Index-aligned provenance metadata returned with each output.",
+                                    },
                                     "endpoint": {"type": "string", "description": "batch endpoint alias"},
                                     "metadata": {
                                         "type": "object",
