@@ -13,6 +13,7 @@ import secrets
 import struct
 import threading
 import time
+import urllib.error
 import urllib.parse
 from typing import Any, Callable
 import uuid
@@ -5122,6 +5123,18 @@ def build_server(
                                 )
                             )
                             self._send(video_jobs.public_response(result, owner))
+                    except urllib.error.HTTPError as exc:
+                        if exc.code == 404:
+                            raise RequestError(
+                                404,
+                                "video_job_not_found",
+                                "The video job is no longer available; submit a new video request.",
+                            ) from exc
+                        raise RequestError(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        ) from exc
                     except Exception as exc:  # noqa: BLE001 - provider trust boundary
                         raise RequestError(
                             503,

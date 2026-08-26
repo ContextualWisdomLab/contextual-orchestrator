@@ -290,6 +290,36 @@ def test_video_provider_outage_returns_documented_503() -> None:
         server.shutdown()
 
 
+def test_expired_provider_video_job_stops_polling_with_404() -> None:
+    """An upstream-gone job tells the client to submit a new request."""
+    agent = ModelAgent("video_owner", "provider/video", tags=("video",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, _payload: {"id": "provider-job", "status": "queued"}
+    )
+    orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
+        lambda _agent, endpoint: (_ for _ in ()).throw(
+            urllib.error.HTTPError(endpoint, 404, "gone", {}, None)
+        )
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        _, raw, _ = _post(port, "/v1/videos", {"prompt": "demo"})
+        gateway_job_id = json.loads(raw)["id"]
+        status, body = _get_error(port, f"/v1/videos/{gateway_job_id}")
+        assert status == 404
+        assert body["error"]["code"] == "video_job_not_found"
+        assert body["error"]["message"] == (
+            "The video job is no longer available; submit a new video request."
+        )
+    finally:
+        server.shutdown()
+
+
 def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
     agent = ModelAgent(
         "image_member",
