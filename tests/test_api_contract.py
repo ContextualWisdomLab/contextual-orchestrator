@@ -88,6 +88,20 @@ def test_openapi_capability_requests_have_endpoint_specific_contracts() -> None:
         assert schema["required"] == required
 
 
+def test_readiness_refresh_item_paths_declare_job_identifier() -> None:
+    """Every readiness by-id operation declares its required path parameter."""
+    for path, method in (
+        ("/api/v1/provider_readiness_refreshes/{job_id}", "get"),
+        ("/api/v1/provider_readiness_refreshes/{job_id}/cancel", "post"),
+    ):
+        assert OPENAPI_SPEC["paths"][path][method]["parameters"] == [{
+            "name": "job_id",
+            "in": "path",
+            "required": True,
+            "schema": {"type": "string"},
+        }]
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
     test_openapi_uses_resource_oriented_operation_ids()
