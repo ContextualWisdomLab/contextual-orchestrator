@@ -90,7 +90,7 @@ Remaining larger gaps stay unchanged: durable multi-replica routing observations
 need an accepted retention/decay decision; video jobs need a normalized durable
 ownership/lifecycle contract; and verified answer-token streaming needs a
 cancellable asynchronous dependency graph. Implementing any of those without
- their missing decisions would invent policy rather than close a bounded gap.
+their missing decisions would invent policy rather than close a bounded gap.
 
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 

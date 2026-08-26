@@ -9,9 +9,9 @@ pool from the persisted catalog.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
 import os
+from dataclasses import dataclass
 import threading
 from typing import Callable, Mapping, Sequence
 
@@ -310,30 +310,24 @@ def bootstrap_provider_catalog_runtime(
                 errors=errors,
             )
             catalog_refreshes = store.refresh_evidence()[evidence_offset:]
-            assessments_by_account: dict[
-                tuple[str, str], list[PrivacyPolicyAssessment]
-            ] = {}
-            for assessment in privacy_assessments:
-                assessments_by_account.setdefault(
-                    (assessment.subject_provider, assessment.subject_credential), []
-                ).append(assessment)
-            for source in source_tuple:
-                account_assessments = assessments_by_account.get(
-                    _source_key(source), []
-                )
-                if account_assessments:
-                    store.record_privacy_assessment_success(
-                        source, account_assessments
-                    )
-            privacy_assessment_count = (
-                sum(
-                    len(store.privacy_assessments(source))
-                    for source in source_tuple
-                    if source.credential_name in registered
-                )
-                if analyze_privacy_policies
-                else 0
+        assessments_by_account: dict[tuple[str, str], list[PrivacyPolicyAssessment]] = {}
+        for assessment in privacy_assessments:
+            assessments_by_account.setdefault(
+                (assessment.subject_provider, assessment.subject_credential), []
+            ).append(assessment)
+        for source in source_tuple:
+            account_assessments = assessments_by_account.get(_source_key(source), [])
+            if account_assessments:
+                store.record_privacy_assessment_success(source, account_assessments)
+        privacy_assessment_count = (
+            sum(
+                len(store.privacy_assessments(source))
+                for source in source_tuple
+                if source.credential_name in registered
             )
+            if analyze_privacy_policies
+            else 0
+        )
         failed_provider_names = {error.provider_name for error in errors}
         failed_credentials = {
             source.credential_name
