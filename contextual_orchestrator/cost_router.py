@@ -119,7 +119,9 @@ class CostRoutingCoordinator:
             ):
                 raise ValueError("provider embedding batch must use one resolved route")
             texts = [request.input_text for request in requests]
-            capability = embedding_model_capability(agent.provider_name, agent.model)
+            capability = embedding_model_capability(
+                getattr(agent, "provider_name", ""), agent.model
+            )
             try:
                 if capability is None:
                     return orchestrator.client.embed_with_usage(agent, texts)
@@ -540,7 +542,9 @@ class CostRoutingCoordinator:
         capability = None
         if routing_agent_id is not None:
             agent = self.orchestrator._agent(routing_agent_id)
-            capability = embedding_model_capability(agent.provider_name, agent.model)
+            capability = embedding_model_capability(
+                getattr(agent, "provider_name", ""), agent.model
+            )
             if capability is not None:
                 max_tokens = capability.max_tokens_per_input
         requests: List[EmbeddingBatchRequest] = []
@@ -971,7 +975,7 @@ class CostRoutingCoordinator:
         routing_agent_id: str | None = None,
         input_attributions: Optional[List[Dict[str, Any]]] = None,
         input_metadata: Optional[List[Dict[str, Any]]] = None,
-        wait_for_terminal: bool = False,
+        wait_for_terminal: bool = True,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 

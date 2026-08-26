@@ -1042,8 +1042,10 @@ class ModelClient:
             return vectors, 0
         destination = self._validate_provider(agent)  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
+        remaining = self.remaining_request_timeout()  # pragma: no cover
+        timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
         response = self._send_raw_with_retry(  # pragma: no cover
-            agent, "embeddings", payload, destination
+            agent, "embeddings", payload, destination, timeout=timeout
         )
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
         if not isinstance(data, list) or len(data) != len(texts):  # pragma: no cover
@@ -1268,6 +1270,7 @@ class ModelClient:
                 self._sleep(min(self._backoff_delay(attempt), remaining))
             finally:
                 self._local.provider_transport_timeout = None
+        self.remaining_request_timeout()
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
@@ -1387,9 +1390,11 @@ class ModelClient:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
         connection_timeout = timeout
         if connection_timeout is None:
-            connection_timeout = (
-                getattr(self._local, "provider_transport_timeout", None) or self.timeout
+            connection_timeout = getattr(
+                self._local, "provider_transport_timeout", None
             )
+        if connection_timeout is None:
+            connection_timeout = self.timeout
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
@@ -1480,11 +1485,22 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)
+        ):
+            remaining = self.remaining_request_timeout()  # pragma: no cover
+            timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
+            with _local_provider_slot(agent, self.local_concurrency, timeout):  # pragma: no cover
+                if remaining is None:
+                    yield from self._stream_send(agent, payload, destination)
+                else:
+                    yield from self._stream_send(agent, payload, destination, timeout=timeout)
 
     def _stream_send(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         api_key = _provider_credential(agent)
@@ -1499,6 +1515,9 @@ class ModelClient:
             method="POST",
         )
         stream_error: RuntimeError | None = None
+        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
+        if timeout is not None:
+            self._local.provider_transport_timeout = timeout
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1529,6 +1548,9 @@ class ModelClient:
             # and exception cause inside the gateway; callers get one stable,
             # package-owned error instead of raw provider diagnostics.
             stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+        finally:
+            if timeout is not None:
+                self._local.provider_transport_timeout = previous_timeout
         if stream_error is not None:
             raise stream_error
 
@@ -1580,15 +1602,24 @@ class ModelClient:
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, provider_timeout):
-                    chat_response = self._send_raw_with_retry(
-                        agent,
-                        "chat/completions",
-                        chat_payload,
-                        destination,
-                        timeout=provider_timeout,
-                    )
+                    if remaining is None:
+                        chat_response = self._send_raw_with_retry(
+                            agent, "chat/completions", chat_payload, destination
+                        )
+                    else:
+                        chat_response = self._send_raw_with_retry(
+                            agent,
+                            "chat/completions",
+                            chat_payload,
+                            destination,
+                            timeout=provider_timeout,
+                        )
                 return _chat_to_responses_payload(chat_response, payload)
             with _local_provider_slot(agent, self.local_concurrency, provider_timeout):  # pragma: no cover
+                if remaining is None:
+                    return self._send_raw_with_retry(
+                        agent, normalized_endpoint, payload, destination
+                    )
                 return self._send_raw_with_retry(
                     agent,
                     normalized_endpoint,
@@ -1615,10 +1646,18 @@ class ModelClient:
         )
         remaining = self.remaining_request_timeout()  # pragma: no cover
         timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
-        with self._open_provider(  # pragma: no cover
-            request, self._validate_provider(agent), timeout=timeout
-        ) as response:
-            return response.read(), response.headers.get_content_type()
+        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
+        self._local.provider_transport_timeout = timeout
+        try:
+            with self._open_provider(  # pragma: no cover
+                request, self._validate_provider(agent)
+            ) as response:
+                return response.read(), response.headers.get_content_type()
+        except Exception:
+            self.remaining_request_timeout()
+            raise
+        finally:
+            self._local.provider_transport_timeout = previous_timeout
 
     def _send_raw_with_retry(
         self,
@@ -1652,6 +1691,7 @@ class ModelClient:
                 self._sleep(min(self._backoff_delay(attempt), remaining))
             finally:
                 self._local.provider_transport_timeout = None
+        self.remaining_request_timeout()
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and endpoint.strip("/").endswith(
@@ -1691,8 +1731,15 @@ class ModelClient:
         effective_timeout = timeout
         if effective_timeout is None:
             effective_timeout = getattr(self._local, "provider_transport_timeout", None)
-        with self._open_provider(request, destination, timeout=effective_timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
+        if timeout is not None:
+            self._local.provider_transport_timeout = effective_timeout
+        try:
+            with self._open_provider(request, destination) as response:
+                return json.loads(response.read().decode("utf-8"))
+        finally:
+            if timeout is not None:
+                self._local.provider_transport_timeout = previous_timeout
 
     def _mock_raw(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -1843,6 +1890,8 @@ class ModelClient:
                 results = self._batch_run(  # pragma: no cover
                     agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
                 )
+            except RequestDeadlineExceeded:
+                raise
             except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
                 # public gateway boundary; provider bodies and exception text stay
@@ -2868,7 +2917,9 @@ class TaskOrchestrator:
         started_at = time.perf_counter()
         try:
             result = self.client.proxy_send(agent, endpoint, upstream)
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, RequestDeadlineExceeded):
+                raise
             if measured:
                 self._group_router.observe_failure(agent.id)
             raise
@@ -3837,6 +3888,8 @@ class TaskOrchestrator:
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
+            except RequestDeadlineExceeded:
+                raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
                 plan_source = "template_fallback"
@@ -4217,6 +4270,8 @@ class TaskOrchestrator:
         """First measured embedding-capable member id, or None when unconfigured."""
         try:
             return self.select_capability_agent("embedding").id
+        except RequestDeadlineExceeded:
+            raise
         except (RuntimeError, ValueError):
             return None
 
@@ -4232,6 +4287,8 @@ class TaskOrchestrator:
             return None
         try:
             vectors = self.client.embed(self._agent(embedding_member), [text])
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -4255,6 +4312,8 @@ class TaskOrchestrator:
             vectors = self.client.embed(
                 self._agent(embedding_member), [self._agent_descriptor_text(agent)]
             )
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -4319,6 +4378,8 @@ class TaskOrchestrator:
         """One uncached triage decision for :meth:`_triage_workflow_required`."""
         try:
             candidates = self._ranked_agents(text, "worker", free_only=True)
+        except RequestDeadlineExceeded:
+            raise
         except RuntimeError:
             candidates = []
         if not candidates:
@@ -4333,6 +4394,8 @@ class TaskOrchestrator:
         try:
             reply = self.client.chat(triage_agent, messages, temperature=0.0)
             return _parse_triage_reply(reply)
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
             return True
 
@@ -4441,6 +4504,8 @@ class TaskOrchestrator:
                     else self.client.proxy_send(agent, provider_endpoint, payload)
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
+                if isinstance(exc, RequestDeadlineExceeded):
+                    raise
                 last_error = exc
                 self._group_router.observe_failure(agent.id)
                 continue
@@ -4490,13 +4555,9 @@ class TaskOrchestrator:
                 except Exception as exc:
                     if isinstance(exc, RequestDeadlineExceeded):
                         raise
-                    if (
-                        agent.group_name or allowed_agent_ids is not None
-                    ):
+                    if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
-                        raise
-                    if isinstance(exc, RequestDeadlineExceeded):
                         raise
                     if isinstance(exc, ProviderResponseError):
                         self._record_failure(agent.id)
@@ -4775,6 +4836,8 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return {
                 "accepted": False,

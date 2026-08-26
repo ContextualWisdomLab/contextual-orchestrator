@@ -323,8 +323,8 @@ def test_provider_batch_cancelled_while_queued_never_starts() -> None:
     second = backend.submit([EmbeddingBatchRequest(input_text="second", model="model")])
     backend.cancel(second, reason="queued cancellation")
     release.set()
-    assert backend.wait(first, 1.0)
-    assert backend.wait(second, 1.0)
+    assert backend.wait(first, timeout=1.0)["is_complete"]
+    assert backend.wait(second, timeout=1.0)["is_complete"]
     assert backend.poll(second)["status"] == "cancelled"
     assert calls == ["first"]
 

@@ -547,7 +547,14 @@ def _request_deadline_header(value: str | None) -> float | None:
             "invalid_request_timeout",
             "X-Request-Timeout-Ms must be a positive integer",
         )
-    timeout_seconds = timeout_ms / 1000.0
+    try:
+        timeout_seconds = timeout_ms / 1000.0
+    except OverflowError as exc:
+        raise RequestError(
+            400,
+            "invalid_request_timeout",
+            "X-Request-Timeout-Ms exceeds the supported numeric range",
+        ) from exc
     if not math.isfinite(timeout_seconds):
         raise RequestError(
             400,
@@ -4856,7 +4863,11 @@ def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, A
         ("embedding_batch", "embedding_batch_backend"),
     ):
         try:
-            backend = getattr(coordinator, backend_name)
+            backend = (
+                coordinator._embedding_backend_for_model("contextual-orchestrator")
+                if check_name == "embedding_batch"
+                else getattr(coordinator, backend_name)
+            )
             # Backend identifiers may contain URLs, tenant names, or deployment
             # secrets. Readiness exposes only a server-controlled status.
             backend_id = getattr(backend, "name", None)
@@ -5668,11 +5679,16 @@ def build_server(
                     _validate_capability_request(path, body)
                     capability, endpoint, binary = capability_routes[path]
                     try:
-                        result = self._run(
-                            lambda: orchestrator.proxy_capability(
-                                body, capability=capability, endpoint=endpoint, binary=binary
+                        with orchestrator.client.request_settings(
+                            request_deadline_monotonic=request_deadline
+                        ):
+                            result = self._run(
+                                lambda: orchestrator.proxy_capability(
+                                    body, capability=capability, endpoint=endpoint, binary=binary
+                                )
                             )
-                        )
+                    except RequestDeadlineExceeded:
+                        raise
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
                     except RuntimeError as exc:
@@ -6118,6 +6134,8 @@ def build_server(
                                     wait_for_terminal=True,
                                 ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
+                            if isinstance(exc, RequestDeadlineExceeded):
+                                raise
                             last_embedding_error = exc
                             orchestrator._group_router.observe_failure(embedding_agent.id)
                             continue
@@ -6193,16 +6211,22 @@ def build_server(
                     for embedding_agent in embedding_agents:
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
-                                inputs,
-                                model=agent.model,
-                                attribution=attribution,
-                                metadata=submit_metadata,
-                                routing_agent_id=agent.id,
-                                input_attributions=input_attributions,
-                                input_metadata=input_metadata,
-                            ))
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                    inputs,
+                                    model=agent.model,
+                                    attribution=attribution,
+                                    metadata=submit_metadata,
+                                    routing_agent_id=agent.id,
+                                    input_attributions=input_attributions,
+                                    input_metadata=input_metadata,
+                                    wait_for_terminal=False,
+                                ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
+                            if isinstance(exc, RequestDeadlineExceeded):
+                                raise
                             last_embedding_error = exc
                             orchestrator._group_router.observe_failure(embedding_agent.id)
                             continue
@@ -6238,7 +6262,10 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
                     batch_requests = _validate_batch_requests(body, security.expose_trace_by_default)
                     metadata = {"actor_scope": "inference"}
-                    job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
@@ -6261,7 +6288,10 @@ def build_server(
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
                     self._authorize_trace_access("/api/v1/batch_routing_jobs/{job_id}/results")
                     try:
-                        retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                        with orchestrator.client.request_settings(
+                            request_deadline_monotonic=request_deadline
+                        ):
+                            retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
@@ -6461,16 +6491,23 @@ def build_server(
                         messages.append({"role": "user", "content": _coerce_input_text(input_value)})
                         started_at = time.perf_counter()
                         if stream:
-                            stream_succeeded = self._stream_orchestrated_response(
-                                orchestrator, security, messages, model_name
-                            )
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                stream_succeeded, stream_status_code = self._stream_orchestrated_response(
+                                    orchestrator, security, messages, model_name
+                                )
                         else:
                             stream_succeeded = True
-                            result = self._run(
-                                lambda: orchestrator.complete(
-                                    messages, mode="auto", model_name=model_name
+                            stream_status_code = 200
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                result = self._run(
+                                    lambda: orchestrator.complete(
+                                        messages, mode="auto", model_name=model_name
+                                    )
                                 )
-                            )
                             summaries = [
                                 _REASONING_STAGE_SUMMARIES.get(step.get("role"), "Processing the request.")
                                 for step in result.get("trace", [])
@@ -6489,7 +6526,7 @@ def build_server(
                             {
                                 "endpoint_path": "/v1/responses",
                                 "actor_scope": "inference",
-                                "status_code": 200 if stream_succeeded else 500,
+                                "status_code": stream_status_code,
                                 "transport_status_code": 200,
                                 "response_status": "completed" if stream_succeeded else "failed",
                                 "model_name": model_name,
@@ -6499,9 +6536,12 @@ def build_server(
                         )
                         return
                     started_at = time.perf_counter()
-                    proxied = self._run(
-                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
-                    )
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        proxied = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                        )
                     orchestrator.record_analytics_event(
                         "responses_passthrough",
                         {
@@ -6521,7 +6561,10 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
                     include_trace = self._trace_requested(body, "/admin/simulate")
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -6531,7 +6574,10 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = self._trace_requested(body, "/api/v1/workflow_runs")
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -6543,7 +6589,10 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = self._trace_requested(body, "/api/v1/evaluation_runs")
-                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -6856,7 +6905,7 @@ def build_server(
             security: Any,
             messages: Any,
             model_name: str,
-        ) -> bool:
+        ) -> tuple[bool, int]:
             """Stream orchestration as native Responses reasoning-summary events."""
             response_id = f"resp_{uuid.uuid4().hex}"
             reasoning_id = f"rs_{uuid.uuid4().hex}"
@@ -6917,7 +6966,7 @@ def build_server(
             security.acquire_run_slot()
             try:
                 if not self._begin_sse():
-                    return False
+                    return False, 500
                 created_response = _orchestrated_response(
                     model_name,
                     {"answer": ""},
@@ -6951,6 +7000,18 @@ def build_server(
                         )
                 except ConnectionAbortedError:
                     raise
+                except RequestDeadlineExceeded:
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": {
+                            "code": "request_deadline_exceeded",
+                            "message": "request deadline exceeded",
+                        },
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False, 504
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     failed = {
                         **created_response,
@@ -6962,7 +7023,7 @@ def build_server(
                     }
                     emit("response.failed", response=failed)
                     self._write_sse("data: [DONE]\n\n")
-                    return False
+                    return False, 500
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",
@@ -7024,9 +7085,9 @@ def build_server(
                 )
                 emit("response.completed", response=completed)
                 self._write_sse("data: [DONE]\n\n")
-                return True
+                return True, 200
             except ConnectionAbortedError:
-                return False
+                return False, 500
             finally:
                 security.release_run_slot()
 
