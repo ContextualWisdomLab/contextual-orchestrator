@@ -40,7 +40,11 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .model_group import ModelGroupRouter, canonical_group_name
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
-from .provider_errors import ProviderUpstreamError, classify_provider_failure
+from .provider_errors import (
+    ProviderUpstreamError,
+    classify_provider_failure,
+    provider_error_body,
+)
 from .telemetry import (
     annotate_current_span,
     inject_trace_context,
@@ -559,7 +563,7 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     if isinstance(cached, bool):
         return cached
     try:
-        payload = json.loads(error.read(65536).decode("utf-8"))
+        payload = json.loads(provider_error_body(error).decode("utf-8"))
     except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         result = False
     else:

@@ -31,6 +31,7 @@ __all__ = [
     "PROVIDER_STATUS_SURFACES",
     "ProviderUpstreamError",
     "classify_provider_failure",
+    "provider_error_body",
     "safe_provider_message",
 ]
 
@@ -71,6 +72,20 @@ PROVIDER_STATUS_SURFACES: dict[int, tuple[int, str, bool]] = {
 _UNMAPPED_UPSTREAM_SURFACE: tuple[int, str, bool] = (502, "api_error", False)
 
 
+def provider_error_body(exc: urllib.error.HTTPError) -> bytes:
+    """Read and cache one bounded upstream error body for all classifiers."""
+    cache_key = "_contextual_orchestrator_provider_error_body"
+    cached = getattr(exc, cache_key, None)
+    if isinstance(cached, bytes):
+        return cached
+    body = exc.read(MAX_PROVIDER_ERROR_BODY_BYTES + 1)[:MAX_PROVIDER_ERROR_BODY_BYTES]
+    try:
+        setattr(exc, cache_key, body)
+    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
+        pass
+    return body
+
+
 def safe_provider_message(exc: BaseException) -> str | None:
     """Extract one bounded, control-free diagnostic sentence from a failure.
 
@@ -86,9 +101,7 @@ def safe_provider_message(exc: BaseException) -> str | None:
     if isinstance(exc, urllib.error.HTTPError):
         try:
             payload = _json.loads(
-                exc.read(MAX_PROVIDER_ERROR_BODY_BYTES + 1)[
-                    :MAX_PROVIDER_ERROR_BODY_BYTES
-                ].decode("utf-8", errors="replace")
+                provider_error_body(exc).decode("utf-8", errors="replace")
             )
         except Exception:  # noqa: BLE001 - bodies are untrusted input
             return None

@@ -21,7 +21,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient, is_transient_error  # noqa: E402
 from contextual_orchestrator.provider_errors import (  # noqa: E402
     MAX_PROVIDER_ERROR_BODY_BYTES,
     MAX_SAFE_MESSAGE_CHARS,
@@ -83,6 +83,14 @@ def test_safe_message_reads_only_a_bounded_provider_body() -> None:
     )
     assert safe_provider_message(error) is None
     assert body.requested_size == MAX_PROVIDER_ERROR_BODY_BYTES + 1
+
+
+def test_safe_message_reuses_body_after_retryability_inspection() -> None:
+    """Tool-stop and caller-safe classification share one bounded body read."""
+    error = _body_http_error(401, {"error": {"message": "invalid credential"}})
+
+    assert is_transient_error(error) is False
+    assert safe_provider_message(error) == "invalid credential"
 
 
 def test_safe_message_collapses_control_characters_and_bounds_length() -> None:
