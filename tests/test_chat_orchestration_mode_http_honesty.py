@@ -86,6 +86,31 @@ def test_http_chat_accepts_orchestration_mode_auto() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_conduct_accepts_advertised_deployment_alias() -> None:
+    """The listed deployment alias must reach the multi-agent conduct path."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "contextual-orchestrator",
+                "messages": [{"role": "user", "content": "analyze and verify this synthetic task"}],
+                "orchestration_mode": "conduct",
+                "include_orchestration_trace": True,
+            },
+        )
+        assert status == 200, body
+        assert body["model"] == "contextual-orchestrator"
+        assert body["orchestration"]["mode"] == "conduct"
+        assert len(body["orchestration"]["trace"]) > 1
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_invalid_mode() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -131,6 +156,7 @@ def test_http_chat_rejects_mode_non_string() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_mode_route()
     test_http_chat_accepts_orchestration_mode_auto()
+    test_http_chat_conduct_accepts_advertised_deployment_alias()
     test_http_chat_rejects_invalid_mode()
     test_http_chat_rejects_mode_non_string()
     print("ok")

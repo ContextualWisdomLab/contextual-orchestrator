@@ -2118,6 +2118,10 @@ def _require_pool_model(
     answering with a different pool agent hides capacity/routing mismatches.
     """
     agents = getattr(orchestrator, "agents", None) or []
+    if model_name == "contextual-orchestrator" and required_capability is None:
+        if any(not getattr(agent, "disabled", False) for agent in agents):
+            return model_name
+        raise RequestError(400, "invalid_model", "no enabled orchestration agent is available")
     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
         if required_capability is None:
             if model_name == TaskOrchestrator.AUTO_MODEL or any(
