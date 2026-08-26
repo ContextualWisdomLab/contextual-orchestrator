@@ -32,7 +32,7 @@ from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
-from .batch_job_registry import JobRegistryFactory
+from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory
 
 _ROUTING_CATEGORY = "routing"
 
@@ -705,6 +705,8 @@ class ProviderEmbeddingBatchBackend:
                     self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
                     self._results[job_id] = items
                     self._states[job_id] = "completed"
+        except ClaimNotAcquired:
+            return
         except Exception as exc:  # noqa: BLE001 - polling exposes a bounded terminal state
             with self._registry.lock(
                 "provider_embedding_job_states", job_id,
