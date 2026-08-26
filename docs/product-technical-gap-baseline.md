@@ -11,7 +11,8 @@ The dimensions follow LiteLLM's `ModelInfoBase` pricing schema.
 Protected `main` is `5a01759165be20ab38c05c2321d8a9f00ec331ea`.
 PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
 records completed full-suite evidence at `3497d8fc` (`2386 passed`, `0 failed`)
-and focused discovery/catalog evidence at current head `6d39bcc7` (`85 passed`). A
+and focused discovery/catalog/privacy/routing/Compose evidence at `0a0eab34`
+(`156 passed`, `1 skipped`). A
 configured OpenAI-compatible gateway now joins `/v1/models` with deployment
 metadata so chat, Responses, Completions, embedding, image generation/edit,
 speech, and transcription capabilities remain individually discoverable;
@@ -53,17 +54,19 @@ bind also requires an explicit TLS PostgreSQL mode (`require`, `verify-ca`, or
 static contract tests prove the topology; a successfully started stack plus
 denied direct-DNS/direct-443 probes remain required runtime acceptance evidence.
 
-Local live verification on current implementation head `6d39bcc7` used the configured
+Local live verification on implementation head `daea6754` used the configured
 gateway and credential without recording either value. Discovery returned eight
 deployments with zero provider errors: seven had explicit chat capability and one
 had embedding capability; two preserved an explicit Responses capability, all
 eight retained complete provider-reported token pricing, none was free, and all
-eight kept ZDR unknown because the gateway supplied no consensus evidence. The
-earlier endpoint probe on head `4b98d55c` showed both `/v1/chat/completions` and `/v1/responses` returned
-HTTP 200 for an omitted model, `contextual-orchestrator`, and
-`orchestrator/auto`; both returned HTTP 400 with the zero-cost eligibility error
-for `orchestrator/free` because this deployment currently exposes no model with
-complete zero-price evidence. A separate live OpenRouter discovery returned 502
+eight kept ZDR unknown because the gateway supplied no consensus evidence. An
+ephemeral server using those discovered agents returned HTTP 200 for omitted
+Chat, explicit `contextual-orchestrator`, `orchestrator/auto`, and omitted
+Responses requests. Chat `orchestrator/free` returned HTTP 400 `invalid_model`
+at the documented zero-cost eligibility boundary because the deployment exposed
+no model with complete zero-price evidence. A separate earlier endpoint matrix
+on `4b98d55c` also covered explicit/default/auto/free across Chat and Responses.
+A separate live OpenRouter discovery returned 502
 paid models (284 ZDR supported, 218 unsupported) and 59 free models (4 supported,
 55 unsupported), with zero unknown ZDR results and zero provider errors. These
 scrubbed observations prove the local discovery and routing contracts, not a
