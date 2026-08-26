@@ -317,6 +317,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        supported_parameters = (
+            row.get("supported_parameters")
+            if isinstance(row.get("supported_parameters"), list)
+            else []
+        )
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
         inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
@@ -335,7 +340,15 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         capabilities = tuple(
             dict.fromkeys(
                 _CAPABILITY_NAMES.get(value, value)
-                for value in (*source_capabilities, *outputs)
+                for value in (
+                    *source_capabilities,
+                    *outputs,
+                    *(
+                        ("response_format",)
+                        if "response_format" in supported_parameters
+                        else ()
+                    ),
+                )
             )
         )
         prompt_price = _price_per_1k(pricing.get("prompt"))

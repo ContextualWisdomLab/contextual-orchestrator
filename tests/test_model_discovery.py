@@ -105,7 +105,11 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     payload = {
         "data": [
-            {"id": "meta/llama-3.3", "pricing": {"prompt": "0.0000006", "completion": "0.0000012"}},
+            {
+                "id": "meta/llama-3.3",
+                "pricing": {"prompt": "0.0000006", "completion": "0.0000012"},
+                "supported_parameters": ["response_format"],
+            },
             {"id": "no-pricing-model"},
             {"missing": "id-field"},
         ]
@@ -126,7 +130,9 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
-    assert all(model.capabilities == ("chat",) for model in discovered)
+    assert discovered[0].capabilities == ("chat", "response_format")
+    assert discovered[1].capabilities == ("chat",)
+    assert "response_format" in agent_from_discovered(discovered[0]).tags
 
 
 def test_openrouter_discovery_preserves_every_declared_modality() -> None:

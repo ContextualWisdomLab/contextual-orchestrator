@@ -3148,6 +3148,10 @@ class TaskOrchestrator:
             raise ValueError("structured completion requires non-empty messages")
         task = self._latest_user_text(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        selection_tags = (
+            *required_tags,
+            *(("response_format",) if chat_body.get("response_format") else ()),
+        )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         final_agent = self._requested_agent(requested_model)
@@ -3156,7 +3160,7 @@ class TaskOrchestrator:
                 final_agent = self._select_agent(
                     task,
                     "synthesizer",
-                    required_tags=required_tags,
+                    required_tags=selection_tags,
                     free_only=free_only,
                 )
             except RuntimeError as exc:
