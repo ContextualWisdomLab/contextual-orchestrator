@@ -255,6 +255,31 @@ def test_structured_chat_rejects_trace_disclosure_it_cannot_return() -> None:
     )
 
 
+def test_structured_chat_ignores_server_trace_default_when_flag_is_omitted() -> None:
+    """A server default must not turn an ordinary structured request into an opt-in."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope == "inference"
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 200, body
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
 def test_tool_chat_rejects_trace_disclosure_it_cannot_return() -> None:
     """Do not silently ignore a trace request on the tool passthrough path."""
     server, thread, port, _orchestrator = _server_with_verifier(

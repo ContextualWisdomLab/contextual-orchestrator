@@ -5852,7 +5852,7 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
-                        if include_trace:
+                        if body.get("include_orchestration_trace") is True:
                             raise RequestError(
                                 400,
                                 "unsupported_trace_disclosure",
