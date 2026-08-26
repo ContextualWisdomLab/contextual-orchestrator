@@ -101,6 +101,7 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
         (["--local-concurrency", "65"], "1..64"),
         (["--max-concurrent-runs", "0"], "positive integer"),
         (["--max-concurrent-runs", "65"], "1..64"),
+        (["--max-body-bytes", "0"], "positive integer"),
         (["--chat-template-args", "[]"], "JSON object"),
         (["--chat-template-args", "null"], "JSON object"),
         (["--chat-template-args", "{"], "valid JSON object"),
@@ -149,6 +150,26 @@ def test_server_concurrency_is_explicit_and_bounded() -> None:
     ):
         main()
     assert serve.call_args.kwargs["security"].max_concurrent_runs == 16
+
+
+def test_server_request_body_limit_is_explicit() -> None:
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--auth-token",
+                "token",
+                "--max-body-bytes",
+                "8388608",
+            ],
+        ),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main()
+    assert serve.call_args.kwargs["security"].max_body_bytes == 8 * 1024 * 1024
 
 
 def test_local_http_session_cookie_requires_explicit_opt_in() -> None:
