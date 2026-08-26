@@ -1519,15 +1519,24 @@ class ModelClient:
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, provider_timeout):
-                    chat_response = self._send_raw_with_retry(
-                        agent,
-                        "chat/completions",
-                        chat_payload,
-                        destination,
-                        timeout=provider_timeout,
-                    )
+                    if remaining is None:
+                        chat_response = self._send_raw_with_retry(
+                            agent, "chat/completions", chat_payload, destination
+                        )
+                    else:
+                        chat_response = self._send_raw_with_retry(
+                            agent,
+                            "chat/completions",
+                            chat_payload,
+                            destination,
+                            timeout=provider_timeout,
+                        )
                 return _chat_to_responses_payload(chat_response, payload)
             with _local_provider_slot(agent, self.local_concurrency, provider_timeout):  # pragma: no cover
+                if remaining is None:
+                    return self._send_raw_with_retry(
+                        agent, normalized_endpoint, payload, destination
+                    )
                 return self._send_raw_with_retry(
                     agent,
                     normalized_endpoint,
@@ -1620,8 +1629,15 @@ class ModelClient:
         effective_timeout = timeout
         if effective_timeout is None:
             effective_timeout = getattr(self._local, "provider_transport_timeout", None)
-        with self._open_provider(request, destination, timeout=effective_timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
+        if timeout is not None:
+            self._local.provider_transport_timeout = effective_timeout
+        try:
+            with self._open_provider(request, destination) as response:
+                return json.loads(response.read().decode("utf-8"))
+        finally:
+            if timeout is not None:
+                self._local.provider_transport_timeout = previous_timeout
 
     def _mock_raw(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
