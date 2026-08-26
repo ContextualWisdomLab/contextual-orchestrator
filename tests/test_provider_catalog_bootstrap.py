@@ -88,6 +88,19 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
         assert second.last_known_good_model_count == 1
         assert second.catalog_refresh_failure_count == 1
         assert second.providers_with_errors == ("openai",)
+        refreshes = second.as_dict()["catalog_refreshes"]
+        assert isinstance(refreshes, list)
+        assert [row["provider_account_id"] for row in refreshes] == [
+            "openai_openai_api_key",
+            "openrouter_openrouter_api_key",
+        ]
+        assert [row["refresh_status"] for row in refreshes] == [
+            "failed",
+            "succeeded",
+        ]
+        assert refreshes[0]["error_code"] == "provider_discovery_error"
+        assert refreshes[1]["error_code"] is None
+        assert all(row["finished_at"].endswith("+00:00") for row in refreshes)
         assert set(second.selected_agent_ids) == {
             "openai_gpt_live",
             "openrouter_router_new",

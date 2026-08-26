@@ -41,6 +41,7 @@ from .provider_bootstrap import (
     serving_tags_for_discovered,
 )
 from .provider_catalog_store import (
+    CatalogRefreshEvidence,
     InMemoryProviderCatalogStore,
     PostgresProviderCatalogStore,
     ProviderCatalogStore,
@@ -80,6 +81,7 @@ class ProviderCatalogBootstrapReport:
     catalog_refresh_failure_count: int
     providers_with_errors: tuple[str, ...]
     priced_model_count: int
+    catalog_refreshes: tuple[CatalogRefreshEvidence, ...]
 
     def as_dict(self) -> dict[str, object]:
         """Return the stable JSON evidence contract without secret values."""
@@ -97,6 +99,18 @@ class ProviderCatalogBootstrapReport:
             "catalog_refresh_failure_count": self.catalog_refresh_failure_count,
             "providers_with_errors": list(self.providers_with_errors),
             "priced_model_count": self.priced_model_count,
+            "catalog_refreshes": [
+                {
+                    "provider_account_id": evidence.provider_account_id,
+                    "refresh_status": evidence.refresh_status,
+                    "observed_model_count": evidence.observed_model_count,
+                    "eligible_model_count": evidence.eligible_model_count,
+                    "error_code": evidence.error_code,
+                    "started_at": evidence.started_at.isoformat(),
+                    "finished_at": evidence.finished_at.isoformat(),
+                }
+                for evidence in self.catalog_refreshes
+            ],
         }
 
 
@@ -264,6 +278,7 @@ def bootstrap_provider_catalog_runtime(
             lambda requested_sources: discover_all_models(requested_sources)
         )
         live_models, errors = discover(source_tuple)
+        evidence_offset = len(store.refresh_evidence())
         snapshot = refresh_persisted_provider_catalog(
             store,
             sources=source_tuple,
@@ -335,6 +350,7 @@ def bootstrap_provider_catalog_runtime(
             catalog_refresh_failure_count=snapshot.refresh_failure_count,
             providers_with_errors=snapshot.providers_with_errors,
             priced_model_count=priced_count,
+            catalog_refreshes=store.refresh_evidence()[evidence_offset:],
         )
     except Exception:
         try:
