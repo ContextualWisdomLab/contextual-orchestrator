@@ -12,6 +12,7 @@ They do not share numbering with `docs/planning/adrs/`.
 | [0002](0002-control-plane-orchestrator.md) | Control-plane orchestrator, not a trained coordinator | Accepted | Xu et al. (2025) TRINITY arXiv:2512.04695; Nielsen et al. (2025) Conductor arXiv:2512.04388; Sakana Fugu (2026) live pages |
 | [0003](0003-cost-aware-sync-batch-routing.md) | Cost-aware sync-versus-batch routing | Accepted | Chen et al. (2023) FrugalGPT arXiv:2305.05176; Ong et al. (2024) RouteLLM arXiv:2406.18665; Ding et al. (2024) Hybrid LLM arXiv:2404.14618 |
 | [0004](0004-msa-leaf-composition.md) | MSA leaf — standalone and callable | Accepted | NIST SP 800-204 independent deployability; planning ADR 0001 fail-closed judge composition |
+| [0005](0005-request-scoped-provider-deadline.md) | Request-scoped provider deadline | Accepted | RFC 9110; NIST SP 800-53 Rev. 5 SI-11, SC-24 |
 
 Each record uses Context / Decision / Consequences plus an APA 7th
 **References** section. Cite only verified DOI or official URLs. arXiv

@@ -15,7 +15,11 @@ from contextual_orchestrator import (
     TaskOrchestrator,
     build_response_cache_key,
 )
-from contextual_orchestrator.server import RequestError, _cache_bypass_header
+from contextual_orchestrator.server import (
+    RequestError,
+    _cache_bypass_header,
+    _request_deadline_header,
+)
 from contextual_orchestrator.orchestrator import ModelClient
 
 
@@ -221,3 +225,20 @@ def test_cache_bypass_header_accepts_explicit_boolean_values(value: str | None) 
 def test_cache_bypass_header_rejects_ambiguous_values() -> None:
     with pytest.raises(RequestError, match="X-Cache-Bypass"):
         _cache_bypass_header("maybe")
+
+
+def test_request_deadline_header_uses_explicit_millisecond_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control header becomes a server-local monotonic deadline."""
+    monkeypatch.setattr("contextual_orchestrator.server.time.monotonic", lambda: 12.5)
+    assert _request_deadline_header(None) is None
+    assert _request_deadline_header(" 180000 ") == 192.5
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "forever", "١"])
+def test_request_deadline_header_rejects_non_positive_or_ambiguous_values(value: str) -> None:
+    """Malformed deadline controls fail before orchestration starts."""
+    with pytest.raises(RequestError) as raised:
+        _request_deadline_header(value)
+    assert raised.value.code == "invalid_request_timeout"

@@ -1190,7 +1190,8 @@ class ModelClient:
                 last_error = TimeoutError("provider attempt deadline exceeded")
                 break
             try:
-                return self._send(agent, payload, destination, timeout=remaining)
+                self._local.provider_transport_timeout = remaining
+                return self._send(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
@@ -1199,6 +1200,8 @@ class ModelClient:
                 if remaining <= 0:
                     break
                 self._sleep(min(self._backoff_delay(attempt), remaining))
+            finally:
+                self._local.provider_transport_timeout = None
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
@@ -1238,10 +1241,13 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        effective_timeout = timeout
+        if effective_timeout is None:
+            effective_timeout = getattr(self._local, "provider_transport_timeout", None)
         opened = (
             self._open_provider(request, destination)
-            if timeout is None
-            else self._open_provider(request, destination, timeout=timeout)
+            if effective_timeout is None
+            else self._open_provider(request, destination, timeout=effective_timeout)
         )
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -4359,7 +4365,8 @@ class TaskOrchestrator:
             retry_attempt = 0
             while True:
                 try:
-                    self.client.remaining_request_timeout()
+                    if hasattr(self.client, "remaining_request_timeout"):
+                        self.client.remaining_request_timeout()
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
                     output = (
@@ -4421,7 +4428,8 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
-        self.client.remaining_request_timeout()
+        if hasattr(self.client, "remaining_request_timeout"):
+            self.client.remaining_request_timeout()
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(

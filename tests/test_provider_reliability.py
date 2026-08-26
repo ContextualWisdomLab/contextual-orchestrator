@@ -382,6 +382,7 @@ def test_provider_retry_reuses_one_timeout_budget(monkeypatch: pytest.MonkeyPatc
 
         def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
             del agent, payload, destination
+            timeout = self._local.provider_transport_timeout
             self.timeouts.append(timeout)
             now[0] += 60.0
             raise TimeoutError("provider timed out")
@@ -411,6 +412,7 @@ def test_request_deadline_allows_backup_only_the_remaining_time(
 
         def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
             del payload, destination
+            timeout = self._local.provider_transport_timeout
             self.calls.append((agent.id, timeout))
             if agent.id == "primary_worker":
                 now[0] += timeout
@@ -419,8 +421,8 @@ def test_request_deadline_allows_backup_only_the_remaining_time(
             return "backup answer"
 
     agents = [
-        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", tags=("reasoning",), priority=5),
-        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", tags=("reasoning",), priority=1),
+        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=5),
+        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=1),
     ]
     client = DeadlineClient()
     orchestrator = TaskOrchestrator(agents, client=client)
@@ -451,12 +453,13 @@ def test_all_provider_failures_end_at_shared_request_deadline(
 
         def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
             del agent, payload, destination
+            timeout = self._local.provider_transport_timeout
             now[0] += timeout
             raise TimeoutError("provider timed out")
 
     agents = [
-        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", tags=("reasoning",), priority=5),
-        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", tags=("reasoning",), priority=1),
+        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=5),
+        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=1),
     ]
     client = AllTimedOut()
     orchestrator = TaskOrchestrator(agents, client=client)
