@@ -5357,6 +5357,13 @@ def build_server(
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
                         self._authorize_trace_access()
+                        access_report = orchestrator.get_access_report(
+                            workflow_run_id,
+                            owner_id=security.principal_id(self.headers),
+                        )
+                        self._audit_trace_disclosure(
+                            "/api/v1/access_reports/{workflow_run_id}"
+                        )
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
                             {
@@ -5366,7 +5373,12 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
+                        self._send(
+                            _response_payload(
+                                access_report,
+                                security.expose_trace_by_default,
+                            )
+                        )
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -5840,6 +5852,12 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        if include_trace:
+                            raise RequestError(
+                                400,
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use chat without tools or response_format",
+                            )
                         tool_loop = bool(tools_list)
                         started_at = time.perf_counter()
                         if tool_loop:

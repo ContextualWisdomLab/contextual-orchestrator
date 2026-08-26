@@ -25,9 +25,15 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, payload: dict, token: str = _TEST_AUTH_TOKEN) -> tuple[int, dict]:
+def _post(
+    port: int,
+    payload: dict,
+    token: str = _TEST_AUTH_TOKEN,
+    *,
+    path: str = "/v1/chat/completions",
+) -> tuple[int, dict]:
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/chat/completions",
+        f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -35,6 +41,18 @@ def _post(port: int, payload: dict, token: str = _TEST_AUTH_TOKEN) -> tuple[int,
             "connection": "close",
         },
         method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _get(port: int, path: str, token: str) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        headers={"authorization": f"Bearer {token}", "connection": "close"},
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -126,10 +144,10 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
 
     append_audit_event = orchestrator._append_audit_event
 
-    def fail_audit(event_type: str, detail: dict) -> None:
+    def fail_audit(event_type: str, detail: dict, **kwargs: object) -> None:
         if event_type == "orchestration_trace_access_granted":
             raise OSError("audit store unavailable")
-        append_audit_event(event_type, detail)
+        append_audit_event(event_type, detail, **kwargs)
 
     orchestrator._append_audit_event = fail_audit  # type: ignore[method-assign]
     try:
@@ -210,8 +228,8 @@ def test_structured_chat_cannot_bypass_trace_flag_validation() -> None:
         thread.join(timeout=5)
 
 
-def test_structured_chat_does_not_audit_trace_disclosure_it_never_returns() -> None:
-    """Record granted access only when the response can disclose a trace."""
+def test_structured_chat_rejects_trace_disclosure_it_cannot_return() -> None:
+    """Tell callers to use a chat shape that can return trace details."""
     server, thread, port, orchestrator = _server_with_verifier(
         lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
     )
@@ -229,12 +247,81 @@ def test_structured_chat_does_not_audit_trace_disclosure_it_never_returns() -> N
     finally:
         server.shutdown()
         thread.join(timeout=5)
-    assert status == 200, body
-    assert "trace" not in body.get("orchestration", {})
+    assert status == 400, body
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
     assert not any(
         event["event_type"] == "orchestration_trace_access_granted"
         for event in orchestrator._audit_events
     )
+
+
+def test_tool_chat_rejects_trace_disclosure_it_cannot_return() -> None:
+    """Do not silently ignore a trace request on the tool passthrough path."""
+    server, thread, port, _orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "use tool"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400, body
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
+
+
+def test_access_report_disclosure_fails_closed_when_audit_fails() -> None:
+    """Do not release accessed-output evidence without durable trace audit."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace", "admin"}
+    )
+    try:
+        status, created = _post(
+            port,
+            {
+                "prompt_text": "create report",
+                "run_mode": "conduct",
+                "include_orchestration_trace": False,
+            },
+            token=_TEST_TRACE_TOKEN,
+            path="/api/v1/workflow_runs",
+        )
+        assert status == 201, created
+        workflow_run_id = created["workflow_run_id"]
+        append_audit_event = orchestrator._append_audit_event
+
+        def fail_trace_audit(event_type: str, detail: dict, **kwargs: object) -> None:
+            if event_type == "orchestration_trace_access_granted":
+                raise OSError("audit store unavailable")
+            append_audit_event(event_type, detail, **kwargs)
+
+        orchestrator._append_audit_event = fail_trace_audit  # type: ignore[method-assign]
+        status, body = _get(
+            port,
+            f"/api/v1/access_reports/{workflow_run_id}",
+            _TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 503, body
+    assert body["error"]["code"] == "trace_audit_unavailable"
 
 
 def test_invalid_chat_does_not_audit_trace_disclosure() -> None:
