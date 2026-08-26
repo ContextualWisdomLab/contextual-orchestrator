@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import re
+import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -19,6 +20,8 @@ from .credentials import get_credential
 
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 RELEASE_AUTHORITY_SIGNING_CREDENTIAL = "CONTEXTUAL_ORCHESTRATOR_RELEASE_AUTHORITY_SIGNING_KEY"
+RELEASE_AUTHORITY_MAX_AGE_SECONDS = 15 * 60
+RELEASE_AUTHORITY_MAX_FUTURE_SKEW_SECONDS = 60
 _SIGNATURE_FIELD = "signature"
 _APPROVED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 _FINDING_SOURCES = frozenset(
@@ -135,6 +138,7 @@ def evaluate_release_authorization(
     authority: Mapping[str, Any] | None,
     *,
     expected_repository: str = "ContextualWisdomLab/contextual-orchestrator",
+    now_epoch: int | None = None,
 ) -> dict[str, Any]:
     """Evaluate one fresh protected-head authority snapshot.
 
@@ -147,6 +151,14 @@ def evaluate_release_authorization(
         return _result(["authority_evidence_unavailable"])
 
     blockers: list[str] = []
+    evaluated_at = int(time.time()) if now_epoch is None else now_epoch
+    collected_at = authority.get("collected_at_epoch")
+    if type(evaluated_at) is not int or type(collected_at) is not int:
+        blockers.append("authority_freshness_invalid")
+    elif collected_at > evaluated_at + RELEASE_AUTHORITY_MAX_FUTURE_SKEW_SECONDS:
+        blockers.append("authority_collected_in_future")
+    elif evaluated_at - collected_at > RELEASE_AUTHORITY_MAX_AGE_SECONDS:
+        blockers.append("authority_evidence_stale")
     repository = authority.get("repository")
     if repository != expected_repository:
         blockers.append("repository_mismatch")

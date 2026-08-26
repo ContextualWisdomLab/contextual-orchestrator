@@ -12,6 +12,10 @@ separate fail-closed release-authority result. It never treats a missing,
 queued, stale, synthetic, predecessor-head, author-only, or unresolved-finding
 snapshot as release-ready.
 
+Signed snapshots expire after 15 minutes and tolerate at most 60 seconds of
+collector clock lead. This bounds approval dismissal, check rerun, and ruleset
+changes that can occur without changing the candidate commit SHA.
+
 Active ruleset semantics are combined fail-closed: the highest required
 approval count applies, and any last-push approval rule excludes the last
 pusher from the qualifying reviewer set.

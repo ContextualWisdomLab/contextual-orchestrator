@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -28,6 +29,7 @@ def valid_release_authority() -> dict[str, object]:
     """Return a complete exact-head authority snapshot for the positive path."""
     return {
         "authority_source": "github_api",
+        "collected_at_epoch": int(time.time()),
         "repository": "ContextualWisdomLab/contextual-orchestrator",
         "base_branch": "main",
         "ruleset_verified": True,

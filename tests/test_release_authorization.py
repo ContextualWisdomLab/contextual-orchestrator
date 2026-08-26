@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import time
 
 import pytest
 
@@ -40,6 +41,7 @@ def authority() -> dict[str, object]:
     """Return a complete trusted-snapshot shape for the nominal case."""
     return {
         "authority_source": "github_api",
+        "collected_at_epoch": int(time.time()),
         "repository": "ContextualWisdomLab/contextual-orchestrator",
         "base_branch": "main",
         "ruleset_verified": True,
@@ -92,6 +94,28 @@ def test_missing_authority_preserves_fail_closed_boundary() -> None:
     result = evaluate_release_authorization(None)
     assert result["status"] == "release_authorization_blocked"
     assert result["blockers"] == ["authority_evidence_unavailable"]
+
+
+def test_stale_future_and_missing_collection_time_fail_closed() -> None:
+    """Exact-head evidence expires because reviews and checks can change in place."""
+    now = 2_000_000_000
+    stale = authority()
+    stale["collected_at_epoch"] = now - 901
+    assert "authority_evidence_stale" in evaluate_release_authorization(
+        stale, now_epoch=now
+    )["blockers"]
+
+    future = authority()
+    future["collected_at_epoch"] = now + 61
+    assert "authority_collected_in_future" in evaluate_release_authorization(
+        future, now_epoch=now
+    )["blockers"]
+
+    missing = authority()
+    missing.pop("collected_at_epoch")
+    assert "authority_freshness_invalid" in evaluate_release_authorization(
+        missing, now_epoch=now
+    )["blockers"]
 
 
 def test_authority_snapshot_requires_a_kv_backed_signature() -> None:

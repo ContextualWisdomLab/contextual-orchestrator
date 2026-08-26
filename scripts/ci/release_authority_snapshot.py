@@ -12,6 +12,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -297,6 +298,7 @@ def collect_authority(
         raise RuntimeError("pull_request_changed_during_collection")
     return {
         "authority_source": "github_api",
+        "collected_at_epoch": int(time.time()),
         "repository": repository,
         "base_branch": base_branch,
         "ruleset_verified": ruleset_verified,
