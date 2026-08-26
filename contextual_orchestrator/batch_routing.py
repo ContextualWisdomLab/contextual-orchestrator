@@ -629,11 +629,10 @@ class ProviderEmbeddingBatchBackend:
             if job_registry is not None
             else {}
         )
-        # A durable registry makes state visible across processes, but it is not
-        # an atomic work queue.  Do not resubmit inherited queued/running rows:
-        # doing so in every web process can execute one paid provider call more
-        # than once.  Restart recovery requires an external single-consumer
-        # dispatcher (or a future DB/KV compare-and-set claim).
+        for job_id in list(self._states):
+            if self._states.get(job_id) in {"queued", "running"}:
+                self._terminal_events[job_id] = threading.Event()
+                self._executor.submit(self._run_job, job_id)
 
     def close(self) -> None:
         """Release the bounded worker pool owned by this backend."""
@@ -650,7 +649,6 @@ class ProviderEmbeddingBatchBackend:
             self.close()
         except Exception:
             pass
-
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:
@@ -664,37 +662,38 @@ class ProviderEmbeddingBatchBackend:
 
     def _run_job(self, job_id: str) -> None:
         """Execute one persisted job inside the bounded provider worker pool."""
-        with self._registry.lock("provider_embedding_job_states", job_id):
-            if self._states.get(job_id) == "cancelled":
-                return
-            self._states[job_id] = "running"
         try:
-            requests = list(self._requests[job_id])
-            vectors, prompt_tokens = self._runner(requests)
-            if self._states.get(job_id) == "cancelled":
-                return
-            if len(vectors) != len(requests):
-                raise ValueError("provider embedding batch result count did not match inputs")
-            dimensions = {len(vector) for vector in vectors}
-            if not vectors or dimensions == {0} or len(dimensions) != 1:
-                raise ValueError("provider embedding batch dimensions were inconsistent")
-            items = []
-            for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
-                items.append(
-                    EmbeddingBatchResultItem(
-                        custom_id=request.custom_id,
-                        index=index,
-                        embedding=vector,
-                        prompt_tokens=0,
-                        model=request.model,
-                    )
-                )
-            with self._registry.lock("provider_embedding_job_states", job_id):
+            with self._registry.lock("provider_embedding_job_execution", job_id):
+                with self._registry.lock("provider_embedding_job_states", job_id):
+                    if self._states.get(job_id) not in {"queued", "running"}:
+                        return
+                    self._states[job_id] = "running"
+                requests = list(self._requests[job_id])
+                vectors, prompt_tokens = self._runner(requests)
                 if self._states.get(job_id) == "cancelled":
                     return
-                self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
-                self._results[job_id] = items
-                self._states[job_id] = "completed"
+                if len(vectors) != len(requests):
+                    raise ValueError("provider embedding batch result count did not match inputs")
+                dimensions = {len(vector) for vector in vectors}
+                if not vectors or dimensions == {0} or len(dimensions) != 1:
+                    raise ValueError("provider embedding batch dimensions were inconsistent")
+                items = []
+                for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
+                    items.append(
+                        EmbeddingBatchResultItem(
+                            custom_id=request.custom_id,
+                            index=index,
+                            embedding=vector,
+                            prompt_tokens=0,
+                            model=request.model,
+                        )
+                    )
+                with self._registry.lock("provider_embedding_job_states", job_id):
+                    if self._states.get(job_id) == "cancelled":
+                        return
+                    self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
+                    self._results[job_id] = items
+                    self._states[job_id] = "completed"
         except Exception as exc:  # noqa: BLE001 - polling exposes a bounded terminal state
             with self._registry.lock("provider_embedding_job_states", job_id):
                 if self._states.get(job_id) != "cancelled":

@@ -1139,3 +1139,52 @@ def test_batch_embeddings_preserves_per_input_provenance_and_cost_attribution() 
         "alpha",
         "beta",
     ]
+
+
+def test_recovered_provider_job_has_one_execution_claim_and_terminal_event() -> None:
+    """Two recovering workers execute once and both can await the durable job."""
+
+    class SharedRegistry(JobRegistryFactory):
+        def __init__(self, values, locks) -> None:
+            super().__init__()
+            self.values = values
+            self.locks = locks
+
+        def mapping(self, name, *, decode=None):
+            return self.values.setdefault(name, {})
+
+        def lock(self, name, key):
+            return self.locks.setdefault((name, key), threading.Lock())
+
+    shared_values: dict[str, dict] = {}
+    shared_locks: dict[tuple[str, str], threading.Lock] = {}
+    first_registry = SharedRegistry(shared_values, shared_locks)
+    second_registry = SharedRegistry(shared_values, shared_locks)
+    job_id = "providerembed_recovered"
+    request = EmbeddingBatchRequest(input_text="evidence", model="embedding-model")
+    first_registry.mapping("provider_embedding_requests")[job_id] = [request]
+    first_registry.mapping("provider_embedding_states")[job_id] = "running"
+    runner_started = threading.Event()
+    runner_release = threading.Event()
+    calls: list[list[EmbeddingBatchRequest]] = []
+
+    def runner(requests):
+        calls.append(requests)
+        runner_started.set()
+        assert runner_release.wait(timeout=1)
+        return [[1.0]], 1
+
+    first = ProviderEmbeddingBatchBackend(runner, job_registry=first_registry)
+    assert runner_started.wait(timeout=1)
+    second = ProviderEmbeddingBatchBackend(runner, job_registry=second_registry)
+    job = BatchJob(job_id=job_id, backend="provider", status="running", request_count=1)
+    assert not second._terminal_events[job_id].is_set()
+
+    runner_release.set()
+    try:
+        assert first.wait(job, timeout=1)["status"] == "completed"
+        assert second.wait(job, timeout=1)["status"] == "completed"
+        assert len(calls) == 1
+    finally:
+        first._executor.shutdown(wait=True)
+        second._executor.shutdown(wait=True)
