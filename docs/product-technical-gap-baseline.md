@@ -89,6 +89,13 @@ failed with HTTP 402. Therefore this run proves discovery, bounded crawl, model
 invocation, and quote enforcement separately, but records zero grounded
 assessments and zero policy-derived model updates; a funded explicit-ZDR route
 that returns a verbatim quote remains required to close the live analysis gap.
+Follow-up verification on exact head `283a1a1f` exercised the repaired candidate
+loop against the same 20,695-character Wardnet document. The first explicit-ZDR
+candidate returned one schema-valid but non-verbatim row; the production
+analysis loop rejected it and automatically invoked the next candidate, which
+failed with HTTP 402. The final result remained zero assessments and zero
+policy-derived updates. This proves failover after an ungrounded response rather
+than only after a transport exception; it does not close the funded-route gap.
 
 Scheduled provider-catalog run `32960451916` failed before discovery because
 the workflow supplied five credentials while the fixed bootstrap inventory had
