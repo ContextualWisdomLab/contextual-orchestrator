@@ -18,6 +18,9 @@ store, never ``os.getenv``.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
 import re
 from typing import Any, Dict, List, Optional
 
@@ -107,7 +110,9 @@ class CostRoutingCoordinator:
             return vectors[0], token_count
 
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
-            embed, job_registry=registry
+            embed,
+            job_registry=registry,
+            max_concurrency=getattr(orchestrator.client, "local_concurrency", 1),
         )
         self.embedding_batch_backend = embedding_batch_backend or self._local_embedding_backend
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
@@ -124,6 +129,7 @@ class CostRoutingCoordinator:
         self._embedding_part_limits = registry.mapping("embedding_part_limits")
         self._embedding_documents = registry.mapping("embedding_documents")
         self._embedding_job_backends = registry.mapping("embedding_job_backends")
+        self._embedding_request_keys = registry.mapping("embedding_request_keys")
 
     def _embedding_agent_for_model(self, model: str) -> Any:
         """Resolve one current embedding-capable agent without freezing discovery state."""
@@ -382,6 +388,24 @@ class CostRoutingCoordinator:
             input_attributions=input_attributions,
             input_metadata=input_metadata,
         )
+        request_documents = []
+        for request in requests:
+            document = dataclasses.asdict(request)
+            document.pop("custom_id", None)
+            request_documents.append(document)
+        request_key = hashlib.sha256(
+            json.dumps(
+                request_documents,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        existing_job_id = self._embedding_request_keys.get(request_key)
+        if existing_job_id:
+            existing_job = self._embedding_jobs.get(str(existing_job_id))
+            if existing_job is not None:
+                return existing_job
         backend = self._embedding_backend_for_model(model)
         job = backend.submit(requests, metadata=metadata)
         self._embedding_job_backends[job.job_id] = backend.name
@@ -391,6 +415,7 @@ class CostRoutingCoordinator:
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
         self._embedding_part_limits[job.job_id] = part_limits
+        self._embedding_request_keys[request_key] = job.job_id
         return job
 
     def _build_embedding_requests(
@@ -605,6 +630,16 @@ class CostRoutingCoordinator:
                 "model": model_name,
                 "embeddings": None,
             }
+        if status.get("status") == "failed":
+            document = {
+                "batch_id": batch_id,
+                "status": "failed",
+                "backend": job.backend,
+                "model": model_name,
+                "embeddings": None,
+            }
+            self._embedding_documents[batch_id] = document
+            return document
 
         items: List[EmbeddingBatchResultItem] = backend.retrieve(job)
         request_by_custom_id = {request.custom_id: request for request in requests}

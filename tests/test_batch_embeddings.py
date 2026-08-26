@@ -18,6 +18,7 @@ from pathlib import Path
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -35,6 +36,7 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     BatchJob,
     EmbeddingBatchRequest,
     EmbeddingBatchResultItem,
+    ProviderEmbeddingBatchBackend,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
@@ -112,6 +114,49 @@ def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> N
         server.shutdown()
 
 
+def test_provider_batch_returns_immediately_then_polls_terminal_result() -> None:
+    release = threading.Event()
+
+    def runner(request):
+        release.wait(timeout=1)
+        return [float(len(request.input_text))], 1
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    request = EmbeddingBatchRequest(input_text="synthetic input", model="synthetic-model")
+    started = time.monotonic()
+    job = backend.submit([request])
+
+    assert time.monotonic() - started < 0.1
+    assert backend.poll(job)["status"] in {"queued", "running"}
+    release.set()
+    for _attempt in range(100):
+        if backend.poll(job)["status"] == "completed":
+            break
+        time.sleep(0.01)
+    assert backend.poll(job) == {
+        "job_id": job.job_id,
+        "status": "completed",
+        "is_complete": True,
+    }
+    assert backend.retrieve(job)[0].embedding == [15.0]
+
+
+def test_provider_batch_exposes_failed_terminal_state() -> None:
+    def runner(_request):
+        raise RuntimeError("synthetic provider failure")
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic input", model="synthetic-model")]
+    )
+    for _attempt in range(100):
+        if backend.poll(job)["status"] == "failed":
+            break
+        time.sleep(0.01)
+    assert backend.poll(job)["is_complete"] is True
+    assert backend.retrieve(job) == []
+
+
 class _RecordingEmbeddingBackend:
     """Embedding backend that records the exact mapped requests it receives."""
 
@@ -120,8 +165,10 @@ class _RecordingEmbeddingBackend:
     def __init__(self) -> None:
         self.requests: list[EmbeddingBatchRequest] = []
         self._results: list[EmbeddingBatchResultItem] = []
+        self.submit_count = 0
 
     def submit(self, requests, metadata=None):
+        self.submit_count += 1
         self.requests = list(requests)
         self._results = [
             EmbeddingBatchResultItem(
@@ -158,6 +205,31 @@ class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
 
     def poll(self, job):
         return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
+
+
+def test_identical_embedding_submission_reuses_durable_job() -> None:
+    agent = ModelAgent(
+        id="mock_worker",
+        model="mock-a",
+        base_url="mock://a",
+        tags=("embedding",),
+    )
+    backend = _PendingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    first = coordinator.submit_embeddings_batch(
+        ["synthetic input"], input_metadata=[{"session_id": "synthetic-session"}]
+    )
+    second = coordinator.submit_embeddings_batch(
+        ["synthetic input"], input_metadata=[{"session_id": "synthetic-session"}]
+    )
+
+    assert second.job_id == first.job_id
+    assert backend.submit_count == 1
 
 
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:

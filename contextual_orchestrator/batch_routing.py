@@ -571,7 +571,7 @@ class LocalEmbeddingBatchBackend:
 
 
 class ProviderEmbeddingBatchBackend:
-    """Run embedding batches through the selected provider-backed model agent."""
+    """Queue provider embedding work and expose a durable polling lifecycle."""
 
     name = "provider"
 
@@ -580,8 +580,12 @@ class ProviderEmbeddingBatchBackend:
         runner: Callable[[EmbeddingBatchRequest], tuple[List[float], int]],
         *,
         job_registry: Any = None,
+        max_concurrency: int = 1,
     ) -> None:
+        if type(max_concurrency) is not int or max_concurrency < 1:
+            raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
+        self._executor = ThreadPoolExecutor(max_workers=max_concurrency)
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
             job_registry.mapping(
                 "provider_embedding_results", decode=lambda raw: EmbeddingBatchResultItem(**raw)
@@ -589,30 +593,63 @@ class ProviderEmbeddingBatchBackend:
             if job_registry is not None
             else {}
         )
+        self._requests = (
+            job_registry.mapping(
+                "provider_embedding_requests",
+                decode=lambda raw: EmbeddingBatchRequest(**raw),
+            )
+            if job_registry is not None
+            else {}
+        )
+        self._states = (
+            job_registry.mapping("provider_embedding_states")
+            if job_registry is not None
+            else {}
+        )
+        for job_id in list(self._states):
+            if self._states.get(job_id) in {"queued", "running"}:
+                self._states[job_id] = "queued"
+                self._executor.submit(self._run_job, job_id)
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:
-        """Resolve and embed every request through its provider model."""
+        """Persist a queued job and return immediately with a pollable handle."""
         job_id = f"providerembed_{uuid.uuid4().hex}"
-        items = []
-        for index, request in enumerate(requests):
-            vector, prompt_tokens = self._runner(request)
-            items.append(
-                EmbeddingBatchResultItem(
-                    custom_id=request.custom_id,
-                    index=index,
-                    embedding=vector,
-                    prompt_tokens=prompt_tokens,
-                    model=request.model,
+        self._requests[job_id] = list(requests)
+        self._states[job_id] = "queued"
+        self._executor.submit(self._run_job, job_id)
+        return BatchJob(job_id=job_id, backend=self.name, status="queued", request_count=len(requests))
+
+    def _run_job(self, job_id: str) -> None:
+        """Execute one persisted job inside the bounded provider worker pool."""
+        self._states[job_id] = "running"
+        try:
+            items = []
+            for index, request in enumerate(self._requests[job_id]):
+                vector, prompt_tokens = self._runner(request)
+                items.append(
+                    EmbeddingBatchResultItem(
+                        custom_id=request.custom_id,
+                        index=index,
+                        embedding=vector,
+                        prompt_tokens=prompt_tokens,
+                        model=request.model,
+                    )
                 )
-            )
-        self._results[job_id] = items
-        return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
+            self._results[job_id] = items
+            self._states[job_id] = "completed"
+        except Exception:  # noqa: BLE001 - polling exposes a bounded terminal state
+            self._states[job_id] = "failed"
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
-        """Provider calls complete during submission."""
-        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+        """Return queued, running, completed, or failed without blocking."""
+        status = str(self._states.get(job.job_id, "failed"))
+        return {
+            "job_id": job.job_id,
+            "status": status,
+            "is_complete": status in {"completed", "failed"},
+        }
 
     def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
         """Return provider embeddings computed during submission."""
