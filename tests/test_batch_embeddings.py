@@ -96,6 +96,22 @@ def _request(method, url, token=None, body=None):
         return exc.code, json.loads(exc.read())
 
 
+def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> None:
+    server, port, token, _coordinator = _serve()
+    try:
+        status, document = _request(
+            "GET", f"http://127.0.0.1:{port}/v1/batch/embeddings/capabilities", token
+        )
+        assert status == 200
+        assert document == {
+            "max_request_body_bytes": 64 * 1024,
+            "max_tokens_per_part": 280_000,
+            "max_chars_per_part": 240_000,
+        }
+    finally:
+        server.shutdown()
+
+
 class _RecordingEmbeddingBackend:
     """Embedding backend that records the exact mapped requests it receives."""
 

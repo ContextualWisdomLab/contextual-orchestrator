@@ -5086,6 +5086,14 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "model_not_found", f"model {model_id!r} not found")
                     return
+                if path == "/v1/batch/embeddings/capabilities":
+                    self._authorize("inference")
+                    self._send(
+                        coordinator.embedding_batch_capabilities(
+                            max_request_body_bytes=security.max_body_bytes
+                        )
+                    )
+                    return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
                     # it is authorized here before the admin gate below.
