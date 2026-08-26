@@ -5117,7 +5117,7 @@ class TaskOrchestrator:
                     max_concurrency=len(race_members),
                     on_attempt_complete=attempt_completed,
                 )
-            except (RuntimeError, TimeoutError):
+            except RuntimeError:
                 outcome = None
             finalize_attempts(
                 None if outcome is None else outcome.winner_endpoint_id
@@ -5229,7 +5229,7 @@ class TaskOrchestrator:
                     max_concurrency=len(race_members),
                     on_attempt_complete=attempt_completed,
                 )
-            except (RuntimeError, TimeoutError):
+            except RuntimeError:
                 outcome = None
             finalize_attempts(
                 None if outcome is None else outcome.winner_endpoint_id

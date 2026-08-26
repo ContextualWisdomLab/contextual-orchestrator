@@ -231,3 +231,35 @@ def test_race_usage_sink_receives_completed_loser_but_not_winner() -> None:
     completed("loser_endpoint", ("loser", "loser_endpoint", {"prompt_tokens": 2, "completion_tokens": 2}), None)
     finalize("winner_endpoint")
     assert emitted == ["loser_endpoint"]
+
+
+def test_all_race_failures_reenter_existing_sequential_failover_boundary() -> None:
+    raw_contract = dict(contract(capability_set=("text",)).__dict__)
+    agents = [
+        ModelAgent(
+            endpoint_id,
+            "provider/shared",
+            tags=("reasoning",),
+            group_name="shared_text_group",
+            endpoint_equivalence=raw_contract,
+        )
+        for endpoint_id in ("first_endpoint", "second_endpoint")
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    calls: dict[str, int] = {agent.id: 0 for agent in agents}
+
+    def chat(agent: ModelAgent, _messages: list[dict], **_kwargs: object) -> str:
+        calls[agent.id] += 1
+        if calls[agent.id] == 1:
+            raise ConnectionError("synthetic provider failure")
+        return f"recovered by {agent.id}"
+
+    orchestrator.client.chat = chat  # type: ignore[method-assign]
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "retry through the shared boundary"}],
+        model_name="shared-text-group",
+    )
+    assert result["answer"].startswith("recovered by ")
+    assert sum(calls.values()) >= 3
+    reports = [orchestrator._group_router.member_report(agent.id) for agent in agents]
+    assert sum(item["failure_count"] for item in reports) >= 2
