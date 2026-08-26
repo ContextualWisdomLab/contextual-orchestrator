@@ -109,3 +109,14 @@ def test_request_timeout_must_be_a_positive_integer_window() -> None:
             assert "rate_limit_window_seconds" in str(exc)
         else:
             raise AssertionError(f"accepted invalid window: {invalid!r}")
+
+
+def test_rate_limit_must_allow_at_least_one_request() -> None:
+    """Reject invalid request budgets before the server accepts connections."""
+    for invalid in (0, -1, True, 1.5, "1"):
+        try:
+            SecurityConfig(rate_limit_requests=invalid)  # type: ignore[arg-type]
+        except ValueError as exc:
+            assert "rate_limit_requests" in str(exc)
+        else:
+            raise AssertionError(f"accepted invalid request budget: {invalid!r}")

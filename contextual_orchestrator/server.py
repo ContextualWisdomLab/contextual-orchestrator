@@ -272,6 +272,8 @@ class SecurityConfig:
             )
         if type(self.rate_limit_window_seconds) is not int or self.rate_limit_window_seconds < 1:
             raise ValueError("rate_limit_window_seconds must be an integer >= 1")
+        if type(self.rate_limit_requests) is not int or self.rate_limit_requests < 1:
+            raise ValueError("rate_limit_requests must be an integer >= 1")
         if type(self.admin_session_ttl_seconds) is not int or self.admin_session_ttl_seconds < 1:
             raise ValueError("admin_session_ttl_seconds must be an integer >= 1")
         if type(self.max_admin_sessions) is not int or self.max_admin_sessions < 1:
@@ -5029,6 +5031,14 @@ def build_server(
         # local ephemeral ports ("dial: i/o timeout") long before server
         # capacity was reached.
         protocol_version = "HTTP/1.1"
+
+        # Response writers emit ``Connection: close`` by reading this flag, but
+        # stdlib only assigns it as an *instance* attribute during
+        # ``parse_request`` -- a handler invoked before any parsed request (or
+        # constructed directly for unit tests) would raise AttributeError.
+        # Declaring it here keeps the pre-parse default aligned with stdlib
+        # semantics: assume the connection closes until a request says keep-alive.
+        close_connection = True
 
         def handle_one_request(self) -> None:
             """Reset per-request state before parsing each persistent request.

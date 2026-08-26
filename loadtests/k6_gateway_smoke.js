@@ -12,7 +12,8 @@
  * How to run
  * ----------
  *   python -m contextual_orchestrator --serve --agents examples/agents.mock.json \
- *       --auth-token "$GATEWAY_TOKEN" --host 127.0.0.1 --port 8000 &
+ *       --auth-token "$GATEWAY_TOKEN" --rate-limit-requests 100000 \
+ *       --host 127.0.0.1 --port 8000 &
  *   GATEWAY_TOKEN=... k6 run loadtests/k6_gateway_smoke.js
  *
  * Thresholds are gate-style: the run FAILS when p95 or error rate regress beyond the
