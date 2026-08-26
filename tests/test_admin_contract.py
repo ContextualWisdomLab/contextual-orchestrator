@@ -13,8 +13,13 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Models" in ADMIN_HTML
     assert "Routing Policy" in ADMIN_HTML
     assert "Audit &amp; Compliance" in ADMIN_HTML
-    assert '<tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>' in ADMIN_HTML
-    assert "PII-001" in ADMIN_HTML
+    assert "PII-001" not in ADMIN_HTML
+    assert "No policy evidence is loaded. Open Audit to review recorded events." in ADMIN_HTML
+    assert "No current alerts. Open Audit to review recent changes." in ADMIN_HTML
+    assert "Analyze the architecture, implement the code" not in ADMIN_HTML
+    assert "prod-us-east-1" not in ADMIN_HTML
+    assert ">US East<" not in ADMIN_HTML
+    assert 'data-i18n-placeholder="prompt_placeholder"' in ADMIN_HTML
     assert "Mask email, phone" not in ADMIN_HTML
     assert "/admin/simulate" in ADMIN_HTML
     assert "ADMIN_TRANSLATIONS" not in ADMIN_HTML
@@ -129,7 +134,7 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
         )
     )
     assert "Mask email, phone" not in ADMIN_HTML
-    assert "Field encryption and audited release" in ADMIN_HTML
+    assert "Field encryption and audited release" not in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:

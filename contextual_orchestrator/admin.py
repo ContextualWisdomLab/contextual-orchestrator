@@ -13,11 +13,8 @@ ADMIN_TRANSLATIONS = {
         "nav_observability": "Observability",
         "nav_audit": "Audit",
         "nav_settings": "Settings",
-        "environment_label": "Environment",
-        "region_label": "Region",
         "language_label": "Language",
         "view_label": "View",
-        "healthy_status": "Healthy",
         "active_status": "Active",
         "agent_pool_title": "Models",
         "register_agent": "Add model connection",
@@ -34,6 +31,9 @@ ADMIN_TRANSLATIONS = {
         "no_agents_match": "No models match these filters. Clear a filter to see more models.",
         "no_agents_configured": "Add a model connection to start routing requests.",
         "no_audit_events": "Run a workflow to create your first audit event.",
+        "no_policy_evidence": "No policy evidence is loaded. Open Audit to review recorded events.",
+        "no_recent_errors": "No current alerts. Open Audit to review recent changes.",
+        "prompt_placeholder": "Describe the task you want to route, then run the trace.",
         "orchestration_policy": "Routing Policy",
         "simulation_title": "Simulation",
         "run_trace": "Run Trace",
@@ -261,11 +261,8 @@ ADMIN_TRANSLATIONS = {
         "nav_observability": "관측",
         "nav_audit": "감사",
         "nav_settings": "설정",
-        "environment_label": "환경",
-        "region_label": "리전",
         "language_label": "언어",
         "view_label": "화면",
-        "healthy_status": "정상",
         "active_status": "활성",
         "agent_pool_title": "모델",
         "register_agent": "모델 연결 추가",
@@ -282,6 +279,9 @@ ADMIN_TRANSLATIONS = {
         "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
         "no_agents_configured": "요청 라우팅을 시작하려면 모델 연결을 추가하세요.",
         "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
+        "no_policy_evidence": "불러온 정책 근거가 없습니다. 기록된 이벤트를 검토하려면 감사를 여세요.",
+        "no_recent_errors": "현재 알림이 없습니다. 최근 변경 사항을 검토하려면 감사를 여세요.",
+        "prompt_placeholder": "라우팅할 작업을 설명한 다음 트레이스를 실행하세요.",
         "orchestration_policy": "라우팅 정책",
         "simulation_title": "시뮬레이션",
         "run_trace": "트레이스 실행",
@@ -594,15 +594,7 @@ ADMIN_HTML = r"""<!doctype html>
     }
     textarea { min-height: 72px; padding: 10px; resize: vertical; width: 100%; }
     #modelGroupMembers { min-width: 240px; }
-    .health {
-      margin-left: auto;
-      color: var(--green);
-      background: #e7f6ec;
-      padding: 5px 10px;
-      border-radius: 999px;
-      font-weight: 650;
-    }
-    .language-switch { margin-left: 6px; }
+    .language-switch { margin-left: auto; }
     .mobile-nav {
       display: none;
       padding: 10px 12px;
@@ -838,14 +830,12 @@ ADMIN_HTML = r"""<!doctype html>
       .toolbar { flex-wrap: wrap; }
       .toolbar input { min-width: 0; width: 100%; }
       .topbar { flex-wrap: wrap; height: auto; min-height: 56px; padding: 10px; }
-      .topbar { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-      .health { margin-left: 0; justify-self: start; }
+      .topbar { display: flex; gap: 10px; }
       .field { min-width: 0; }
       select { max-width: 100%; }
     }
     @media (max-width: 600px) {
-      .topbar .field:first-child { grid-column: 1 / -1; }
-      .topbar .field:first-child select { width: 100%; }
+      .language-switch { margin-left: 0; }
       #modelGroupMembers { width: 100%; }
     }
   </style>
@@ -870,10 +860,7 @@ ADMIN_HTML = r"""<!doctype html>
     </aside>
     <main class="main">
       <header class="topbar">
-        <div class="field"><span data-i18n="environment_label">Environment</span><select><option>prod-us-east-1</option><option>staging</option></select></div>
-        <div class="field"><span data-i18n="region_label">Region</span><strong>US East</strong></div>
         <div class="field language-switch"><span data-i18n="language_label">Language</span><select id="language"><option value="en">English</option><option value="ko">한국어</option></select></div>
-        <div class="health">● <span data-i18n="healthy_status">Healthy</span></div>
       </header>
       <div class="mobile-nav">
         <label for="mobileView" data-i18n="view_label">View</label>
@@ -925,7 +912,7 @@ ADMIN_HTML = r"""<!doctype html>
           <div class="policy-list">
             <div>
               <h3 data-i18n="simulation_title">Simulation</h3>
-              <textarea id="prompt">Analyze the architecture, implement the code, and verify risks.</textarea>
+              <textarea id="prompt" data-i18n-placeholder="prompt_placeholder" placeholder="Describe the task you want to route, then run the trace."></textarea>
               <div class="actions" style="margin-top:8px">
                 <select id="mode"><option value="auto">auto</option><option value="route">route</option><option value="conduct">conduct</option></select>
                 <button class="btn primary" id="run" data-i18n="run_trace">Run Trace</button>
@@ -955,24 +942,15 @@ ADMIN_HTML = r"""<!doctype html>
         </section>
         <aside class="audit">
           <section class="panel">
-            <div class="panel-header"><h2 data-i18n="audit_compliance">Audit &amp; Compliance</h2><span class="chip">4 rules</span></div>
+            <div class="panel-header"><h2 data-i18n="audit_compliance">Audit &amp; Compliance</h2></div>
             <table>
               <thead><tr><th data-i18n="rule_header">Rule</th><th data-i18n="scope_header">Scope</th><th data-i18n="exclusion_header">Exclusion</th></tr></thead>
-              <tbody>
-                <tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>
-                <tr><td>SEC-002</td><td>Model responses</td><td>Review web search access</td></tr>
-                <tr><td>DATA-003</td><td>Network metadata</td><td>Review IP address access</td></tr>
-                <tr><td>FIN-004</td><td>Financial records</td><td>Review amount access</td></tr>
-              </tbody>
+              <tbody><tr><td colspan="3" class="empty" data-i18n="no_policy_evidence">No policy evidence is loaded. Open Audit to review recorded events.</td></tr></tbody>
             </table>
           </section>
           <section class="panel">
             <div class="panel-header"><h2 data-i18n="recent_errors">Recent Errors</h2><button class="btn" id="viewAudit" data-i18n="view_all">View all</button></div>
-            <div class="audit-list">
-              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="route_degradation">Route degradation</b><br><small data-i18n="worker_latency">A processing step is slower than the selected limit; review the trace before continuing.</small></div><small>2m</small></div>
-              <div class="event"><span class="status-icon">!</span><div><b data-i18n="verifier_disagreement">Quality review needs attention</b><br><small data-i18n="confidence_low">Review the response evidence, then rerun it or adjust the quality threshold.</small></div><small>11m</small></div>
-              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="agent_capacity">Model capacity</b><br><small data-i18n="planner_capacity">Planning capacity is nearly full; reduce queued work or add capacity.</small></div><small>18m</small></div>
-            </div>
+            <div class="audit-list"><p class="empty" data-i18n="no_recent_errors">No current alerts. Open Audit to review recent changes.</p></div>
           </section>
         </aside>
       </section>
