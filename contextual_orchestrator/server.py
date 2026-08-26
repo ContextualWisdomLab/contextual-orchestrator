@@ -1317,14 +1317,15 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     return value
 
 def _validate_completions_model(body: dict[str, Any]) -> str:
-    """Legacy Completions ``model`` — required non-empty string (OpenAI parity).
+    """Validate or default the chat/completions model.
 
     Incidental leading/trailing whitespace is stripped and written back so
     tools/response_format passthrough (``proxy_completion``) matches the same
     pool model id as the orchestration path. Form/JS SDKs often pad model names.
     """
     if "model" not in body:
-        raise RequestError(400, "invalid_model", "model is required")
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     model = body.get("model")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
@@ -4454,16 +4455,16 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 
 
 def _validate_responses_model(body: dict[str, Any]) -> str:
-    """Responses API ``model`` — required non-empty string ≤256 chars.
+    """Validate or default the Responses API model.
 
-    OpenAI requires model on Responses. Missing/empty/non-string values fail
-    closed so clients cannot hit passthrough with an implicit mock default and
-    believe a named deployment was selected. Strip + write back so
-    ``proxy_completion`` pool match sees the same id as form/JS padded names.
+    An omitted model selects the advertised gateway default. Explicit empty or
+    non-string values still fail closed. Strip + write back so passthrough pool
+    matching sees the same id as form/JS padded names.
     """
     model = body.get("model")
     if model is None:
-        raise RequestError(400, "invalid_model", "model is required on /v1/responses")
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()

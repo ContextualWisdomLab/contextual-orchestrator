@@ -1,4 +1,4 @@
-"""Responses API model field required honesty over HTTP."""
+"""Responses API model selection honesty over HTTP."""
 
 from __future__ import annotations
 
@@ -48,14 +48,12 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_rejects_missing_model() -> None:
+def test_http_responses_defaults_missing_model() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(port, {"input": "hello"})
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_model" in blob
-        assert "required" in blob
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -110,7 +108,7 @@ def test_http_responses_accepts_pool_model() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_rejects_missing_model()
+    test_http_responses_defaults_missing_model()
     test_http_responses_rejects_empty_model()
     test_http_responses_rejects_non_string_model()
     test_http_responses_rejects_overlong_model()

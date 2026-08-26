@@ -4235,7 +4235,11 @@ class TaskOrchestrator:
         capability = {"embeddings": "embedding"}.get(capability, capability)
         if not capability:
             raise ValueError("capability must be a non-empty string")
-        virtual_model = model_name in {self.AUTO_MODEL, self.FREE_MODEL}
+        virtual_model = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
         free_only = model_name == self.FREE_MODEL
         exact_models = {agent.model for agent in self.candidates}
         requested_group = (

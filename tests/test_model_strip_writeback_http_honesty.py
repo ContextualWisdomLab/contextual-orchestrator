@@ -71,6 +71,14 @@ def test_unit_model_strip_writeback() -> None:
         assert body["model"] == "mock-planner"
 
 
+def test_text_model_omission_selects_gateway_default() -> None:
+    """Omitting a text model uses auto routing, never a provider-specific guess."""
+    for validate in (_validate_completions_model, _validate_responses_model):
+        body: dict = {}
+        assert validate(body) == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
+
 def test_unit_model_rejects_blank() -> None:
     for validate in (
         _validate_completions_model,
@@ -135,6 +143,14 @@ def test_http_chat_accepts_advertised_gateway_default_model() -> None:
         assert status == 200, body
         assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
 
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "implicit gateway default"}]},
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
         # The advertised list must keep offering exactly this id first.
         models_request = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/models",
@@ -143,6 +159,18 @@ def test_http_chat_accepts_advertised_gateway_default_model() -> None:
         with urllib.request.urlopen(models_request, timeout=10) as response:
             listed = json.loads(response.read().decode("utf-8"))
         assert listed["data"][0]["id"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_legacy_completions_defaults_missing_model() -> None:
+    """Legacy completions shares the gateway-default selection contract."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, "/v1/completions", {"prompt": "implicit default"})
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     finally:
         server.shutdown()
         thread.join(timeout=5)
