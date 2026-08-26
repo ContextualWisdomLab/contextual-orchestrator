@@ -256,10 +256,10 @@ def _runtime_discovery_sources(
 def _discover_models_command(argv: list[str]) -> None:
     """Query every provider with a KV-registered credential and report the models found.
 
-    Never fabricates a credential: a provider with nothing registered in the KV
-    (see ``register-credential``) is silently skipped, so running this after
-    registering a subset of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY /
-    NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY still works.
+    Providers without a KV credential are skipped. The sole bootstrap exception
+    is an explicitly configured gateway: this one-shot command promotes its
+    allowlisted URL and API key from bootstrap transport into the KV before
+    discovery. Runtime auto-discovery never reads that environment transport.
     """
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
