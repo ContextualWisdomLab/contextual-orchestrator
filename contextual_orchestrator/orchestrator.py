@@ -1356,7 +1356,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
-        last_failure: tuple[Exception, ModelAgent] | None = None
+        last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
@@ -1765,7 +1765,7 @@ class ModelClient:
         allow_transient_retries: bool = True,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
-        last_error: Exception | None = None
+        last_failure: tuple[Exception, ModelAgent] | None = None
         retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
         for attempt in range(retry_limit + 1):
             try:
