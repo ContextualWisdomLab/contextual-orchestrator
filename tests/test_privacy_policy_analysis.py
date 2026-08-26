@@ -153,6 +153,7 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
         "WARDNET_API_URL": "http://127.0.0.1:8080",
         "WARDNET_ADMIN_TOKEN": "wardnet-test-token",
         "WARDNET_EGRESS_PROXY_URL": "http://127.0.0.1:8081",
+        "WARDNET_EGRESS_PROXY_TOKEN": "wardnet-proxy-test-token",
         "CAMOUFOX_MCP_URL": "http://127.0.0.1:9377/mcp",
         "CAMOUFOX_MCP_TOKEN": "camoufox-test-token",
     }.items():
@@ -175,5 +176,5 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
         "host": "127.0.0.1",
         "port": "8081",
         "username": "wardnet",
-        "password": "wardnet-test-token",
+        "password": "wardnet-proxy-test-token",
     }

@@ -23,6 +23,7 @@ MAX_ANALYZER_CANDIDATES = 4
 WARDNET_API_URL_CREDENTIAL = "WARDNET_API_URL"
 WARDNET_ADMIN_TOKEN_CREDENTIAL = "WARDNET_ADMIN_TOKEN"
 WARDNET_EGRESS_PROXY_URL_CREDENTIAL = "WARDNET_EGRESS_PROXY_URL"
+WARDNET_EGRESS_PROXY_TOKEN_CREDENTIAL = "WARDNET_EGRESS_PROXY_TOKEN"
 CAMOUFOX_MCP_URL_CREDENTIAL = "CAMOUFOX_MCP_URL"
 CAMOUFOX_MCP_TOKEN_CREDENTIAL = "CAMOUFOX_MCP_TOKEN"
 
@@ -93,7 +94,7 @@ def _mcp_text_payload(result: Any) -> dict[str, Any]:
 def _wardnet_browser_proxy() -> dict[str, str]:
     """Build Camoufox's proxy override from credential-registry values."""
     proxy_url = get_credential(WARDNET_EGRESS_PROXY_URL_CREDENTIAL)
-    token = get_credential(WARDNET_ADMIN_TOKEN_CREDENTIAL)
+    token = get_credential(WARDNET_EGRESS_PROXY_TOKEN_CREDENTIAL)
     if not proxy_url or not token:
         raise ValueError("Wardnet browser egress is not configured")
     proxy = urlsplit(proxy_url)
@@ -228,6 +229,7 @@ def crawl_policy_document(
             CAMOUFOX_MCP_URL_CREDENTIAL,
             CAMOUFOX_MCP_TOKEN_CREDENTIAL,
             WARDNET_EGRESS_PROXY_URL_CREDENTIAL,
+            WARDNET_EGRESS_PROXY_TOKEN_CREDENTIAL,
         )
     ):
         try:
