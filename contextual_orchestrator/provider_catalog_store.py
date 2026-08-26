@@ -289,7 +289,7 @@ def _restore_model_semantics(
         currency_code=model.currency_code,
         is_free="cost:free" in normalized,
         supports_zero_data_retention=(
-            True if "privacy:zdr" in normalized else False if "privacy:no-zdr" in normalized else None
+            True if "privacy:zdr" in normalized else False if "privacy:no_zdr" in normalized else None
         ),
     )
 

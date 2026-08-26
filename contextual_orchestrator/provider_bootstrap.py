@@ -179,7 +179,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
                 *(("privacy:zdr",) if model.supports_zero_data_retention is True else ()),
-                *(("privacy:no-zdr",) if model.supports_zero_data_retention is False else ()),
+                *(("privacy:no_zdr",) if model.supports_zero_data_retention is False else ()),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),

@@ -260,6 +260,16 @@ def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
     } <= set(tags)
 
 
+def test_serving_tags_preserve_explicit_no_zdr_evidence():
+    """Explicit unsupported zero-data retention survives tag normalization."""
+    model = replace(
+        _model("opencode_zen", "OPENCODE_ZEN_API_KEY", "temporary-name", 0.0),
+        supports_zero_data_retention=False,
+    )
+
+    assert "privacy:no_zdr" in provider_bootstrap.serving_tags_for_discovered(model)
+
+
 def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(
     monkeypatch,
 ):

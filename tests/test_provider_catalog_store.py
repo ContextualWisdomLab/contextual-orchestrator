@@ -206,6 +206,26 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
     assert store.serving_models(source) == [model]
 
 
+def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
+    """A catalog round trip preserves an explicit lack of zero-data retention."""
+    source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
+    model = replace(
+        _model(source, "no-zdr-model", 0),
+        supports_zero_data_retention=False,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: ("discovered", "privacy:no_zdr")},
+    )
+
+    restored = store.serving_models(source)
+    assert len(restored) == 1
+    assert restored[0].supports_zero_data_retention is False
+
+
 class _FakeCursor:
     """Minimal DB-API cursor recording parameterized catalog statements."""
 

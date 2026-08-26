@@ -285,7 +285,11 @@ def _discover_models_command(argv: list[str]) -> None:
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
-    discovered, errors = discover_all_models(_bootstrap_discovery_sources())
+    try:
+        sources = _bootstrap_discovery_sources()
+    except ValueError as exc:
+        parser.error(str(exc))
+    discovered, errors = discover_all_models(sources)
     free_models = free_discovered_models(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())

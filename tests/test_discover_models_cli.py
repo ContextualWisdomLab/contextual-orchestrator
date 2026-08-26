@@ -74,6 +74,29 @@ def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None
     }
 
 
+def test_discover_models_reports_invalid_gateway_configuration_without_traceback() -> None:
+    """Invalid gateway configuration exits through argparse's actionable error path."""
+    stderr = StringIO()
+    environment = {
+        "LLM_GATEWAY_API_URL": "http://gateway.example/v1",
+        "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "gateway.example",
+    }
+    with (
+        patch.dict(os.environ, environment, clear=True),
+        patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("invalid gateway configuration must exit")
+
+    assert "error:" in stderr.getvalue()
+    assert "Traceback" not in stderr.getvalue()
+
+
 def test_discover_models_reports_models_found_over_a_registered_credential() -> None:
     set_backend(InMemoryCredentialBackend())
     register_credential("OPENAI_API_KEY", "sk-live")
@@ -187,6 +210,7 @@ def test_configured_gateway_requires_explicit_host_allowlist() -> None:
     """Bootstrap URL configuration cannot create an unrestricted SSRF target."""
     set_backend(InMemoryCredentialBackend())
     try:
+        stderr = StringIO()
         with (
             patch.dict(
                 os.environ,
@@ -197,13 +221,15 @@ def test_configured_gateway_requires_explicit_host_allowlist() -> None:
                 clear=True,
             ),
             patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
+            patch.object(sys, "stderr", stderr),
         ):
             try:
                 main()
-            except ValueError as exc:
-                assert "allowlist" in str(exc)
+            except SystemExit as exc:
+                assert exc.code == 2
             else:  # pragma: no cover
                 raise AssertionError("unallowlisted gateway must fail")
+        assert "allowlist" in stderr.getvalue()
     finally:
         set_backend(None)
 
