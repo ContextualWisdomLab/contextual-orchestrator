@@ -2165,10 +2165,16 @@ def _require_pool_model(
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
     """
-    agents = getattr(orchestrator, "agents", None) or []
+    agents = [
+        agent
+        for agent in (getattr(orchestrator, "agents", None) or [])
+        if not getattr(agent, "disabled", False)
+    ]
     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
         if required_capability is None:
-            if model_name == TaskOrchestrator.AUTO_MODEL or any(
+            if model_name == TaskOrchestrator.AUTO_MODEL and not agents:
+                raise RequestError(400, "invalid_model", "no enabled model is available")
+            if (model_name == TaskOrchestrator.AUTO_MODEL and agents) or any(
                 orchestrator._is_free_agent(agent) for agent in agents
             ):
                 return model_name

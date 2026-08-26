@@ -596,7 +596,11 @@ class CostRoutingCoordinator:
             "completion_tokens": record.completion_tokens,
             "total_tokens": record.total_tokens,
         }
-        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        result["cost"] = {
+            "cost_amount": record.cost_amount,
+            "currency_code": record.currency_code,
+            "measurement_status": record.measurement_status,
+        }
         return result
 
     def complete_structured(
@@ -638,7 +642,11 @@ class CostRoutingCoordinator:
             "completion_tokens": record.completion_tokens,
             "total_tokens": record.total_tokens,
         }
-        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        result["cost"] = {
+            "cost_amount": record.cost_amount,
+            "currency_code": record.currency_code,
+            "measurement_status": record.measurement_status,
+        }
         return result
 
     def _record_completion(
@@ -656,6 +664,11 @@ class CostRoutingCoordinator:
         completion_tokens: Optional[int] = None,
     ):
         provider, model = provider_model
+        measurement_status = (
+            "measured"
+            if prompt_tokens is not None and completion_tokens is not None
+            else "estimated"
+        )
         if prompt_tokens is None:
             prompt_tokens = self.token_counter.count_messages(messages, model)
         if completion_tokens is None:
@@ -669,6 +682,7 @@ class CostRoutingCoordinator:
             route_mode=route_mode,
             workflow_run_id=workflow_run_id,
             attribution=attribution,
+            measurement_status=measurement_status,
         )
 
     # ------------------------------------------------------------------
@@ -1290,9 +1304,6 @@ class CostRoutingCoordinator:
                 route_mode="embedding",
                 workflow_run_id=batch_id,
                 attribution=shared_attribution,
-                input_attributions=[
-                    dict(item.get("attribution") or {}) for item in embeddings
-                ],
             )
             total_cost_amount = float(record.cost_amount)
             currency_code = record.currency_code
