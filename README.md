@@ -11,6 +11,37 @@ model-like orchestration candidate while keeping the worker pool, routing,
 workflow, and verification logic behind it. `contextual-orchestrator` is the
 public control-plane model; it is not just an HTTP gateway.
 
+## Docker Compose
+
+The canonical path is `compose.yaml`. It starts PostgreSQL, seeds the server
+token into the encrypted KV from a Compose secret, and binds the gateway to
+loopback:
+
+```bash
+umask 077
+mkdir -p .secrets
+chmod 700 .secrets
+printf '%s' 'replace-with-a-long-random-token' > .secrets/server-token
+chmod 600 .secrets/server-token
+export TOKEN="$(cat .secrets/server-token)"
+export CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD='replace-with-a-database-password'
+export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE='replace-with-an-encryption-passphrase'
+docker compose up --build --wait
+curl http://127.0.0.1:8000/healthz
+```
+
+Register provider keys separately with `register-credential`; do not put them
+in `compose.yaml` or the gateway runtime environment.
+
+For orchestration with OpenAI Responses-native reasoning summaries, select
+`orchestrator/auto` or the fail-closed zero-cost pool `orchestrator/free`:
+
+```bash
+curl -N http://127.0.0.1:8000/v1/responses \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"model":"orchestrator/free","input":"Research and verify this","reasoning":{"summary":"auto"},"stream":true}'
+```
+
 ## Quick Start
 
 ```bash

@@ -19,7 +19,11 @@ def build() -> TaskOrchestrator:
 
 
 def test_route_once() -> None:
-    result = build().complete([{"role": "user", "content": "Write a short status update."}], mode="auto")
+    orchestrator = build()
+    # Mock transports cannot emit strict triage JSON; pin a direct-answer
+    # verdict so this test exercises the single-step route path itself.
+    orchestrator._triage_fn = lambda text: False
+    result = orchestrator.complete([{"role": "user", "content": "Write a short status update."}], mode="auto")
     assert result["mode"] == "route"
     assert len(result["trace"]) == 1
     assert result["trace"][0]["role"] == "worker"

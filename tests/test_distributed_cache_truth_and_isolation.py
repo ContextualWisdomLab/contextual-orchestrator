@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 
 import pytest
 
@@ -44,6 +45,12 @@ class _CountingModelClient(ModelClient):
 
 
 def _orchestrator() -> tuple[TaskOrchestrator, _CountingModelClient]:
+    """Build an orchestrator pinned to single-step routing for cache accounting.
+
+    The model-triage gas and real-time judge are orthogonal to the cache layer
+    under test, so both are disabled here: every counted call is one worker
+    execution, which keeps ``calls`` an exact measure of provider executions.
+    """
     client = _CountingModelClient()
     orchestrator = TaskOrchestrator(
         [
@@ -58,6 +65,7 @@ def _orchestrator() -> tuple[TaskOrchestrator, _CountingModelClient]:
         client=client,
         cache_provider=_MemoryCache(),
     )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
     return orchestrator, client
 
 
@@ -66,9 +74,9 @@ def test_cache_partition_prevents_cross_principal_reuse() -> None:
     orchestrator, client = _orchestrator()
     messages = [{"role": "user", "content": "same tenant-sensitive request"}]
 
-    first_a = orchestrator.complete(messages, cache_partition="principal-a")
-    first_b = orchestrator.complete(messages, cache_partition="principal-b")
-    second_a = orchestrator.complete(messages, cache_partition="principal-a")
+    first_a = orchestrator.complete(messages, mode="route", cache_partition="principal-a")
+    first_b = orchestrator.complete(messages, mode="route", cache_partition="principal-b")
+    second_a = orchestrator.complete(messages, mode="route", cache_partition="principal-a")
 
     assert client.calls == 2
     assert first_a["cache_status"] == "miss"
@@ -89,8 +97,8 @@ def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() 
     )
     messages = [{"role": "user", "content": "repeat this deterministic request"}]
 
-    first = coordinator.complete(messages, cache_partition="principal-a")
-    second = coordinator.complete(messages, cache_partition="principal-a")
+    first = coordinator.complete(messages, mode="route", cache_partition="principal-a")
+    second = coordinator.complete(messages, mode="route", cache_partition="principal-a")
 
     assert client.calls == 1
     assert first["cache_status"] == "miss"

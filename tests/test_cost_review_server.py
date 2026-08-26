@@ -277,6 +277,24 @@ def test_batch_routing_jobs_reject_invalid_custom_ids() -> None:
         server.shutdown()
 
 
+def test_batch_routing_jobs_reject_empty_or_non_string_models() -> None:
+    """Reject malformed model identity before a batch reaches its worker."""
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for body in (
+            {"model": " ", "requests": [{"messages": [{"role": "user", "content": "a"}]}]},
+            {"requests": [{"model": 7, "messages": [{"role": "user", "content": "a"}]}]},
+        ):
+            status, response = _request(
+                "POST", f"{base}/api/v1/batch_routing_jobs", token, body
+            )
+            assert status == 400
+            assert response["error"]["code"] == "invalid_model"
+    finally:
+        server.shutdown()
+
+
 def test_cost_report_rejects_unknown_dimension() -> None:
     server, port, token = _serve()
     base = f"http://127.0.0.1:{port}"

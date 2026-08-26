@@ -4,8 +4,8 @@ ADMIN_TRANSLATIONS = {
     "en": {
         "brand_name": "Contextual Orchestrator",
         "nav_overview": "Overview",
-        "nav_agent_pool": "Agent Pool",
-        "nav_orchestration": "Orchestration",
+        "nav_agent_pool": "Models",
+        "nav_orchestration": "Routing",
         "nav_evaluations": "Evaluations",
         "nav_datasets": "Datasets",
         "nav_access_control": "Access Control",
@@ -13,36 +13,44 @@ ADMIN_TRANSLATIONS = {
         "nav_observability": "Observability",
         "nav_audit": "Audit",
         "nav_settings": "Settings",
-        "environment_label": "Environment",
-        "region_label": "Region",
         "language_label": "Language",
         "view_label": "View",
-        "healthy_status": "Healthy",
         "active_status": "Active",
-        "agent_pool_title": "Agent Pool",
-        "register_agent": "Register Agent",
-        "search_agents": "Search agents",
+        "agent_pool_title": "Models",
+        "register_agent": "Add model connection",
+        "model_groups_title": "Model groups",
+        "group_name_label": "Group name",
+        "group_members_label": "Provider model members",
+        "save_group": "Save group",
+        "delete_group": "Delete group",
+        "no_model_groups": "No model groups yet. Create one to route a logical model across providers.",
+        "group_saved": "Group saved. Send requests with this group name to use measured routing.",
+        "group_deleted": "Group deleted. Its provider models remain available.",
+        "search_agents": "Search models",
         "all_statuses": "All statuses",
-        "no_agents_match": "No agents match the current filters.",
-        "no_agents_configured": "No agents are configured yet.",
-        "no_audit_events": "No audit events yet.",
-        "orchestration_policy": "Orchestration Policy",
+        "no_agents_match": "No models match these filters. Clear a filter to see more models.",
+        "no_agents_configured": "Add a model connection to start routing requests.",
+        "no_audit_events": "Run a workflow to create your first audit event.",
+        "no_policy_evidence": "No policy evidence is loaded. Open Audit to review recorded events.",
+        "no_recent_errors": "No current alerts. Open Audit to review recent changes.",
+        "prompt_placeholder": "Describe the task you want to route, then run the trace.",
+        "orchestration_policy": "Routing Policy",
         "simulation_title": "Simulation",
         "run_trace": "Run Trace",
         "live_workflow_trace": "Live Workflow Trace",
-        "view_json": "View JSON",
+        "view_json": "Copy run details",
         "audit_compliance": "Audit & Compliance",
         "recent_errors": "Recent Errors",
         "datasets_title": "Datasets",
         "access_control_title": "Access Control",
         "integrations_title": "Integrations",
         "doc_viewer_title": "Document Viewer",
-        "doc_viewer_desc": "Clearfolio integrated document viewer: upload, async conversion, and PDF preview for admin document review.",
+        "doc_viewer_desc": "Upload a document, wait for processing to finish, then open its PDF preview.",
         "doc_viewer_unset": "Not configured",
         "doc_viewer_open": "Open viewer",
         "doc_viewer_open_doc": "Open document",
-        "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.",
+        "doc_viewer_docid": "Document ID",
+        "doc_viewer_hint": "Ask an administrator to connect a document viewer, then refresh this page.",
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
@@ -53,8 +61,8 @@ ADMIN_TRANSLATIONS = {
         "spend_runs": "Runs",
         "settings_title": "Settings",
         "session_title": "Operator session",
-        "session_hint": "Use an opaque HttpOnly session cookie so the browser never retains the admin bearer.",
-        "session_token_placeholder": "Admin bearer token",
+        "session_hint": "Enter your access token to open a secure operator session.",
+        "session_token_placeholder": "Access token",
         "session_start": "Start session",
         "session_end": "End session",
         "session_status_ready": "Session established",
@@ -64,7 +72,7 @@ ADMIN_TRANSLATIONS = {
         "policy_safe_routing_rate": "Policy-safe routing rate",
         "route_versus_conduct_mix": "Route-versus-conduct mix",
         "evaluation_replay_usage": "Evaluation replay usage",
-        "agent_health_coverage": "Agent health coverage",
+        "agent_health_coverage": "Model health coverage",
         "provider_exclusion_miss_rate": "Provider exclusion miss rate",
         "locale_key_parity": "Locale key parity",
         "readiness_summary": "Readiness summary",
@@ -196,7 +204,7 @@ ADMIN_TRANSLATIONS = {
         "dataset_name": "Dataset",
         "dataset_owner": "Owner",
         "dataset_prompts": "Prompts",
-        "access_inspector": "Access List Inspector",
+        "access_inspector": "Permission review",
         "step_header": "Step",
         "visible_context": "Visible Context",
         "provider_header": "Provider",
@@ -209,32 +217,31 @@ ADMIN_TRANSLATIONS = {
         "single_api_status": "OpenAI-compatible endpoint active",
         "no_trace": "Run a conduct trace to populate workflow evidence.",
         "source_basis": "Source basis",
-        "source_basis_text": "Fugu: one interface. TRINITY: thinker, worker, verifier. Conductor: access-list workflow visibility.",
-        "agent_header": "Agent",
+        "source_basis_text": "Routing uses measured quality, cost, and availability. Review the trace before applying policy changes.",
+        "agent_header": "Connection",
         "model_header": "Model",
         "tags_header": "Tags",
         "status_header": "Status",
-        "capacity_header": "Capacity",
+        "capacity_header": "Recent latency",
         "success_header": "Success",
         "status_healthy": "Healthy",
         "status_degraded": "Degraded",
         "latency_threshold": "Latency P95 route threshold",
-        "workflow_hints": "Workflow trigger hints",
-        "verifier_required": "Verifier required",
-        "agent_exclusion": "Agent exclusion policy",
+        "verifier_required": "Quality review required",
+        "agent_exclusion": "Model availability rules",
         "timeline_tab": "Timeline",
-        "access_list_tab": "Access List",
-        "json_tab": "JSON",
+        "access_list_tab": "Permissions",
+        "json_tab": "Run details",
         "rule_header": "Rule",
         "scope_header": "Scope",
         "exclusion_header": "Exclusion",
         "view_all": "View all",
         "route_degradation": "Route degradation",
-        "verifier_disagreement": "Verifier disagreement",
-        "agent_capacity": "Agent capacity",
-        "worker_latency": "worker exceeded latency threshold",
-        "confidence_low": "confidence below policy threshold",
-        "planner_capacity": "planner pool near soft limit",
+        "verifier_disagreement": "Quality review needs attention",
+        "agent_capacity": "Model capacity",
+        "worker_latency": "A processing step is slower than the selected limit; review the trace before continuing.",
+        "confidence_low": "Review the response evidence, then rerun it or adjust the quality threshold.",
+        "planner_capacity": "Planning capacity is nearly full; reduce queued work or add capacity.",
         "evaluation_hint": "Replay prompts against route or conduct mode before policy rollout.",
         "golden_prompts": "Golden prompts",
         "security_reviews": "Security reviews",
@@ -245,8 +252,8 @@ ADMIN_TRANSLATIONS = {
     "ko": {
         "brand_name": "컨텍스트 오케스트레이터",
         "nav_overview": "개요",
-        "nav_agent_pool": "에이전트 풀",
-        "nav_orchestration": "오케스트레이션",
+        "nav_agent_pool": "모델",
+        "nav_orchestration": "라우팅",
         "nav_evaluations": "평가",
         "nav_datasets": "데이터셋",
         "nav_access_control": "접근 제어",
@@ -254,36 +261,44 @@ ADMIN_TRANSLATIONS = {
         "nav_observability": "관측",
         "nav_audit": "감사",
         "nav_settings": "설정",
-        "environment_label": "환경",
-        "region_label": "리전",
         "language_label": "언어",
         "view_label": "화면",
-        "healthy_status": "정상",
         "active_status": "활성",
-        "agent_pool_title": "에이전트 풀",
-        "register_agent": "에이전트 등록",
-        "search_agents": "에이전트 검색",
+        "agent_pool_title": "모델",
+        "register_agent": "모델 연결 추가",
+        "model_groups_title": "모델 그룹",
+        "group_name_label": "그룹 이름",
+        "group_members_label": "공급자 모델 멤버",
+        "save_group": "그룹 저장",
+        "delete_group": "그룹 삭제",
+        "no_model_groups": "모델 그룹이 없습니다. 논리 모델을 여러 공급자로 라우팅하려면 그룹을 만드세요.",
+        "group_saved": "그룹을 저장했습니다. 측정 기반 라우팅에는 이 그룹 이름으로 요청하세요.",
+        "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
+        "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
-        "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다.",
-        "no_agents_configured": "아직 구성된 에이전트가 없습니다.",
-        "no_audit_events": "아직 감사 이벤트가 없습니다.",
-        "orchestration_policy": "오케스트레이션 정책",
+        "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
+        "no_agents_configured": "요청 라우팅을 시작하려면 모델 연결을 추가하세요.",
+        "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
+        "no_policy_evidence": "불러온 정책 근거가 없습니다. 기록된 이벤트를 검토하려면 감사를 여세요.",
+        "no_recent_errors": "현재 알림이 없습니다. 최근 변경 사항을 검토하려면 감사를 여세요.",
+        "prompt_placeholder": "라우팅할 작업을 설명한 다음 트레이스를 실행하세요.",
+        "orchestration_policy": "라우팅 정책",
         "simulation_title": "시뮬레이션",
         "run_trace": "트레이스 실행",
         "live_workflow_trace": "실시간 워크플로 트레이스",
-        "view_json": "JSON 보기",
+        "view_json": "실행 세부 정보 복사",
         "audit_compliance": "감사 및 컴플라이언스",
         "recent_errors": "최근 오류",
         "datasets_title": "데이터셋",
         "access_control_title": "접근 제어",
         "integrations_title": "연동",
         "doc_viewer_title": "문서 뷰어",
-        "doc_viewer_desc": "Clearfolio 통합 문서 뷰어: 업로드, 비동기 변환, PDF 미리보기를 통한 관리자 문서 검토.",
+        "doc_viewer_desc": "문서를 업로드하고 처리가 끝나면 PDF 미리보기를 여세요.",
         "doc_viewer_unset": "미설정",
         "doc_viewer_open": "뷰어 열기",
         "doc_viewer_open_doc": "문서 열기",
-        "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "--clearfolio-url (또는 CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) 설정 시 활성화됩니다.",
+        "doc_viewer_docid": "문서 ID",
+        "doc_viewer_hint": "관리자에게 문서 뷰어 연결을 요청한 다음 이 페이지를 새로고침하세요.",
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
@@ -294,8 +309,8 @@ ADMIN_TRANSLATIONS = {
         "spend_runs": "실행",
         "settings_title": "설정",
         "session_title": "운영자 세션",
-        "session_hint": "브라우저가 관리자 bearer를 보관하지 않도록 불투명 HttpOnly 세션 쿠키를 사용합니다.",
-        "session_token_placeholder": "관리자 bearer 토큰",
+        "session_hint": "보안 운영자 세션을 열려면 액세스 토큰을 입력하세요.",
+        "session_token_placeholder": "액세스 토큰",
         "session_start": "세션 시작",
         "session_end": "세션 종료",
         "session_status_ready": "세션이 설정되었습니다",
@@ -305,7 +320,7 @@ ADMIN_TRANSLATIONS = {
         "policy_safe_routing_rate": "정책 안전 라우팅 비율",
         "route_versus_conduct_mix": "route/conduct 분포",
         "evaluation_replay_usage": "평가 리플레이 사용량",
-        "agent_health_coverage": "에이전트 상태 커버리지",
+        "agent_health_coverage": "모델 상태 커버리지",
         "provider_exclusion_miss_rate": "공급자 제외 누락률",
         "locale_key_parity": "로케일 키 일치율",
         "readiness_summary": "판매 준비 지표",
@@ -437,7 +452,7 @@ ADMIN_TRANSLATIONS = {
         "dataset_name": "데이터셋",
         "dataset_owner": "담당",
         "dataset_prompts": "프롬프트",
-        "access_inspector": "접근 목록 검사기",
+        "access_inspector": "권한 검토",
         "step_header": "단계",
         "visible_context": "보이는 컨텍스트",
         "provider_header": "공급자",
@@ -450,32 +465,31 @@ ADMIN_TRANSLATIONS = {
         "single_api_status": "OpenAI 호환 엔드포인트 활성",
         "no_trace": "conduct 트레이스를 실행하면 워크플로 근거가 채워집니다.",
         "source_basis": "논문 근거",
-        "source_basis_text": "Fugu: 단일 인터페이스. TRINITY: thinker, worker, verifier. Conductor: access-list 기반 워크플로 가시성.",
-        "agent_header": "에이전트",
+        "source_basis_text": "라우팅에는 측정된 품질, 비용, 가용성을 사용합니다. 정책을 적용하기 전에 트레이스를 검토하세요.",
+        "agent_header": "연결",
         "model_header": "모델",
         "tags_header": "태그",
         "status_header": "상태",
-        "capacity_header": "용량",
+        "capacity_header": "최근 지연 시간",
         "success_header": "성공률",
         "status_healthy": "정상",
         "status_degraded": "저하",
         "latency_threshold": "라우팅 P95 지연 임계값",
-        "workflow_hints": "워크플로 트리거 힌트",
-        "verifier_required": "검증 단계 필수",
-        "agent_exclusion": "에이전트 제외 정책",
+        "verifier_required": "품질 검토 필수",
+        "agent_exclusion": "모델 가용성 규칙",
         "timeline_tab": "타임라인",
-        "access_list_tab": "접근 목록",
-        "json_tab": "JSON",
+        "access_list_tab": "권한",
+        "json_tab": "실행 세부 정보",
         "rule_header": "규칙",
         "scope_header": "범위",
         "exclusion_header": "제외 항목",
         "view_all": "전체 보기",
         "route_degradation": "라우팅 성능 저하",
-        "verifier_disagreement": "검증 불일치",
-        "agent_capacity": "에이전트 용량",
-        "worker_latency": "worker 지연 임계값 초과",
-        "confidence_low": "신뢰도가 정책 임계값보다 낮음",
-        "planner_capacity": "planner 풀이 소프트 한도에 근접",
+        "verifier_disagreement": "품질 검토 필요",
+        "agent_capacity": "모델 용량",
+        "worker_latency": "처리 단계가 선택한 제한보다 느립니다. 계속하기 전에 트레이스를 검토하세요.",
+        "confidence_low": "응답 근거를 검토한 다음 다시 실행하거나 품질 기준을 조정하세요.",
+        "planner_capacity": "계획 용량이 거의 찼습니다. 대기 작업을 줄이거나 용량을 추가하세요.",
         "evaluation_hint": "정책 롤아웃 전에 route 또는 conduct 모드로 프롬프트를 재생합니다.",
         "golden_prompts": "골든 프롬프트",
         "security_reviews": "보안 리뷰",
@@ -579,15 +593,8 @@ ADMIN_HTML = r"""<!doctype html>
       padding: 0 10px;
     }
     textarea { min-height: 72px; padding: 10px; resize: vertical; width: 100%; }
-    .health {
-      margin-left: auto;
-      color: var(--green);
-      background: #e7f6ec;
-      padding: 5px 10px;
-      border-radius: 999px;
-      font-weight: 650;
-    }
-    .language-switch { margin-left: 6px; }
+    #modelGroupMembers { min-width: 240px; }
+    .language-switch { margin-left: auto; }
     .mobile-nav {
       display: none;
       padding: 10px 12px;
@@ -823,10 +830,13 @@ ADMIN_HTML = r"""<!doctype html>
       .toolbar { flex-wrap: wrap; }
       .toolbar input { min-width: 0; width: 100%; }
       .topbar { flex-wrap: wrap; height: auto; min-height: 56px; padding: 10px; }
-      .topbar { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-      .health { margin-left: 0; justify-self: start; }
+      .topbar { display: flex; gap: 10px; }
       .field { min-width: 0; }
       select { max-width: 100%; }
+    }
+    @media (max-width: 600px) {
+      .language-switch { margin-left: 0; }
+      #modelGroupMembers { width: 100%; }
     }
   </style>
 </head>
@@ -836,8 +846,8 @@ ADMIN_HTML = r"""<!doctype html>
       <div class="brand"><span class="mark"></span><span data-i18n="brand_name">Contextual Orchestrator</span></div>
       <nav aria-label="Admin navigation">
         <button class="nav-item" data-view="overview" aria-current="page"><span>⌂</span><span data-i18n="nav_overview">Overview</span></button>
-        <button class="nav-item" data-view="overview" data-section="agent-pool"><span>▦</span><span data-i18n="nav_agent_pool">Agent Pool</span></button>
-        <button class="nav-item" data-view="overview" data-section="orchestration-policy"><span>⌁</span><span data-i18n="nav_orchestration">Orchestration</span></button>
+        <button class="nav-item" data-view="overview" data-section="agent-pool"><span>▦</span><span data-i18n="nav_agent_pool">Models</span></button>
+        <button class="nav-item" data-view="overview" data-section="orchestration-policy"><span>⌁</span><span data-i18n="nav_orchestration">Routing</span></button>
         <button class="nav-item" data-view="evaluations"><span>◫</span><span data-i18n="nav_evaluations">Evaluations</span></button>
         <button class="nav-item" data-view="datasets"><span>▣</span><span data-i18n="nav_datasets">Datasets</span></button>
         <button class="nav-item" data-view="access"><span>□</span><span data-i18n="nav_access_control">Access Control</span></button>
@@ -846,14 +856,11 @@ ADMIN_HTML = r"""<!doctype html>
         <button class="nav-item" data-view="audit"><span>§</span><span data-i18n="nav_audit">Audit</span></button>
         <button class="nav-item" data-view="settings"><span>⚙</span><span data-i18n="nav_settings">Settings</span></button>
       </nav>
-      <div class="side-footer">Contextual Orchestrator v0.1.0</div>
+      <div class="side-footer">Contextual Orchestrator v0.2.0</div>
     </aside>
     <main class="main">
       <header class="topbar">
-        <div class="field"><span data-i18n="environment_label">Environment</span><select><option>prod-us-east-1</option><option>staging</option></select></div>
-        <div class="field"><span data-i18n="region_label">Region</span><strong>US East</strong></div>
         <div class="field language-switch"><span data-i18n="language_label">Language</span><select id="language"><option value="en">English</option><option value="ko">한국어</option></select></div>
-        <div class="health">● <span data-i18n="healthy_status">Healthy</span></div>
       </header>
       <div class="mobile-nav">
         <label for="mobileView" data-i18n="view_label">View</label>
@@ -871,77 +878,79 @@ ADMIN_HTML = r"""<!doctype html>
       <section class="grid view" data-view="overview">
         <section class="panel" id="agent-pool" tabindex="-1">
           <div class="panel-header">
-            <h1><span data-i18n="agent_pool_title">Agent Pool</span> <span id="agentCount" class="chip"></span></h1>
-            <div class="actions"><button class="btn primary" id="registerAgent">+ <span data-i18n="register_agent">Register Agent</span></button><button class="btn" id="agentSettings" aria-label="Agent settings">⚙</button></div>
+            <h1><span data-i18n="agent_pool_title">Models</span> <span id="agentCount" class="chip"></span></h1>
+            <div class="actions"><button class="btn primary" id="registerAgent">+ <span data-i18n="register_agent">Add model connection</span></button><button class="btn" id="agentSettings" aria-label="Model settings">⚙</button></div>
           </div>
           <div class="toolbar">
-            <input id="agentSearch" type="search" placeholder="Search agents" data-i18n-placeholder="search_agents">
+            <input id="agentSearch" type="search" placeholder="Search models" data-i18n-placeholder="search_agents">
             <select id="statusFilter"><option value="all" data-i18n="all_statuses">All statuses</option><option value="healthy" data-i18n="status_healthy">Healthy</option><option value="degraded" data-i18n="status_degraded">Degraded</option></select>
           </div>
           <table>
             <thead>
-              <tr><th data-i18n="agent_header">Agent</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Capacity</th><th data-i18n="success_header">Success</th></tr>
+              <tr><th data-i18n="agent_header">Connection</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Recent latency</th><th data-i18n="success_header">Success</th></tr>
             </thead>
             <tbody id="agents"></tbody>
           </table>
+          <form id="modelGroupForm" class="policy-list" aria-labelledby="modelGroupsTitle">
+            <h2 id="modelGroupsTitle" data-i18n="model_groups_title">Model groups</h2>
+            <label><span data-i18n="group_name_label">Group name</span>
+              <input id="modelGroupName" required pattern="[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+" autocomplete="off">
+            </label>
+            <label><span data-i18n="group_members_label">Provider model members</span>
+              <select id="modelGroupMembers" multiple required size="5"></select>
+            </label>
+            <div class="actions"><button class="btn primary" type="submit" data-i18n="save_group">Save group</button></div>
+            <p id="modelGroupFeedback" role="status" aria-live="polite"></p>
+            <ul id="modelGroups" class="policy-list"></ul>
+          </form>
         </section>
         <section class="panel" id="orchestration-policy" tabindex="-1">
           <div class="panel-header">
-            <h2 data-i18n="orchestration_policy">Orchestration Policy</h2>
+            <h2 data-i18n="orchestration_policy">Routing Policy</h2>
             <span class="chip green" data-i18n="active_status">Active</span>
           </div>
           <div class="policy-list">
             <div>
               <h3 data-i18n="simulation_title">Simulation</h3>
-              <textarea id="prompt">Analyze the architecture, implement the code, and verify risks.</textarea>
+              <textarea id="prompt" data-i18n-placeholder="prompt_placeholder" placeholder="Describe the task you want to route, then run the trace."></textarea>
               <div class="actions" style="margin-top:8px">
                 <select id="mode"><option value="auto">auto</option><option value="route">route</option><option value="conduct">conduct</option></select>
                 <button class="btn primary" id="run" data-i18n="run_trace">Run Trace</button>
               </div>
             </div>
-            <div class="metric source"><span data-i18n="source_basis">Source basis</span><strong data-i18n="source_basis_text">Fugu: one interface. TRINITY: thinker, worker, verifier. Conductor: access-list workflow visibility.</strong></div>
+            <div class="metric source"><span data-i18n="source_basis">Source basis</span><strong data-i18n="source_basis_text">Routing uses measured quality, cost, and availability. Review the trace before applying policy changes.</strong></div>
             <div class="metric"><span data-i18n="latency_threshold">Latency P95 route threshold</span><strong>2.50s</strong></div>
-            <div class="metric"><span data-i18n="workflow_hints">Workflow trigger hints</span><strong id="hintCount">0</strong></div>
-            <div class="metric"><span data-i18n="verifier_required">Verifier required</span><strong>Yes</strong></div>
-            <div class="metric"><span data-i18n="agent_exclusion">Agent exclusion policy</span><strong>Config</strong></div>
+            <div class="metric"><span data-i18n="verifier_required">Quality review required</span><strong>Yes</strong></div>
+            <div class="metric"><span data-i18n="agent_exclusion">Model availability rules</span><strong>Review</strong></div>
           </div>
         </section>
         <section class="panel workflow">
           <div class="panel-header">
             <h2 data-i18n="live_workflow_trace">Live Workflow Trace</h2>
-            <div class="actions"><span id="traceMode" class="chip green">Live</span><button class="btn" id="copyJson" data-i18n="view_json">View JSON</button></div>
+            <div class="actions"><span id="traceMode" class="chip green">Live</span><button class="btn" id="copyJson" data-i18n="view_json">Copy run details</button></div>
           </div>
           <div class="trace">
             <div class="steps" id="steps"></div>
           </div>
           <div class="tabs">
             <button class="tab active" data-tab="timeline" data-i18n="timeline_tab">Timeline</button>
-            <button class="tab" data-tab="access" data-i18n="access_list_tab">Access List</button>
-            <button class="tab" data-tab="json" data-i18n="json_tab">JSON</button>
+            <button class="tab" data-tab="access" data-i18n="access_list_tab">Permissions</button>
+            <button class="tab" data-tab="json" data-i18n="json_tab">Run details</button>
           </div>
           <div class="inspector" id="accessPanel" hidden></div>
           <pre class="json" id="traceJson" hidden></pre>
         </section>
         <aside class="audit">
           <section class="panel">
-            <div class="panel-header"><h2 data-i18n="audit_compliance">Audit &amp; Compliance</h2><span class="chip">4 rules</span></div>
+            <div class="panel-header"><h2 data-i18n="audit_compliance">Audit &amp; Compliance</h2></div>
             <table>
               <thead><tr><th data-i18n="rule_header">Rule</th><th data-i18n="scope_header">Scope</th><th data-i18n="exclusion_header">Exclusion</th></tr></thead>
-              <tbody>
-                <tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>
-                <tr><td>SEC-002</td><td>worker</td><td>Tool web_search</td></tr>
-                <tr><td>DATA-003</td><td>verifier</td><td>Field ip_address</td></tr>
-                <tr><td>FIN-004</td><td>synthesizer</td><td>Record amount</td></tr>
-              </tbody>
+              <tbody><tr><td colspan="3" class="empty" data-i18n="no_policy_evidence">No policy evidence is loaded. Open Audit to review recorded events.</td></tr></tbody>
             </table>
           </section>
           <section class="panel">
             <div class="panel-header"><h2 data-i18n="recent_errors">Recent Errors</h2><button class="btn" id="viewAudit" data-i18n="view_all">View all</button></div>
-            <div class="audit-list">
-              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="route_degradation">Route degradation</b><br><small data-i18n="worker_latency">worker exceeded latency threshold</small></div><small>2m</small></div>
-              <div class="event"><span class="status-icon">!</span><div><b data-i18n="verifier_disagreement">Verifier disagreement</b><br><small data-i18n="confidence_low">confidence below policy threshold</small></div><small>11m</small></div>
-              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="agent_capacity">Agent capacity</b><br><small data-i18n="planner_capacity">planner pool near soft limit</small></div><small>18m</small></div>
-            </div>
+            <div class="audit-list"><p class="empty" data-i18n="no_recent_errors">No current alerts. Open Audit to review recent changes.</p></div>
           </section>
         </aside>
       </section>
@@ -965,7 +974,7 @@ Summarize this research thread and verify claims.</textarea>
       </section>
       <section class="detail-grid view" data-view="access" hidden>
         <section class="panel wide">
-          <div class="panel-header"><h1 data-i18n="access_inspector">Access List Inspector</h1><span class="chip" id="accessRunId">No run</span></div>
+          <div class="panel-header"><h1 data-i18n="access_inspector">Permission review</h1><span class="chip" id="accessRunId">No run</span></div>
           <div class="inspector" id="accessPage"></div>
         </section>
       </section>
@@ -975,11 +984,11 @@ Summarize this research thread and verify claims.</textarea>
           <table><thead><tr><th data-i18n="provider_header">Provider</th><th data-i18n="endpoint_header">Endpoint</th><th data-i18n="policy_header">Policy</th></tr></thead><tbody id="integrationRows"></tbody></table>
         </section>
         <section class="panel wide">
-          <div class="panel-header"><h1 data-i18n="session_title">Operator session</h1><span class="chip">HttpOnly</span></div>
-          <p class="muted" data-i18n="session_hint">Use an opaque HttpOnly session cookie so the browser never retains the admin bearer.</p>
+          <div class="panel-header"><h1 data-i18n="session_title">Operator session</h1><span class="chip">Secure</span></div>
+          <p class="muted" data-i18n="session_hint">Enter your access token to open a secure operator session.</p>
           <form id="sessionForm" class="actions">
-            <label class="sr-only" for="sessionToken" data-i18n="session_token_placeholder">Admin bearer token</label>
-            <input id="sessionToken" type="password" autocomplete="off" data-i18n-placeholder="session_token_placeholder" placeholder="Admin bearer token">
+            <label class="sr-only" for="sessionToken" data-i18n="session_token_placeholder">Access token</label>
+            <input id="sessionToken" type="password" autocomplete="off" data-i18n-placeholder="session_token_placeholder" placeholder="Access token">
             <button class="btn primary" type="submit" data-i18n="session_start">Start session</button>
             <button class="btn" id="endSession" type="button" data-i18n="session_end">End session</button>
           </form>
@@ -987,13 +996,13 @@ Summarize this research thread and verify claims.</textarea>
         </section>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="doc_viewer_title">Document Viewer</h1><span class="chip" id="docViewerStatus" data-i18n="doc_viewer_unset">Not configured</span></div>
-          <p class="muted" data-i18n="doc_viewer_desc">Clearfolio integrated document viewer: upload, async conversion, and PDF preview for admin document review.</p>
+          <p class="muted" data-i18n="doc_viewer_desc">Upload a document, wait for processing to finish, then open its PDF preview.</p>
           <div id="docViewerActions" hidden>
             <a id="docViewerOpen" class="btn primary" target="_blank" rel="noopener" data-i18n="doc_viewer_open">Open viewer</a>
-            <input id="docViewerDocId" type="text" data-i18n-placeholder="doc_viewer_docid" placeholder="docId" />
+            <input id="docViewerDocId" type="text" data-i18n-placeholder="doc_viewer_docid" placeholder="Document ID" />
             <button id="docViewerOpenDoc" class="btn" data-i18n="doc_viewer_open_doc">Open document</button>
           </div>
-          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.</p>
+          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Ask an administrator to connect a document viewer, then refresh this page.</p>
         </section>
       </section>
       <section class="detail-grid view" data-view="observability" hidden>
@@ -1035,7 +1044,6 @@ Summarize this research thread and verify claims.</textarea>
       agentCount: document.querySelector("#agentCount"),
       agentSearch: document.querySelector("#agentSearch"),
       statusFilter: document.querySelector("#statusFilter"),
-      hintCount: document.querySelector("#hintCount"),
       prompt: document.querySelector("#prompt"),
       mode: document.querySelector("#mode"),
       run: document.querySelector("#run"),
@@ -1058,6 +1066,11 @@ Summarize this research thread and verify claims.</textarea>
       viewAudit: document.querySelector("#viewAudit"),
       agentSettings: document.querySelector("#agentSettings"),
       registerAgent: document.querySelector("#registerAgent"),
+      modelGroupForm: document.querySelector("#modelGroupForm"),
+      modelGroupName: document.querySelector("#modelGroupName"),
+      modelGroupMembers: document.querySelector("#modelGroupMembers"),
+      modelGroupFeedback: document.querySelector("#modelGroupFeedback"),
+      modelGroups: document.querySelector("#modelGroups"),
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language"),
       sessionForm: document.querySelector("#sessionForm"),
@@ -1065,7 +1078,7 @@ Summarize this research thread and verify claims.</textarea>
       sessionStatus: document.querySelector("#sessionStatus"),
       endSession: document.querySelector("#endSession")
     };
-    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
+    let state = {agents: [], modelGroups: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -1100,16 +1113,51 @@ Summarize this research thread and verify claims.</textarea>
       const rows = state.agents
         .map((agent, index) => ({agent, index, status: agentStatus(index)}))
         .filter(({agent, status}) => (agent.id.toLowerCase().includes(q) || agent.model.toLowerCase().includes(q)) && (selectedStatus === "all" || status.key === selectedStatus));
-      els.agentCount.textContent = `${rows.length} agents`;
+      els.agentCount.textContent = `${rows.length} models`;
       els.agents.innerHTML = rows.map(({agent, index, status}) => `
         <tr>
-          <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.id)}</strong><br><small>${escapeHtml(agent.base_url)}</small></td>
-          <td>${escapeHtml(agent.model)}</td>
+          <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.provider_name || "Configured")}</strong></td>
+          <td>${escapeHtml(agent.model)}${agent.group_name ? `<br><span class="chip">${escapeHtml(agent.group_name)}</span>` : ""}</td>
           <td>${tags(agent.tags)}</td>
           <td><span class="chip ${status.chip}">${status.label}</span></td>
-          <td><div>${72 - index * 8}%</div><div class="bar"><span style="width:${72 - index * 8}%"></span></div></td>
-          <td>${(99.2 - index * .4).toFixed(1)}%</td>
+          <td>${agent.group_routing?.ewma_latency_seconds == null ? "—" : `${escapeHtml(agent.group_routing.ewma_latency_seconds)}s`}</td>
+          <td>${agent.group_routing ? `${(agent.group_routing.success_posterior_mean * 100).toFixed(1)}%` : "—"}</td>
         </tr>`).join("") || `<tr><td colspan="6" class="empty" data-i18n="no_agents_match">${t("no_agents_match")}</td></tr>`;
+    }
+    function renderModelGroups() {
+      const selected = new Set(Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value));
+      els.modelGroupMembers.innerHTML = state.agents.map(agent =>
+        `<option value="${escapeHtml(agent.id)}" ${selected.has(agent.id) ? "selected" : ""}>${escapeHtml(agent.provider_name || "Provider")} — ${escapeHtml(agent.model)}</option>`
+      ).join("");
+      els.modelGroups.innerHTML = (state.modelGroups || []).map(group => `
+        <li><strong>${escapeHtml(group.group_name)}</strong> — ${escapeHtml(group.member_agent_ids.join(", "))}<br>
+          <small>${escapeHtml(Object.entries(group.capability_coverage || {}).map(([name, count]) => `${name}: ${count}`).join(" · "))}</small>
+          <button class="btn" type="button" data-delete-group="${escapeHtml(group.group_name)}" data-i18n="delete_group">${t("delete_group")}</button>
+        </li>`).join("") || `<li class="empty">${t("no_model_groups")}</li>`;
+    }
+
+    async function refreshModelGroups() {
+      const response = await fetch("/api/v1/model_groups");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not load model groups");
+      state.modelGroups = payload.items || [];
+      renderModelGroups();
+    }
+
+    async function saveModelGroup(event) {
+      event.preventDefault();
+      const groupName = els.modelGroupName.value.trim();
+      const memberIds = Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value);
+      const exists = state.modelGroups.some(group => group.group_name === groupName.replaceAll("-", "_").toLowerCase());
+      const response = await fetch(exists ? `/api/v1/model_groups/${encodeURIComponent(groupName)}` : "/api/v1/model_groups", {
+        method: exists ? "PATCH" : "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify(exists ? {member_agent_ids: memberIds} : {group_name: groupName, member_agent_ids: memberIds})
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error?.message || "Could not save model group");
+      els.modelGroupFeedback.textContent = t("group_saved");
+      await refreshModelGroups();
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -1193,7 +1241,7 @@ Summarize this research thread and verify claims.</textarea>
         return `<div class="kpi"><span>${escapeHtml(t(metric.metric_name) || metric.label)}</span><strong>${escapeHtml(rawValue)}${suffix}</strong></div>`;
       }).join("") || [
         ["Workflow runs", runs.length],
-        ["Enabled agents", state.agents.length],
+        ["Enabled models", state.agents.length],
         ["Verifier required", state.policy.verifier_required ? "Yes" : "No"]
       ].map(([label, value]) => `<div class="kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
       els.runRows.innerHTML = runs.map(run => `
@@ -1505,6 +1553,7 @@ Summarize this research thread and verify claims.</textarea>
       });
       localStorage.setItem("admin_lang", lang);
       if (state.agents.length) renderAgents();
+      if (state.agents.length) renderModelGroups();
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
@@ -1514,9 +1563,9 @@ Summarize this research thread and verify claims.</textarea>
         return;
       }
       state = await res.json();
+      await refreshModelGroups();
       await refreshAnalytics();
       await refreshReadiness();
-      els.hintCount.textContent = state.policy.complex_hints.length;
       renderAgents();
       renderSecondaryViews();
       await simulate();
@@ -1634,6 +1683,20 @@ Summarize this research thread and verify claims.</textarea>
     els.viewAudit.addEventListener("click", () => showView("audit"));
     els.agentSettings.addEventListener("click", () => showView("settings"));
     els.registerAgent.addEventListener("click", () => showView("integrations"));
+    els.modelGroupForm.addEventListener("submit", event => saveModelGroup(event).catch(error => {
+      els.modelGroupFeedback.textContent = error.message;
+    }));
+    els.modelGroups.addEventListener("click", event => {
+      const name = event.target.dataset?.deleteGroup;
+      if (!name) return;
+      fetch(`/api/v1/model_groups/${encodeURIComponent(name)}`, {method: "DELETE"})
+        .then(response => response.ok ? response.json() : Promise.reject(new Error("Could not delete model group")))
+        .then(() => {
+          els.modelGroupFeedback.textContent = t("group_deleted");
+          return refreshModelGroups();
+        })
+        .catch(error => { els.modelGroupFeedback.textContent = error.message; });
+    });
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     els.sessionForm?.addEventListener("submit", startSession);
