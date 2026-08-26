@@ -9,9 +9,9 @@ pool from the persisted catalog.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
 import os
+from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
 from .cost_ledger import PriceBook
@@ -23,13 +23,17 @@ from .credentials import (
 )
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
-    DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
+    DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
     agent_id_for,
     discover_all_models,
     refresh_price_book,
+)
+from .privacy_policy_analysis import (
+    PrivacyPolicyAssessment,
+    analyze_discovered_privacy_policies,
 )
 from .provider_bootstrap import (
     ProviderBootstrapError,
@@ -80,6 +84,7 @@ class ProviderCatalogBootstrapReport:
     catalog_refresh_failure_count: int
     providers_with_errors: tuple[str, ...]
     priced_model_count: int
+    privacy_assessment_count: int
 
     def as_dict(self) -> dict[str, object]:
         """Return the stable JSON evidence contract without secret values."""
@@ -97,6 +102,7 @@ class ProviderCatalogBootstrapReport:
             "catalog_refresh_failure_count": self.catalog_refresh_failure_count,
             "providers_with_errors": list(self.providers_with_errors),
             "priced_model_count": self.priced_model_count,
+            "privacy_assessment_count": self.privacy_assessment_count,
         }
 
 
@@ -236,6 +242,10 @@ DiscoveryFunction = Callable[
     [tuple[ProviderModelSource, ...]],
     tuple[list[DiscoveredModel], list[ProviderDiscoveryError]],
 ]
+PrivacyAnalysisFunction = Callable[
+    [Sequence[DiscoveredModel]],
+    tuple[list[DiscoveredModel], list[PrivacyPolicyAssessment]],
+]
 
 
 def bootstrap_provider_catalog_runtime(
@@ -247,6 +257,8 @@ def bootstrap_provider_catalog_runtime(
     catalog_store: ProviderCatalogStore | None = None,
     sources: Sequence[ProviderModelSource] = PROVIDER_MODEL_SOURCES,
     discovery: DiscoveryFunction | None = None,
+    analyze_privacy_policies: bool = False,
+    privacy_analysis: PrivacyAnalysisFunction = analyze_discovered_privacy_policies,
 ) -> ProviderCatalogBootstrapReport:
     """Register secrets, persist catalogs, and build the effective serving pool."""
     credentials = collect_provider_credentials(
@@ -264,12 +276,33 @@ def bootstrap_provider_catalog_runtime(
             lambda requested_sources: discover_all_models(requested_sources)
         )
         live_models, errors = discover(source_tuple)
+        privacy_assessments: list[PrivacyPolicyAssessment] = []
+        if analyze_privacy_policies:
+            live_models, privacy_assessments = privacy_analysis(live_models)
         snapshot = refresh_persisted_provider_catalog(
             store,
             sources=source_tuple,
             registered_credentials=registered,
             discovered=live_models,
             errors=errors,
+        )
+        assessments_by_account: dict[tuple[str, str], list[PrivacyPolicyAssessment]] = {}
+        for assessment in privacy_assessments:
+            assessments_by_account.setdefault(
+                (assessment.subject_provider, assessment.subject_credential), []
+            ).append(assessment)
+        for source in source_tuple:
+            account_assessments = assessments_by_account.get(_source_key(source), [])
+            if account_assessments:
+                store.record_privacy_assessment_success(source, account_assessments)
+        privacy_assessment_count = (
+            sum(
+                len(store.privacy_assessments(source))
+                for source in source_tuple
+                if source.credential_name in registered
+            )
+            if analyze_privacy_policies
+            else 0
         )
         failed_provider_names = {error.provider_name for error in errors}
         failed_credentials = {
@@ -335,6 +368,7 @@ def bootstrap_provider_catalog_runtime(
             catalog_refresh_failure_count=snapshot.refresh_failure_count,
             providers_with_errors=snapshot.providers_with_errors,
             priced_model_count=priced_count,
+            privacy_assessment_count=privacy_assessment_count,
         )
     except Exception:
         try:
@@ -360,6 +394,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument("--model-limit", type=int, default=16)
     parser.add_argument(
+        "--analyze-privacy-policies",
+        action="store_true",
+        help="Persist grounded provider-policy provenance; may incur provider charges.",
+    )
+    parser.add_argument(
         "--allow-partial-credentials",
         action="store_true",
         help="Permit a subset of the fixed provider inventory (development only).",
@@ -370,6 +409,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         require_all_credentials=not args.allow_partial_credentials,
         agents_db=args.agents_db,
         model_limit=args.model_limit,
+        analyze_privacy_policies=args.analyze_privacy_policies,
     )
     print(json.dumps(report.as_dict(), ensure_ascii=False, sort_keys=True))
 

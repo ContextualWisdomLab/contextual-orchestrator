@@ -8,6 +8,7 @@ import json
 import urllib.request
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -32,6 +33,9 @@ CAMOUFOX_MCP_TOKEN_CREDENTIAL = "CAMOUFOX_MCP_TOKEN"
 class PrivacyPolicyAssessment:
     """One grounded structured assessment of an official policy source."""
 
+    subject_provider: str
+    subject_credential: str
+    subject_model: str
     source_url: str
     zero_data_retention_available: bool | None
     supports_no_training: bool | None
@@ -39,10 +43,13 @@ class PrivacyPolicyAssessment:
     evidence_quote: str
     analyzer_provider: str
     analyzer_model: str
+    observed_at: datetime
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-ready assessment without credentials or policy text."""
         return {
+            "subject_provider": self.subject_provider,
+            "subject_model": self.subject_model,
             "source_url": self.source_url,
             "zero_data_retention_available": self.zero_data_retention_available,
             "no_training": self.supports_no_training,
@@ -50,6 +57,7 @@ class PrivacyPolicyAssessment:
             "evidence_quote": self.evidence_quote,
             "analyzer_provider": self.analyzer_provider,
             "analyzer_model": self.analyzer_model,
+            "observed_at": self.observed_at.isoformat(),
         }
 
 
@@ -403,7 +411,8 @@ def analyze_discovered_privacy_policies(
     if analyzer_model is None or not isinstance(rows, list):
         return list(models), []
 
-    assessments: list[PrivacyPolicyAssessment] = []
+    source_assessments: list[PrivacyPolicyAssessment] = []
+    observed_at = datetime.now(timezone.utc)
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -424,19 +433,23 @@ def analyze_discovered_privacy_policies(
         ]
         if any(value is not None and not isinstance(value, bool) for value in values):
             continue
-        assessments.append(
+        source_assessments.append(
             PrivacyPolicyAssessment(
-                source_url,
-                values[0],
-                values[1],
-                values[2],
-                evidence_quote,
-                analyzer_model.provider_name,
-                analyzer_model.model_id,
+                subject_provider="",
+                subject_credential="",
+                subject_model="",
+                source_url=source_url,
+                zero_data_retention_available=values[0],
+                supports_no_training=values[1],
+                supports_no_prompt_retention=values[2],
+                evidence_quote=evidence_quote,
+                analyzer_provider=analyzer_model.provider_name,
+                analyzer_model=analyzer_model.model_id,
+                observed_at=observed_at,
             )
         )
 
-    by_url = {assessment.source_url: assessment for assessment in assessments}
+    by_url = {assessment.source_url: assessment for assessment in source_assessments}
 
     def inferred_consensus(
         values: list[bool | None],
@@ -472,4 +485,15 @@ def analyze_discovered_privacy_policies(
                 ),
             )
         )
+    assessments = [
+        replace(
+            by_url[url],
+            subject_provider=model.provider_name,
+            subject_credential=model.credential_name,
+            subject_model=model.model_id,
+        )
+        for model in models
+        for url in model.privacy_policy_urls
+        if url in by_url
+    ]
     return enriched, assessments
