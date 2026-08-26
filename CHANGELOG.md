@@ -55,6 +55,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Keep the hourly provider-catalog credential transport aligned with discovery
+  by registering OpenCode Zen, and mask the generated run-scoped KV passphrase
+  before exporting it to later workflow steps.
 - Make per-request budget checks constant time while preserving exact parity
   with full spend analytics across persisted, replaced, estimated, and
   provider-reported workflow runs.

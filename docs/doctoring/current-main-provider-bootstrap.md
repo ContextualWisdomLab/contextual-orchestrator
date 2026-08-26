@@ -75,7 +75,8 @@ later discovery run.
 
 `.github/workflows/provider-catalog-sync.yml` runs hourly on protected `main` and may
 also be dispatched manually. It is intentionally absent from pull-request secret
-execution. Every sync requires the five provider secrets above. Cross-run
+execution. Every sync requires the six provider secrets above, including
+`OPENCODE_ZEN_API_KEY`. Cross-run
 production persistence additionally requires:
 
 - `CONTEXTUAL_ORCHESTRATOR_KV_DSN`; and
@@ -90,7 +91,7 @@ long-running service may either use the ordinary KV-backed startup discovery pat
 invoke this bootstrap with a persistent `--agents-db` under its own deployment
 boundary.
 
-The workflow verifies that all five credential names were registered, at least one
+The workflow verifies that all six credential names were registered, at least one
 model was discovered, at least one chat-compatible model survived classification, a
 bounded serving candidate set was produced, and no exact provider secret appears in
 the emitted report.

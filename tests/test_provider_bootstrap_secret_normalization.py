@@ -78,6 +78,18 @@ def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() ->
     assert "KV DSN and passphrase must be configured together" in workflow
     assert "RUN_SCOPED_KV_DSN=postgresql://" in workflow
     assert 'export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${RUN_SCOPED_KV_DSN}"' in workflow
+    assert 'print(f"::add-mask::{passphrase}")' in workflow
+
+
+def test_catalog_sync_registers_every_discovery_credential() -> None:
+    """The hourly bootstrap must transport the same inventory discovery requires."""
+    workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(
+        encoding="utf-8"
+    )
+
+    for credential_name in PROVIDER_CREDENTIAL_NAMES:
+        assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
+        assert f"'{credential_name}'," in workflow
 
 
 if __name__ == "__main__":  # pragma: no cover
