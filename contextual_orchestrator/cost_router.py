@@ -27,6 +27,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
@@ -49,6 +50,11 @@ from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import RustCl100kPacker, build_token_counter
 from .embedding_capabilities import embedding_model_capability
+
+
+_RACE_USAGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
+    "race_usage_context", default=None
+)
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
@@ -79,6 +85,9 @@ class CostRoutingCoordinator:
         self.ledger = ledger or CostLedger(self.price_book)
         self.token_counter = token_counter or build_token_counter(postgres_dsn)
         self._cl100k_packer: Any = None
+        self._race_usage_context = _RACE_USAGE_CONTEXT
+        if hasattr(orchestrator, "_race_usage_sink"):
+            orchestrator._race_usage_sink = self._record_race_endpoint_usage
         self.policy = routing_policy or RoutingPolicy(self.config)
         # Job registries live in Valkey when the credential registry carries
         # batch_job_registry_valkey_url, so submitted jobs survive a process
@@ -506,6 +515,12 @@ class CostRoutingCoordinator:
     # ------------------------------------------------------------------
     # Provider / model resolution
     # ------------------------------------------------------------------
+    @staticmethod
+    def _agent_provider_model(agent: Any, fallback_model: str) -> tuple[str, str]:
+        """Derive the ledger provider/model identity for one served agent."""
+        provider = agent.provider_name or _provider_from_base_url(agent.base_url)
+        return provider or "unknown", agent.model or fallback_model
+
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
         trace = result.get("trace") or []
@@ -515,11 +530,64 @@ class CostRoutingCoordinator:
         if agent_id:
             try:
                 agent = self.orchestrator._agent(agent_id)
-                provider = agent.provider_name or _provider_from_base_url(agent.base_url)
-                return provider or "unknown", agent.model or fallback_model
+                return self._agent_provider_model(agent, fallback_model)
             except Exception:
                 pass
         return "unknown", fallback_model
+
+    @staticmethod
+    def _provider_usage(usage: Any) -> tuple[int, int] | None:
+        """Return validated Chat or Responses token counts."""
+        if not isinstance(usage, dict):
+            return None
+        prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
+        completion = usage.get("completion_tokens", usage.get("output_tokens"))
+        if type(prompt) is not int or prompt < 0 or type(completion) is not int or completion < 0:
+            return None
+        return prompt, completion
+
+    def _record_race_endpoint_usage(self, endpoint_id: str, value: Any) -> None:
+        """Ledger provider-reported usage for completed non-winning race calls."""
+        context = self._race_usage_context.get()
+        if context is None:
+            return
+        if not context["workflow_ready"]:
+            context["pending_usage"].append((endpoint_id, value))
+            return
+        usage = None
+        if isinstance(value, tuple) and len(value) == 3:
+            usage = value[2]
+        elif isinstance(value, dict):
+            usage = value.get("usage")
+        counts = self._provider_usage(usage)
+        if counts is None:
+            return
+        agent = next(
+            (item for item in self.orchestrator.candidates if item.id == endpoint_id),
+            None,
+        )
+        if agent is None:  # pragma: no cover - endpoint came from the current pool
+            return
+        record = self._record_completion(
+            messages=[],
+            answer="",
+            route_mode=context["route_mode"],
+            request_channel="sync",
+            attribution=context["attribution"],
+            model_name=context["model_name"],
+            provider_model=self._agent_provider_model(agent, context["model_name"]),
+            workflow_run_id=context["workflow_run_id"],
+            prompt_tokens=counts[0],
+            completion_tokens=counts[1],
+        )
+        context["records"].append(record)
+
+    def _flush_race_endpoint_usage(self, context: dict[str, Any]) -> None:
+        """Persist usage held until the workflow identity becomes available."""
+        pending = list(context["pending_usage"])
+        context["pending_usage"].clear()
+        for endpoint_id, value in pending:
+            self._record_race_endpoint_usage(endpoint_id, value)
 
     # ------------------------------------------------------------------
     # Sync + batch completion
@@ -536,6 +604,8 @@ class CostRoutingCoordinator:
         cache_bypass: bool = False,
         cache_partition: Optional[str] = None,
         owner_id: Optional[str] = None,
+        provider_request: Optional[Dict[str, Any]] = None,
+        provider_endpoint: str = "chat/completions",
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -543,6 +613,17 @@ class CostRoutingCoordinator:
         augmented with ``channel``, ``routing_reason``, ``usage``, and the
         ``usage_record_id``. Batch requests are dispatched to the batch backend
         and return a job envelope; their cost is recorded on retrieval.
+
+        For multi-step workflows, each trace step records one ledger
+        row. Rows backed by provider-reported token counts are labeled
+        ``measurement_status="measured"``; rows that fall back to heuristic
+        estimates are labeled ``"estimated"``. The original request prompt is
+        attributed at most once across unreported rows: it lands in full on the
+        first unreported step, and later unreported steps estimate only their
+        own output tokens. Provider-reported prompt counts remain attached to
+        their respective rows because each trace step is a separate billable
+        provider call; they are neither deduplicated against nor replaced by
+        the fallback estimate for a different call.
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
@@ -550,7 +631,7 @@ class CostRoutingCoordinator:
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
 
-        if decision.channel == "batch":
+        if decision.channel == "batch" and provider_request is None:
             request = BatchRequest(
                 messages=messages,
                 model=model_name,
@@ -567,6 +648,128 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
+        if provider_request is not None:
+            if provider_endpoint not in {"chat/completions", "responses"}:
+                raise ValueError("provider_endpoint must be chat/completions or responses")
+            race_context = {
+                "route_mode": mode,
+                "attribution": attribution,
+                "model_name": model_name,
+                "workflow_run_id": workflow_run_id,
+                "workflow_ready": workflow_run_id is not None,
+                "records": [],
+                "pending_usage": [],
+            }
+            race_token = self._race_usage_context.set(race_context)
+            try:
+                provider_response = self.orchestrator.proxy_completion(
+                    provider_request,
+                    endpoint=provider_endpoint,
+                    single_agent=False,
+                )
+                lineage = provider_response.get("orchestration")
+                if isinstance(lineage, dict) and isinstance(
+                    lineage.get("workflow_run_id"), str
+                ):
+                    race_context["workflow_run_id"] = lineage["workflow_run_id"]
+                race_context["workflow_ready"] = True
+                self._flush_race_endpoint_usage(race_context)
+            finally:
+                self._race_usage_context.reset(race_token)
+            lineage = provider_response.get("orchestration")
+            if not isinstance(lineage, dict) or not isinstance(
+                lineage.get("workflow_run_id"), str
+            ):
+                raise RuntimeError("provider completion omitted orchestration lineage")
+            result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
+            race_records = list(race_context["records"])
+            records = list(race_records)
+            # The caller's request prompt is attributed at most once per
+            # completion: the full prompt lands on the first trace step that
+            # reports no provider usage of its own, and every later unreported
+            # step estimates only its own output tokens. One workflow run must
+            # never bill the same request prompt once per unreported step.
+            # Reported prompt counts describe separate provider calls and stay
+            # on their own measured rows; suppressing them would undercount the
+            # provider invoice rather than deduplicate one request.
+            request_prompt_attributed = False
+            for step in result.get("trace") or []:
+                if not isinstance(step, dict):
+                    continue
+                counts = self._provider_usage(step.get("usage"))
+                attribute_request_prompt = counts is None and not request_prompt_attributed
+                if attribute_request_prompt:
+                    request_prompt_attributed = True
+                records.append(
+                    self._record_completion(
+                        messages=messages if attribute_request_prompt else [],
+                        answer=step.get("output", "") if counts is None else "",
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model(
+                            {"trace": [step]}, model_name
+                        ),
+                        workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                    )
+                )
+            if len(records) == len(race_records):
+                counts = self._provider_usage(provider_response.get("usage"))
+                records.append(
+                    self._record_completion(
+                        messages=messages,
+                        answer=result.get("answer", ""),
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model(result, model_name),
+                        workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                    )
+                )
+            currencies = {record.currency_code for record in records}
+            provider_response["usage_record_ids"] = [
+                record.usage_record_id for record in records
+            ]
+            provider_response["cost"] = {
+                "cost_amount": (
+                    round(sum(record.cost_amount for record in records), 6)
+                    if len(currencies) == 1
+                    else None
+                ),
+                "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "measurement_status": (
+                    "estimated"
+                    if any(record.measurement_status == "estimated" for record in records)
+                    else "measured"
+                ),
+            }
+            if len(currencies) > 1:
+                provider_response["cost"]["currency_components"] = [
+                    {
+                        "currency_code": currency,
+                        "cost_amount": round(
+                            sum(
+                                record.cost_amount
+                                for record in records
+                                if record.currency_code == currency
+                            ),
+                            6,
+                        ),
+                    }
+                    for currency in sorted(currencies)
+                ]
+                provider_response["cost"]["customer_action"] = (
+                    "Review each currency component separately. Apply an approved "
+                    "exchange-rate source before calculating a combined total."
+                )
+            return provider_response
+
         run_kwargs = {"mode": mode, "workflow_run_id": workflow_run_id, "owner_id": owner_id}
         if model_name != "contextual-orchestrator":
             run_kwargs["model_name"] = model_name
@@ -574,29 +777,128 @@ class CostRoutingCoordinator:
             run_kwargs["bypass_cache"] = True
         if cache_partition is not None:
             run_kwargs["cache_partition"] = cache_partition
-        result = self.orchestrator.run(messages, **run_kwargs)
+        race_context = {
+            "route_mode": mode,
+            "attribution": attribution,
+            "model_name": model_name,
+            "workflow_run_id": workflow_run_id,
+            "workflow_ready": workflow_run_id is not None,
+            "records": [],
+            "pending_usage": [],
+        }
+        race_token = self._race_usage_context.set(race_context)
+        try:
+            result = self.orchestrator.run(messages, **run_kwargs)
+            if isinstance(result.get("workflow_run_id"), str):
+                race_context["workflow_run_id"] = result["workflow_run_id"]
+            race_context["workflow_ready"] = True
+            self._flush_race_endpoint_usage(race_context)
+        finally:
+            self._race_usage_context.reset(race_token)
         cache_hit = result.get("cache_status") == "hit"
-        record = self._record_completion(
-            messages=messages,
-            answer=result.get("answer", ""),
-            route_mode=result.get("mode"),
-            request_channel="cache" if cache_hit else "sync",
-            attribution=attribution,
-            model_name=model_name,
-            provider_model=("cache", "response") if cache_hit else self._served_provider_model(result, model_name),
-            workflow_run_id=result.get("workflow_run_id"),
-            prompt_tokens=0 if cache_hit else None,
-            completion_tokens=0 if cache_hit else None,
-        )
+        race_records = list(race_context["records"])
+        records = list(race_records)
+        if cache_hit:
+            records.append(
+                self._record_completion(
+                    messages=messages,
+                    answer=result.get("answer", ""),
+                    route_mode=result.get("mode"),
+                    request_channel="cache",
+                    attribution=attribution,
+                    model_name=model_name,
+                    provider_model=("cache", "response"),
+                    workflow_run_id=result.get("workflow_run_id"),
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                )
+            )
+        else:
+            request_prompt_attributed = False
+            for step in result.get("trace") or []:
+                if not isinstance(step, dict):
+                    continue
+                counts = self._provider_usage(step.get("usage"))
+                attribute_request_prompt = counts is None and not request_prompt_attributed
+                if attribute_request_prompt:
+                    request_prompt_attributed = True
+                records.append(
+                    self._record_completion(
+                        messages=messages if attribute_request_prompt else [],
+                        answer=step.get("output", "") if counts is None else "",
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model({"trace": [step]}, model_name),
+                        workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                    )
+                )
+            if len(records) == len(race_records):
+                counts = self._provider_usage(result.get("usage"))
+                records.append(
+                    self._record_completion(
+                        messages=messages,
+                        answer=result.get("answer", "") if counts is None else "",
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model(result, model_name),
+                        workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                    )
+                )
+        record = records[-1]
         result["channel"] = "sync"
         result["routing_reason"] = decision.reason
         result["usage_record_id"] = record.usage_record_id
+        result["usage_record_ids"] = [item.usage_record_id for item in records]
+        race_record_ids = {item.usage_record_id for item in race_records}
+        client_usage_records = [
+            item for item in records if item.usage_record_id not in race_record_ids
+        ]
         result["usage"] = {
-            "prompt_tokens": record.prompt_tokens,
-            "completion_tokens": record.completion_tokens,
-            "total_tokens": record.total_tokens,
+            "prompt_tokens": sum(item.prompt_tokens for item in client_usage_records),
+            "completion_tokens": sum(item.completion_tokens for item in client_usage_records),
+            "total_tokens": sum(item.total_tokens for item in client_usage_records),
         }
-        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        currencies = {item.currency_code for item in records}
+        result["cost"] = {
+            "cost_amount": (
+                round(sum(item.cost_amount for item in records), 6)
+                if len(currencies) == 1
+                else None
+            ),
+            "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+            "measurement_status": (
+                "estimated"
+                if any(item.measurement_status == "estimated" for item in records)
+                else "measured"
+            ),
+        }
+        if len(currencies) > 1:
+            result["cost"]["currency_components"] = [
+                {
+                    "currency_code": currency,
+                    "cost_amount": round(
+                        sum(
+                            item.cost_amount
+                            for item in records
+                            if item.currency_code == currency
+                        ),
+                        6,
+                    ),
+                }
+                for currency in sorted(currencies)
+            ]
+            result["cost"]["customer_action"] = (
+                "Review each currency component separately. Apply an approved "
+                "exchange-rate source before calculating a combined total."
+            )
         return result
 
     def complete_structured(
@@ -633,12 +935,17 @@ class CostRoutingCoordinator:
         result["channel"] = "sync"
         result["routing_reason"] = "structured_multi_agent"
         result["usage_record_id"] = record.usage_record_id
+        result["usage_record_ids"] = [record.usage_record_id]
         result["usage"] = {
             "prompt_tokens": record.prompt_tokens,
             "completion_tokens": record.completion_tokens,
             "total_tokens": record.total_tokens,
         }
-        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        result["cost"] = {
+            "cost_amount": record.cost_amount,
+            "currency_code": record.currency_code,
+            "measurement_status": record.measurement_status,
+        }
         return result
 
     def _record_completion(
@@ -655,7 +962,25 @@ class CostRoutingCoordinator:
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
     ):
+        """Record one completion's usage + cost and return its ledger record.
+
+        ``prompt_tokens``/``completion_tokens`` carry provider-reported counts;
+        when either is missing the ledger falls back to heuristic estimates and
+        the row is labeled ``measurement_status="estimated"`` instead of
+        ``"measured"``. The status is exposed on the completion's ``cost``
+        payload, batch retrieval results, and analytics usage-record rows so a
+        buyer can always tell provider-measured spend from estimated spend.
+        For multi-step structured workflows the caller passes the original
+        request ``messages`` only for the first unreported step, keeping the
+        request prompt attributed at most once per completion; later unreported
+        steps pass empty messages and estimate their own output alone.
+        """
         provider, model = provider_model
+        measurement_status = (
+            "measured"
+            if prompt_tokens is not None and completion_tokens is not None
+            else "estimated"
+        )
         if prompt_tokens is None:
             prompt_tokens = self.token_counter.count_messages(messages, model)
         if completion_tokens is None:
@@ -669,6 +994,7 @@ class CostRoutingCoordinator:
             route_mode=route_mode,
             workflow_run_id=workflow_run_id,
             attribution=attribution,
+            measurement_status=measurement_status,
         )
 
     # ------------------------------------------------------------------
@@ -717,6 +1043,7 @@ class CostRoutingCoordinator:
                     "currency_code": record.currency_code,
                     "prompt_tokens": record.prompt_tokens,
                     "completion_tokens": record.completion_tokens,
+                    "measurement_status": record.measurement_status,
                 }
             )
         return {
@@ -1290,9 +1617,6 @@ class CostRoutingCoordinator:
                 route_mode="embedding",
                 workflow_run_id=batch_id,
                 attribution=shared_attribution,
-                input_attributions=[
-                    dict(item.get("attribution") or {}) for item in embeddings
-                ],
             )
             total_cost_amount = float(record.cost_amount)
             currency_code = record.currency_code

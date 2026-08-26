@@ -32,6 +32,7 @@ from .orchestrator import (
     _validate_provider_probe_timeout,
     _coerce_input_text,
     _new_chat_completion_id,
+    _responses_to_chat_payload,
     chat_completion_chunks,
     chat_completion_response,
     text_completion_response,
@@ -145,7 +146,10 @@ ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_PROVIDER_READINESS_REFRESH_KEYS = {
     "agent_ids", "capability_code", "timeout_seconds"
 }
-ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions", "group_name"}
+ALLOWED_AGENT_PATCH_KEYS = {
+    "status", "priority", "tags", "provider_exclusions", "group_name",
+    "endpoint_equivalence",
+}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
     "model",
@@ -158,6 +162,7 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_name",
     "provider_exclusions",
     "group_name",
+    "endpoint_equivalence",
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
@@ -2165,12 +2170,18 @@ def _require_pool_model(
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
     """
-    agents = getattr(orchestrator, "agents", None) or []
+    agents = [
+        agent
+        for agent in (getattr(orchestrator, "agents", None) or [])
+        if not getattr(agent, "disabled", False)
+    ]
     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
         if required_capability is None:
-            if model_name == TaskOrchestrator.AUTO_MODEL or any(
-                orchestrator._is_free_agent(agent) for agent in agents
-            ):
+            if model_name == TaskOrchestrator.AUTO_MODEL:
+                if agents:
+                    return model_name
+                raise RequestError(400, "invalid_model", "no enabled model is available")
+            if any(orchestrator._is_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
         try:
@@ -5274,17 +5285,41 @@ def build_server(
                         security_profile=security.readiness_profile(),
                     ))
                     return
-                if path == "/api/v1/buyer_evidence_manifests/latest":
-                    self._send(orchestrator.buyer_evidence_manifest_report(
+                if path == "/api/v1/commercial_evidence_manifests/latest":
+                    self._send(orchestrator.commercial_evidence_manifest_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
                     ))
                     return
-                if path == "/api/v1/buyer_handoff_bundles/latest":
-                    self._send(orchestrator.buyer_handoff_bundle_report(
+                if path == "/api/v1/commercial_handoff_bundles/latest":
+                    self._send(orchestrator.commercial_handoff_bundle_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
                     ))
+                    return
+                if path == "/api/v1/buyer_evidence_manifests/latest":
+                    self._send(
+                        orchestrator.commercial_evidence_manifest_report(
+                            locale_bundles=ADMIN_TRANSLATIONS,
+                            security_profile=security.readiness_profile(),
+                        ),
+                        extra_headers={
+                            "deprecation": "true",
+                            "link": '</api/v1/commercial_evidence_manifests/latest>; rel="successor-version"',
+                        },
+                    )
+                    return
+                if path == "/api/v1/buyer_handoff_bundles/latest":
+                    self._send(
+                        orchestrator.commercial_handoff_bundle_report(
+                            locale_bundles=ADMIN_TRANSLATIONS,
+                            security_profile=security.readiness_profile(),
+                        ),
+                        extra_headers={
+                            "deprecation": "true",
+                            "link": '</api/v1/commercial_handoff_bundles/latest>; rel="successor-version"',
+                        },
+                    )
                     return
                 if path == "/api/v1/saleability_decisions/latest":
                     self._send(orchestrator.saleability_decision_report(
@@ -5988,7 +6023,8 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    _validate_completions_model(body)
+                    model_name = _validate_completions_model(body)
+                    _require_pool_model(orchestrator, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -6014,10 +6050,7 @@ def build_server(
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if any(
-                        key in body and body.get(key) is not None
-                        for key in PASSTHROUGH_TRIGGER_KEYS
-                    ):
+                    if body.get("response_format") or tools_list:
                         response_format = body.get("response_format")
                         requested_model = body.get("model")
                         if (
@@ -6029,10 +6062,7 @@ def build_server(
                                 TaskOrchestrator.FREE_MODEL,
                                 "contextual-orchestrator",
                             }
-                            and not any(
-                                body.get(key) is not None
-                                for key in ("tools", "tool_choice", "functions", "function_call")
-                            )
+                            and not tools_list
                         ):
                             if stream:
                                 raise RequestError(
@@ -6056,45 +6086,89 @@ def build_server(
                                 frequency_penalty=frequency_penalty,
                                 request_deadline_monotonic=request_deadline,
                             ):
-                                result = self._run(
-                                    lambda: coordinator.complete_structured(
-                                        messages,
-                                        response_format=response_format,
-                                        attribution=attribution,
-                                        model_name=requested_model,
-                                        workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                result = self._run(lambda: coordinator.complete_structured(
+                                    messages,
+                                    response_format=response_format,
+                                    attribution=attribution,
+                                    model_name=requested_model,
+                                    workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                ))
+                            orchestrator.record_analytics_event("chat_completion_structured", {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "workflow_run_id": result["workflow_run_id"],
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            })
+                            self._send(chat_completion_response(
+                                result,
+                                model=requested_model,
+                                include_trace=self._trace_requested(body, "/v1/chat/completions"),
+                                usage=result.get("usage"),
+                            ))
+                            return
+                        tool_loop = bool(tools_list)
+                        started_at = time.perf_counter()
+                        if tool_loop:
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                proxied = self._run(
+                                    lambda: orchestrator.proxy_completion(
+                                        body,
+                                        endpoint="chat/completions",
+                                        single_agent=True,
                                     )
                                 )
-                            orchestrator.record_analytics_event(
-                                "chat_completion_structured",
-                                {
-                                    "endpoint_path": "/v1/chat/completions",
-                                    "actor_scope": "inference",
-                                    "status_code": 200,
-                                    "workflow_run_id": result["workflow_run_id"],
-                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                                },
-                            )
-                            self._send(
-                                chat_completion_response(
-                                    result,
-                                    model=requested_model,
-                                    include_trace=self._trace_requested(body, "/v1/chat/completions"),
-                                    usage=result.get("usage"),
+                        else:
+                            structured_messages = _validate_messages(body.get("messages"))
+                            structured_routing = _validate_routing(body.get("routing"))
+                            if structured_routing and (
+                                structured_routing.get("channel") == "batch"
+                                or structured_routing.get("latency_tolerant") is True
+                            ):
+                                raise RequestError(
+                                    400,
+                                    "invalid_routing",
+                                    "batch routing is not supported for structured chat responses",
                                 )
+                            structured_attribution = dict(
+                                _validate_attribution(body.get("attribution")) or {}
                             )
-                            return
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
-                        started_at = time.perf_counter()
-                        with orchestrator.client.request_settings(
-                            request_deadline_monotonic=request_deadline
-                        ):
-                            proxied = self._run(
-                                lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
-                            )
+                            end_user_id = _validate_completions_user(body)
+                            if end_user_id is not None and not structured_attribution.get("account"):
+                                structured_attribution["account"] = end_user_id
+                            structured_attribution.setdefault("model_name", body["model"])
+                            structured_attribution.setdefault("service", "chat_completions_api")
+                            with orchestrator.client.request_settings(
+                                max_output_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                presence_penalty=presence_penalty,
+                                frequency_penalty=frequency_penalty,
+                                request_deadline_monotonic=request_deadline,
+                            ):
+                                proxied = self._run(
+                                    lambda: coordinator.complete(
+                                        structured_messages,
+                                        mode="conduct",
+                                        attribution=structured_attribution,
+                                        hints=structured_routing,
+                                        model_name=body["model"],
+                                        provider_request=body,
+                                    )
+                                )
                         orchestrator.record_analytics_event(
-                            "chat_completion_passthrough",
+                            (
+                                # Plain tools passthrough vs conducted-evidence
+                                # + synthesis: the structured path runs a full
+                                # evidence workflow before synthesis, so it is
+                                # reported under its own conducted label rather
+                                # than the passthrough one.
+                                "chat_completion_passthrough"
+                                if tool_loop
+                                else "chat_completion_conducted"
+                            ),
                             {
                                 "endpoint_path": "/v1/chat/completions",
                                 "actor_scope": "inference",
@@ -6112,8 +6186,8 @@ def build_server(
                     routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid
                     # which deployment the buyer selected on the chat Completions path.
-                    model_name = _validate_completions_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    # The pool was validated before the structured/passthrough
+                    # branch so every chat shape shares the same client-error contract.
                     attribution = dict(attribution or {})
                     # OpenAI chat ``user`` → account when unset.
                     # Same fail-closed rules as Completions: present key must be a
@@ -6700,14 +6774,65 @@ def build_server(
                         )
                         return
                     started_at = time.perf_counter()
-                    with orchestrator.client.request_settings(
-                        request_deadline_monotonic=request_deadline
-                    ):
-                        proxied = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                    tool_loop = bool(body.get("tools"))
+                    if tool_loop:
+                        with orchestrator.client.request_settings(
+                            request_deadline_monotonic=request_deadline
+                        ):
+                            proxied = self._run(
+                                lambda: orchestrator.proxy_completion(
+                                    body,
+                                    endpoint="responses",
+                                    single_agent=True,
+                                )
+                            )
+                    else:
+                        responses_messages = _responses_to_chat_payload(body)["messages"]
+                        responses_attribution = dict(
+                            _validate_attribution(body.get("attribution")) or {}
                         )
+                        responses_user_id = _validate_completions_user(body)
+                        if responses_user_id is not None and not responses_attribution.get("account"):
+                            responses_attribution["account"] = responses_user_id
+                        responses_attribution.setdefault("model_name", body["model"])
+                        responses_attribution.setdefault("service", "responses_api")
+                        response_max_tokens = next(
+                            (
+                                body.get(key)
+                                for key in (
+                                    "max_output_tokens",
+                                    "max_completion_tokens",
+                                    "max_tokens",
+                                )
+                                if body.get(key) is not None
+                            ),
+                            None,
+                        )
+                        with orchestrator.client.request_settings(
+                            max_output_tokens=response_max_tokens,
+                            temperature=body.get("temperature"),
+                            top_p=body.get("top_p"),
+                            presence_penalty=body.get("presence_penalty"),
+                            frequency_penalty=body.get("frequency_penalty"),
+                            request_deadline_monotonic=request_deadline,
+                        ):
+                            proxied = self._run(
+                                lambda: coordinator.complete(
+                                    responses_messages,
+                                    mode="conduct",
+                                    attribution=responses_attribution,
+                                    hints=_validate_routing(body.get("routing")),
+                                    model_name=body["model"],
+                                    provider_request=body,
+                                    provider_endpoint="responses",
+                                )
+                            )
                     orchestrator.record_analytics_event(
-                        "responses_passthrough",
+                        (
+                            "responses_passthrough"
+                            if tool_loop
+                            else "responses_conducted"
+                        ),
                         {
                             "endpoint_path": "/v1/responses",
                             "actor_scope": "inference",
