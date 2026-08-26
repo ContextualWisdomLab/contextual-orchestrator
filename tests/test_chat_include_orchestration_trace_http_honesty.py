@@ -116,7 +116,7 @@ def test_trace_access_is_audited_before_response_release() -> None:
     workflow_index = next(
         index for index, event in enumerate(events) if event["event_type"] == "workflow_run_created"
     )
-    assert access_index < workflow_index
+    assert workflow_index < access_index
 
 
 def test_trace_is_not_released_when_audit_persistence_fails() -> None:
@@ -124,8 +124,12 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
         lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
     )
 
-    def fail_audit(_event_type: str, _detail: dict) -> None:
-        raise OSError("audit store unavailable")
+    append_audit_event = orchestrator._append_audit_event
+
+    def fail_audit(event_type: str, detail: dict) -> None:
+        if event_type == "orchestration_trace_access_granted":
+            raise OSError("audit store unavailable")
+        append_audit_event(event_type, detail)
 
     orchestrator._append_audit_event = fail_audit  # type: ignore[method-assign]
     try:
@@ -227,6 +231,57 @@ def test_structured_chat_does_not_audit_trace_disclosure_it_never_returns() -> N
         thread.join(timeout=5)
     assert status == 200, body
     assert "trace" not in body.get("orchestration", {})
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
+def test_invalid_chat_does_not_audit_trace_disclosure() -> None:
+    """Do not record a grant when request validation prevents disclosure."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, _body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": "not-an-array",
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
+def test_batched_chat_does_not_audit_trace_disclosure() -> None:
+    """A 202 job handle is not a trace disclosure."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "later"}],
+                "routing": {"latency_tolerant": True},
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 202, body
     assert not any(
         event["event_type"] == "orchestration_trace_access_granted"
         for event in orchestrator._audit_events

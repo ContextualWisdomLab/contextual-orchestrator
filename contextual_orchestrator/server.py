@@ -5114,7 +5114,8 @@ def build_server(
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
                     if security.expose_trace_by_default:
-                        self._authorize_trace_access("/admin/state")
+                        self._authorize_trace_access()
+                        self._audit_trace_disclosure("/admin/state")
                     self._send(_response_payload(state, security.expose_trace_by_default))
                     return
                 if path == "/api/v1/agent_pools":
@@ -5330,7 +5331,8 @@ def build_server(
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
                     owner_id = security.principal_id(self.headers)
                     if security.expose_trace_by_default:
-                        self._authorize_trace_access("/api/v1/workflow_runs")
+                        self._authorize_trace_access()
+                        self._audit_trace_disclosure("/api/v1/workflow_runs")
                     self._send(_response_payload({
                         "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size, owner_id=owner_id),
                         "total_count": orchestrator.count_workflow_runs(owner_id=owner_id),
@@ -5342,8 +5344,11 @@ def build_server(
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
                         if security.expose_trace_by_default:
-                            self._authorize_trace_access("/api/v1/workflow_runs/{workflow_run_id}")
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
+                            self._authorize_trace_access()
+                        workflow_run = orchestrator.get_workflow_run(workflow_run_id, owner_id=security.principal_id(self.headers))
+                        if security.expose_trace_by_default:
+                            self._audit_trace_disclosure("/api/v1/workflow_runs/{workflow_run_id}")
+                        self._send(_response_payload(workflow_run, security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -5351,7 +5356,7 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._authorize_trace_access("/api/v1/access_reports/{workflow_run_id}")
+                        self._authorize_trace_access()
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
                             {
@@ -5370,8 +5375,11 @@ def build_server(
                     evaluation_run_id = path.rsplit("/", 1)[-1]
                     try:
                         if security.expose_trace_by_default:
-                            self._authorize_trace_access("/api/v1/evaluation_runs/{evaluation_run_id}")
-                        self._send(_response_payload(orchestrator.get_evaluation_run(evaluation_run_id, owner_id=security.principal_id(self.headers)), security.expose_trace_by_default))
+                            self._authorize_trace_access()
+                        evaluation_run = orchestrator.get_evaluation_run(evaluation_run_id, owner_id=security.principal_id(self.headers))
+                        if security.expose_trace_by_default:
+                            self._audit_trace_disclosure("/api/v1/evaluation_runs/{evaluation_run_id}")
+                        self._send(_response_payload(evaluation_run, security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
@@ -5900,7 +5908,7 @@ def build_server(
                         self._send(proxied)
                         return
                     if include_trace:
-                        self._authorize_trace_access("/v1/chat/completions")
+                        self._authorize_trace_access()
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     # stream + stream_options already coerced/validated before passthrough.
@@ -5934,6 +5942,8 @@ def build_server(
                         frequency_penalty=frequency_penalty,
                     ):
                         if stream and orchestrator.would_route(messages, mode, model_name):
+                            if include_trace:
+                                self._audit_trace_disclosure("/v1/chat/completions")
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
@@ -5984,9 +5994,13 @@ def build_server(
                         },
                     )
                     if stream:
+                        if include_trace:
+                            self._audit_trace_disclosure("/v1/chat/completions")
                         chunks = chat_completion_chunks(result, model=model_name, include_trace=include_trace)
                         self._send_sse(sse_stream_body(chunks))
                         return
+                    if include_trace:
+                        self._audit_trace_disclosure("/v1/chat/completions")
                     self._send(chat_completion_response(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
@@ -6199,12 +6213,13 @@ def build_server(
                     return
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
-                    self._authorize_trace_access("/api/v1/batch_routing_jobs/{job_id}/results")
+                    self._authorize_trace_access()
                     try:
                         retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
+                    self._audit_trace_disclosure("/api/v1/batch_routing_jobs/{job_id}/results")
                     self._send(_response_payload(retrieved, include_trace=True))
                     return
                 if path == "/v1/responses":
@@ -6512,8 +6527,10 @@ def build_server(
                     mode = _validate_mode(body.get("mode", "auto"))
                     include_trace = self._validate_trace_request(body)
                     if include_trace:
-                        self._authorize_trace_access("/admin/simulate")
+                        self._authorize_trace_access()
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    if include_trace:
+                        self._audit_trace_disclosure("/admin/simulate")
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -6524,8 +6541,10 @@ def build_server(
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = self._validate_trace_request(body)
                     if include_trace:
-                        self._authorize_trace_access("/api/v1/workflow_runs")
+                        self._authorize_trace_access()
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    if include_trace:
+                        self._audit_trace_disclosure("/api/v1/workflow_runs")
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -6538,8 +6557,10 @@ def build_server(
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = self._validate_trace_request(body)
                     if include_trace:
-                        self._authorize_trace_access("/api/v1/evaluation_runs")
+                        self._authorize_trace_access()
                     evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
+                    if include_trace:
+                        self._audit_trace_disclosure("/api/v1/evaluation_runs")
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -6646,9 +6667,12 @@ def build_server(
                 raise RequestError(401, "unauthorized", "bearer token is required")
             return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-        def _authorize_trace_access(self, endpoint_path: str) -> None:
-            """Authorize and durably record a trace-purpose access decision."""
+        def _authorize_trace_access(self) -> None:
+            """Authorize trace-purpose access before protected work begins."""
             self._authorize("trace")
+
+        def _audit_trace_disclosure(self, endpoint_path: str) -> None:
+            """Durably record a trace disclosure immediately before release."""
             try:
                 orchestrator._append_audit_event(  # noqa: SLF001 - server owns the release gate
                     "orchestration_trace_access_granted",
