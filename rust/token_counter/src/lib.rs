@@ -22,6 +22,36 @@ fn checked_token_total(current: usize, additional: usize) -> PyResult<usize> {
         .ok_or_else(|| PyValueError::new_err("request token total overflow"))
 }
 
+fn utf8_token_ranges(
+    tokenizer: &tiktoken_rs::CoreBPE,
+    tokens: &[u32],
+    max_tokens_per_input: usize,
+) -> PyResult<Vec<(usize, usize, String)>> {
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    while start < tokens.len() {
+        let ceiling = start
+            .checked_add(max_tokens_per_input)
+            .map(|value| value.min(tokens.len()))
+            .ok_or_else(|| PyValueError::new_err("token range overflow"))?;
+        let mut end = ceiling;
+        let decoded = loop {
+            if end == start {
+                return Err(PyValueError::new_err(
+                    "token limit cannot preserve a complete UTF-8 scalar",
+                ));
+            }
+            match tokenizer.decode(tokens[start..end].to_vec()) {
+                Ok(text) => break text,
+                Err(_) => end -= 1,
+            }
+        };
+        ranges.push((start, end, decoded));
+        start = end;
+    }
+    Ok(ranges)
+}
+
 #[pyfunction]
 fn sum_token_counts(values: Vec<usize>) -> PyResult<usize> {
     values.into_iter().try_fold(0usize, checked_token_total)
@@ -81,24 +111,16 @@ fn pack_cl100k(
         .collect();
     let mut parts = Vec::new();
     for (source_index, tokens) in encoded.iter().enumerate() {
-        let part_count = tokens.len().div_ceil(max_tokens_per_input);
-        for (part_index, slice) in tokens.chunks(max_tokens_per_input).enumerate() {
-            let token_start = part_index
-                .checked_mul(max_tokens_per_input)
-                .ok_or_else(|| PyValueError::new_err("token range overflow"))?;
-            let token_end = token_start
-                .checked_add(slice.len())
-                .ok_or_else(|| PyValueError::new_err("token range overflow"))?;
-            let text = tokenizer
-                .decode(slice.to_vec())
-                .map_err(|_| PyValueError::new_err("token decode failed"))?;
+        let ranges = utf8_token_ranges(&tokenizer, tokens, max_tokens_per_input)?;
+        let part_count = ranges.len();
+        for (part_index, (token_start, token_end, text)) in ranges.into_iter().enumerate() {
             parts.push(PackedPart {
                 source_index,
                 part_index,
                 part_count,
                 token_start,
                 token_end,
-                token_count: slice.len(),
+                token_count: token_end - token_start,
                 text,
             });
         }
@@ -156,6 +178,31 @@ mod tests {
                 inputs.iter().map(String::as_str).collect::<Vec<_>>()
             );
             assert_eq!(shards.iter().flatten().count(), parts.len());
+        });
+    }
+
+    #[test]
+    fn utf8_boundary_retreats_to_a_complete_scalar_or_fails_closed() {
+        Python::with_gil(|_| {
+            let input = format!("{}🙂", exact_token_text(8191));
+            let tokenizer = cl100k_base().unwrap();
+            assert_eq!(tokenizer.encode_ordinary(&input).len(), 8193);
+            let (parts, _) = pack_cl100k(vec![input.clone()], 8192, 2048, 300_000).unwrap();
+            assert_eq!(
+                parts
+                    .iter()
+                    .map(|part| part.text.as_str())
+                    .collect::<String>(),
+                input
+            );
+            assert_eq!(
+                parts
+                    .iter()
+                    .map(|part| part.token_count)
+                    .collect::<Vec<_>>(),
+                vec![8191, 2]
+            );
+            assert!(pack_cl100k(vec!["🙂".into()], 1, 2048, 300_000).is_err());
         });
     }
 
