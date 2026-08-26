@@ -782,6 +782,18 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        "/v1/batch/embeddings/capabilities": {
+            "get": {
+                "operationId": "get_batch_embeddings_capabilities",
+                "summary": "Read enforced bulk request and provider partition ceilings",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {
+                    "200": {
+                        "description": "Enforced max_request_body_bytes, max_tokens_per_part, and max_chars_per_part"
+                    }
+                },
+            }
+        },
         "/api/v1/access_reports/{workflow_run_id}": {
             "get": {
                 "operationId": "get_access_report",

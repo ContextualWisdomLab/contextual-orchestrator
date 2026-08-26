@@ -466,6 +466,15 @@ class CostRoutingCoordinator:
         )
         return max_tokens, max_chars
 
+    def embedding_batch_capabilities(self, *, max_request_body_bytes: int) -> Dict[str, int]:
+        """Publish the enforced bulk-request and provider-part ceilings."""
+        max_tokens, max_chars = self._embedding_request_limits()
+        return {
+            "max_request_body_bytes": max_request_body_bytes,
+            "max_tokens_per_part": max_tokens,
+            "max_chars_per_part": max_chars,
+        }
+
     def _split_embedding_input(
         self,
         text: str,
