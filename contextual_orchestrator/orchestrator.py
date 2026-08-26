@@ -3233,6 +3233,22 @@ class TaskOrchestrator:
             return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         return None
 
+    @staticmethod
+    def _structured_contract_messages(
+        messages: list[ChatMessage], schema: dict[str, Any]
+    ) -> list[ChatMessage]:
+        """Attach the schema as a caller instruction for every conduct role."""
+        return [
+            *messages,
+            {
+                "role": "system",
+                "content": (
+                    "The final answer must be one JSON value satisfying this Draft 2020-12 schema:\n"
+                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                ),
+            },
+        ]
+
     def _repair_structured_answer(
         self,
         messages: list[ChatMessage],
@@ -3322,8 +3338,9 @@ class TaskOrchestrator:
         failed_token = self._request_failed_agents.set(set())
         admitted_token = self._request_admitted_agents.set(admitted)
         try:
+            structured_messages = self._structured_contract_messages(messages, schema)
             result = self.complete(
-                messages,
+                structured_messages,
                 mode="conduct",
                 bypass_cache=True,
                 model_name=model_name,
@@ -3382,7 +3399,10 @@ class TaskOrchestrator:
         try:
             with self.client.request_settings(request_deadline_monotonic=deadline):
                 synthesis = self._conduct_request(
-                    [{"role": "user", "content": "Return whether this request is valid."}],
+                    self._structured_contract_messages(
+                        [{"role": "user", "content": "Return whether this request is valid."}],
+                        schema,
+                    ),
                     model_name=self.AUTO_MODEL,
                 )
                 self._repair_structured_answer([], synthesis["answer"], schema, frozenset({agent.id}))

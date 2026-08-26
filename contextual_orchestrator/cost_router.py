@@ -617,8 +617,11 @@ class CostRoutingCoordinator:
             owner_id=owner_id,
             model_name=model_name,
         )
+        cost_messages = self.orchestrator._structured_contract_messages(
+            messages, response_format["json_schema"]["schema"]
+        )
         record = self._record_completion(
-            messages=messages,
+            messages=cost_messages,
             answer=result["answer"],
             route_mode=result["mode"],
             request_channel="sync",

@@ -146,14 +146,20 @@ def test_virtual_structured_repair_defers_when_all_candidates_return_invalid_jso
 
 def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() -> None:
     calls: list[str] = []
+    saw_schema_instruction = False
 
     class PlainOnly(ModelClient):
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
             raise AssertionError("readiness must not use native response_format")
 
         def chat(self, agent, messages, **kwargs):  # type: ignore[override]
-            del messages, kwargs
+            nonlocal saw_schema_instruction
+            del kwargs
             calls.append(agent.id)
+            saw_schema_instruction = saw_schema_instruction or any(
+                "Draft 2020-12 schema" in str(message.get("content", ""))
+                for message in messages
+            )
             return '{"ok":true}'
 
     unprobed = ModelAgent("unprobed_primary", "mock")
@@ -163,6 +169,7 @@ def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() 
     assert result["status"] == "ready"
     assert len(calls) > 1
     assert set(calls) == {"plain_only"}
+    assert saw_schema_instruction
 
 
 def test_json_schema_contract_accepts_nullable_enum_and_rejects_unknown_keyword() -> None:
