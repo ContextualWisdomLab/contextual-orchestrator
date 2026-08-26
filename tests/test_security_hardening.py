@@ -386,6 +386,17 @@ def test_concurrency_limit_rejects_unbounded_or_non_integer_configuration() -> N
             raise AssertionError("invalid max_concurrent_runs configuration was accepted")
 
 
+def test_rate_limit_rejects_non_positive_configuration() -> None:
+    for field in ("rate_limit_requests", "rate_limit_window_seconds"):
+        for value in (0, -1, False):
+            try:
+                SecurityConfig(**{field: value})
+            except ValueError as exc:
+                assert field in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError(f"invalid {field} configuration was accepted")
+
+
 def test_chat_completion_response_requires_explicit_trace() -> None:
     result = {
         "mode": "route",

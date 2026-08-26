@@ -18,7 +18,7 @@ fn exact_tokenizer() -> PyResult<&'static tiktoken_rs::CoreBPE> {
         .ok_or_else(|| PyValueError::new_err("cl100k initialization failed"))
 }
 
-#[pyclass(get_all)]
+#[pyclass(get_all, skip_from_py_object)]
 #[derive(Clone)]
 struct PackedPart {
     source_index: usize,
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn utf8_korean_emoji_combining_and_order_are_preserved() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             let inputs = vec!["한국어🙂e\u{301}".into(), "두 번째🙂".into()];
             let (parts, shards) = pack_cl100k(inputs.clone(), 8192, 2048, 300_000).unwrap();
             assert!(parts.iter().all(|part| part.token_count <= 8192));
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn utf8_boundary_retreats_to_a_complete_scalar_or_fails_closed() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             let input = format!("{}🙂", exact_token_text(8191));
             let tokenizer = cl100k_base().unwrap();
             assert_eq!(tokenizer.encode_ordinary(&input).len(), 8193);
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_input_and_nonpositive_limits() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             assert!(pack_cl100k(vec![String::new()], 8192, 2048, 300_000).is_err());
             assert!(pack_cl100k(vec!["x".into()], 0, 2048, 300_000).is_err());
         });
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn per_input_boundary_is_exact_at_8192_and_8193() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             let (exact, _) =
                 pack_cl100k(vec![exact_token_text(8192)], 8192, 2048, 300_000).unwrap();
             assert_eq!(
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn total_token_boundary_is_exact_at_300000_and_300001() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             let inputs = vec![exact_token_text(7500); 40];
             let (_, exact) = pack_cl100k(inputs, 8192, 2048, 300_000).unwrap();
             assert_eq!(exact.len(), 1);
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn total_token_limit_also_bounds_each_part() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             let (parts, shards) = pack_cl100k(vec![exact_token_text(9)], 10, 2, 8).unwrap();
             assert_eq!(
                 parts
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn input_count_boundary_is_exact_at_2048_and_2049() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             let (_, exact) = pack_cl100k(vec!["x".into(); 2048], 8192, 2048, 300_000).unwrap();
             assert_eq!(exact.iter().map(Vec::len).collect::<Vec<_>>(), vec![2048]);
             let (_, over) = pack_cl100k(vec!["x".into(); 2049], 8192, 2048, 300_000).unwrap();
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn checked_total_fails_closed_on_integer_overflow() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             assert!(checked_token_total(usize::MAX, 1).is_err());
             assert!(sum_token_counts(vec![usize::MAX, 1]).is_err());
         });
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn vector_reduction_and_token_sum_are_rust_owned() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             assert_eq!(sum_token_counts(vec![2, 3, 5]).unwrap(), 10);
             assert_eq!(
                 weighted_average_embeddings(vec![(vec![1.0, 3.0], 1), (vec![3.0, 5.0], 3)])
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn exact_count_cosine_and_rmse_are_rust_owned() {
-        Python::with_gil(|_| {
+        Python::attach(|_| {
             assert_eq!(count_cl100k("hello world").unwrap(), 2);
             assert_eq!(
                 cosine_similarity(vec![1.0, 0.0], vec![1.0, 0.0]).unwrap(),

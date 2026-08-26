@@ -1514,15 +1514,17 @@ class CostRoutingCoordinator:
                 "model": model_name,
                 "embeddings": None,
             }
-        if status.get("status") == "failed":
+        if status.get("status") in {"cancelled", "failed"}:
+            terminal_status = status["status"]
             document = {
                 "batch_id": batch_id,
-                "status": "failed",
+                "status": terminal_status,
                 "backend": job.backend,
                 "model": model_name,
                 "embeddings": None,
-                "failure": dict(status.get("failure") or {}),
             }
+            detail_key = "cancellation" if terminal_status == "cancelled" else "failure"
+            document[detail_key] = dict(status.get(detail_key) or {})
             self._embedding_documents[batch_id] = document
             return document
 
@@ -1724,24 +1726,28 @@ class CostRoutingCoordinator:
 
     def cancel_embeddings_batch(self, batch_id: str, *, reason: str) -> Dict[str, Any]:
         """Cancel a provider batch through its durable backend state."""
-        job = self._require_embedding_job(batch_id)
-        backend = self._embedding_backend_for_job(batch_id)
-        cancel = getattr(backend, "cancel", None)
-        if not callable(cancel):
-            raise ValueError("embedding batch backend does not support cancellation")
-        status = cancel(job, reason=reason)
-        if status["status"] != "cancelled":
-            return self.embeddings_batch_document(batch_id)
-        document = {
-            "batch_id": batch_id,
-            "status": status["status"],
-            "backend": job.backend,
-            "model": self._embedding_models.get(batch_id, "contextual-orchestrator"),
-            "embeddings": None,
-            "cancellation": dict(status.get("cancellation") or {}),
-        }
-        self._embedding_documents[batch_id] = document
-        return document
+        with self.job_registry.lock(
+            "embedding_document_materialization", batch_id,
+            lease_seconds=self._embedding_document_lease_seconds(),
+        ):
+            job = self._require_embedding_job(batch_id)
+            backend = self._embedding_backend_for_job(batch_id)
+            cancel = getattr(backend, "cancel", None)
+            if not callable(cancel):
+                raise ValueError("embedding batch backend does not support cancellation")
+            status = cancel(job, reason=reason)
+            if status["status"] != "cancelled":
+                return self._embeddings_batch_document_locked(batch_id)
+            document = {
+                "batch_id": batch_id,
+                "status": status["status"],
+                "backend": job.backend,
+                "model": self._embedding_models.get(batch_id, "contextual-orchestrator"),
+                "embeddings": None,
+                "cancellation": dict(status.get("cancellation") or {}),
+            }
+            self._embedding_documents[batch_id] = document
+            return document
 
     def _require_embedding_job(self, batch_id: str) -> BatchJob:
         job = self._embedding_jobs.get(batch_id)

@@ -325,6 +325,26 @@ def test_embeddings_document_incomplete_status_has_no_vectors() -> None:
     assert document["status"] == "in_progress"
 
 
+def test_embeddings_document_preserves_cancelled_backend_status() -> None:
+    class _CancelledBackend(_DroppingEmbeddingBackend):
+        def poll(self, job: BatchJob) -> Dict[str, Any]:
+            return {
+                "job_id": job.job_id,
+                "status": "cancelled",
+                "is_complete": True,
+                "cancellation": {"reason": "operator"},
+            }
+
+        def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+            raise AssertionError("cancelled batches must not retrieve vectors")
+
+    coordinator = _coordinator(embedding_batch_backend=_CancelledBackend())
+    job = coordinator.submit_embeddings_batch(["later"])
+    document = coordinator.embeddings_batch_document(job.job_id)
+    assert document["status"] == "cancelled"
+    assert document["cancellation"] == {"reason": "operator"}
+
+
 def test_cost_report_delegates_to_ledger_window() -> None:
     ledger = CostLedger(PriceBook(InMemoryConfigStore()))
     coordinator = _coordinator(ledger=ledger)

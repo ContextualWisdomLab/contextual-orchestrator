@@ -265,6 +265,10 @@ class SecurityConfig:
             raise ValueError("split token mode requires both admin_token and inference_token")
         if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
             raise ValueError("max_body_bytes must be a positive integer")
+        if type(self.rate_limit_requests) is not int or self.rate_limit_requests < 1:
+            raise ValueError("rate_limit_requests must be a positive integer")
+        if type(self.rate_limit_window_seconds) is not int or self.rate_limit_window_seconds < 1:
+            raise ValueError("rate_limit_window_seconds must be a positive integer")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"

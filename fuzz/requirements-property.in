@@ -3,3 +3,4 @@ pip
 hypothesis>=6.100
 pytest
 cryptography>=43.0
+jsonschema>=4.23,<5

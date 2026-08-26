@@ -1087,7 +1087,7 @@ class SqlLedgerStore:
         if rows:
             placeholder = "?" if self._paramstyle == "qmark" else "%s"
             identifiers = tuple(str(row["usage_record_id"]) for row in rows)
-            cur.execute(
+            cur.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- placeholders are fixed-count; values stay bound below
                 "SELECT usage_record_id, input_index, dimension_name, dimension_value "
                 "FROM usage_record_input_attributions WHERE usage_record_id IN ("
                 + ", ".join(placeholder for _ in identifiers)

@@ -62,5 +62,6 @@ RUN set -eu; \
       --with-requirements requirements.lock \
       --with-requirements fuzz/requirements-property.txt \
       --with "$1" python -m pytest -q
+USER orchestrator
 
 FROM runtime-base AS runtime
