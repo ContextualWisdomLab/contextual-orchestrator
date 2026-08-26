@@ -90,7 +90,11 @@ def test_rendered_compose_keeps_browser_off_the_default_network() -> None:
 
 def test_deployment_docs_do_not_treat_dev_postgres_or_doh_as_proven() -> None:
     """Keep the documented runtime boundary no stronger than current evidence."""
-    text = (COMPOSE.parent / "docs" / "kv-credentials.md").read_text(encoding="utf-8")
+    text = " ".join(
+        (COMPOSE.parent / "docs" / "kv-credentials.md")
+        .read_text(encoding="utf-8")
+        .split()
+    )
     assert "plaintext development PostgreSQL service" in text
     assert "cannot satisfy this prerequisite" in text
     assert "does not assert that the browser refuses all DoH requests" in text
