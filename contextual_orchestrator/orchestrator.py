@@ -184,6 +184,7 @@ class _FastMLSIJudgeAdapter:
         return self.orchestrator.client
 
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
+        """Return one judge completion through the constrained adapter."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
         output, served_id, usage = self.orchestrator._invoke(
@@ -2111,6 +2112,7 @@ class _AgentPoolStore:
         conn.execute("DROP TABLE agent_pool_legacy_payloads")
 
     def save(self, agent: "ModelAgent") -> None:
+        """Persist one normalized model-agent definition."""
         with self._lock:
             conn = self._connect(self._path)
             try:
@@ -2182,6 +2184,7 @@ class _AgentPoolStore:
                 conn.close()
 
     def load_all(self) -> list["ModelAgent"]:
+        """Load every persisted model-agent definition."""
         with self._lock:
             conn = self._connect(self._path)
             try:
@@ -2322,6 +2325,7 @@ class _StateStore:
             self._conn.execute(drop_index_sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any], *, durable: bool = False) -> None:
+        """Persist one typed state record, optionally on the durable path."""
         if kind in self._STREAM_LIMITS and not durable:
             with self._stream_condition:
                 if self._stream_closing:
@@ -2379,6 +2383,7 @@ class _StateStore:
                 self._stream_condition.wait()
 
     def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
+        """Load typed state records in insertion order."""
         self._flush_streams()
         with self._lock:
             if limit is None:
@@ -2414,6 +2419,7 @@ class _ResponseCache:
         self._data: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
 
     def get(self, key: str) -> dict[str, Any] | None:
+        """Return a detached cached response when it remains valid."""
         with self._lock:
             entry = self._data.get(key)
             if entry is None:
@@ -2426,6 +2432,7 @@ class _ResponseCache:
             return copy.deepcopy(value)
 
     def put(self, key: str, value: dict[str, Any]) -> None:
+        """Store a detached response and evict least-recently-used entries."""
         with self._lock:
             self._data[key] = (self._clock(), copy.deepcopy(value))
             self._data.move_to_end(key)
