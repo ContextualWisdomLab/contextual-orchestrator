@@ -1049,18 +1049,29 @@ class SqlLedgerStore:
             _USAGE_QUERY_SQL[(self._paramstyle, start is not None, end is not None)],
             tuple(params),
         )
-        rows = [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
-        for row in rows:
+        rows = [
+            dict(zip(_USAGE_COLUMNS, values, strict=True)) for values in cur.fetchall()
+        ]
+        inputs_by_record: Dict[str, List[Dict[str, str]]] = {
+            str(row["usage_record_id"]): [] for row in rows
+        }
+        if rows:
+            placeholder = "?" if self._paramstyle == "qmark" else "%s"
+            placeholders = ", ".join(placeholder for _row in rows)
             cur.execute(
-                _INPUT_ATTRIBUTION_SELECT_SQL[self._paramstyle],
-                (row["usage_record_id"],),
+                "SELECT usage_record_id, input_index, dimension_name, dimension_value "
+                "FROM usage_record_input_attributions "
+                f"WHERE usage_record_id IN ({placeholders}) "
+                "ORDER BY usage_record_id, input_index, dimension_name",
+                tuple(row["usage_record_id"] for row in rows),
             )
-            inputs: List[Dict[str, str]] = []
-            for input_index, dimension_name, dimension_value in cur.fetchall():
+            for usage_record_id, input_index, dimension_name, dimension_value in cur.fetchall():
+                inputs = inputs_by_record[str(usage_record_id)]
                 while len(inputs) <= input_index:
                     inputs.append({})
                 inputs[input_index][dimension_name] = dimension_value
-            row["input_attributions"] = inputs
+        for row in rows:
+            row["input_attributions"] = inputs_by_record[str(row["usage_record_id"])]
         return rows
 
 

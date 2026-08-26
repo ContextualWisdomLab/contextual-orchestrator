@@ -293,7 +293,8 @@ def test_valkey_claim_uses_bounded_lease_and_wait_not_result_retention() -> None
             "batch_job_registry:shards:claim:one",
             {
                 "timeout": 90.0,
-                "blocking": False,
+                "blocking": True,
+                "blocking_timeout": 90.0,
             },
         )
     ]

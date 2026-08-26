@@ -23,24 +23,5 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Install test dependencies
-        # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Install both
-        # runtime integrations and the property-test tools exercised below.
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --require-hashes -r fuzz/requirements-property.txt
-
-      - name: Build package-scoped Rust token packer
-        run: |
-          docker run --rm --volume "$PWD:/io" --workdir /io/rust/token_counter \
-            ghcr.io/pyo3/maturin@sha256:b6c8b59a0170b77eb31a35b56034abd39972483ad0ebfff344deaa42a85f3bd3 \
-            build --locked --release --out /io/dist
-          python -m pip install --no-deps dist/*.whl
-
-      - name: Run full test suite
-        run: python -m pytest -q
+      - name: Run hash-locked full test suite
+        run: make test

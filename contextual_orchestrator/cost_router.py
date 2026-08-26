@@ -40,13 +40,14 @@ from .batch_routing import (
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
     ProviderEmbeddingBatchBackend,
+    heuristic_embedding,
     RoutingHints,
     RoutingPolicy,
 )
 from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
-from .token_counting import HeuristicTokenCounter, RustCl100kPacker, build_token_counter
+from .token_counting import RustCl100kPacker, build_token_counter
 from .embedding_capabilities import embedding_model_capability
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
@@ -76,9 +77,7 @@ class CostRoutingCoordinator:
         self.config = config_store or InMemoryConfigStore()
         self.price_book = price_book or PriceBook(self.config)
         self.ledger = ledger or CostLedger(self.price_book)
-        self.token_counter = token_counter or (
-            build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
-        )
+        self.token_counter = token_counter or build_token_counter(postgres_dsn)
         self._cl100k_packer: Any = None
         self.policy = routing_policy or RoutingPolicy(self.config)
         # Job registries live in Valkey when the credential registry carries
@@ -112,7 +111,9 @@ class CostRoutingCoordinator:
             self.batch_backend = batch_backend
         self._embedding_backend_override = embedding_batch_backend
         self._local_embedding_backend = LocalEmbeddingBatchBackend(
-            token_counter=self.token_counter, job_registry=registry
+            embedder=heuristic_embedding,
+            token_counter=self.token_counter,
+            job_registry=registry,
         )
 
         def embed(
@@ -232,8 +233,18 @@ class CostRoutingCoordinator:
                     provider_token_counts.append(chunk_tokens)
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
 
+        def run_provider_embedding_batch(
+            requests: List[EmbeddingBatchRequest],
+        ) -> tuple[List[List[float]], int]:
+            """Run durable work independently of the submitting HTTP deadline."""
+            request_settings = getattr(client, "request_settings", None)
+            if not callable(request_settings):
+                return embed(requests)
+            with request_settings(request_deadline_monotonic=None):
+                return embed(requests)
+
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
-            embed,
+            run_provider_embedding_batch,
             job_registry=registry,
             max_concurrency=getattr(client, "local_concurrency", 1),
             claim_lease_seconds=(
@@ -718,25 +729,34 @@ class CostRoutingCoordinator:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
-        existing_job_id = self._embedding_request_keys.get(request_key)
-        if existing_job_id:
-            existing_job = self._embedding_jobs.get(str(existing_job_id))
-            if existing_job is not None:
-                existing_backend = self._embedding_backend_for_job(existing_job.job_id)
-                existing_status = existing_backend.poll(existing_job).get("status")
-                if existing_status not in {"failed", "cancelled", "rejected"}:
-                    return existing_job
-        backend = backend or self._embedding_backend_for_model(model, routing_agent_id)
-        job = backend.submit(requests, metadata=metadata)
-        self._embedding_job_backends[job.job_id] = backend.name
-        self._embedding_jobs[job.job_id] = job
-        self._embedding_models[job.job_id] = model
-        self._embedding_requests[job.job_id] = requests
-        self._embedding_input_counts[job.job_id] = len(inputs)
-        self._embedding_part_counts[job.job_id] = part_counts
-        self._embedding_part_limits[job.job_id] = part_limits
-        self._embedding_request_keys[request_key] = job.job_id
-        return job
+        with self.job_registry.lock(
+            "embedding_request_keys",
+            request_key,
+            lease_seconds=(
+                self._embedding_claim_lease_seconds()
+                if self.job_registry.durable
+                else None
+            ),
+        ):
+            existing_job_id = self._embedding_request_keys.get(request_key)
+            if existing_job_id:
+                existing_job = self._embedding_jobs.get(str(existing_job_id))
+                if existing_job is not None:
+                    existing_backend = self._embedding_backend_for_job(existing_job.job_id)
+                    existing_status = existing_backend.poll(existing_job).get("status")
+                    if existing_status not in {"failed", "cancelled", "rejected"}:
+                        return existing_job
+            backend = backend or self._embedding_backend_for_model(model, routing_agent_id)
+            job = backend.submit(requests, metadata=metadata)
+            self._embedding_job_backends[job.job_id] = backend.name
+            self._embedding_jobs[job.job_id] = job
+            self._embedding_models[job.job_id] = model
+            self._embedding_requests[job.job_id] = requests
+            self._embedding_input_counts[job.job_id] = len(inputs)
+            self._embedding_part_counts[job.job_id] = part_counts
+            self._embedding_part_limits[job.job_id] = part_limits
+            self._embedding_request_keys[request_key] = job.job_id
+            return job
 
     def _build_embedding_requests(
         self,
@@ -1021,14 +1041,11 @@ class CostRoutingCoordinator:
         )
 
     def _count_embedding_tokens(self, text: str, model: str) -> int:
-        """Count tokens for embedding split decisions, tolerating adapters."""
-        try:
-            value = int(self.token_counter.count_text(text, model))
-        except Exception:
-            value = len(text.split())
-        if text and value <= 0:
-            return 1
-        return max(0, value)
+        """Count tokens exactly for embedding split decisions or fail closed."""
+        value = int(self.token_counter.count_text(text, model))
+        if value < 0 or (text and value == 0):
+            raise RuntimeError("exact token counter returned an invalid count")
+        return value
 
     def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
         """Serialize terminal materialization so cost is recorded exactly once."""
@@ -1172,7 +1189,7 @@ class CostRoutingCoordinator:
                 }
             )
 
-        if provider_batch_tokens is not None:
+        if provider_batch_tokens is not None and input_count > 0:
             # A provider-reported batch total has no defensible per-input
             # allocation. Preserve each input's attribution in ``embeddings``
             # above, and record usage once against common batch dimensions

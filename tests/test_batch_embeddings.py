@@ -48,7 +48,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _provider_limit_contract,
     is_transient_error,
 )
-from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
+from contextual_orchestrator.token_counting import RustCl100kTokenCounter  # noqa: E402
 from contextual_orchestrator.batch_job_registry import JobRegistryFactory  # noqa: E402
 from contextual_orchestrator.embedding_capabilities import EmbeddingModelCapability  # noqa: E402
 
@@ -174,8 +174,9 @@ def test_http_poll_fields_do_not_mutate_cached_embedding_document() -> None:
             token,
         )
         assert status == 200
-        assert "poll_after_ms" not in cached
-        assert "job_retention_ms" not in cached
+        refetched = coordinator.embeddings_batch_document(created["batch_id"])
+        assert "poll_after_ms" not in refetched
+        assert "job_retention_ms" not in refetched
     finally:
         server.shutdown()
 
@@ -379,8 +380,8 @@ def test_provider_backend_context_manager_closes_executor() -> None:
     assert executor is not None and executor._shutdown
 
 
-def test_provider_worker_inherits_caller_deadline() -> None:
-    """The copied worker context retains request-scoped provider settings."""
+def test_provider_worker_detaches_caller_deadline() -> None:
+    """Returned async work is independent of the submitting request's patience."""
     agent = ModelAgent(
         "embedding_worker", "remote-embedding", base_url="https://provider.example/v1",
         provider_name="provider", tags=("embedding",),
@@ -401,7 +402,7 @@ def test_provider_worker_inherits_caller_deadline() -> None:
         coordinator.complete_embeddings_batch(
             ["alpha"], model=agent.model, routing_agent_id=agent.id
         )
-    assert observed == [deadline]
+    assert observed == [None]
 
 
 def test_completed_provider_result_wins_post_wait_deadline_race() -> None:
@@ -1244,12 +1245,24 @@ def test_pending_batch_preserves_resolved_model_identity() -> None:
 
 
 def test_empty_batch_preserves_resolved_model_identity() -> None:
-    orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "embedding_worker",
+                "resolved-embedding",
+                base_url="https://provider.example/v1",
+                tags=("embedding",),
+            )
+        ]
+    )
     coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
 
-    document = coordinator.complete_embeddings_batch([], model="resolved-embedding")
+    document = coordinator.complete_embeddings_batch(
+        [], model="resolved-embedding", routing_agent_id="embedding_worker"
+    )
 
     assert document["model"] == "resolved-embedding"
+    assert coordinator.ledger.records() == []
 
 
 def test_blank_embedding_input_fails_before_backend_selection() -> None:
@@ -1297,7 +1310,7 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
         orchestrator,
         config,
         price_book=price_book,
-        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        token_counter=RustCl100kTokenCounter(),
         embedding_batch_backend=backend,
     )
 
@@ -1348,7 +1361,7 @@ def test_batch_embeddings_char_guard_splits_no_whitespace_input() -> None:
     coordinator = CostRoutingCoordinator(
         orchestrator,
         config,
-        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        token_counter=RustCl100kTokenCounter(),
         embedding_batch_backend=backend,
     )
 
