@@ -228,10 +228,62 @@ def test_embedding_batch_binds_the_selected_agent_when_models_match() -> None:
             return first
 
     document = CostRoutingCoordinator(_Orchestrator()).complete_embeddings_batch(
-        ["evidence"], model="shared-model", routing_agent_id=second.id
+        ["evidence"],
+        model="shared-model",
+        routing_agent_id=second.id,
+        attribution={"provider": "caller-guess"},
     )
 
     assert document["embeddings"][0]["embedding"] == [0.2, 0.8]
+    assert document["embeddings"][0]["attribution"]["provider"] == "second.example"
+
+
+def test_direct_embedding_batch_reuses_one_selected_agent() -> None:
+    first = ModelAgent(
+        "first_agent",
+        "shared-model",
+        base_url="https://first.example/v1",
+        tags=("embedding",),
+    )
+    second = ModelAgent(
+        "second_agent", "shared-model", base_url="mock://second", tags=("embedding",)
+    )
+    orchestrator = TaskOrchestrator([first, second])
+    selections = []
+
+    def select(_capability, _model):
+        selected = (first, second)[len(selections) % 2]
+        selections.append(selected.id)
+        return selected
+
+    orchestrator.select_capability_agent = select  # type: ignore[method-assign]
+    orchestrator.client.embed_with_usage = (  # type: ignore[method-assign]
+        lambda agent, _texts: ([[1.0, 0.0]], 1) if agent is first else ([[0.0, 1.0]], 1)
+    )
+
+    document = CostRoutingCoordinator(orchestrator).complete_embeddings_batch(
+        ["evidence"], model="shared-model"
+    )
+
+    assert selections == [first.id]
+    assert document["backend"] == "provider"
+    assert document["embeddings"][0]["embedding"] == [1.0, 0.0]
+
+
+def test_embedding_batch_does_not_fabricate_local_vectors_for_a_removed_agent() -> None:
+    """An explicitly selected member disappearing must reach the caller's failover."""
+    orchestrator = TaskOrchestrator([ModelAgent("removed_agent", "shared-model")])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    orchestrator.candidates.clear()
+
+    try:
+        coordinator.complete_embeddings_batch(
+            ["evidence"], model="shared-model", routing_agent_id="removed-agent"
+        )
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("a removed selected agent must not use local embeddings")
 
 
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:

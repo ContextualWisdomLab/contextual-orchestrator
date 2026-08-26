@@ -119,7 +119,7 @@ def test_responses_stream_does_not_start_orchestration_after_header_disconnect()
         result = server.RequestHandlerClass._stream_orchestrated_response(
             Handler(), Orchestrator(), security, [], "orchestrator/auto"
         )
-        assert result is False
+        assert result == (False, 500)
         assert security.acquired == security.released == 1
     finally:
         server.server_close()
@@ -166,7 +166,7 @@ def test_responses_stream_stops_orchestration_after_event_disconnect() -> None:
         result = server.RequestHandlerClass._stream_orchestrated_response(
             handler, Orchestrator(), security, [], "orchestrator/auto"
         )
-        assert result is False
+        assert result == (False, 500)
         assert continued == []
         assert handler.writes == 3
         assert security.acquired == security.released == 1

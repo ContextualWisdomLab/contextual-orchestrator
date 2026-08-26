@@ -11,6 +11,7 @@ import urllib.error
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.orchestrator import RequestDeadlineExceeded
 from contextual_orchestrator.server import (
     RequestError,
     SecurityConfig,
@@ -275,5 +276,34 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
         if event["event_name"] == "responses_orchestrated"
     )
     assert event["event_detail"]["status_code"] == 500
+    assert event["event_detail"]["transport_status_code"] == 200
+    assert event["event_detail"]["response_status"] == "failed"
+
+
+def test_stream_deadline_emits_timeout_event_and_analytics() -> None:
+    token = "responses_stream_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
+    ])
+    orchestrator.would_route = lambda *args, **kwargs: False  # type: ignore[method-assign]
+    orchestrator.conduct = lambda *args, **kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
+        RequestDeadlineExceeded("request deadline exceeded")
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        stream = _post(server, token, "orchestrator/free")
+    finally:
+        server.shutdown()
+
+    assert "event: response.failed" in stream
+    assert '"code": "request_deadline_exceeded"' in stream
+    assert '"message": "request deadline exceeded"' in stream
+    assert stream.endswith("data: [DONE]\n\n")
+    event = next(
+        event for event in orchestrator._analytics_events
+        if event["event_name"] == "responses_orchestrated"
+    )
+    assert event["event_detail"]["status_code"] == 504
     assert event["event_detail"]["transport_status_code"] == 200
     assert event["event_detail"]["response_status"] == "failed"

@@ -145,6 +145,26 @@ def test_readiness_never_exposes_backend_identifiers() -> None:
     assert "secret" not in json.dumps(body)
 
 
+def test_readiness_uses_the_current_routed_embedding_backend() -> None:
+    agents = [
+        ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a"),
+        ModelAgent(
+            id="embedding_worker",
+            model="embedding-model",
+            base_url="https://provider.example/v1",
+            tags=("embedding",),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator.embedding_batch_backend = object()
+
+    body, status = _readiness_payload(orchestrator, coordinator)
+
+    assert status == 200
+    assert body["checks"]["embedding_batch"] == {"status": "ready"}
+
+
 def test_readiness_keeps_interactive_service_ready_when_optional_batch_degrades() -> None:
     agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
     orchestrator = TaskOrchestrator(agents)

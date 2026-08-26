@@ -170,6 +170,7 @@ def test_model_client_embedding_uses_provider_endpoint_and_usage() -> None:
     register_credential("EMBEDDING_API_KEY", "embedding-secret")
     client = ModelClient(max_retries=0)
     seen = []
+    seen_timeouts = []
 
     class _Response:
         def __enter__(self):
@@ -186,11 +187,14 @@ def test_model_client_embedding_uses_provider_endpoint_and_usage() -> None:
 
     def open_provider(request, _destination=None):
         seen.append(request)
+        seen_timeouts.append(client._local.provider_transport_timeout)
         return _Response()
 
     with (
         patch.object(client, "_validate_provider", return_value=(2, ("127.0.0.1", 443))),
         patch.object(client, "_open_provider", side_effect=open_provider),
+        patch("contextual_orchestrator.orchestrator.time.monotonic", return_value=10.0),
+        client.request_settings(request_deadline_monotonic=15.0),
     ):
         vectors, token_count = client.embed_with_usage(agent, ["evidence"])
 
@@ -198,6 +202,7 @@ def test_model_client_embedding_uses_provider_endpoint_and_usage() -> None:
     assert token_count == 4
     assert seen[0].full_url == "https://provider.example/v1/embeddings"
     assert seen[0].get_header("Authorization") == "Bearer embedding-secret"
+    assert seen_timeouts == [5.0]
 
 
 def test_model_client_embedding_rejects_non_object_data_entry() -> None:
