@@ -574,10 +574,11 @@ def _merge_openrouter_provider_privacy(
             ("retainsPrompts", "supports_no_prompt_retention"),
         ):
             values = [policy.get(source_key) for policy in known]
-            if any(value is False for value in values):
-                row[target_key] = True
-            elif complete and values and all(value is True for value in values):
-                row[target_key] = False
+            if complete and values and all(isinstance(value, bool) for value in values):
+                if all(value is False for value in values):
+                    row[target_key] = True
+                elif all(value is True for value in values):
+                    row[target_key] = False
         urls = {
             value
             for policy in known
