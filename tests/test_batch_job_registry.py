@@ -95,6 +95,9 @@ def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
     release = threading.Event()
 
     class BlockingProbeClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=1)
+
         def probe_structured(self, agent, *, timeout):  # type: ignore[override]
             del timeout
             entered.set()
@@ -127,19 +130,19 @@ def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
         time.sleep(0.01)
     assert document["completed_count"] == 1
     assert document["ready_count"] == 1
+    execution_claims = [
+        kwargs["timeout"]
+        for name, kwargs in client.locks
+        if "provider_readiness_job_execution" in name
+    ]
+    assert len(execution_claims) == 1
+    assert execution_claims[0] > orchestrator.client.timeout
     restarted_orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
     restarted = CostRoutingCoordinator(
         restarted_orchestrator, job_registry=JobRegistryFactory(client)
     )
     assert restarted.provider_readiness_refresh_document(submitted["job_id"])["status"] == "completed"
     assert restarted_orchestrator._structured_readiness[agent.id]["status"] == "ready"
-
-    persisted = registry.mapping("provider_readiness_jobs")[submitted["job_id"]]
-    persisted["completed_epoch"] = time.time() - 60.0
-    registry.mapping("provider_readiness_jobs")[submitted["job_id"]] = persisted
-    stale_orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
-    CostRoutingCoordinator(stale_orchestrator, job_registry=JobRegistryFactory(client))
-    assert stale_orchestrator._structured_readiness == {}
 
 
 def test_cancelled_readiness_refresh_cannot_publish_late_probe_results() -> None:

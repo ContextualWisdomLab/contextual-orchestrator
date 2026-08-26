@@ -270,19 +270,13 @@ class CostRoutingCoordinator:
         for readiness_job_id in list(self._readiness_jobs):
             readiness_job = self._readiness_jobs[readiness_job_id]
             if readiness_job.get("status") == "completed" and readiness_job.get("capability_code") == "structured":
-                completed_epoch = readiness_job.get("completed_epoch")
-                if isinstance(completed_epoch, (int, float)) and not isinstance(
-                    completed_epoch, bool
-                ):
-                    age_seconds = time.time() - float(completed_epoch)
-                    if 0.0 <= age_seconds < self.orchestrator.circuit_reset_seconds:
-                        checked_at = time.monotonic() - age_seconds
-                        with self.orchestrator._provider_readiness_lock:
-                            for agent_id, status in readiness_job.get("results", {}).items():
-                                self.orchestrator._structured_readiness[agent_id] = {
-                                    "status": status,
-                                    "checked_at": checked_at,
-                                }
+                checked_at = time.monotonic()
+                with self.orchestrator._provider_readiness_lock:
+                    for agent_id, status in readiness_job.get("results", {}).items():
+                        self.orchestrator._structured_readiness[agent_id] = {
+                            "status": status,
+                            "checked_at": checked_at,
+                        }
             elif readiness_job.get("status") in {"queued", "running"}:
                 self._readiness_executor.submit(
                     copy_context().run, self._run_provider_readiness_job, readiness_job_id
@@ -342,10 +336,16 @@ class CostRoutingCoordinator:
 
     def _run_provider_readiness_job(self, job_id: str) -> None:
         """Probe only a job's declared access list under durable claim ownership."""
-        lease = float(getattr(self.orchestrator.client, "timeout", 1.0))
+        initial = dict(self._readiness_jobs[job_id])
+        deadline_epoch = initial.get("deadline_epoch")
+        lease = (
+            max(1.0, float(deadline_epoch) - time.time())
+            if deadline_epoch is not None
+            else max(float(getattr(self.orchestrator.client, "timeout", 1.0)), 1.0)
+        )
         try:
             with self.job_registry.lock(
-                "provider_readiness_job_execution", job_id, lease_seconds=max(lease, 1.0)
+                "provider_readiness_job_execution", job_id, lease_seconds=lease
             ):
                 with self.job_registry.lock(
                     "provider_readiness_job_state", job_id, lease_seconds=max(lease, 1.0)
@@ -413,7 +413,6 @@ class CostRoutingCoordinator:
                     job = dict(self._readiness_jobs[job_id])
                     if job.get("status") == "cancelled":
                         return
-                    completed_epoch = time.time()
                     if job["capability_code"] == "structured":
                         checked_at = time.monotonic()
                         with self.orchestrator._provider_readiness_lock:
@@ -423,7 +422,6 @@ class CostRoutingCoordinator:
                                     "checked_at": checked_at,
                                 }
                     job["status"] = "completed"
-                    job["completed_epoch"] = completed_epoch
                     job["results"] = results
                     self._readiness_jobs[job_id] = job
         except Exception as exc:  # noqa: BLE001 - expose only a typed terminal class

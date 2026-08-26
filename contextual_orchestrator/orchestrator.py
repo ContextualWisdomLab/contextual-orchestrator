@@ -3029,29 +3029,20 @@ class TaskOrchestrator:
             }
 
     def _structured_admitted_agent_ids(self) -> frozenset[str]:
-        """Return agents with current structured-readiness evidence.
+        """Return agents with latest successful structured-readiness evidence.
 
         A conducted request must never turn discovery rows into live provider
         calls merely to discover whether they work.  Mock transports are an
-        explicit deterministic test capability; every external transport must
-        have a recent successful structured probe.
+        explicit deterministic test capability. External evidence remains
+        admitted until a provider failure records contradictory evidence;
+        an arbitrary wall-clock freshness heuristic is intentionally absent.
         """
-        now = time.monotonic()
         with self._provider_readiness_lock:
             return frozenset(
                 agent.id
                 for agent in self.agents
                 if agent.base_url.startswith("mock://")
-                or (
-                    self._structured_readiness.get(agent.id, {}).get("status") == "ready"
-                    and now
-                    - float(
-                        self._structured_readiness.get(agent.id, {}).get(
-                            "checked_at", -math.inf
-                        )
-                    )
-                    < self.circuit_reset_seconds
-                )
+                or self._structured_readiness.get(agent.id, {}).get("status") == "ready"
             )
 
     def _reload_state(self) -> None:
