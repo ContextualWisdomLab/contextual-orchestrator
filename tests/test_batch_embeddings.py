@@ -477,6 +477,62 @@ def test_provider_declared_maximum_drives_server_side_batch_split() -> None:
     )["max_inputs"] == 40
 
 
+def test_provider_limit_fallback_keeps_completed_shard_checkpoint(monkeypatch) -> None:
+    """A learned provider limit must retry only the unpaid suffix of the request."""
+    capability = EmbeddingModelCapability(
+        "openai", "text-embedding-3-large", 10, 10, 2,
+        "cl100k_base", "https://example.test",
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router.embedding_model_capability",
+        lambda provider, model: capability if provider == "openai" else None,
+    )
+
+    class LimitAdvertisingClient:
+        local_concurrency = 1
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def embed_with_usage(self, _agent, texts):
+            self.calls.append(list(texts))
+            if texts == ["gamma", "delta"]:
+                raise ProviderResponseError(
+                    "synthetic explicit limit",
+                    status_code=413,
+                    provider_code="too_many_inputs",
+                    max_inputs=1,
+                )
+            return [[float(index)] for index, _text in enumerate(texts)], len(texts)
+
+    client = LimitAdvertisingClient()
+    agent = ModelAgent(
+        id="embedding_worker",
+        model="text-embedding-3-large",
+        base_url="https://provider.example/v1",
+        provider_name="openai",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client),
+        InMemoryConfigStore(),
+    )
+    created = coordinator.complete_embeddings_batch(
+        ["alpha", "beta", "gamma", "delta"],
+        model=agent.model,
+        routing_agent_id=agent.id,
+    )
+    for _attempt in range(100):
+        document = coordinator.embeddings_batch_document(created["batch_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+
+    assert document["status"] == "completed"
+    assert client.calls == [["alpha", "beta"], ["gamma", "delta"], ["gamma"], ["delta"]]
+    assert document["batch_token_count"] == 4
+
+
 def test_provider_shard_resume_reuses_completed_shards_in_original_order(monkeypatch) -> None:
     """A retry resumes only an unfinished provider shard and preserves index order."""
     capability = EmbeddingModelCapability(
