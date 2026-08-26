@@ -283,7 +283,8 @@ class CostRoutingCoordinator:
             ):
                 raise RuntimeError("provider completion omitted orchestration lineage")
             result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
-            records = list(race_context["records"])
+            race_records = list(race_context["records"])
+            records = list(race_records)
             # The caller's request prompt is attributed at most once per
             # completion: the full prompt lands on the first trace step that
             # reports no provider usage of its own, and every later unreported
@@ -293,7 +294,7 @@ class CostRoutingCoordinator:
             # on their own measured rows; suppressing them would undercount the
             # provider invoice rather than deduplicate one request.
             request_prompt_attributed = False
-            for step in result.get("trace", []):
+            for step in result.get("trace") or []:
                 if not isinstance(step, dict):
                     continue
                 counts = self._provider_usage(step.get("usage"))
@@ -316,7 +317,7 @@ class CostRoutingCoordinator:
                         completion_tokens=counts[1] if counts else None,
                     )
                 )
-            if not records:
+            if len(records) == len(race_records):
                 counts = self._provider_usage(provider_response.get("usage"))
                 records.append(
                     self._record_completion(

@@ -238,6 +238,44 @@ def test_structured_provider_workflow_records_each_reported_call() -> None:
     }
 
 
+def test_structured_empty_trace_records_winner_even_after_race_loser() -> None:
+    coordinator = _coordinator()
+
+    def proxy_completion(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", {"prompt_tokens": 5, "completion_tokens": 2}),
+        )
+        return {
+            "model": "mock-a",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            "orchestration": {"workflow_run_id": "run_empty_trace"},
+        }
+
+    coordinator.orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    coordinator.orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_empty_trace",
+        "mode": "route",
+        "answer": "winner",
+        "trace": None,
+    }
+    result = coordinator.complete(
+        [{"role": "user", "content": "race structured"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "race structured"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+    records = coordinator.ledger.records()
+    assert len(records) == 2
+    assert {(row["prompt_tokens"], row["completion_tokens"]) for row in records} == {
+        (5, 2),
+        (7, 3),
+    }
+    assert len(result["usage_record_ids"]) == 2
+
+
 def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     """Mixed usage bills each measured call plus one fallback prompt estimate."""
     coordinator = _coordinator()
