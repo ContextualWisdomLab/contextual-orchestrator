@@ -119,6 +119,18 @@ def test_stable_usage_identity_is_idempotent() -> None:
     assert len(ledger.records()) == 1
 
 
+def test_sql_stable_usage_identity_is_idempotent() -> None:
+    ledger = _priced_ledger(
+        store=SqlLedgerStore(sqlite3.connect(":memory:"), paramstyle="qmark")
+    )
+    for _ in range(2):
+        ledger.record_usage(
+            provider="openai", model="gpt-x", prompt_tokens=7,
+            completion_tokens=2, usage_record_id="usage_video_stable",
+        )
+    assert len(ledger.records()) == 1
+
+
 def test_unpriced_model_costs_zero_and_still_records() -> None:
     ledger = _priced_ledger()
     record = ledger.record_usage(

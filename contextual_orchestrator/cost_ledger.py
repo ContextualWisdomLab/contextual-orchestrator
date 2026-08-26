@@ -732,11 +732,11 @@ _RECORD_ATTRIBUTION_INSERT_SQL = {
 _USAGE_MEASUREMENT_INSERT_SQL = {
     "qmark": (
         "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
-        "VALUES (?, ?)"
+        "VALUES (?, ?) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
     "pyformat": (
         "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
-        "VALUES (%s, %s)"
+        "VALUES (%s, %s) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
 }
 _USAGE_SELECT_SQL = (
