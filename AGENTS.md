@@ -77,7 +77,7 @@ push or open a PR.
 - Provider API keys and server bearer tokens are resolved from the **KV /
   credential registry** (`get_credential`), not from `os.environ`. Ensure the
   org `OPENAI_API_KEY` (and `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`,
-  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`) is seeded into the KV at
+  `NVIDIA_NIM_API_KEY_SUB`, `OPENROUTER_API_KEY`, `OPENCODE_ZEN_API_KEY`) is seeded into the KV at
   bootstrap time so auto-discovery and routing can use them.
 - **Policy change (2026-08-18, explicit org decision, supersedes the prior
   "stays on GitHub Models" rule):** OpenCode, Noema, and Strix — the org's
