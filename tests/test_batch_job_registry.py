@@ -205,13 +205,16 @@ def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
 
 
 def test_readiness_coordinator_close_releases_executor() -> None:
-    """Coordinator lifecycle closes its readiness worker without waiting for work."""
+    """Coordinator lifecycle closes every owned worker without waiting for work."""
     agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
     coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
+    provider_closed: list[bool] = []
+    coordinator._provider_embedding_backend.close = lambda: provider_closed.append(True)  # type: ignore[method-assign]
 
     coordinator.close()
 
     assert coordinator._readiness_executor._shutdown is True
+    assert provider_closed == [True]
 
 
 def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> None:

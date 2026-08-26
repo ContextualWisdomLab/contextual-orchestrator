@@ -291,8 +291,9 @@ class CostRoutingCoordinator:
                 )
 
     def close(self) -> None:
-        """Release readiness-refresh worker resources owned by this coordinator."""
+        """Release every worker pool owned by this coordinator."""
         self._readiness_executor.shutdown(wait=False, cancel_futures=True)
+        self._provider_embedding_backend.close()
 
     def submit_provider_readiness_refresh(
         self,
