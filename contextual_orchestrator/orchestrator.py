@@ -5311,6 +5311,8 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        bounded_provider_response_failures = 0
+        last_provider_response_error: ProviderResponseError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -5330,6 +5332,8 @@ class TaskOrchestrator:
                     if isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             raise
+                        bounded_provider_response_failures += 1
+                        last_provider_response_error = exc
                         decision = classify_tool_failure(exc)
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
@@ -5378,6 +5382,11 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
+        if (
+            last_provider_response_error is not None
+            and bounded_provider_response_failures == len(candidates)
+        ):
+            raise last_provider_response_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(

@@ -381,6 +381,31 @@ def test_structural_provider_response_stays_inside_explicit_pool_failover() -> N
     assert orchestrator._audit_events[-1]["event_detail"]["agent_id"] == "primary_worker"
 
 
+def test_all_structurally_invalid_bounded_members_preserve_provider_error() -> None:
+    """An exhausted bounded pool retains its concrete fail-closed error contract."""
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+    ]
+
+    class MalformedPoolClient(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            raise ProviderResponseError(
+                f"provider {agent.id} response did not contain assistant content"
+            )
+
+    orchestrator = TaskOrchestrator(agents, client=MalformedPoolClient())
+
+    with pytest.raises(ProviderResponseError, match="backup_worker"):
+        orchestrator._invoke(
+            agents[0],
+            [{"role": "user", "content": "route this"}],
+            text="route this",
+            role="worker",
+            allowed_agent_ids={agent.id for agent in agents},
+        )
+
+
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning",)),
