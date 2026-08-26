@@ -232,12 +232,15 @@ def _runtime_discovery_sources(
     for agent in orchestrator.candidates:
         if agent.provider_name != "configured_gateway":
             continue
-        source = configured_gateway_source(
-            {
-                "LLM_GATEWAY_API_URL": agent.base_url,
-                "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": allowed_hosts,
-            }
-        )
+        try:
+            source = configured_gateway_source(
+                {
+                    "LLM_GATEWAY_API_URL": agent.base_url,
+                    "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": allowed_hosts,
+                }
+            )
+        except ValueError:
+            continue
         if source is None or get_credential(source.credential_name) is None:
             continue
         identity = (source.list_url, source.credential_name)

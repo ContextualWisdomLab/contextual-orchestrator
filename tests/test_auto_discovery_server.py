@@ -108,3 +108,22 @@ def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -
     ):
         assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert all(source.provider_name != "configured_gateway" for source in captured)
+
+
+def test_runtime_auto_discovery_skips_gateway_outside_allowlist(monkeypatch) -> None:
+    """One stale persisted gateway cannot abort otherwise valid discovery."""
+    captured = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda sources: (captured.extend(sources) or [], []),
+    )
+    gateway = ModelAgent(
+        "configured_gateway",
+        "gateway-model",
+        base_url="https://gateway.example/v1",
+        provider_name="configured_gateway",
+    )
+    orchestrator = TaskOrchestrator([gateway])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert all(source.provider_name != "configured_gateway" for source in captured)
