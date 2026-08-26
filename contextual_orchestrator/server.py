@@ -5587,6 +5587,46 @@ def build_server(
                 )
                 cache_partition = self._cache_partition()
 
+                if path.startswith("/v1/batch/embeddings/") and path.endswith("/cancel"):
+                    _reject_unknown_keys(body, {"reason"})
+                    reason = body.get("reason")
+                    if (
+                        not isinstance(reason, str)
+                        or not reason.strip()
+                        or len(reason) > 128
+                        or not reason.replace("_", "").isalnum()
+                        or reason != reason.lower()
+                    ):
+                        raise RequestError(
+                            400,
+                            "invalid_cancellation_reason",
+                            "reason must be a lowercase code of at most 128 characters",
+                        )
+                    batch_id = path[len("/v1/batch/embeddings/") : -len("/cancel")]
+                    try:
+                        document = coordinator.cancel_embeddings_batch(
+                            batch_id, reason=reason.strip()
+                        )
+                    except KeyError:
+                        raise RequestError(
+                            404,
+                            "embeddings_batch_not_found",
+                            "embeddings batch was not found",
+                        ) from None
+                    document["poll_after_ms"] = security.batch_poll_after_ms
+                    document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
+                    orchestrator.record_analytics_event(
+                        "embeddings_batch_cancelled",
+                        {
+                            "endpoint_path": "/v1/batch/embeddings/{batch_id}/cancel",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "cancellation_reason": reason.strip(),
+                        },
+                    )
+                    self._send(document)
+                    return
+
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
                     if len(segments) != 5 or segments[:3] != ["api", "v1", "agent_pools"]:

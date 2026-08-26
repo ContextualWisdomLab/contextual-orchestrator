@@ -15,6 +15,7 @@ services cannot drift out of contract.
 from __future__ import annotations
 
 from pathlib import Path
+import io
 import json
 import sys
 import threading
@@ -39,6 +40,10 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     ProviderEmbeddingBatchBackend,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ProviderResponseError,
+    _provider_limit_contract,
+)
 from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
 
 
@@ -172,6 +177,26 @@ def test_provider_batch_exposes_failed_terminal_state() -> None:
     assert backend.retrieve(job) == []
 
 
+def test_provider_batch_cancel_is_terminal_and_discards_late_result() -> None:
+    release = threading.Event()
+
+    def runner(requests):
+        release.wait(timeout=1)
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic input", model="synthetic-model")]
+    )
+    cancelled = backend.cancel(job, reason="superseded_by_true_bulk_runner")
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["cancellation"] == {"reason": "superseded_by_true_bulk_runner"}
+    release.set()
+    time.sleep(0.02)
+    assert backend.poll(job)["status"] == "cancelled"
+    assert backend.retrieve(job) == []
+
+
 def test_provider_batch_sends_more_than_32_inputs_in_one_provider_call() -> None:
     calls = []
 
@@ -197,6 +222,77 @@ def test_provider_batch_sends_more_than_32_inputs_in_one_provider_call() -> None
     assert len(calls[0]) == 40
     assert len(backend.retrieve(job)) == 40
     assert backend.usage(job) == {"prompt_tokens": 40}
+
+
+def test_provider_declared_maximum_drives_server_side_batch_split() -> None:
+    class LimitAdvertisingClient:
+        local_concurrency = 1
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def embed_with_usage(self, _agent, texts):
+            self.calls.append(list(texts))
+            if len(texts) > 40:
+                raise ProviderResponseError(
+                    "synthetic explicit limit",
+                    status_code=413,
+                    provider_code="too_many_inputs",
+                    max_inputs=40,
+                )
+            return [[float(index)] for index, _text in enumerate(texts)], len(texts)
+
+    client = LimitAdvertisingClient()
+    agent = ModelAgent(
+        id="embedding_worker",
+        model="text-embedding-test",
+        base_url="https://provider.example/v1",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client), InMemoryConfigStore()
+    )
+    created = coordinator.complete_embeddings_batch(
+        [f"synthetic input {index}" for index in range(80)],
+        model="text-embedding-test",
+        routing_agent_id="embedding_worker",
+    )
+    for _attempt in range(100):
+        document = coordinator.embeddings_batch_document(created["batch_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+
+    assert document["status"] == "completed"
+    assert [len(call) for call in client.calls] == [80, 40, 40]
+    assert len(document["embeddings"]) == 80
+    assert document["total_tokens"] == 80
+    assert document["batch_token_count"] == 80
+    assert coordinator.embedding_batch_capabilities(
+        max_request_body_bytes=65_536, poll_after_ms=1_000
+    )["max_inputs"] == 40
+
+
+def test_provider_limit_parser_keeps_only_machine_readable_limits() -> None:
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/embeddings",
+        413,
+        "too large",
+        {},
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "too_many_inputs",
+                        "max_inputs": 64,
+                        "max_tokens": 8192,
+                        "message": "provider text that must not be retained",
+                    }
+                }
+            ).encode()
+        ),
+    )
+    assert _provider_limit_contract(error) == ("too_many_inputs", 64, 8192)
 
 class _RecordingEmbeddingBackend:
     """Embedding backend that records the exact mapped requests it receives."""

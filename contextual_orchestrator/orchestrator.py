@@ -117,6 +117,21 @@ class BudgetExceededError(RuntimeError):
 class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        provider_code: str | None = None,
+        max_inputs: int | None = None,
+        max_tokens: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.provider_code = provider_code
+        self.max_inputs = max_inputs
+        self.max_tokens = max_tokens
+
 
 class RequestDeadlineExceeded(RuntimeError):
     """Raised when the caller's request-scoped monotonic deadline is exhausted."""
@@ -819,6 +834,54 @@ def is_transient_error(exc: BaseException) -> bool:
     if isinstance(exc, ssl.SSLError):
         return not isinstance(exc, ssl.SSLCertVerificationError)
     return False
+
+
+def _provider_limit_contract(
+    exc: urllib.error.HTTPError,
+) -> tuple[str | None, int | None, int | None]:
+    """Extract only explicit machine-readable provider limits from an error."""
+    try:
+        document = json.loads(exc.read(16 * 1024).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, None, None
+
+    values: dict[str, Any] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {
+                    "code",
+                    "max_inputs",
+                    "maximum_inputs",
+                    "max_batch_size",
+                    "maximum_batch_size",
+                    "max_tokens",
+                    "maximum_tokens",
+                }:
+                    values.setdefault(key, item)
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(document)
+
+    def positive_int(*keys: str) -> int | None:
+        for key in keys:
+            value = values.get(key)
+            if type(value) is int and value > 0:
+                return value
+        return None
+
+    provider_code = values.get("code")
+    return (
+        str(provider_code) if isinstance(provider_code, (str, int)) else None,
+        positive_int(
+            "max_inputs", "maximum_inputs", "max_batch_size", "maximum_batch_size"
+        ),
+        positive_int("max_tokens", "maximum_tokens"),
+    )
 
 
 class ModelClient:
@@ -1591,6 +1654,17 @@ class ModelClient:
                 self._local.provider_transport_timeout = None
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
+        if isinstance(last_error, urllib.error.HTTPError) and endpoint.strip("/").endswith(
+            "embeddings"
+        ):
+            provider_code, max_inputs, max_tokens = _provider_limit_contract(last_error)
+            raise ProviderResponseError(
+                "provider rejected the embeddings batch",
+                status_code=int(last_error.code),
+                provider_code=provider_code,
+                max_inputs=max_inputs,
+                max_tokens=max_tokens,
+            ) from None
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(

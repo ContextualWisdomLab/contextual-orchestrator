@@ -115,9 +115,27 @@ class CostRoutingCoordinator:
                 for request in requests
             ):
                 raise ValueError("provider embedding batch must use one resolved route")
-            return orchestrator.client.embed_with_usage(
-                agent, [request.input_text for request in requests]
-            )
+            texts = [request.input_text for request in requests]
+            try:
+                return orchestrator.client.embed_with_usage(agent, texts)
+            except Exception as exc:
+                max_inputs = getattr(exc, "max_inputs", None)
+                if type(max_inputs) is not int or max_inputs < 1 or len(texts) <= max_inputs:
+                    raise
+                self.config.set(
+                    _EMBEDDING_CONFIG_CATEGORY,
+                    "embedding_max_inputs_per_batch",
+                    max_inputs,
+                )
+                vectors: List[List[float]] = []
+                total_tokens = 0
+                for offset in range(0, len(texts), max_inputs):
+                    chunk_vectors, chunk_tokens = orchestrator.client.embed_with_usage(
+                        agent, texts[offset : offset + max_inputs]
+                    )
+                    vectors.extend(chunk_vectors)
+                    total_tokens += chunk_tokens
+                return vectors, total_tokens
 
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
             embed,
@@ -518,6 +536,16 @@ class CostRoutingCoordinator:
             "max_chars_per_part": max_chars,
             "poll_after_ms": poll_after_ms,
             "job_retention_ms": self.job_registry.retention_seconds * 1000,
+            **(
+                {"max_inputs": max_inputs}
+                if type(max_inputs := self.config.get(
+                    _EMBEDDING_CONFIG_CATEGORY,
+                    "embedding_max_inputs_per_batch",
+                    None,
+                )) is int
+                and max_inputs > 0
+                else {}
+            ),
         }
 
     @property
@@ -662,6 +690,7 @@ class CostRoutingCoordinator:
                 "backend": job.backend,
                 "model": model_name,
                 "embeddings": None,
+                "failure": dict(status.get("failure") or {}),
             }
             self._embedding_documents[batch_id] = document
             return document
@@ -823,6 +852,25 @@ class CostRoutingCoordinator:
             input_metadata=input_metadata,
         )
         return self.embeddings_batch_document(job.job_id)
+
+    def cancel_embeddings_batch(self, batch_id: str, *, reason: str) -> Dict[str, Any]:
+        """Cancel a provider batch through its durable backend state."""
+        job = self._require_embedding_job(batch_id)
+        backend = self._embedding_backend_for_job(batch_id)
+        cancel = getattr(backend, "cancel", None)
+        if not callable(cancel):
+            raise ValueError("embedding batch backend does not support cancellation")
+        status = cancel(job, reason=reason)
+        document = {
+            "batch_id": batch_id,
+            "status": status["status"],
+            "backend": job.backend,
+            "model": self._embedding_models.get(batch_id, "contextual-orchestrator"),
+            "embeddings": None,
+            "cancellation": dict(status.get("cancellation") or {}),
+        }
+        self._embedding_documents[batch_id] = document
+        return document
 
     def _require_embedding_job(self, batch_id: str) -> BatchJob:
         job = self._embedding_jobs.get(batch_id)

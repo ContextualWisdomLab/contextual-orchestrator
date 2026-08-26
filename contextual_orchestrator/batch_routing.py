@@ -611,6 +611,16 @@ class ProviderEmbeddingBatchBackend:
             if job_registry is not None
             else {}
         )
+        self._errors = (
+            job_registry.mapping("provider_embedding_errors")
+            if job_registry is not None
+            else {}
+        )
+        self._cancellations = (
+            job_registry.mapping("provider_embedding_cancellations")
+            if job_registry is not None
+            else {}
+        )
         for job_id in list(self._states):
             if self._states.get(job_id) in {"queued", "running"}:
                 self._states[job_id] = "queued"
@@ -632,6 +642,8 @@ class ProviderEmbeddingBatchBackend:
         try:
             requests = list(self._requests[job_id])
             vectors, prompt_tokens = self._runner(requests)
+            if self._states.get(job_id) == "cancelled":
+                return
             if len(vectors) != len(requests):
                 raise ValueError("provider embedding batch result count did not match inputs")
             dimensions = {len(vector) for vector in vectors}
@@ -651,16 +663,44 @@ class ProviderEmbeddingBatchBackend:
             self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
             self._results[job_id] = items
             self._states[job_id] = "completed"
-        except Exception:  # noqa: BLE001 - polling exposes a bounded terminal state
+        except Exception as exc:  # noqa: BLE001 - polling exposes a bounded terminal state
+            self._errors[job_id] = {
+                "error_type": type(exc).__name__,
+                "status_code": getattr(exc, "status_code", None),
+                "provider_code": getattr(exc, "provider_code", None),
+                "max_inputs": getattr(exc, "max_inputs", None),
+                "max_tokens": getattr(exc, "max_tokens", None),
+            }
             self._states[job_id] = "failed"
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Return queued, running, completed, or failed without blocking."""
         status = str(self._states.get(job.job_id, "failed"))
+        document = {
+            "job_id": job.job_id,
+            "status": status,
+            "is_complete": status in {"completed", "failed", "cancelled"},
+        }
+        if status == "failed":
+            document["failure"] = dict(self._errors.get(job.job_id, {}))
+        return document
+
+    def cancel(self, job: BatchJob, *, reason: str) -> Dict[str, Any]:
+        """Mark queued/running work cancelled and discard any late provider result."""
+        status = str(self._states.get(job.job_id, "failed"))
+        if status not in {"completed", "failed", "cancelled"}:
+            self._cancellations[job.job_id] = {"reason": reason}
+            self._states[job.job_id] = "cancelled"
+            status = "cancelled"
         return {
             "job_id": job.job_id,
             "status": status,
-            "is_complete": status in {"completed", "failed"},
+            "is_complete": status in {"completed", "failed", "cancelled"},
+            **(
+                {"cancellation": dict(self._cancellations.get(job.job_id, {}))}
+                if status == "cancelled"
+                else {}
+            ),
         }
 
     def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
