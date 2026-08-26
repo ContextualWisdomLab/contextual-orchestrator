@@ -5234,9 +5234,13 @@ class TaskOrchestrator:
                 last_error = exc
                 self._group_router.observe_failure(agent.id)
                 continue
-            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             if selection_sink is not None:
-                return selection_sink(agent, result)
+                selected_result = selection_sink(agent, result)
+                self._group_router.observe_success(
+                    agent.id, time.perf_counter() - started_at
+                )
+                return selected_result
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
         raise RuntimeError(f"all {capability} providers failed") from last_error
 

@@ -12,6 +12,7 @@ import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
+from contextual_orchestrator.video_jobs import VideoJobContractError
 
 TOKEN = "multimodal_group_token"
 
@@ -240,6 +241,28 @@ def test_video_submission_does_not_race_uncancellable_async_jobs() -> None:
         assert submissions == ["first_video"]
     finally:
         server.shutdown()
+
+
+def test_untrackable_video_submission_is_not_recorded_as_routing_success() -> None:
+    """Ownership registration must succeed before routing records success."""
+    agent = ModelAgent("video_owner", "provider/video", tags=("video",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, _payload: {"status": "queued"}
+    )
+
+    def reject_untrackable(_owner: ModelAgent, _result: object) -> None:
+        raise VideoJobContractError("missing provider job id")
+
+    with pytest.raises(VideoJobContractError):
+        orchestrator.proxy_capability(
+            {"prompt": "product walkthrough"},
+            capability="video",
+            endpoint="videos",
+            selection_sink=reject_untrackable,
+        )
+
+    assert orchestrator._group_router.member_report(agent.id)["success_count"] == 0
 
 
 def test_video_provider_outage_returns_documented_503() -> None:
