@@ -27,6 +27,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _merge_configured_gateway_metadata,
     _price_per_1k,
     agent_from_discovered,
     agent_id_for,
@@ -37,6 +38,36 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+
+
+def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None:
+    """Logical-model pricing requires complete consensus across deployments."""
+    payload = {"data": [{"id": "shared-model"}]}
+    metadata = {
+        "data": [
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+            },
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "input_cost_per_token": {"invalid": True},
+                    "output_cost_per_token": 0.000002,
+                },
+            },
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert "pricing" not in merged["data"][0]
+    assert merged["data"][0]["architecture"]["output_modalities"] == ["text"]
 
 
 @pytest.fixture(autouse=True)

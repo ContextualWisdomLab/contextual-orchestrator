@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.parse
 from io import StringIO
@@ -14,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator.__main__ import main  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
+    get_credential,
     register_credential,
     set_backend,
 )
@@ -95,6 +97,111 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
     assert report["models"] == [
         {"provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5", "is_free": False}
     ]
+
+
+def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment() -> None:
+    """A one-shot env secret enters KV before full paid/free chat discovery."""
+    set_backend(InMemoryCredentialBackend())
+    stdout = StringIO()
+    environment = {
+        "LLM_GATEWAY_API_URL": "https://gateway.example/v1",
+        "LLM_GATEWAY_URL": "https://gateway.example/v1/",
+        "LLM_GATEWAY_API_KEY": "  gateway-secret\n",
+        "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "gateway.example",
+    }
+
+    def urlopen(request, timeout=None):
+        assert request.headers["Authorization"] == "Bearer gateway-secret"
+        if request.full_url.endswith("/model/info"):
+            return _Response({
+                "data": [
+                    {
+                        "model_name": "gpt-5.6-sol",
+                        "model_info": {
+                            "mode": "chat",
+                            "input_cost_per_token": 0.000005,
+                            "output_cost_per_token": 0.00003,
+                        },
+                    },
+                    {
+                        "model_name": "community/free-chat",
+                        "model_info": {
+                            "mode": "chat",
+                            "input_cost_per_token": 0,
+                            "output_cost_per_token": 0,
+                        },
+                    },
+                    {
+                        "model_name": "text-embedding-3-large",
+                        "model_info": {
+                            "mode": "embedding",
+                            "input_cost_per_token": 0.00000013,
+                            "output_cost_per_token": 0,
+                        },
+                    },
+                ]
+            })
+        assert request.full_url == "https://gateway.example/v1/models"
+        return _Response({
+            "data": [
+                {"id": "gpt-5.6-sol"},
+                {
+                    "id": "community/free-chat",
+                    "pricing": {"prompt": "0", "completion": "0"},
+                },
+                {"id": "text-embedding-3-large"},
+            ]
+        })
+
+    try:
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                side_effect=urlopen,
+            ),
+        ):
+            main()
+            assert get_credential("LLM_GATEWAY_API_KEY") == "gateway-secret"
+    finally:
+        set_backend(None)
+
+    report = json.loads(stdout.getvalue())
+    assert report["discovered_count"] == 3
+    assert report["free_tier_count"] == 1
+    assert report["priced_count"] == 2
+    assert [row["model"] for row in report["models"]] == [
+        "gpt-5.6-sol",
+        "community/free-chat",
+        "text-embedding-3-large",
+    ]
+
+
+def test_configured_gateway_requires_explicit_host_allowlist() -> None:
+    """Bootstrap URL configuration cannot create an unrestricted SSRF target."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "LLM_GATEWAY_URL": "https://gateway.example/v1",
+                    "LLM_GATEWAY_API_KEY": "secret",
+                },
+                clear=True,
+            ),
+            patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
+        ):
+            try:
+                main()
+            except ValueError as exc:
+                assert "allowlist" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("unallowlisted gateway must fail")
+    finally:
+        set_backend(None)
 
 
 def test_discover_models_persists_to_agents_db(tmp_path) -> None:
