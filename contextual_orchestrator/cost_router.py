@@ -507,7 +507,13 @@ class CostRoutingCoordinator:
             "max_tokens_per_part": max_tokens,
             "max_chars_per_part": max_chars,
             "poll_after_ms": poll_after_ms,
+            "job_retention_ms": self.job_registry.retention_seconds * 1000,
         }
+
+    @property
+    def embedding_batch_retention_ms(self) -> int:
+        """Return the configured durable batch-result retention in milliseconds."""
+        return self.job_registry.retention_seconds * 1000
 
     def _split_embedding_input(
         self,

@@ -118,6 +118,7 @@ def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> N
             "max_tokens_per_part": 280_000,
             "max_chars_per_part": 240_000,
             "poll_after_ms": 1_000,
+            "job_retention_ms": 7 * 24 * 60 * 60 * 1_000,
         }
     finally:
         server.shutdown()
@@ -232,6 +233,7 @@ def test_pending_http_batch_declares_rate_budget_polling_cadence() -> None:
         )
         assert status == 202
         assert created["poll_after_ms"] == 500
+        assert created["job_retention_ms"] == 7 * 24 * 60 * 60 * 1_000
 
         time.sleep(created["poll_after_ms"] / 1000)
         status, polled = _request(
@@ -239,6 +241,7 @@ def test_pending_http_batch_declares_rate_budget_polling_cadence() -> None:
         )
         assert status == 200
         assert polled["poll_after_ms"] == 500
+        assert polled["job_retention_ms"] == 7 * 24 * 60 * 60 * 1_000
     finally:
         server.shutdown()
 

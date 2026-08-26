@@ -5138,6 +5138,7 @@ def build_server(
                     try:
                         document = coordinator.embeddings_batch_document(batch_id)
                         document["poll_after_ms"] = security.batch_poll_after_ms
+                        document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
                         self._send(document)
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
@@ -6174,6 +6175,7 @@ def build_server(
                             "all enabled embedding-capable model group members failed",
                         ) from last_embedding_error
                     document["poll_after_ms"] = security.batch_poll_after_ms
+                    document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
                     is_complete = document.get("status") == "completed"
                     orchestrator.record_analytics_event(
                         "embeddings_batch_created",

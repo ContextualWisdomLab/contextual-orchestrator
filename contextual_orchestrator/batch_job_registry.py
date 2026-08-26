@@ -129,6 +129,11 @@ class JobRegistryFactory:
         """True when registries survive a process restart."""
         return self._client is not None
 
+    @property
+    def retention_seconds(self) -> int:
+        """Return the configured terminal-result retention contract."""
+        return self._retention_seconds
+
     def mapping(self, name: str, *, decode: Optional[Callable[[Any], Any]] = None) -> MutableMapping:
         """Return the registry called ``name`` — a dict unless Valkey is configured."""
         if self._client is None:
