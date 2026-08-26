@@ -3,9 +3,9 @@
 ## 2026-08-26 protected-main catalog evidence slice
 
 Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`
-after the normal #851 merge. The exact open queue was re-read at #879
-`b17d600b`, #876 `6bae530b`, #872 `2515ad69`, #869 `760c52c8`, #868
-`942d75df`, #858 `4fc2f7c4`, #857 `77fd4369`, and #849 `e0847fe7`.
+after the normal #851 merge. The exact open queue was re-read at #880
+`da9f4ab0`, #879 `ed0690e3`, #876 `4da38a05`, #869 `fe7b248e`, #868
+`28e0fdbd`, #858 `b0b67286`, #857 `77fd4369`, and #849 `7abf1b89`.
 Those branches cover provider errors and telemetry, CI runtime installation,
 this baseline's broader refresh, Zen bootstrap, gateway aliases, customer copy,
 provider-backed embeddings, and asynchronous HTTP capacity. None delivers the
