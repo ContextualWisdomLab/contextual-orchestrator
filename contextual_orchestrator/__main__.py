@@ -291,8 +291,6 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in chat_models
         if agent_id_for(model) not in existing_ids
     ]
-    if not chat_models:
-        return {"added": [], "updated": []}
     result = (
         orchestrator.sync_discovered_agents(agents)
         if agents

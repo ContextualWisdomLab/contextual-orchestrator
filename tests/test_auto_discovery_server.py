@@ -127,6 +127,33 @@ def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     assert orchestrator.agents == [real_agent]
 
 
+def test_auto_discovery_retires_mock_seed_when_current_discovery_is_empty(
+    monkeypatch,
+) -> None:
+    """A transient empty discovery cannot preserve a stale bootstrap fixture."""
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([], []),
+    )
+    real_agent = ModelAgent(
+        "existing_real_agent",
+        "existing-real-model",
+        base_url="https://provider.invalid/v1",
+        tags=("discovered", "chat"),
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("mock_seed_agent", "mock-model", tags=("bootstrap_seed",)),
+            real_agent,
+        ]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": ["mock_seed_agent"]}
+    assert orchestrator.agents == [real_agent]
+
+
 def test_auto_discovery_preserves_operator_configured_mock(monkeypatch) -> None:
     """Only tagged bootstrap fixtures retire when real discovery succeeds."""
     discovered = DiscoveredModel(
