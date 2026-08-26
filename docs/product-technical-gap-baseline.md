@@ -1,23 +1,23 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-26 20:35 KST protected-main delivery evidence
+## 2026-08-27 00:50 KST protected-main and exact-head queue evidence
 
 Protected `main` is exact commit
-`56a898b85654f5c8468e3d8448d93120b24bd269`, the GitHub merge commit for
-[PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
-from reviewed source head `d49846d5c8deca55c60315a8fbb461ecdebf67eb`.
-The merge commit has protected `main` as its first parent and that source head
-as its second parent, which proves delivery provenance. At this audit, however,
-the required workflow Check Runs attached to the source head remain `queued`;
-only the CodeRabbit and Devin status contexts are successful. No repository or
-GitHub record located by this audit supports transferring an earlier local test
-count to the final source head. This entry therefore proves protected-main code
-presence, not terminal hosted-suite completion or independent approval. It
-supersedes the older #851 branch-only delivery claims below without rewriting
-their historical audit record.
+`5a01759165be20ab38c05c2321d8a9f00ec331ea`. It contains the normal protected
+merges of [PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
+at `56a898b85654f5c8468e3d8448d93120b24bd269` and
+[PR #881](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/881)
+at `5a01759165be20ab38c05c2321d8a9f00ec331ea`. Their reviewed source heads are
+`d49846d5c8deca55c60315a8fbb461ecdebf67eb` and
+`4acfe477014d56fbe76a2cd9db9ebd91552d0079`, respectively. The #851 source
+head now has terminal successful full-suite and security jobs, but its Strix
+job failed. The #881 source head has terminal successful full-suite and
+security jobs, while OpenCode remains queued and Strix failed. These facts
+prove protected delivery of the bounded code changes; they do not convert
+failed or queued review automation into successful review evidence.
 
-This protected-main delivery closes
-[issue #102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102)
+[PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
+closed [issue #102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102)
 and [issue #846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846).
 Operator-declared equivalent endpoints can race through bounded execution while
 preserving modality validation, deadline/cancellation outcomes, provider-call
@@ -28,6 +28,30 @@ checkpoints, and configured local output limits without mutating caller-owned
 requests. These claims are bounded to the exact merge above; production
 provider quotas and deployment-specific capacity remain separate acceptance
 evidence.
+
+PR #881 closes the bounded operator-visible catalog-evidence gap: refresh output
+now includes stable account identity, outcome, observed and eligible counts,
+allowlisted error code, and UTC start/finish instants without secrets or raw
+provider diagnostics. It does not infer a freshness threshold, provider/model
+equivalence, or zero cost from missing price evidence.
+
+The open queue was re-read at exact heads #883 `2dba7a8f`, #880 `b545fdc0`,
+#879 `032ad415`, #876 `c9405e71`, #868 `057d3acd`, #858 `09f5f194`, #857
+`d68d117b`, and #849 `7abf1b89`. PR #869 was closed unmerged because #868
+preserves its OpenCode Zen workflow transport and unique-passphrase validation;
+no check or review evidence transfers between those heads. The queue covers
+video job ownership, this baseline, provider errors, pinned OpenCode runtime,
+gateway aliases and discovery, customer copy, provider-backed embeddings, and
+asynchronous HTTP capacity. Each requires its current exact-head review and
+required checks before normal protected merge.
+
+Remaining acceptance gaps are deployment evidence, not invented policy:
+repeat the checked-in k6 workload through production TLS and real provider
+quotas; run a successful post-merge provider-catalog refresh using the durable
+KV; prove OpenCode Zen and OpenRouter free/cost discovery from that refresh;
+and verify all eight capability routes plus OpenAI Responses reasoning-summary
+stream cancellation at the deployed boundary. Durable multi-replica routing
+observations still require an accepted retention model before implementation.
 
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
