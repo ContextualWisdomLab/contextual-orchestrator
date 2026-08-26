@@ -82,6 +82,22 @@ def test_unit_model_rejects_blank() -> None:
             assert getattr(exc, "code", None) == "invalid_model"
 
 
+def test_http_chat_requires_an_explicit_model() -> None:
+    """Chat Completions must not silently replace an omitted deployment choice."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "choose explicitly"}]},
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_model"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_accepts_padded_model() -> None:
     """Tools passthrough uses body.model for pool match — must see strip writeback."""
     server, thread, port = _server()
