@@ -670,7 +670,7 @@ def test_commercial_release_candidate_defines_buyer_release_package() -> None:
         "Commercial Release Candidate",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "release authorization fails closed",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Release Inputs",
         "Runtime Shape",

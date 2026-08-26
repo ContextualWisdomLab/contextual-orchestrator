@@ -90,7 +90,10 @@ def test_commercial_gap_register_report_classifies_external_gaps_without_blockin
     ]
     assert report["gap_items"][0]["source_evidence_type"] == "proposed_until_production"
     assert report["gap_items"][1]["source_evidence_type"] == "proposed_until_buyer_specific"
-    assert report["related_runtime_reports"]["commercial_release_status"] == "commercial_release_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_release_status"] == "commercial_release_blocked"
+    assert report["related_runtime_reports"]["commercial_product_evidence_status"] == (
+        "commercial_release_ready_with_warnings"
+    )
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["gap_register_links"]["runtime_endpoint"] == "/api/v1/commercial_gap_registers/latest"
 

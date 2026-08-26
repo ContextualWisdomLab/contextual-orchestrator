@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Fail-closed exact-head release authorization (ADR 0035), kept separate from
+  inspectable local product evidence and backed by machine-readable blockers
+  for missing, pending, stale, author-only, unresolved, or malformed evidence.
+
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and

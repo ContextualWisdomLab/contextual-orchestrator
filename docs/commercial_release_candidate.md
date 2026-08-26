@@ -16,8 +16,11 @@ Conductor into separate products.
 Figma Code Connect is not used for discovery, metadata, code generation, or
 artifact creation.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without concrete failure remain non-blocking.
+Product evidence remains inspectable while review or checks are pending, but
+release authorization fails closed. Authorization requires terminal successful
+required checks, qualifying independent approval, and zero unresolved findings
+on the exact integrated protected head. Pending, absent, cancelled, stale-head,
+or predecessor-head evidence never authorizes a release.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 the repository as one deployable product until a second product, independent
@@ -44,9 +47,15 @@ necessary.
 
 - `release_status`: `commercial_release_ready`,
   `commercial_release_ready_with_warnings`, or `commercial_release_blocked`;
+- `product_evidence_status`: local evidence completeness, kept separate from
+  release authority so useful evidence remains inspectable while authorization
+  is blocked;
+- `release_authorization`: exact candidate/protected head identities, aggregate
+  check and approval counts, unresolved-finding count, and machine-readable
+  blocker reasons (never reviewer credentials);
 - `measurement_status`: `local_commercial_release_candidate`;
 - `release_summary`: artifact count, blocked count, warning count, and
-  `review_process_is_blocker=false`;
+  `review_process_is_blocker=true` for release authorization;
 - `release_artifacts`: acceptance check, runtime endpoint chain, repository
   distribution packet, security/package metadata, admin operator surface,
   verification evidence, Figma artifacts, review-process policy, and packaging
@@ -63,9 +72,9 @@ necessary.
 
 | Status | Rule |
 |---|---|
-| `commercial_release_ready` | All release artifacts are ready and no external gaps remain. |
-| `commercial_release_ready_with_warnings` | Release artifacts are ready, but production or buyer-specific evidence still needs review. |
-| `commercial_release_blocked` | Any release artifact is blocked or a concrete blocker exists. |
+| `commercial_release_ready` | All release artifacts are ready, no external gaps remain, and exact-head release authorization is granted. |
+| `commercial_release_ready_with_warnings` | Release artifacts have only explicit external warnings and exact-head release authorization is granted. |
+| `commercial_release_blocked` | A release artifact is blocked, a concrete blocker exists, or exact-head release authorization is absent or invalid. |
 
 ## KRW 2B Commercial Release Candidate
 
@@ -77,7 +86,8 @@ The release candidate is ready for buyer review when:
 - focused tests and `pytest -q` are named as verification evidence;
 - Figma artifacts are recorded and editable;
 - Code Connect exclusion is explicit;
-- review-process delay is not counted as a product blocker;
+- review-process delay does not erase local product evidence, but it blocks
+  release authorization until exact-head policy evidence is complete;
 - library split is deferred until a real extraction trigger exists.
 
 Warnings remain acceptable when they are explicitly labeled as

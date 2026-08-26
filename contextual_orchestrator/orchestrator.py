@@ -6287,13 +6287,113 @@ class TaskOrchestrator:
             },
         }
 
+    @staticmethod
+    def _release_authorization_decision(
+        evidence: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Validate exact-head release authority without consulting product telemetry."""
+        blockers: list[str] = []
+        if evidence is None:
+            return {
+                "status": "release_authorization_blocked",
+                "candidate_head_sha": None,
+                "protected_head_sha": None,
+                "required_check_count": 0,
+                "qualifying_approval_count": 0,
+                "unresolved_finding_count": None,
+                "blocker_reasons": ["release_authorization_evidence_absent"],
+            }
+
+        candidate_head = evidence.get("candidate_head_sha")
+        protected_head = evidence.get("protected_head_sha")
+        sha_pattern = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+        if not isinstance(candidate_head, str) or sha_pattern.fullmatch(candidate_head) is None:
+            blockers.append("candidate_head_sha_invalid")
+        if not isinstance(protected_head, str) or sha_pattern.fullmatch(protected_head) is None:
+            blockers.append("protected_head_sha_invalid")
+        if isinstance(candidate_head, str) and isinstance(protected_head, str) and candidate_head != protected_head:
+            blockers.append("candidate_is_not_integrated_protected_head")
+
+        required_names = evidence.get("required_check_names")
+        check_rows = evidence.get("required_checks")
+        if (
+            not isinstance(required_names, list)
+            or not required_names
+            or any(not isinstance(name, str) or not name for name in required_names)
+            or len(set(required_names)) != len(required_names)
+        ):
+            blockers.append("required_check_policy_invalid")
+            required_names = []
+        if not isinstance(check_rows, list) or any(not isinstance(row, Mapping) for row in check_rows):
+            blockers.append("required_check_evidence_invalid")
+            check_rows = []
+        check_names = [row.get("name") for row in check_rows]
+        if len(check_names) != len(set(check_names)):
+            blockers.append("required_check_evidence_duplicated")
+        checks_by_name = {
+            row.get("name"): row
+            for row in check_rows
+            if isinstance(row.get("name"), str)
+        }
+        for name in required_names:
+            row = checks_by_name.get(name)
+            if row is None:
+                blockers.append(f"required_check_absent:{name}")
+            elif row.get("head_sha") != candidate_head:
+                blockers.append(f"required_check_stale_head:{name}")
+            elif row.get("status") != "completed" or row.get("conclusion") != "success":
+                blockers.append(f"required_check_not_successful:{name}")
+
+        required_approvals = evidence.get("required_approvals")
+        approvals = evidence.get("independent_approvals")
+        if type(required_approvals) is not int or required_approvals < 0:
+            blockers.append("required_approval_policy_invalid")
+            required_approvals = 0
+        if not isinstance(approvals, list) or any(not isinstance(row, Mapping) for row in approvals):
+            blockers.append("independent_approval_evidence_invalid")
+            approvals = []
+        qualifying_reviewers = {
+            row.get("reviewer_fingerprint")
+            for row in approvals
+            if row.get("head_sha") == candidate_head
+            and row.get("state") == "APPROVED"
+            and row.get("is_author") is False
+            and isinstance(row.get("reviewer_fingerprint"), str)
+            and row.get("reviewer_fingerprint")
+        }
+        qualifying_approval_count = len(qualifying_reviewers)
+        if qualifying_approval_count < required_approvals:
+            blockers.append("independent_approval_requirement_unsatisfied")
+
+        unresolved_count = evidence.get("unresolved_finding_count")
+        if type(unresolved_count) is not int or unresolved_count < 0:
+            blockers.append("unresolved_finding_count_invalid")
+            unresolved_count = None
+        elif unresolved_count:
+            blockers.append("unresolved_findings_present")
+
+        return {
+            "status": (
+                "release_authorization_blocked"
+                if blockers
+                else "release_authorization_granted"
+            ),
+            "candidate_head_sha": candidate_head if isinstance(candidate_head, str) else None,
+            "protected_head_sha": protected_head if isinstance(protected_head, str) else None,
+            "required_check_count": len(required_names),
+            "qualifying_approval_count": qualifying_approval_count,
+            "unresolved_finding_count": unresolved_count,
+            "blocker_reasons": blockers,
+        }
+
     def commercial_release_candidate_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authorization_evidence: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the local buyer-facing commercial release-candidate manifest."""
+        """Return product evidence separately from exact-head release authority."""
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
@@ -6306,6 +6406,9 @@ class TaskOrchestrator:
 
         concrete_blockers = acceptance["concrete_blockers"]
         acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
+        release_authorization = self._release_authorization_decision(
+            release_authorization_evidence
+        )
         runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
         release_artifacts = [
             self._buyer_evidence_item(
@@ -6493,14 +6596,20 @@ class TaskOrchestrator:
         blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
         if blocked_count:
-            release_status = "commercial_release_blocked"
+            product_evidence_status = "commercial_release_blocked"
         elif warning_count:
-            release_status = "commercial_release_ready_with_warnings"
+            product_evidence_status = "commercial_release_ready_with_warnings"
         else:  # pragma: no cover - unreachable while this report carries literal buyer-specific warning sections
-            release_status = "commercial_release_ready"  # pragma: no cover
+            product_evidence_status = "commercial_release_ready"  # pragma: no cover
+        release_status = (
+            product_evidence_status
+            if release_authorization["status"] == "release_authorization_granted"
+            else "commercial_release_blocked"
+        )
 
         return {
             "release_status": release_status,
+            "product_evidence_status": product_evidence_status,
             "target_contract_value_krw": target_contract_value_krw,
             "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
             "measurement_status": "local_commercial_release_candidate",
@@ -6515,8 +6624,9 @@ class TaskOrchestrator:
                 "artifact_count": len(release_artifacts),
                 "blocked_count": blocked_count,
                 "warning_count": warning_count,
-                "review_process_is_blocker": acceptance["review_process_policy"]["is_blocker"],
+                "review_process_is_blocker": True,
             },
+            "release_authorization": release_authorization,
             "release_artifacts": release_artifacts,
             "external_release_gaps": external_release_gaps,
             "concrete_blockers": concrete_blockers,
@@ -6534,7 +6644,15 @@ class TaskOrchestrator:
                     "rule": "security failure, API contract regression, missing distribution artifact, document mismatch, product defect, or Code Connect usage",
                 },
             ],
-            "review_process_policy": acceptance["review_process_policy"],
+            "review_process_policy": {
+                "is_blocker": True,
+                "blocker_definition": (
+                    "Release authorization requires terminal successful required checks, "
+                    "qualifying independent approval, and zero unresolved findings on the "
+                    "exact integrated protected head."
+                ),
+                "product_evidence_policy": acceptance["review_process_policy"],
+            },
             "related_runtime_reports": {
                 "commercial_acceptance_status": acceptance["acceptance_status"],
                 **acceptance["related_runtime_reports"],
@@ -6562,7 +6680,8 @@ class TaskOrchestrator:
             security_profile=security_profile,
         )
         concrete_blockers = release["concrete_blockers"]
-        release_blocked = release["release_status"] == "commercial_release_blocked"
+        release_blocked = release["product_evidence_status"] == "commercial_release_blocked"
+        product_review_policy = release["review_process_policy"]["product_evidence_policy"]
         gap_items = []
         for item in release["external_release_gaps"]:
             source_type = item["evidence_type"]
@@ -6613,7 +6732,7 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "blocked_count": blocked_count,
-                "review_process_is_blocker": release["review_process_policy"]["is_blocker"],
+                "review_process_is_blocker": product_review_policy["is_blocker"],
             },
             "gap_items": gap_items,
             "concrete_blockers": concrete_blockers,
@@ -6631,9 +6750,10 @@ class TaskOrchestrator:
                     "rule": "concrete security, API contract, document, product defect, or Code Connect usage blocks commercial release",
                 },
             ],
-            "review_process_policy": release["review_process_policy"],
+            "review_process_policy": product_review_policy,
             "related_runtime_reports": {
                 "commercial_release_status": release["release_status"],
+                "commercial_product_evidence_status": release["product_evidence_status"],
                 **release["related_runtime_reports"],
             },
             "library_split_decision": release["library_split_decision"],
