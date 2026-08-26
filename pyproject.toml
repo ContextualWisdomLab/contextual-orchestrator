@@ -47,7 +47,7 @@ show_missing = true
 
 [tool.interrogate]
 exclude = ["tests"]
-fail-under = 80
+fail-under = 100
 ignore-init-method = true
 ignore-magic = true
 ignore-nested-functions = true
