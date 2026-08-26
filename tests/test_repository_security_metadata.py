@@ -160,28 +160,31 @@ def test_python_lockfile_uses_hash_pinning():
 
 
 def test_unit_workflow_installs_runtime_and_test_lockfiles():
-    """CI must exercise declared runtime integrations, not graceful no-op imports."""
+    """CI must use the same fail-closed, hash-locked target as local runs."""
     workflow_text = read_text(".github/workflows/tests.yml")
-    install_step = workflow_text.split(
-        "      - name: Install test dependencies\n", 1
-    )[1].split("\n      - name:", 1)[0]
-    runtime_command = "python -m pip install --require-hashes -r requirements.lock"
-    property_command = (
-        "python -m pip install --require-hashes "
-        "-r fuzz/requirements-property.txt"
-    )
-
-    assert runtime_command in install_step
-    assert property_command in install_step
-    assert install_step.index(runtime_command) < install_step.index(property_command)
+    assert "run: make test" in workflow_text
+    assert "python -m pytest -q" not in workflow_text
+    assert "pip install --no-deps dist/*.whl" not in workflow_text
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():
     """The documented local command must exercise optional runtime integrations."""
     makefile_text = read_text("Makefile")
+    runner_text = read_text("scripts/run_hash_locked_tests.sh")
+    dockerfile_text = read_text("Dockerfile")
 
-    assert "--with-requirements requirements.lock" in makefile_text
-    assert "--with-requirements fuzz/requirements-property.txt" in makefile_text
+    assert "./scripts/run_hash_locked_tests.sh" in makefile_text
+    assert "ghcr.io/pyo3/maturin@sha256:" in runner_text
+    assert "--target test-runner" in runner_text
+    assert "--output type=cacheonly" in runner_text
+    assert "make test requires Docker" in runner_text
+    assert "maturin build --locked" in dockerfile_text
+    assert "FROM runtime-base AS test-runner" in dockerfile_text
+    assert 'python -m zipfile -e "$1"' in dockerfile_text
+    assert 'cp "$1" /io/contextual_orchestrator/' in dockerfile_text
+    assert "--with-requirements requirements.lock" in dockerfile_text
+    assert "--with-requirements fuzz/requirements-property.txt" in dockerfile_text
+    assert '--with "$1"' in dockerfile_text
 
 
 def test_security_tool_lockfile_uses_hash_pinning():
