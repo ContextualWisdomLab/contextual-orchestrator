@@ -75,13 +75,13 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
-    "include_orchestration_trace", "stream", "attribution", "routing",
+    "include_orchestration_trace", "stream", "attribution", "routing", "session_id",
     # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
     "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
-    "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "model", "input", "instructions", "stream", "metadata", "reasoning", "session_id",
     "prompt_cache_key", "client_metadata",
     # OpenAI Responses native output budget (not max_tokens on this surface).
     "max_output_tokens",
@@ -94,10 +94,10 @@ ALLOWED_RESPONSES_KEYS = {
     # (omit-real optionals), not rejected wholesale.
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
-ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "input_metadata", "input_attributions", "user", "encoding_format", "dimensions", "routing"}
+ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "session_id"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "input_metadata", "input_attributions", "user", "encoding_format", "dimensions", "routing", "session_id"}
 ALLOWED_EMBEDDINGS_KEYS = {
-    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing",
+    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing", "session_id",
 }
 ALLOWED_COMPLETIONS_KEYS = {
     "model", "prompt", "stream", "stream_options", "echo", "suffix", "best_of",
@@ -117,7 +117,7 @@ ALLOWED_COMPLETIONS_KEYS = {
     "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
     "reasoning", "background", "include",
     "tool_resources",
-} | {"attribution", "routing"}
+} | {"attribution", "routing", "session_id"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 # Chat message object keys this gateway interprets. Anything else fails closed
 # with unknown_message_fields (named error, not silent strip/smuggle).
@@ -470,6 +470,11 @@ class SecurityConfig:
             if count >= self.rate_limit_requests:
                 raise RequestError(429, "rate_limit_exceeded", "request rate limit exceeded")
             self._rate_buckets[key] = (count + 1, reset_at)
+
+    @property
+    def batch_poll_after_ms(self) -> int:
+        """Return the rate-budget-derived minimum batch polling cadence."""
+        return math.ceil(self.rate_limit_window_seconds * 1000 / self.rate_limit_requests)
 
     def acquire_run_slot(self) -> None:
         """Reserve a run slot, rejecting quickly when the process is saturated."""
@@ -5131,7 +5136,8 @@ def build_server(
                     self._authorize("inference")
                     self._send(
                         coordinator.embedding_batch_capabilities(
-                            max_request_body_bytes=security.max_body_bytes
+                            max_request_body_bytes=security.max_body_bytes,
+                            poll_after_ms=security.batch_poll_after_ms,
                         )
                     )
                     return
@@ -5141,7 +5147,10 @@ def build_server(
                     self._authorize("inference")
                     batch_id = path[len("/v1/batch/embeddings/"):]
                     try:
-                        self._send(coordinator.embeddings_batch_document(batch_id))
+                        document = coordinator.embeddings_batch_document(batch_id)
+                        document["poll_after_ms"] = security.batch_poll_after_ms
+                        document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
+                        self._send(document)
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
@@ -5580,7 +5589,7 @@ def build_server(
                     for key in ("metadata", "client_metadata")
                     if isinstance((value := body.get(key)), dict)
                 ]
-                request_session_id = session_id_from_request(self.headers, *metadata_values)
+                request_session_id = session_id_from_request(self.headers, body, *metadata_values)
                 if request_session_id != current_session_id():
                     self._bind_session(request_session_id)
                 cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
@@ -5588,6 +5597,46 @@ def build_server(
                     self.headers.get("x-request-timeout-ms")
                 )
                 cache_partition = self._cache_partition()
+
+                if path.startswith("/v1/batch/embeddings/") and path.endswith("/cancel"):
+                    _reject_unknown_keys(body, {"reason"})
+                    reason = body.get("reason")
+                    if (
+                        not isinstance(reason, str)
+                        or not reason.strip()
+                        or len(reason) > 128
+                        or not reason.replace("_", "").isalnum()
+                        or reason != reason.lower()
+                    ):
+                        raise RequestError(
+                            400,
+                            "invalid_cancellation_reason",
+                            "reason must be a lowercase code of at most 128 characters",
+                        )
+                    batch_id = path[len("/v1/batch/embeddings/") : -len("/cancel")]
+                    try:
+                        document = coordinator.cancel_embeddings_batch(
+                            batch_id, reason=reason.strip()
+                        )
+                    except KeyError:
+                        raise RequestError(
+                            404,
+                            "embeddings_batch_not_found",
+                            "embeddings batch was not found",
+                        ) from None
+                    document["poll_after_ms"] = security.batch_poll_after_ms
+                    document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
+                    orchestrator.record_analytics_event(
+                        "embeddings_batch_cancelled",
+                        {
+                            "endpoint_path": "/v1/batch/embeddings/{batch_id}/cancel",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "cancellation_reason": reason.strip(),
+                        },
+                    )
+                    self._send(document)
+                    return
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -6082,6 +6131,7 @@ def build_server(
                                     attribution=attribution,
                                     metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                     routing_agent_id=agent.id,
+                                    wait_for_terminal=True,
                                 ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             if isinstance(exc, RequestDeadlineExceeded):
@@ -6094,6 +6144,14 @@ def build_server(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
                             )
+                            break
+                        if document.get("status") == "failed":
+                            last_embedding_error = RuntimeError(
+                                f"embedding backend failed: {document.get('failure') or {}}"
+                            )
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            document = None
+                            continue
                         break
                     if document is None:
                         raise RequestError(
@@ -6152,7 +6210,11 @@ def build_server(
                         attribution["model_name"] = model_name
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_batch_api"
+                    if request_session_id is not None:
+                        attribution["session_id"] = request_session_id
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
+                    if request_session_id is not None:
+                        submit_metadata["session_id"] = request_session_id
                     endpoint_alias = _validate_batch_embeddings_endpoint(body)
                     if endpoint_alias is not None:
                         submit_metadata["endpoint_alias"] = endpoint_alias
@@ -6172,6 +6234,7 @@ def build_server(
                                     routing_agent_id=agent.id,
                                     input_attributions=input_attributions,
                                     input_metadata=input_metadata,
+                                    wait_for_terminal=False,
                                 ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             if isinstance(exc, RequestDeadlineExceeded):
@@ -6191,6 +6254,8 @@ def build_server(
                             "embeddings_unavailable",
                             "all enabled embedding-capable model group members failed",
                         ) from last_embedding_error
+                    document["poll_after_ms"] = security.batch_poll_after_ms
+                    document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
                     is_complete = document.get("status") == "completed"
                     orchestrator.record_analytics_event(
                         "embeddings_batch_created",

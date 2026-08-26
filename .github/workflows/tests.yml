@@ -35,5 +35,12 @@ jobs:
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --require-hashes -r fuzz/requirements-property.txt
 
+      - name: Build package-scoped Rust token packer
+        run: |
+          docker run --rm --volume "$PWD:/io" --workdir /io/rust/token_counter \
+            ghcr.io/pyo3/maturin@sha256:b6c8b59a0170b77eb31a35b56034abd39972483ad0ebfff344deaa42a85f3bd3 \
+            build --locked --release --out /io/dist
+          python -m pip install --no-deps dist/*.whl
+
       - name: Run full test suite
         run: python -m pytest -q

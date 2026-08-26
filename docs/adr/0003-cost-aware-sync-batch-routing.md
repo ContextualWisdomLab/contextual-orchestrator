@@ -55,6 +55,22 @@ only.
    remote embedding agent. Once a remote agent carries the explicit
    `embedding` capability, sync and batch embedding requests call that agent's
    provider endpoint and preserve the resolved model and provider token usage.
+6. **Published limits are exact-model contracts.** For OpenAI
+   `text-embedding-3-large`, request packing uses the provider-published limits:
+   2,048 array inputs, 8,192 tokens per input, and 300,000 tokens per request.
+   Token counts use the model's `cl100k_base` tokenizer; character or word-count
+   estimates cannot authorize a request. The capability record carries its
+   authority URL and is not inherited by another provider or model (OpenAI,
+   2026).
+7. **Rust owns exact packing.** The owned `rust/` Cargo workspace builds a
+   typed PyO3 extension with pinned Rust 1.97.1. It performs cl100k
+   tokenization, token-boundary child chunking, source token-range retention,
+   and request sharding with Rayon; Python only orchestrates the returned
+   typed parts. Completed provider shards are checkpointed under an atomic
+   leased claim so retries neither repeat their provider cost nor reorder
+   outputs. The separate 50,000-input OpenAI Batch-file limit does not apply to
+   this service's custom durable `/v1/batch/embeddings` endpoint because it
+   does not upload `/v1/batches` JSONL files.
 
 ## Consequences
 
@@ -76,6 +92,9 @@ only.
   table-driven. It is not RouteLLM's preference model.
 
 ## References
+
+OpenAI. (2026). *Create embeddings*. OpenAI API reference.
+https://developers.openai.com/api/reference/ruby/resources/embeddings/methods/create
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance* [Preprint].

@@ -28,6 +28,8 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ProviderResponseError,
     RequestDeadlineExceeded,
     is_transient_error,
+    _is_tool_execution_stopped,
+    _provider_limit_contract,
 )
 import contextual_orchestrator.orchestrator as orchestrator_module
 from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
@@ -56,6 +58,15 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(urllib.error.URLError("dns"))
     assert is_transient_error(TimeoutError("read timeout"))
     assert is_transient_error(socket.timeout("slow"))
+
+
+def test_http_error_body_is_shared_by_terminal_and_limit_classifiers() -> None:
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/embeddings", 413, "large", {},
+        io.BytesIO(json.dumps({"error": {"code": "too_many_inputs", "max_inputs": 2}}).encode()),
+    )
+    assert not _is_tool_execution_stopped(error)
+    assert _provider_limit_contract(error) == ("too_many_inputs", 2, None)
 
 
 def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> None:

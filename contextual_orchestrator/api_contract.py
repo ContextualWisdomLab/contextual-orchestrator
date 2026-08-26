@@ -758,7 +758,13 @@ OPENAPI_SPEC = {
                             "input_part_counts, map_reduce}"
                         )
                     },
-                    "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
+                    "202": {
+                        "description": (
+                            "Batch accepted; poll GET /v1/batch/embeddings/{batch_id} "
+                            "after the returned poll_after_ms; terminal results remain "
+                            "available for job_retention_ms"
+                        )
+                    },
                     "503": {"description": "No enabled embedding-capable agent is available"},
                 },
             }
@@ -774,8 +780,8 @@ OPENAPI_SPEC = {
                 "responses": {
                     "200": {
                         "description": (
-                            "{batch_id, status, embeddings:[[...]], cost_micro_usd, "
-                            "token_counts, input_part_counts, map_reduce}"
+                            "{batch_id, status, poll_after_ms, job_retention_ms, embeddings:[[...]], "
+                            "cost_micro_usd, token_counts, input_part_counts, map_reduce}"
                         )
                     },
                     "404": {"description": "Embeddings batch not found"},
@@ -789,7 +795,11 @@ OPENAPI_SPEC = {
                 "security": [{"inference_bearer_auth": []}],
                 "responses": {
                     "200": {
-                        "description": "Enforced max_request_body_bytes, max_tokens_per_part, and max_chars_per_part"
+                        "description": (
+                            "Enforced max_request_body_bytes, max_tokens_per_part, "
+                            "max_chars_per_part, rate-budget-derived poll_after_ms, and "
+                            "configured job_retention_ms"
+                        )
                     }
                 },
             }

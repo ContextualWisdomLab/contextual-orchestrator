@@ -10,8 +10,17 @@ import pytest
 from contextual_orchestrator.token_counting import (
     HeuristicTokenCounter,
     PgTiktokenAdapter,
+    RustCl100kPacker,
     build_token_counter,
 )
+
+
+def test_exact_cl100k_packing_fails_closed_without_rust_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "contextual_orchestrator._token_packer", None)
+    with pytest.raises(RuntimeError, match="Rust token packer extension is unavailable"):
+        RustCl100kPacker()
 
 
 def test_heuristic_empty_and_whitespace_only_text_count_zero() -> None:

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
 from collections.abc import MutableMapping
 from typing import Any, Callable, Iterator, Optional
 
@@ -123,11 +124,28 @@ class JobRegistryFactory:
     def __init__(self, client: Any = None, *, retention_seconds: int = DEFAULT_RETENTION_SECONDS) -> None:
         self._client = client
         self._retention_seconds = retention_seconds
+        self._local_locks: dict[str, threading.Lock] = {}
+
+    def lock(self, name: str, key: str):
+        """Return an atomic shard claim with the registry retention as its lease."""
+        lock_name = f"batch_job_registry:{name}:claim:{key}"
+        if self._client is not None:
+            return self._client.lock(
+                lock_name,
+                timeout=self._retention_seconds,
+                blocking_timeout=self._retention_seconds,
+            )
+        return self._local_locks.setdefault(lock_name, threading.Lock())
 
     @property
     def durable(self) -> bool:
         """True when registries survive a process restart."""
         return self._client is not None
+
+    @property
+    def retention_seconds(self) -> int:
+        """Return the configured terminal-result retention contract."""
+        return self._retention_seconds
 
     def mapping(self, name: str, *, decode: Optional[Callable[[Any], Any]] = None) -> MutableMapping:
         """Return the registry called ``name`` — a dict unless Valkey is configured."""

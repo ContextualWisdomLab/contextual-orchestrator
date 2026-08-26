@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 import pytest
@@ -25,7 +26,6 @@ from contextual_orchestrator.cost_router import (
 from contextual_orchestrator.cost_router import (
     _positive_int,
     _provider_from_base_url,
-    _weighted_average_embedding,
 )
 
 
@@ -196,27 +196,6 @@ def test_positive_int_defaults_on_garbage_and_non_positive() -> None:
     assert _positive_int(True, 3) == 1  # bool coerces to 1, which is positive
 
 
-# --- weighted average embedding reduction ----------------------------------------------
-
-
-def test_weighted_average_empty_vectors_returns_empty() -> None:
-    assert _weighted_average_embedding([]) == []
-    assert _weighted_average_embedding([([], 5)]) == []
-
-
-def test_weighted_average_clamps_degenerate_weights_to_one() -> None:
-    reduced = _weighted_average_embedding([([2.0, 4.0], 0), ([4.0, 6.0], -1)])
-    # Zero/negative weights clamp up to 1, so this is the plain part mean.
-    assert reduced == [pytest.approx(3.0), pytest.approx(5.0)]
-
-
-def test_weighted_average_respects_ragged_dimensions_and_weights() -> None:
-    reduced = _weighted_average_embedding([([1.0, 3.0, 9.0], 3), ([2.0], 1)])
-    assert reduced[0] == pytest.approx((1.0 * 3 + 2.0 * 1) / 4)
-    assert reduced[1] == pytest.approx(9.0 / 4)  # short vector contributes zero
-    assert reduced[2] == pytest.approx(27.0 / 4)
-
-
 # --- embeddings batch document lifecycle -------------------------------------------------
 
 
@@ -276,6 +255,37 @@ def test_embeddings_document_is_idempotent_after_completion() -> None:
     assert first == second
     # The completed document cache means the backend is polled exactly once.
     assert backend.polled.count(job.job_id) == 1
+
+
+def test_concurrent_terminal_materialization_records_cost_once() -> None:
+    backend = _DroppingEmbeddingBackend()
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    coordinator._cl100k_packer = type(
+        "RustFixture", (), {
+            "weighted_average_embeddings": staticmethod(lambda parts: parts[0][0]),
+            "sum_token_counts": staticmethod(sum),
+        }
+    )()
+    job = coordinator.submit_embeddings_batch(["only one"])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        documents = list(pool.map(lambda _index: coordinator.embeddings_batch_document(job.job_id), range(2)))
+    assert documents[0] == documents[1]
+    assert len(coordinator.ledger.records()) == 1
+
+
+def test_cancelling_completed_batch_preserves_terminal_document() -> None:
+    backend = _DroppingEmbeddingBackend()
+    backend.cancel = lambda job, reason: {"status": "completed", "is_complete": True}
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    coordinator._cl100k_packer = type(
+        "RustFixture", (), {
+            "weighted_average_embeddings": staticmethod(lambda parts: parts[0][0]),
+            "sum_token_counts": staticmethod(sum),
+        }
+    )()
+    job = coordinator.submit_embeddings_batch(["only one"])
+    completed = coordinator.embeddings_batch_document(job.job_id)
+    assert coordinator.cancel_embeddings_batch(job.job_id, reason="too late") == completed
 
 
 def test_embeddings_document_requires_known_batch() -> None:
@@ -383,6 +393,7 @@ def test_document_recounts_tokens_when_backend_reports_zero_usage() -> None:
     document = coordinator.embeddings_batch_document(job.job_id)
     # HeuristicTokenCounter counts word units with the BPE expansion factor.
     assert document["token_counts"] == [4]
+    assert document["token_count_provenance"] == ["measured_or_estimated_per_input"]
 
 
 def test_complete_embeddings_batch_round_trips_locally() -> None:
