@@ -414,6 +414,8 @@ class CostRoutingCoordinator:
             }
             source_metadata = input_metadata[source_index] if input_metadata else {}
             source_text = str(text)
+            if not source_text:
+                raise ValueError("embedding inputs must be non-empty strings")
             parts = self._split_embedding_input(
                 source_text, model=model, max_tokens=max_tokens, max_chars=max_chars
             )
