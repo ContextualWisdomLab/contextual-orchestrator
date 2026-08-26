@@ -62,6 +62,15 @@ only.
    estimates cannot authorize a request. The capability record carries its
    authority URL and is not inherited by another provider or model (OpenAI,
    2026).
+7. **Rust owns exact packing.** The owned `rust/` Cargo workspace builds a
+   typed PyO3 extension with pinned Rust 1.97.1. It performs cl100k
+   tokenization, token-boundary child chunking, source token-range retention,
+   and request sharding with Rayon; Python only orchestrates the returned
+   typed parts. Completed provider shards are checkpointed under an atomic
+   leased claim so retries neither repeat their provider cost nor reorder
+   outputs. The separate 50,000-input OpenAI Batch-file limit does not apply to
+   this service's custom durable `/v1/batch/embeddings` endpoint because it
+   does not upload `/v1/batches` JSONL files.
 
 ## Consequences
 

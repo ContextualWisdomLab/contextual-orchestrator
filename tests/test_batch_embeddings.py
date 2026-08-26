@@ -45,6 +45,8 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _provider_limit_contract,
 )
 from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
+from contextual_orchestrator.batch_job_registry import JobRegistryFactory  # noqa: E402
+from contextual_orchestrator.embedding_capabilities import EmbeddingModelCapability  # noqa: E402
 
 
 CONTRACT = json.loads(
@@ -162,7 +164,6 @@ def test_openai_large_embedding_input_uses_exact_tokenizer_and_8192_limit() -> N
         tags=("embedding",),
     )
     coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
-    coordinator._cl100k_token_counter = HeuristicTokenCounter(tokens_per_word=1.0)
     requests, part_counts, limits = coordinator._build_embedding_requests(
         ["token " * 9_000],
         model=agent.model,
@@ -316,6 +317,75 @@ def test_provider_declared_maximum_drives_server_side_batch_split() -> None:
     assert coordinator.embedding_batch_capabilities(
         max_request_body_bytes=65_536, poll_after_ms=1_000
     )["max_inputs"] == 40
+
+
+def test_provider_shard_resume_reuses_completed_shards_in_original_order(monkeypatch) -> None:
+    """A retry resumes only an unfinished provider shard and preserves index order."""
+    capability = EmbeddingModelCapability(
+        "openai", "text-embedding-3-large", 2, 10, 2, "cl100k_base", "https://example.test"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router.embedding_model_capability",
+        lambda provider, model: capability if provider == "openai" else None,
+    )
+
+    class SharedRegistry(JobRegistryFactory):
+        def __init__(self):
+            super().__init__()
+            self.values = {}
+
+        def mapping(self, name, *, decode=None):
+            return self.values.setdefault(name, {})
+
+    class Client:
+        local_concurrency = 1
+
+        def __init__(self, fail_second):
+            self.fail_second = fail_second
+            self.calls = []
+
+        def embed_with_usage(self, _agent, texts):
+            self.calls.append(list(texts))
+            if self.fail_second and texts == ["third"]:
+                raise ProviderResponseError("synthetic terminal")
+            return [[float(ord(text[0]))] for text in texts], len(texts)
+
+    registry = SharedRegistry()
+    agent = ModelAgent(
+        "openai_embedding", "text-embedding-3-large", base_url="https://provider.example/v1",
+        provider_name="openai", tags=("embedding",),
+    )
+    first_client = Client(True)
+    first = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=first_client),
+        job_registry=registry,
+    )
+    created = first.complete_embeddings_batch(
+        ["alpha", "beta", "third"], model=agent.model, routing_agent_id=agent.id
+    )
+    for _attempt in range(100):
+        failed = first.embeddings_batch_document(created["batch_id"])
+        if failed["status"] == "failed":
+            break
+        time.sleep(0.01)
+    assert [len(call) for call in first_client.calls] == [2, 1]
+
+    second_client = Client(False)
+    second = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=second_client),
+        job_registry=registry,
+    )
+    retried = second.complete_embeddings_batch(
+        ["alpha", "beta", "third"], model=agent.model,
+        routing_agent_id=agent.id, attribution={"workflow_run": "retry"},
+    )
+    for _attempt in range(100):
+        document = second.embeddings_batch_document(retried["batch_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+    assert second_client.calls == [["third"]]
+    assert [item["embedding"] for item in document["embeddings"]] == [[97.0], [98.0], [116.0]]
 
 
 def test_provider_limit_parser_keeps_only_machine_readable_limits() -> None:

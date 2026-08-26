@@ -443,6 +443,9 @@ class EmbeddingBatchRequest:
     part_index: int = 0
     part_count: int = 1
     token_count: int = 0
+    token_start: int = 0
+    token_end: int = 0
+    shard_index: int = 0
     routing_agent_id: str | None = None
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:

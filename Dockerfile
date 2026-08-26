@@ -16,7 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl build-esse
        sh -s -- -y --profile minimal --default-toolchain 1.97.1
 ENV PATH=/root/.cargo/bin:$PATH
 COPY rust/token_counter/ /build/token_counter/
-RUN cargo build --locked --release --manifest-path /build/token_counter/Cargo.toml
+RUN python -m pip install --no-cache-dir 'maturin>=1.8,<2' \
+    && maturin build --locked --release --manifest-path /build/token_counter/Cargo.toml --out /build/wheels
 
 # python:3.12-slim
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
@@ -26,7 +27,8 @@ COPY pyproject.toml requirements.lock README.md LICENSE ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY contextual_orchestrator/ /usr/local/lib/python3.12/site-packages/contextual_orchestrator/
 COPY examples/ examples/
-COPY --from=token-builder /build/token_counter/target/release/contextual-token-counter /usr/local/bin/contextual-token-counter
+COPY --from=token-builder /build/wheels /tmp/token-wheels
+RUN pip install --no-cache-dir /tmp/token-wheels/*.whl && rm -rf /tmp/token-wheels
 
 ENV AGENTS_FILE=/app/examples/agents.mock.json \
     PORT=8000

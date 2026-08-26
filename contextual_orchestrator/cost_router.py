@@ -41,7 +41,7 @@ from .batch_routing import (
 from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
-from .token_counting import HeuristicTokenCounter, RustCl100kTokenCounter, build_token_counter
+from .token_counting import HeuristicTokenCounter, RustCl100kPacker, build_token_counter
 from .embedding_capabilities import embedding_model_capability
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
@@ -74,7 +74,7 @@ class CostRoutingCoordinator:
         self.token_counter = token_counter or (
             build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
         )
-        self._cl100k_token_counter: Any = None
+        self._cl100k_packer: Any = None
         self.policy = routing_policy or RoutingPolicy(self.config)
         # Job registries live in Valkey when the credential registry carries
         # batch_job_registry_valkey_url, so submitted jobs survive a process
@@ -125,23 +125,13 @@ class CostRoutingCoordinator:
                     return orchestrator.client.embed_with_usage(agent, texts)
                 vectors: List[List[float]] = []
                 total_tokens = 0
-                chunk: List[EmbeddingBatchRequest] = []
-                chunk_tokens = 0
                 shards: List[List[EmbeddingBatchRequest]] = []
                 for request in requests:
                     if request.token_count > capability.max_tokens_per_input:
                         raise ValueError("embedding input exceeds provider token limit")
-                    if chunk and (
-                        len(chunk) >= capability.max_inputs
-                        or chunk_tokens + request.token_count > capability.max_total_tokens
-                    ):
-                        shards.append(chunk)
-                        chunk = []
-                        chunk_tokens = 0
-                    chunk.append(request)
-                    chunk_tokens += request.token_count
-                if chunk:
-                    shards.append(chunk)
+                    if not shards or shards[-1][0].shard_index != request.shard_index:
+                        shards.append([])
+                    shards[-1].append(request)
                 for shard in shards:
                     shard_texts = [request.input_text for request in shard]
                     shard_key = hashlib.sha256(
@@ -156,22 +146,24 @@ class CostRoutingCoordinator:
                             separators=(",", ":"),
                         ).encode("utf-8")
                     ).hexdigest()
-                    cached = embedding_shards.get(shard_key)
-                    if isinstance(cached, dict):
-                        chunk_vectors = cached.get("vectors")
-                        used = cached.get("provider_tokens")
-                        if not isinstance(chunk_vectors, list) or type(used) is not int:
-                            raise RuntimeError("embedding shard checkpoint is invalid")
-                    else:
-                        chunk_vectors, used = orchestrator.client.embed_with_usage(
-                            agent, shard_texts
-                        )
-                        if len(chunk_vectors) != len(shard_texts):
-                            raise RuntimeError("provider embedding shard length mismatch")
-                        embedding_shards[shard_key] = {
-                            "vectors": chunk_vectors,
-                            "provider_tokens": used,
-                        }
+                    with registry.lock("embedding_provider_shards", shard_key):
+                        cached = embedding_shards.get(shard_key)
+                        if isinstance(cached, dict):
+                            chunk_vectors = cached.get("vectors")
+                            used = cached.get("provider_tokens")
+                            if not isinstance(chunk_vectors, list) or type(used) is not int:
+                                raise RuntimeError("embedding shard checkpoint is invalid")
+                        else:
+                            chunk_vectors, used = orchestrator.client.embed_with_usage(
+                                agent, shard_texts
+                            )
+                            if len(chunk_vectors) != len(shard_texts):
+                                raise RuntimeError("provider embedding shard length mismatch")
+                            embedding_shards[shard_key] = {
+                                "state": "completed",
+                                "vectors": chunk_vectors,
+                                "provider_tokens": used,
+                            }
                     vectors.extend(chunk_vectors)
                     total_tokens += used
                 return vectors, total_tokens
@@ -533,6 +525,37 @@ class CostRoutingCoordinator:
                 max_tokens = capability.max_tokens_per_input
         requests: List[EmbeddingBatchRequest] = []
         part_counts: List[int] = []
+        if capability is not None:
+            if self._cl100k_packer is None:
+                self._cl100k_packer = RustCl100kPacker()
+            packed_parts, packed_shards = self._cl100k_packer.pack_texts(
+                [str(value) for value in inputs],
+                max_tokens_per_input=capability.max_tokens_per_input,
+                max_inputs=capability.max_inputs,
+                max_total_tokens=capability.max_total_tokens,
+            )
+            shard_by_part = {
+                part_position: shard_index
+                for shard_index, positions in enumerate(packed_shards)
+                for part_position in positions
+            }
+            part_counts = [0] * len(inputs)
+            for part_position, part in enumerate(packed_parts):
+                source_index = part.source_index
+                part_counts[source_index] = part.part_count
+                requests.append(EmbeddingBatchRequest(
+                    input_text=part.text, model=model,
+                    attribution={**attribution, **(input_attributions[source_index] if input_attributions else {})},
+                    metadata=dict(input_metadata[source_index] if input_metadata else {}),
+                    source_index=source_index, part_index=part.part_index,
+                    part_count=part.part_count, token_count=part.token_count,
+                    token_start=part.token_start, token_end=part.token_end,
+                    shard_index=shard_by_part[part_position], routing_agent_id=routing_agent_id,
+                ))
+            return requests, part_counts, {
+                "max_tokens_per_part": capability.max_tokens_per_input,
+                "max_chars_per_part": max_chars,
+            }
         for source_index, text in enumerate(inputs):
             source_attribution = {
                 **attribution,
@@ -743,10 +766,6 @@ class CostRoutingCoordinator:
 
     def _count_embedding_tokens(self, text: str, model: str) -> int:
         """Count tokens for embedding split decisions, tolerating adapters."""
-        if model == "text-embedding-3-large":
-            if self._cl100k_token_counter is None:
-                self._cl100k_token_counter = RustCl100kTokenCounter()
-            return self._cl100k_token_counter.count_text(text, model)
         try:
             value = int(self.token_counter.count_text(text, model))
         except Exception:
