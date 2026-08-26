@@ -76,7 +76,7 @@ ADMIN_TRANSLATIONS = {
         "provider_exclusion_miss_rate": "Provider exclusion miss rate",
         "locale_key_parity": "Locale key parity",
         "readiness_summary": "Readiness summary",
-        "readiness_summary_text": "Criteria passed: {pass}. Need attention: {warn}. Failed: {fail}. See the rows below to fix what failed.",
+        "readiness_summary_text": "Sales and commercial criteria passed: {pass}. Need attention: {warn}. Failed: {fail}. See the rows below to fix what failed.",
         "readiness_source": "Readiness source",
         "readiness_measurement_status": "Measurement status",
         "readiness_remediation_label": "Remediation",
@@ -325,7 +325,7 @@ ADMIN_TRANSLATIONS = {
         "provider_exclusion_miss_rate": "공급자 제외 누락률",
         "locale_key_parity": "로케일 키 일치율",
         "readiness_summary": "준비도 요약",
-        "readiness_summary_text": "통과 기준 {pass}개, 주의 {warn}개, 실패 {fail}개. 아래 행에서 실패 항목을 해결하세요.",
+        "readiness_summary_text": "판매 및 상용 기준 통과 {pass}개, 주의 {warn}개, 실패 {fail}개. 아래 행에서 실패 항목을 해결하세요.",
         "readiness_source": "준비 근거",
         "readiness_measurement_status": "측정 상태",
         "readiness_remediation_label": "보완 조치",
@@ -1504,7 +1504,7 @@ Summarize this research thread and verify claims.</textarea>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${statusLabel(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+          <strong>${escapeHtml(statusLabel(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown"))}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>

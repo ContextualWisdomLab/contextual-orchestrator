@@ -55,6 +55,12 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert '{ pass: "ok", warn: "warning", fail: "failure" }[row.status]' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["readiness_ok"] == "Pass"
     assert ADMIN_TRANSLATIONS["ko"]["readiness_failure"] == "실패"
+    assert ADMIN_TRANSLATIONS["en"]["readiness_summary_text"].startswith(
+        "Sales and commercial criteria passed:"
+    )
+    assert ADMIN_TRANSLATIONS["ko"]["readiness_summary_text"].startswith("판매 및 상용 기준 통과")
+    assert "${escapeHtml(statusLabel(" in ADMIN_HTML
+    assert "<strong>${statusLabel(" not in ADMIN_HTML
     assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
     assert "viewAudit: document.querySelector" in ADMIN_HTML
     assert 'els.viewAudit.addEventListener("click", () => showView("audit"))' in ADMIN_HTML
