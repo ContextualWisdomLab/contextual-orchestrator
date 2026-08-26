@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 import sys
@@ -96,6 +97,18 @@ def test_http_models_get_by_id() -> None:
         assert status == 200, body
         assert body.get("id") == "mock-coder"
         assert body.get("object") == "model"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_models_get_url_encoded_virtual_id() -> None:
+    server, thread, port = _server()
+    try:
+        model_id = urllib.parse.quote("orchestrator/auto", safe="")
+        status, body = _get(port, f"/v1/models/{model_id}", token=_TEST_AUTH_TOKEN)
+        assert status == 200, body
+        assert body.get("id") == "orchestrator/auto"
     finally:
         server.shutdown()
         thread.join(timeout=5)

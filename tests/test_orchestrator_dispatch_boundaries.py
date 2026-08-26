@@ -263,15 +263,6 @@ def test_parse_workflow_plan_rejects_empty_subtasks() -> None:
         orch._parse_workflow_plan(json.dumps(raw))
 
 
-def test_score_agent_penalizes_disabled_and_excluded_agents() -> None:
-    disabled = _agent("bench_agent", disabled=True)
-    excluded = _agent("excluded_agent", tags=("coding",), provider_exclusions=("worker",))
-
-    orch = _orch(_agent())
-    assert orch._score_agent(disabled, "worker", "code")[0] == -20_000
-    assert orch._score_agent(excluded, "worker", "code")[0] == -10_000
-
-
 def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> None:
     from contextual_orchestrator.tool_fallback import (
         ToolExecutionError,

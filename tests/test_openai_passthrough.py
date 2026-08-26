@@ -120,6 +120,32 @@ def test_proxy_completion_honors_an_enabled_requested_worker_model() -> None:
     assert result["model"] == "mock-builder"
 
 
+def test_proxy_completion_free_model_uses_only_an_explicitly_free_agent() -> None:
+    orch = TaskOrchestrator(
+        agents=[
+            ModelAgent("paid_agent", "paid-model", priority=100),
+            ModelAgent("free_agent", "free-model", tags=("cost:free",)),
+        ]
+    )
+
+    result = orch.proxy_completion({
+        "model": orch.FREE_MODEL,
+        "messages": [{"role": "user", "content": "call a tool"}],
+        "tools": [],
+    })
+
+    assert result["model"] == "free-model"
+
+
+def test_proxy_completion_free_model_fails_closed_without_a_free_agent() -> None:
+    with pytest.raises(RuntimeError, match="no enabled zero-cost model"):
+        _build().proxy_completion({
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "call a tool"}],
+            "tools": [],
+        })
+
+
 def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
     try:
         _build().proxy_completion({
@@ -232,7 +258,8 @@ def test_http_models_endpoint_lists_configured_models() -> None:
     # Disabled models are omitted: an inference-scope caller should never see
     # a model it cannot actually call (matches real OpenAI API behavior).
     assert {item["id"] for item in body["data"]} == {
-        "contextual-orchestrator", "mock-planner", "mock-builder", "mock-reviewer"
+        "contextual-orchestrator", "orchestrator/auto", "mock-planner",
+        "mock-builder", "mock-reviewer",
     }
 
 

@@ -179,7 +179,7 @@ def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
     class _Orchestrator:
         client = _Client()
 
-        def complete(self, messages, *, mode):
+        def complete(self, messages, *, mode, model_name):
             return {"answer": messages[-1]["content"], "mode": mode}
 
     coordinator = CostRoutingCoordinator(_Orchestrator())

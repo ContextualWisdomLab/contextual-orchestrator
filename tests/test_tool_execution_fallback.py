@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from dataclasses import replace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -214,12 +215,16 @@ def _orchestrator(
         ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
         ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
     ]
-    return TaskOrchestrator(
+    orchestrator = TaskOrchestrator(
         agents,
         client=client,
         tool_retry_attempts=tool_retry_attempts,
         tool_retry_backoff_seconds=tool_retry_backoff_seconds,
     )
+    # Mechanical fallback/retry contracts: real-time judging is orthogonal and
+    # its extra provider calls would consume scripted outcomes.
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    return orchestrator
 
 
 def test_exact_strix_missing_tool_failure_falls_back_to_backup_agent() -> None:
