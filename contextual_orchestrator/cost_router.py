@@ -1006,7 +1006,7 @@ class CostRoutingCoordinator:
                 }
             )
 
-        if provider_batch_tokens is not None:
+        if provider_batch_tokens is not None and input_count > 0:
             # A provider-reported batch total has no defensible per-input
             # allocation. Preserve each input's attribution in ``embeddings``
             # above, and record usage once against common batch dimensions

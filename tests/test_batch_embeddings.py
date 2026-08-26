@@ -1245,12 +1245,24 @@ def test_pending_batch_preserves_resolved_model_identity() -> None:
 
 
 def test_empty_batch_preserves_resolved_model_identity() -> None:
-    orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "embedding_worker",
+                "resolved-embedding",
+                base_url="https://provider.example/v1",
+                tags=("embedding",),
+            )
+        ]
+    )
     coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
 
-    document = coordinator.complete_embeddings_batch([], model="resolved-embedding")
+    document = coordinator.complete_embeddings_batch(
+        [], model="resolved-embedding", routing_agent_id="embedding_worker"
+    )
 
     assert document["model"] == "resolved-embedding"
+    assert coordinator.ledger.records() == []
 
 
 def test_blank_embedding_input_fails_before_backend_selection() -> None:
