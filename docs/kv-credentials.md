@@ -213,6 +213,14 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
 | Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+| Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
+
+For a configured gateway, the one-shot discovery/bootstrap boundary accepts
+`LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
+host is listed in `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`. It promotes
+`LLM_GATEWAY_API_KEY` into the KV before discovery; provider requests and normal
+runtime routing then read the key only from KV. The full chat catalog remains
+visible, while `--free-only` still selects only structured zero-price evidence.
 
 Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider

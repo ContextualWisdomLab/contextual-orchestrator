@@ -17,10 +17,12 @@ from decimal import Decimal
 import json
 import math
 import re
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential
@@ -33,6 +35,7 @@ DISCOVERY_TIMEOUT_SECONDS = 15.0
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
 _MODELS_DEV_OPENCODE_PROVIDER = "opencode"
+CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -68,6 +71,57 @@ class ProviderModelSource:
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
     capabilities: tuple[str, ...] = ()
+
+
+def configured_gateway_source(
+    environ: Mapping[str, str],
+) -> ProviderModelSource | None:
+    """Build one allowlisted OpenAI-compatible gateway source at bootstrap.
+
+    The URL is non-secret bootstrap transport. The API key is referenced only
+    by its KV credential name; callers may promote the environment value into
+    the credential registry before runtime discovery starts.
+    """
+    values = {
+        value.strip().rstrip("/")
+        for name in ("LLM_GATEWAY_API_URL", "LLM_GATEWAY_URL")
+        if isinstance((value := environ.get(name)), str) and value.strip()
+    }
+    if not values:
+        return None
+    if len(values) != 1:
+        raise ValueError("LLM gateway URL settings must identify the same endpoint")
+    raw_url = values.pop()
+    parsed = urlsplit(raw_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("LLM gateway URL must be a credential-free HTTPS base URL")
+    allowed_hosts = {
+        host.strip().casefold()
+        for host in environ.get(
+            "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", ""
+        ).split(",")
+        if host.strip()
+    }
+    if parsed.hostname.casefold() not in allowed_hosts:
+        raise ValueError("LLM gateway host must be present in the provider allowlist")
+    path = parsed.path.rstrip("/")
+    if not path.endswith("/v1"):
+        path += "/v1"
+    base_url = urlunsplit(("https", parsed.netloc, path, "", ""))
+    return ProviderModelSource(
+        provider_name="configured_gateway",
+        credential_name=CONFIGURED_GATEWAY_CREDENTIAL_NAME,
+        list_url=f"{base_url}/models",
+        chat_base_url=base_url,
+        capabilities=("chat",),
+    )
 
 
 # NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
@@ -157,7 +211,18 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
     headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    try:
+        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - validated https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    except urllib.error.URLError as exc:
+        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise
+        import certifi
+
+        context = ssl.create_default_context(cafile=certifi.where())
+        response = urllib.request.urlopen(  # noqa: S310 - validated https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+            request, timeout=timeout, context=context
+        )
+    with response:
         return json.loads(response.read().decode("utf-8"))
 
 
