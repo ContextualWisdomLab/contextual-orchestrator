@@ -68,6 +68,7 @@ def test_auto_discovery_removes_the_configured_gateway_placeholder(monkeypatch) 
 
     assert result["added"] == ["configured_gateway_chat_capable_model"]
     assert [agent.model for agent in orchestrator.agents] == ["chat-capable-model"]
+    assert placeholder.id not in orchestrator._group_router.snapshot()
 
 
 def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:

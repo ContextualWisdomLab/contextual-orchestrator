@@ -368,13 +368,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for agent in orchestrator.candidates
         if agent.provider_name == "configured_gateway" and not agent.model.strip()
     }
-    if placeholders:
-        orchestrator.candidates = [
-            agent for agent in orchestrator.candidates if agent.id not in placeholders
-        ]
-        orchestrator.agents = [
-            agent for agent in orchestrator.agents if agent.id not in placeholders
-        ]
+    for placeholder_id in placeholders:
+        orchestrator.remove_agent("default", placeholder_id)
     return result
 
 
