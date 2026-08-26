@@ -68,11 +68,14 @@ def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:
         assert status == 200
         assert unprobed["status"] == "unprobed"
 
-        status, refreshed = request(f"{url}?refresh=true")
-        assert status == 200
-        assert refreshed["status"] == "ready"
-        assert refreshed["ready_agent_count"] == 1
-        assert refreshed["items"][1]["status"] == "disabled"
+        try:
+            request(f"{url}?refresh=true")
+        except HTTPError as exc:
+            assert exc.code == 409
+            body = json.loads(exc.read().decode("utf-8"))
+            assert body["error"]["code"] == "async_readiness_refresh_required"
+        else:  # pragma: no cover
+            raise AssertionError("inline broad readiness refresh must not run")
 
         try:
             request(f"{url}?refresh=true", token=None)

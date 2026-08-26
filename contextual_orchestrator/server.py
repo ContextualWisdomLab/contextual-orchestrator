@@ -140,6 +140,9 @@ ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_SESSION_KEYS = {"token"}
+ALLOWED_PROVIDER_READINESS_REFRESH_KEYS = {
+    "agent_ids", "capability_code", "timeout_seconds"
+}
 ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions", "group_name"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -5230,7 +5233,22 @@ def build_server(
                     raw_refresh = (query.get("refresh") or ["false"])[0].lower()
                     if raw_refresh not in {"true", "false"}:
                         raise ValueError("refresh must be true or false")
-                    self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
+                    if raw_refresh == "true":
+                        raise RequestError(
+                            409,
+                            "async_readiness_refresh_required",
+                            "submit an explicit provider readiness refresh job",
+                        )
+                    self._send(orchestrator.provider_readiness_report(refresh=False))
+                    return
+                if path.startswith("/api/v1/provider_readiness_refreshes/"):
+                    job_id = path.rsplit("/", 1)[-1]
+                    try:
+                        self._send(coordinator.provider_readiness_refresh_document(job_id))
+                    except KeyError:
+                        raise RequestError(
+                            404, "provider_readiness_refresh_not_found", "readiness refresh was not found"
+                        ) from None
                     return
                 if path == "/api/v1/analytics_snapshots/latest":
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
@@ -5581,8 +5599,13 @@ def build_server(
                     return
                 scope = (
                     "admin"
-                    if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
+                    if path in {
+                        "/admin/simulate",
+                        "/api/v1/evaluation_runs",
+                        "/api/v1/provider_readiness_refreshes",
+                    }
                     or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups"))
+                    or path.startswith("/api/v1/provider_readiness_refreshes/")
                     else "inference"
                 )
                 self._authorize(scope, state_changing=True)
@@ -5600,6 +5623,49 @@ def build_server(
                     self.headers.get("x-request-timeout-ms")
                 )
                 cache_partition = self._cache_partition()
+
+                if path == "/api/v1/provider_readiness_refreshes":
+                    _reject_unknown_keys(body, ALLOWED_PROVIDER_READINESS_REFRESH_KEYS)
+                    agent_ids = body.get("agent_ids")
+                    if not isinstance(agent_ids, list):
+                        raise RequestError(400, "invalid_agent_ids", "agent_ids must be a list")
+                    timeout_seconds = body.get("timeout_seconds")
+                    if (
+                        isinstance(timeout_seconds, bool)
+                        or not isinstance(timeout_seconds, (int, float))
+                        or timeout_seconds <= 0
+                    ):
+                        raise RequestError(
+                            400, "invalid_probe_timeout", "timeout_seconds must be positive"
+                        )
+                    if request_deadline is None:
+                        raise RequestError(
+                            400,
+                            "request_timeout_required",
+                            "X-Request-Timeout-Ms is required for readiness refresh jobs",
+                        )
+                    deadline_epoch = (
+                        time.time() + max(0.0, request_deadline - time.monotonic())
+                    )
+                    document = coordinator.submit_provider_readiness_refresh(
+                        agent_ids=agent_ids,
+                        capability_code=body.get("capability_code"),
+                        timeout_seconds=float(timeout_seconds),
+                        deadline_epoch=deadline_epoch,
+                    )
+                    self._send(document, 202)
+                    return
+
+                if path.startswith("/api/v1/provider_readiness_refreshes/") and path.endswith("/cancel"):
+                    _reject_unknown_keys(body, set())
+                    job_id = path[len("/api/v1/provider_readiness_refreshes/") : -len("/cancel")]
+                    try:
+                        self._send(coordinator.cancel_provider_readiness_refresh(job_id))
+                    except KeyError:
+                        raise RequestError(
+                            404, "provider_readiness_refresh_not_found", "readiness refresh was not found"
+                        ) from None
+                    return
 
                 if path.startswith("/v1/batch/embeddings/") and path.endswith("/cancel"):
                     _reject_unknown_keys(body, {"reason"})
