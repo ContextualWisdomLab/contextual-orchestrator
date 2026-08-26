@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import uuid
 from collections.abc import Mapping
@@ -147,6 +148,7 @@ def publish_artifact_set(
     final.parent.mkdir(parents=True, exist_ok=True)
     _recover_publication(final)
     staging = Path(tempfile.mkdtemp(dir=final.parent, prefix=f".{final.name}.staging-"))
+    staging.chmod(stat.S_IMODE(final.stat().st_mode) if final.exists() else 0o755)
     backup: Path | None = None
     try:
         for name, payload in artifacts.items():
@@ -161,7 +163,10 @@ def publish_artifact_set(
                 os.replace(backup, final)
             raise
         if backup is not None:
-            shutil.rmtree(backup)
+            try:
+                shutil.rmtree(backup)
+            except OSError:
+                pass
     finally:
         if staging.exists():
             shutil.rmtree(staging)

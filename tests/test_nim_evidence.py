@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,25 @@ def test_complete_set_replaces_prior_set_and_rejects_partial_set(
     fresh = tmp_path / "fresh"
     publish_artifact_set(fresh, _artifacts())
     assert fresh.is_dir()
+    assert fresh.stat().st_mode & 0o777 == 0o755
+
+
+def test_successful_replacement_preserves_mode_and_ignores_backup_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nim_evidence"
+    target.mkdir(mode=0o750)
+    real_rmtree = shutil.rmtree
+
+    def fail_backup(path: str | os.PathLike[str]) -> None:
+        if Path(path).name.startswith(".nim_evidence.backup-"):
+            raise OSError("simulated cleanup failure")
+        real_rmtree(path)
+
+    monkeypatch.setattr("contextual_orchestrator.nim_evidence.shutil.rmtree", fail_backup)
+    publish_artifact_set(target, _artifacts())
+    assert target.stat().st_mode & 0o777 == 0o750
+    assert (target / "benchmark_report.json").read_bytes() == b"{}"
 
 
 def test_publication_rejects_invalid_payloads_and_targets(tmp_path: Path) -> None:
