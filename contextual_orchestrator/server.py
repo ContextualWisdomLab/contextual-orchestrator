@@ -26,6 +26,7 @@ from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
+    _coerce_input_text,
     _new_chat_completion_id,
     chat_completion_chunks,
     chat_completion_response,
@@ -35,6 +36,7 @@ from .orchestrator import (
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
 from .tool_fallback import ToolFallbackStoppedError
+from .model_group import canonical_group_name
 from .telemetry import (
     attach_trace_context,
     configure_telemetry,
@@ -135,7 +137,7 @@ ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_SESSION_KEYS = {"token"}
-ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
+ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions", "group_name"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
     "model",
@@ -147,7 +149,10 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "disabled",
     "provider_name",
     "provider_exclusions",
+    "group_name",
 }
+ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
+ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
 ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 DEFAULT_MAX_ADMIN_SESSIONS = 256
@@ -2020,11 +2025,12 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
 def _validate_responses_stream_options(body: dict[str, Any]) -> None:
     """Responses ``stream_options`` — not supported (Responses streaming is off).
 
-    OpenAI pairs stream_options with stream=true. This gateway rejects
-    stream=true on /v1/responses, so any present stream_options would be a
-    silent no-op; fail closed instead. Explicit JSON null (object or *allowed*
-    flag values) is treat-as-omit. Unknown keys fail closed even when null so
-    clients cannot smuggle unsupported flags past the allow-list via nulls.
+    OpenAI pairs stream_options with stream=true. Virtual models can stream,
+    but this gateway does not implement usage aggregation or obfuscation flags;
+    fail closed on enabled flags rather than silently ignoring them. Explicit
+    JSON null (object or *allowed* flag values) is treat-as-omit. Unknown keys
+    fail closed even when null so clients cannot smuggle unsupported flags past
+    the allow-list via nulls.
     """
     if "stream_options" not in body:
         return
@@ -2053,7 +2059,7 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
     raise RequestError(
         400,
         "invalid_stream_options",
-        "stream_options is not supported on /v1/responses (stream is not supported)",
+        "stream_options flags are not supported on /v1/responses",
     )
 
 
@@ -2066,23 +2072,104 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
+    """Validate the required trust-boundary fields for media/rerank passthrough."""
+    model = body.get("model")
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    required_strings = {
+        "/v1/images/generations": ("prompt",),
+        "/v1/videos": ("prompt",),
+        "/v1/audio/speech": ("input", "voice"),
+        "/v1/rerank": ("query",),
+    }.get(path, ())
+    for required_field in required_strings:
+        if not isinstance(body.get(required_field), str) or not body[required_field].strip():
+            raise RequestError(
+                400,
+                f"invalid_{required_field}",
+                f"{required_field} must be a non-empty string",
+            )
+    if path == "/v1/audio/transcriptions":
+        audio = body.get("input_audio")
+        if not isinstance(audio, dict) or not all(
+            isinstance(audio.get(field), str) and audio[field] for field in ("data", "format")
+        ):
+            raise RequestError(400, "invalid_input_audio", "input_audio.data and input_audio.format are required")
+    if path == "/v1/rerank":
+        documents = body.get("documents")
+        if not isinstance(documents, list) or not documents:
+            raise RequestError(400, "invalid_documents", "documents must be a non-empty array")
+    if path == "/v1/audio/generations":
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise RequestError(400, "invalid_messages", "messages must be a non-empty array")
+
+
 
 def _require_pool_model(
     orchestrator: Any, model_name: str, *, required_capability: str | None = None
-) -> None:
+) -> str:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
     """
     agents = getattr(orchestrator, "agents", None) or []
+    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+        if required_capability is None:
+            if model_name == TaskOrchestrator.AUTO_MODEL or any(
+                orchestrator._is_free_agent(agent) for agent in agents
+            ):
+                return model_name
+            raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
+        try:
+            capability_agents = orchestrator._capability_agents(required_capability)
+        except RuntimeError:
+            capability_agents = []
+        if model_name == TaskOrchestrator.FREE_MODEL:
+            capability_agents = [
+                agent for agent in capability_agents if orchestrator._is_free_agent(agent)
+            ]
+        if capability_agents:
+            return capability_agents[0].model
+        raise RequestError(
+            400,
+            "invalid_model",
+            f"no enabled {required_capability} model is available for {model_name}",
+        )
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
         if getattr(agent, "model", None) == model_name and (
-            required_capability is None or required_capability in getattr(agent, "tags", ())
+            required_capability is None
+            or (
+                required_capability in getattr(agent, "tags", ())
+                and required_capability not in getattr(agent, "provider_exclusions", ())
+            )
         ):
-            return
+            return model_name
+    try:
+        group_name = canonical_group_name(model_name)
+    except (TypeError, ValueError):
+        group_name = ""
+    members = [
+        agent
+        for agent in agents
+        if group_name
+        and getattr(agent, "group_name", "") == group_name
+        and (
+            required_capability is None
+            or (
+                required_capability in getattr(agent, "tags", ())
+                and required_capability not in getattr(agent, "provider_exclusions", ())
+            )
+        )
+    ]
+    if members:
+        ranked_ids = orchestrator._group_router.ranked_member_ids([agent.id for agent in members])
+        by_id = {agent.id: agent for agent in members}
+        return by_id[ranked_ids[0]].model
     raise RequestError(
         400,
         "invalid_model",
@@ -2857,7 +2944,10 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = str(body.get("model", "contextual-orchestrator"))
+    default_model = body.get("model", "contextual-orchestrator")
+    if not isinstance(default_model, str) or not default_model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    default_model = default_model.strip()
     batch: list[BatchRequest] = []
     seen_custom_ids: set[str] = set()
     for item in raw_requests:
@@ -2867,9 +2957,12 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
         attribution = _validate_attribution(item.get("attribution"))
         merged = {**default_attribution, **(attribution or {})}
         mode = _validate_mode(item.get("mode", "auto"))
+        model = item.get("model", default_model)
+        if not isinstance(model, str) or not model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
         kwargs: dict[str, Any] = {
             "messages": messages,
-            "model": str(item.get("model", default_model)),
+            "model": model.strip(),
             "attribution": merged,
             "mode": mode,
         }
@@ -4430,20 +4523,25 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
                     )
                 )
             )
-            summary_omit = (
+            summary_ok = (
                 "summary" not in value
                 or summary is None
-                or (isinstance(summary, str) and not summary.strip())
+                or (
+                    isinstance(summary, str)
+                    and (not summary.strip() or summary.strip().lower() in {"auto", "concise", "detailed"})
+                )
             )
-            if effort_ok and summary_omit:
+            if effort_ok and summary_ok:
                 if isinstance(effort, str) and effort.strip():
                     value["effort"] = effort.strip().lower()
-                    body["reasoning"] = value
+                if isinstance(summary, str) and summary.strip():
+                    value["summary"] = summary.strip().lower()
+                body["reasoning"] = value
                 return
     raise RequestError(
         400,
         "invalid_reasoning",
-        "reasoning.effort must be one of none, minimal, low, medium, high "
+        "reasoning.effort or reasoning.summary is invalid "
         "on /v1/responses",
     )
 
@@ -4783,6 +4881,65 @@ def responses_sse_body(response: dict[str, Any]) -> str:
     return "".join(frames)
 
 
+_REASONING_STAGE_SUMMARIES = {
+    "thinker": "Planning the approach.",
+    "worker": "Executing the selected approach.",
+    "verifier": "Checking the result for errors and unsupported claims.",
+    "synthesizer": "Preparing the final answer.",
+}
+
+
+def _orchestrated_response(
+    model: str,
+    result: dict[str, Any],
+    response_id: str,
+    created_at: int,
+    summaries: list[str],
+    *,
+    reasoning_id: str | None = None,
+    message_id: str | None = None,
+) -> dict[str, Any]:
+    """Build the OpenAI Responses shape for an orchestrated plain-text result."""
+    reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
+    message_id = message_id or f"msg_{uuid.uuid4().hex}"
+    return {
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "model": model,
+        "output": [
+            {
+                "id": reasoning_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{"type": "summary_text", "text": text} for text in summaries],
+            },
+            {
+                "id": message_id,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": result["answer"], "annotations": []}],
+            },
+        ],
+        "parallel_tool_calls": True,
+        "previous_response_id": None,
+        "reasoning": {"effort": None, "summary": "auto"},
+        "store": False,
+        "temperature": None,
+        "text": {"format": {"type": "text"}},
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "truncation": "disabled",
+        "usage": None,
+        "metadata": {},
+    }
+
+
 def build_server(
     orchestrator: TaskOrchestrator,
     host: str = "127.0.0.1",
@@ -4878,9 +5035,14 @@ def build_server(
                     if path == "/v1/models":
                         self._send(orchestrator.list_openai_models())
                         return
-                    model_id = urllib.parse.unquote(path[len("/v1/models/") :])
-                    if not model_id or "/" in model_id:
-                        raise RequestError(400, "invalid_model", "model id path must be a single segment")
+                    raw_model_id = path[len("/v1/models/") :]
+                    if not raw_model_id or "/" in raw_model_id:
+                        raise RequestError(
+                            400,
+                            "invalid_model",
+                            "model id must be one URL-encoded path segment",
+                        )
+                    model_id = urllib.parse.unquote(raw_model_id)
                     try:
                         self._send(orchestrator.get_openai_model(model_id))
                     except KeyError:
@@ -4951,6 +5113,16 @@ def build_server(
                         "page_number": page_number,
                         "page_size": page_size,
                     })
+                    return
+                if path == "/api/v1/model_groups":
+                    items = orchestrator.list_model_groups()
+                    self._send({"items": items, "total_count": len(items)})
+                    return
+                if path.startswith("/api/v1/model_groups/"):
+                    try:
+                        self._send(orchestrator.get_model_group(urllib.parse.unquote(path.rsplit("/", 1)[-1])))
+                    except KeyError:
+                        self._send_error(404, "model_group_not_found", "model group not found")
                     return
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
@@ -5227,6 +5399,18 @@ def build_server(
                     updated = orchestrator.patch_agent(segments[3], segments[-1], body)
                     self._send(updated, 200)
                     return
+                if path.startswith("/api/v1/model_groups/"):
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_PATCH_KEYS)
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    try:
+                        orchestrator.get_model_group(name)
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_group_not_found", "model group not found"
+                        ) from exc
+                    self._send(orchestrator.set_model_group(name, body.get("member_agent_ids")))
+                    return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
@@ -5256,6 +5440,16 @@ def build_server(
                     if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
                         raise RequestError(400, "bad_path", "agent delete path missing worker agent")
                     self._send(orchestrator.remove_agent(segments[3], segments[-1]), 200)
+                    return
+                if path.startswith("/api/v1/model_groups/"):
+                    name = urllib.parse.unquote(path.rsplit("/", 1)[-1])
+                    try:
+                        deleted = orchestrator.delete_model_group(name)
+                    except KeyError as exc:
+                        raise RequestError(
+                            404, "model_group_not_found", "model group not found"
+                        ) from exc
+                    self._send(deleted, 200)
                     return
                 self._send_error(404, "route_not_found", "not found")
             except RequestError as exc:
@@ -5289,7 +5483,7 @@ def build_server(
                 scope = (
                     "admin"
                     if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
-                    or path.startswith("/api/v1/agent_pools/")
+                    or path.startswith(("/api/v1/agent_pools/", "/api/v1/model_groups"))
                     else "inference"
                 )
                 self._authorize(scope, state_changing=True)
@@ -5315,6 +5509,55 @@ def build_server(
                     except KeyError as exc:
                         raise RequestError(404, "agent_not_found", str(exc)) from exc
                     self._send(created_agent, 201)
+                    return
+                if path == "/api/v1/model_groups":
+                    _reject_unknown_keys(body, ALLOWED_MODEL_GROUP_KEYS)
+                    group_name = body.get("group_name")
+                    try:
+                        orchestrator.get_model_group(group_name)
+                    except KeyError:
+                        pass
+                    else:
+                        raise RequestError(409, "model_group_exists", "model group already exists; use PATCH")
+                    try:
+                        created_group = orchestrator.set_model_group(group_name, body.get("member_agent_ids"))
+                    except KeyError as exc:
+                        # Unknown members reference agents, so the canonical
+                        # not-found code matches the worker-agent surface (#831).
+                        raise RequestError(404, "agent_not_found", str(exc)) from exc
+                    self._send(created_group, 201)
+                    return
+
+                capability_routes = {
+                    "/v1/images/generations": ("image", "images/generations", False),
+                    "/v1/videos": ("video", "videos", False),
+                    "/v1/audio/speech": ("speech", "audio/speech", True),
+                    "/v1/audio/transcriptions": ("transcription", "audio/transcriptions", False),
+                    "/v1/rerank": ("rerank", "rerank", False),
+                    "/v1/audio/generations": ("audio", "chat/completions", False),
+                }
+                if path in capability_routes:
+                    _validate_capability_request(path, body)
+                    capability, endpoint, binary = capability_routes[path]
+                    try:
+                        result = self._run(
+                            lambda: orchestrator.proxy_capability(
+                                body, capability=capability, endpoint=endpoint, binary=binary
+                            )
+                        )
+                    except ValueError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
+                    except RuntimeError as exc:
+                        raise RequestError(
+                            503,
+                            "capability_unavailable",
+                            f"no enabled {capability}-capable model group member is available",
+                        ) from exc
+                    if binary:
+                        raw, content_type = result
+                        self._send_bytes(raw, content_type)
+                    else:
+                        self._send(result)
                     return
 
                 if path == "/v1/completions":
@@ -5604,7 +5847,7 @@ def build_server(
                         presence_penalty=presence_penalty,
                         frequency_penalty=frequency_penalty,
                     ):
-                        if stream and orchestrator.would_route(messages, mode):
+                        if stream and orchestrator.would_route(messages, mode, model_name):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
@@ -5669,9 +5912,12 @@ def build_server(
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
                     model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
+                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5722,12 +5968,33 @@ def build_server(
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
                     started_at = time.perf_counter()
-                    document = self._run(lambda: coordinator.complete_embeddings_batch(
-                        inputs,
-                        model=model_name,
-                        attribution=attribution,
-                        metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
-                    ))
+                    document = None
+                    last_embedding_error: Exception | None = None
+                    for embedding_agent in embedding_agents:
+                        attempt_started_at = time.perf_counter()
+                        try:
+                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                inputs,
+                                model=agent.model,
+                                attribution=attribution,
+                                metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
+                            ))
+                        except Exception as exc:  # noqa: BLE001 - measured member failover
+                            last_embedding_error = exc
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            continue
+                        if document.get("status") == "completed":
+                            orchestrator._group_router.observe_success(
+                                embedding_agent.id,
+                                time.perf_counter() - attempt_started_at,
+                            )
+                        break
+                    if document is None:
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "all enabled embedding-capable model group members failed",
+                        ) from last_embedding_error
                     if document.get("status") != "completed" or document.get("embeddings") is None:
                         # Async backends return a job handle; fail closed on the
                         # sync OpenAI path rather than inventing vectors.
@@ -5758,7 +6025,10 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
                     model_name = _validate_embeddings_model(body, orchestrator)
-                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
+                    _require_pool_model(
+                        orchestrator, model_name, required_capability="embedding"
+                    )
+                    embedding_agents = orchestrator._capability_agents("embedding", model_name)
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5777,12 +6047,33 @@ def build_server(
                     endpoint_alias = _validate_batch_embeddings_endpoint(body)
                     if endpoint_alias is not None:
                         submit_metadata["endpoint_alias"] = endpoint_alias
-                    document = self._run(lambda: coordinator.complete_embeddings_batch(
-                        inputs,
-                        model=model_name,
-                        attribution=attribution,
-                        metadata=submit_metadata,
-                    ))
+                    document = None
+                    last_embedding_error: Exception | None = None
+                    for embedding_agent in embedding_agents:
+                        attempt_started_at = time.perf_counter()
+                        try:
+                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                inputs,
+                                model=agent.model,
+                                attribution=attribution,
+                                metadata=submit_metadata,
+                            ))
+                        except Exception as exc:  # noqa: BLE001 - measured member failover
+                            last_embedding_error = exc
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            continue
+                        if document.get("status") == "completed":
+                            orchestrator._group_router.observe_success(
+                                embedding_agent.id,
+                                time.perf_counter() - attempt_started_at,
+                            )
+                        break
+                    if document is None:
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "all enabled embedding-capable model group members failed",
+                        ) from last_embedding_error
                     is_complete = document.get("status") == "completed"
                     orchestrator.record_analytics_event(
                         "embeddings_batch_created",
@@ -5836,7 +6127,7 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
-                    _validate_responses_model(body)
+                    model_name = _validate_responses_model(body)
                     _validate_responses_conversation_controls(body)
                     if "store" in body:
                         _validate_responses_store(body)
@@ -5980,18 +6271,87 @@ def build_server(
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).
                     # stream=true is not implemented for Responses passthrough.
                     # String/0-1 forms coerce via shared bool helper (parity with chat).
+                    stream = False
                     if "stream" in body:
-                        stream = _coerce_optional_bool(
+                        stream = bool(_coerce_optional_bool(
                             body.get("stream"),
                             error_code="invalid_stream",
                             message="stream must be a boolean",
-                        )
-                        if stream is True:
+                        ))
+                        if stream and model_name not in {
+                            TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL
+                        }:
                             raise RequestError(
                                 400,
                                 "invalid_stream",
-                                "stream is not supported on /v1/responses",
+                                "stream is not supported for this model on /v1/responses; use orchestrator/auto or orchestrator/free",
                             )
+                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+                        _require_pool_model(orchestrator, model_name)
+                        if body.get("tools"):
+                            raise RequestError(
+                                400,
+                                "invalid_tools",
+                                "tools are not supported for orchestrated Responses requests",
+                            )
+                        response_format = body.get("response_format")
+                        text_format = (body.get("text") or {}).get("format") if isinstance(
+                            body.get("text"), dict
+                        ) else None
+                        if any(
+                            isinstance(value, dict)
+                            and value.get("type") in {"json_object", "json_schema"}
+                            for value in (response_format, text_format)
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_response_format",
+                                "structured output is not supported for orchestrated Responses requests",
+                            )
+                        messages = []
+                        instructions = body.get("instructions")
+                        if isinstance(instructions, str) and instructions:
+                            messages.append({"role": "system", "content": instructions})
+                        messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        started_at = time.perf_counter()
+                        if stream:
+                            stream_succeeded = self._stream_orchestrated_response(
+                                orchestrator, security, messages, model_name
+                            )
+                        else:
+                            stream_succeeded = True
+                            result = self._run(
+                                lambda: orchestrator.complete(
+                                    messages, mode="auto", model_name=model_name
+                                )
+                            )
+                            summaries = [
+                                _REASONING_STAGE_SUMMARIES.get(step.get("role"), "Processing the request.")
+                                for step in result.get("trace", [])
+                            ]
+                            self._send(
+                                _orchestrated_response(
+                                    model_name,
+                                    result,
+                                    f"resp_{uuid.uuid4().hex}",
+                                    int(time.time()),
+                                    summaries,
+                                )
+                            )
+                        orchestrator.record_analytics_event(
+                            "responses_orchestrated",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200 if stream_succeeded else 500,
+                                "transport_status_code": 200,
+                                "response_status": "completed" if stream_succeeded else "failed",
+                                "model_name": model_name,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                "response_streamed": stream,
+                            },
+                        )
+                        return
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
@@ -6005,10 +6365,7 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    if body.get("stream") is True:
-                        self._send_sse(responses_sse_body(proxied))
-                    else:
-                        self._send(proxied)
+                    self._send(proxied)
                     return
 
                 if path == "/admin/simulate":
@@ -6301,6 +6658,17 @@ def build_server(
 
             self._write_response(_write)
 
+        def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+            def _write() -> None:
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(payload)))
+                self._send_security_headers()
+                self.end_headers()
+                self.wfile.write(payload)
+
+            self._write_response(_write)
+
         def _send_sse(self, body: str, status: int = 200) -> None:
             raw = body.encode("utf-8")
 
@@ -6334,6 +6702,186 @@ def build_server(
 
             return self._write_response(_write)
 
+        def _stream_orchestrated_response(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+        ) -> bool:
+            """Stream orchestration as native Responses reasoning-summary events."""
+            response_id = f"resp_{uuid.uuid4().hex}"
+            reasoning_id = f"rs_{uuid.uuid4().hex}"
+            message_id = f"msg_{uuid.uuid4().hex}"
+            created_at = int(time.time())
+            sequence = 0
+            summaries: list[str] = []
+            open_parts: dict[str, list[tuple[int, str]]] = {}
+
+            def emit(event_type: str, **values: Any) -> None:
+                nonlocal sequence
+                payload = {"type": event_type, "sequence_number": sequence, **values}
+                sequence += 1
+                if not self._write_sse(
+                    f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                ):
+                    raise ConnectionAbortedError("Responses stream disconnected")
+
+            def progress(role: str, status: str) -> None:
+                text = _REASONING_STAGE_SUMMARIES.get(role, "Processing the request.")
+                if status == "started":
+                    index = len(summaries)
+                    summaries.append(text)
+                    open_parts.setdefault(role, []).append((index, text))
+                    emit(
+                        "response.reasoning_summary_part.added",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        part={"type": "summary_text", "text": ""},
+                    )
+                    emit(
+                        "response.reasoning_summary_text.delta",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        delta=text,
+                    )
+                elif open_parts.get(role):
+                    index, text = open_parts[role].pop(0)
+                    if not open_parts[role]:
+                        del open_parts[role]
+                    emit(
+                        "response.reasoning_summary_text.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        text=text,
+                    )
+                    emit(
+                        "response.reasoning_summary_part.done",
+                        item_id=reasoning_id,
+                        output_index=0,
+                        summary_index=index,
+                        part={"type": "summary_text", "text": text},
+                    )
+
+            security.acquire_run_slot()
+            try:
+                if not self._begin_sse():
+                    return False
+                created_response = _orchestrated_response(
+                    model_name,
+                    {"answer": ""},
+                    response_id,
+                    created_at,
+                    [],
+                    reasoning_id=reasoning_id,
+                    message_id=message_id,
+                )
+                created_response.update(status="in_progress", output=[])
+                emit(
+                    "response.created",
+                    response=created_response,
+                )
+                reasoning_item = {
+                    "id": reasoning_id,
+                    "type": "reasoning",
+                    "status": "in_progress",
+                    "summary": [],
+                }
+                emit("response.output_item.added", output_index=0, item=reasoning_item)
+                try:
+                    if orchestrator.would_route(messages, "auto", model_name):
+                        progress("worker", "started")
+                        parts = list(orchestrator.stream_route(messages, model_name=model_name))
+                        progress("worker", "completed")
+                        result = {"answer": "".join(parts)}
+                    else:
+                        result = orchestrator.conduct(
+                            messages, model_name=model_name, progress=progress
+                        )
+                except ConnectionAbortedError:
+                    raise
+                except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": {
+                            "code": "server_error",
+                            "message": "Orchestration failed before a final answer was produced.",
+                        },
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False
+                reasoning_done = {
+                    **reasoning_item,
+                    "status": "completed",
+                    "summary": [{"type": "summary_text", "text": text} for text in summaries],
+                }
+                emit("response.output_item.done", output_index=0, item=reasoning_done)
+                message_item = {
+                    "id": message_id,
+                    "type": "message",
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": [],
+                }
+                emit("response.output_item.added", output_index=1, item=message_item)
+                part = {"type": "output_text", "text": "", "annotations": []}
+                emit(
+                    "response.content_part.added",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    part=part,
+                )
+                answer = result["answer"]
+                emit(
+                    "response.output_text.delta",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    delta=answer,
+                )
+                done_part = {**part, "text": answer}
+                emit(
+                    "response.output_text.done",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    text=answer,
+                )
+                emit(
+                    "response.content_part.done",
+                    item_id=message_id,
+                    output_index=1,
+                    content_index=0,
+                    part=done_part,
+                )
+                emit(
+                    "response.output_item.done",
+                    output_index=1,
+                    item={**message_item, "status": "completed", "content": [done_part]},
+                )
+                completed = _orchestrated_response(
+                    model_name,
+                    result,
+                    response_id,
+                    created_at,
+                    summaries,
+                    reasoning_id=reasoning_id,
+                    message_id=message_id,
+                )
+                emit("response.completed", response=completed)
+                self._write_sse("data: [DONE]\n\n")
+                return True
+            except ConnectionAbortedError:
+                return False
+            finally:
+                security.release_run_slot()
+
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
@@ -6355,7 +6903,9 @@ def build_server(
                 if not self._begin_sse() or not self._write_sse(frame({"role": "assistant"})):
                     return
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages, workflow_run_id=run_id, model_name=model_name
+                    ):
                         if not self._write_sse(frame({"content": delta})):
                             return
                     if not self._write_sse(frame({}, finish="stop")):

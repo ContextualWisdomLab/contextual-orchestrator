@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+from dataclasses import replace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -301,7 +302,11 @@ def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDown
         ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
     ]
     client = _AgentDownClient(down_id)
-    return TaskOrchestrator(agents, client=client), client
+    orchestrator = TaskOrchestrator(agents, client=client)
+    # Mechanical failover contract: real-time judging is orthogonal here and
+    # its extra provider call would pollute the scripted call ledger.
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    return orchestrator, client
 
 
 def test_failover_to_backup_agent_when_primary_fails() -> None:

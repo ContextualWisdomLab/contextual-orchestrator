@@ -10,11 +10,16 @@ from contextual_orchestrator.admin import ADMIN_HTML, ADMIN_TRANSLATIONS  # noqa
 
 
 def test_admin_surface_exists_for_enterprise_operations() -> None:
-    assert "Agent Pool" in ADMIN_HTML
-    assert "Orchestration Policy" in ADMIN_HTML
+    assert "Models" in ADMIN_HTML
+    assert "Routing Policy" in ADMIN_HTML
     assert "Audit &amp; Compliance" in ADMIN_HTML
-    assert '<tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>' in ADMIN_HTML
-    assert "PII-001" in ADMIN_HTML
+    assert "PII-001" not in ADMIN_HTML
+    assert "No policy evidence is loaded. Open Audit to review recorded events." in ADMIN_HTML
+    assert "No current alerts. Open Audit to review recent changes." in ADMIN_HTML
+    assert "Analyze the architecture, implement the code" not in ADMIN_HTML
+    assert "prod-us-east-1" not in ADMIN_HTML
+    assert ">US East<" not in ADMIN_HTML
+    assert 'data-i18n-placeholder="prompt_placeholder"' in ADMIN_HTML
     assert "Mask email, phone" not in ADMIN_HTML
     assert "/admin/simulate" in ADMIN_HTML
     assert "ADMIN_TRANSLATIONS" not in ADMIN_HTML
@@ -23,7 +28,7 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'data-view="evaluations"' in ADMIN_HTML
     assert 'data-view="datasets"' in ADMIN_HTML
     assert 'data-view="access"' in ADMIN_HTML
-    assert "Access List Inspector" in ADMIN_HTML
+    assert "Permission review" in ADMIN_HTML
     assert "Evaluation Replay" in ADMIN_HTML
     assert 'id="mobileView"' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["view_label"] == "View"
@@ -44,22 +49,47 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'els.statusFilter.addEventListener("change", renderAgents)' in ADMIN_HTML
     assert "function agentStatus(index)" in ADMIN_HTML
     assert "no_agents_match" in ADMIN_HTML
-    assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == "No agents match the current filters."
+    assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == (
+        "No models match these filters. Clear a filter to see more models."
+    )
     assert '{ pass: "ok", warn: "warning", fail: "failure" }[row.status]' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["readiness_ok"] == "Pass"
     assert ADMIN_TRANSLATIONS["ko"]["readiness_failure"] == "실패"
     assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
     assert "viewAudit: document.querySelector" in ADMIN_HTML
     assert 'els.viewAudit.addEventListener("click", () => showView("audit"))' in ADMIN_HTML
-    assert 'id="agentSettings" aria-label="Agent settings"' in ADMIN_HTML
+    assert 'id="agentSettings" aria-label="Model settings"' in ADMIN_HTML
     assert "agentSettings: document.querySelector" in ADMIN_HTML
     assert 'els.agentSettings.addEventListener("click", () => showView("settings"))' in ADMIN_HTML
     assert 'id="registerAgent"' in ADMIN_HTML
     assert "registerAgent: document.querySelector" in ADMIN_HTML
     assert 'els.registerAgent.addEventListener("click", () => showView("integrations"))' in ADMIN_HTML
-    assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == "No agents are configured yet."
+    assert 'id="modelGroupForm"' in ADMIN_HTML
+    assert 'id="modelGroupName" required pattern=' in ADMIN_HTML
+    assert 'id="modelGroupMembers" multiple required' in ADMIN_HTML
+    assert 'role="status" aria-live="polite"' in ADMIN_HTML
+    assert 'fetch("/api/v1/model_groups")' in ADMIN_HTML
+    assert "(state.modelGroups || []).map" in ADMIN_HTML
+    assert "hintCount" not in ADMIN_HTML
+    assert "complex_hints" not in ADMIN_HTML
+    assert 'method: exists ? "PATCH" : "POST"' in ADMIN_HTML
+    assert 'method: "DELETE"' in ADMIN_HTML
+    for key in (
+        "model_groups_title",
+        "group_name_label",
+        "group_members_label",
+        "save_group",
+        "delete_group",
+        "no_model_groups",
+        "group_saved",
+        "group_deleted",
+    ):
+        assert key in ADMIN_TRANSLATIONS["en"] and key in ADMIN_TRANSLATIONS["ko"]
+    assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == (
+        "Add a model connection to start routing requests."
+    )
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`' in ADMIN_HTML
-    assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "No audit events yet."
+    assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "Run a workflow to create your first audit event."
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`' in ADMIN_HTML
     assert 'id="sessionForm"' in ADMIN_HTML
     assert 'id="sessionToken"' in ADMIN_HTML
@@ -68,8 +98,43 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'finally {\n        els.sessionToken.value = "";' in ADMIN_HTML
     assert 'headers: {"origin": window.location.origin}' not in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
+    explanatory_keys = (
+        "doc_viewer_desc",
+        "doc_viewer_hint",
+        "session_hint",
+        "source_basis_text",
+        "worker_latency",
+        "planner_capacity",
+    )
+    internal_terms = (
+        "clearfolio",
+        "httponly",
+        "bearer",
+        "contextual_orchestrator_",
+        "--clearfolio",
+        "worker",
+        "planner pool",
+        "verifier",
+        "synthesizer",
+    )
+    for locale in ("en", "ko"):
+        copy = " ".join(ADMIN_TRANSLATIONS[locale][key] for key in explanatory_keys).lower()
+        assert not any(term in copy for term in internal_terms)
+    customer_html = ADMIN_HTML.lower()
+    assert not any(
+        term in customer_html
+        for term in (
+            "clearfolio integrated",
+            "httponly</span>",
+            "worker exceeded",
+            "planner pool",
+            ">worker<",
+            ">verifier<",
+            ">synthesizer<",
+        )
+    )
     assert "Mask email, phone" not in ADMIN_HTML
-    assert "Field encryption and audited release" in ADMIN_HTML
+    assert "Field encryption and audited release" not in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
