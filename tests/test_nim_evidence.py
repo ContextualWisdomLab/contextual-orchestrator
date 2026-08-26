@@ -260,6 +260,19 @@ def test_read_only_crash_staging_is_recovered(tmp_path: Path) -> None:
     assert not abandoned.exists()
 
 
+def test_read_only_final_republishes_without_backup_residue(tmp_path: Path) -> None:
+    target = tmp_path / "nim_evidence"
+    target.mkdir()
+    (target / "old.txt").write_text("old", encoding="utf-8")
+    target.chmod(0o500)
+
+    publish_artifact_set(target, _artifacts())
+    publish_artifact_set(target, _artifacts())
+
+    assert target.stat().st_mode & 0o777 == 0o500
+    assert not list(tmp_path.glob(".nim_evidence.backup-*"))
+
+
 def test_concurrent_publications_are_serialized(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

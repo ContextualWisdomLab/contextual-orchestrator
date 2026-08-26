@@ -169,8 +169,8 @@ def _recover_publication(final: Path) -> None:
     if backups:
         if final.exists():
             try:
-                shutil.rmtree(backups[0])
-            except OSError:
+                _remove_staging(backups[0])
+            except NimEvidenceError:
                 pass
         else:
             os.replace(backups[0], final)
@@ -221,8 +221,8 @@ def publish_artifact_set(
                 raise
             if backup is not None:
                 try:
-                    shutil.rmtree(backup)
-                except OSError:
+                    _remove_staging(backup)
+                except NimEvidenceError:
                     pass
         finally:
             if staging.exists():
