@@ -1,5 +1,27 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 configured-gateway and privacy discovery continuation
+
+Protected `main` is `56a898b805864e13020a1b0a35379f65032eeaa9`.
+PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
+is integrated with that base at implementation merge head `67cb6334`. A
+configured OpenAI-compatible gateway now joins `/v1/models` with deployment
+metadata so chat, Responses, and embedding capabilities remain individually
+discoverable; conflicting or incomplete capability, price, or privacy evidence
+stays unknown. Omitted text models and `contextual-orchestrator` share
+`orchestrator/auto` selection, while `orchestrator/free` admits only complete
+structured zero-cost evidence and fails over only inside that bounded pool.
+
+OpenRouter discovery joins its official ZDR endpoint inventory to the complete
+paid and free model catalog. Every reported model now carries explicit
+`supported`, `unsupported`, or `unknown` ZDR status; free endpoint policy
+evidence additionally records no-training, no-prompt-retention, and policy/TOS
+sources. Configured gateways preserve the same fields only with complete
+deployment consensus. The post-main focused discovery, Chat, Responses,
+passthrough, and failover slice is `129 passed`; the prior full branch suite was
+`2283 passed`. Replacement exact-head hosted checks, independent reviews, and
+normal protected merge remain required before this is release evidence.
+
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.

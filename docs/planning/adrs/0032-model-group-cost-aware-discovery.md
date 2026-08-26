@@ -19,6 +19,16 @@ Stability uses the posterior mean of a Bernoulli success probability under a uni
 
 OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery intersects its documented `/zen/v1/models` availability response with the `opencode` catalog in Models.dev, which OpenCode documents as a source for its own model catalog. Only structured cost records whose declared monetary components are all exactly zero are classified free. A missing, malformed, unmatched, or temporarily unavailable metadata record remains unknown; model-name suffixes are never treated as price evidence. All available models remain discoverable for later policy decisions.
 
+Privacy discovery is also model-specific rather than inferred from price. The
+OpenRouter ZDR endpoint inventory is joined to every paid and free catalog row;
+absence from a successfully fetched complete inventory is explicit non-support,
+while an inventory failure remains unknown. Free-model endpoint/provider policy
+records additionally expose whether at least one route prohibits training or
+prompt retention and retain their HTTPS policy sources. A configured gateway may
+publish the same fields through model metadata, but a logical model receives a
+value only when every deployment agrees. Thus free status never implies privacy,
+and paid status never implies retention.
+
 Durable provider-catalog refreshes store explicit cost, capability, and directed
 modality evidence in normalized serving-tag rows. Last-known-good reads reconstruct
 those semantics before selection and Agent Pool synchronization; otherwise
@@ -99,6 +109,12 @@ OpenAI. (2026). *OpenAI OpenAPI specification: Responses streaming events*.
 https://github.com/openai/openai-openapi/blob/master/openapi.yaml
 
 OpenRouter. (2026). *List all models and their properties*. https://openrouter.ai/docs/api/api-reference/models/get-models
+
+OpenRouter. (2026). *Preview the impact of ZDR on the available endpoints*. https://openrouter.ai/docs/api/api-reference/endpoints/preview-the-impact-of-zdr-on-the-available-endpoints
+
+OpenRouter. (2026). *Provider logging and data policies*. https://openrouter.ai/docs/guides/privacy/provider-logging
+
+OpenRouter. (2026). *Zero data retention enforcement*. https://openrouter.ai/docs/features/provider-routing#zero-data-retention-enforcement
 
 OpenRouter. (2026). *Create speech*. https://openrouter.ai/docs/api/api-reference/speech/create-audio-speech
 
