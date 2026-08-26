@@ -199,6 +199,126 @@ def test_chat_completion_reports_real_usage_and_records_cost() -> None:
         server.shutdown()
 
 
+def test_chat_completion_fallback_path_labels_estimated_measurement_status() -> None:
+    """Provider-unreported usage stays honestly labeled estimated end to end."""
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _request(
+            "POST",
+            f"{base}/v1/chat/completions",
+            token,
+            {
+                "model": "mock-a",
+                "messages": [{"role": "user", "content": "hello there world"}],
+            },
+        )
+        assert status == 200, body
+        # The mock provider reports no usage, so both the completion cost
+        # payload and the analytics usage-ledger rows must carry the explicit
+        # estimated measurement status instead of claiming provider-measured.
+        assert body["orchestration"]["cost"]["measurement_status"] == "estimated"
+
+        status, records = _request("GET", f"{base}/api/v1/llm_usage_records", token)
+        assert status == 200, records
+        assert records["total_count"] == 1
+        assert records["items"][0]["measurement_status"] == "estimated"
+    finally:
+        server.shutdown()
+
+
+def test_structured_http_cost_contract_preserves_mixed_currency_components() -> None:
+    """HTTP clients receive no implicit cross-currency total or conversion."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("mock_worker", "mock-a", base_url="mock://a")]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator.complete = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "id": "chatcmpl_mixed",
+        "object": "chat.completion",
+        "model": "mock-a",
+        "choices": [],
+        "cost": {
+            "cost_amount": None,
+            "currency_code": "MIXED",
+            "currency_components": [
+                {"currency_code": "EUR", "cost_amount": 2.0},
+                {"currency_code": "USD", "cost_amount": 1.0},
+            ],
+            "measurement_status": "measured",
+            "customer_action": (
+                "Review each currency component separately. Apply an approved "
+                "exchange-rate source before calculating a combined total."
+            ),
+        },
+    }
+    token = "cost_token"
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            token,
+            {
+                "model": "mock-a",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert body["cost"]["cost_amount"] is None
+    assert body["cost"]["currency_code"] == "MIXED"
+    assert body["cost"]["currency_components"] == [
+        {"currency_code": "EUR", "cost_amount": 2.0},
+        {"currency_code": "USD", "cost_amount": 1.0},
+    ]
+    assert "approved exchange-rate source" in body["cost"]["customer_action"]
+
+
+def test_structured_chat_cost_records_keep_service_and_account_attribution() -> None:
+    """Structured workflow calls roll up under the same chat dimensions."""
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _request(
+            "POST",
+            f"{base}/v1/chat/completions",
+            token,
+            {
+                "model": "mock-a",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+                "user": "account_123",
+            },
+        )
+        assert status == 200, body
+
+        for dimension, expected in (
+            ("service", "chat_completions_api"),
+            ("account", "account_123"),
+        ):
+            status, report = _request(
+                "GET",
+                f"{base}/api/v1/cost_reports/rollup?dimension={dimension}",
+                token,
+            )
+            assert status == 200, report
+            assert {item["dimension_value"] for item in report["items"]} == {expected}
+    finally:
+        server.shutdown()
+
+
 def test_batch_routing_via_chat_completion_and_results_retrieval() -> None:
     server, port, token = _serve()
     base = f"http://127.0.0.1:{port}"

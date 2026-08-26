@@ -202,6 +202,54 @@ def test_json_schema_contract_accepts_nullable_enum_and_rejects_unknown_keyword(
     assert error.value.code == "invalid_response_format"
 
 
+def test_json_schema_contract_visits_map_valued_subschemas() -> None:
+    """Map-valued schema keywords validate each nested schema, not map keys."""
+    validate_json_schema_contract(
+        {
+            "type": "object",
+            "patternProperties": {"^item_": {"type": "string"}},
+            "dependentSchemas": {"item_name": {"required": ["item_code"]}},
+        }
+    )
+    with pytest.raises(ValueError, match="unsupported keyword"):
+        validate_json_schema_contract(
+            {"patternProperties": {"^item_": {"madeUpKeyword": True}}}
+        )
+
+
+def test_free_structured_repair_never_calls_paid_agent() -> None:
+    """The free virtual model keeps synthesis repair inside its free admission set."""
+    calls: list[str] = []
+
+    class FreeRepair(ModelClient):
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            calls.append(agent.id)
+            return '{"cases":[]}' if len(calls) >= 3 else "not json"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_agent", "paid-model", priority=100),
+            ModelAgent("free_agent", "free-model", tags=("cost:free", "reasoning")),
+        ],
+        client=FreeRepair(),
+    )
+    result = orchestrator.run_structured(
+        [{"role": "user", "content": "synthetic evidence"}],
+        model_name=orchestrator.FREE_MODEL,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "operations_case_evidence",
+                "schema": {"type": "object", "properties": {"cases": {"type": "array"}}},
+            },
+        },
+    )
+
+    assert json.loads(result["answer"]) == {"cases": []}
+    assert set(calls) == {"free_agent"}
+
+
 def test_structured_passthrough_does_not_call_unadmitted_primary() -> None:
     """A virtual request must start with a capability-admitted candidate."""
 
@@ -497,6 +545,31 @@ def test_http_virtual_json_schema_preserves_openai_shape_and_orchestration_linea
     assert json.loads(body["choices"][0]["message"]["content"]) == {"cases": []}
     assert body["orchestration"]["mode"] == "conduct"
     assert body["orchestration"]["usage_record_id"]
+
+
+def test_http_virtual_json_schema_rejects_streaming_explicitly() -> None:
+    """Deferred structured SSE must fail closed instead of returning a JSON body."""
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic evidence"}],
+                "stream": True,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "case", "schema": {"type": "object"}},
+                },
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 400
+    assert body["error"]["code"] == "invalid_request"
 
 
 def test_http_responses_endpoint_passes_through() -> None:

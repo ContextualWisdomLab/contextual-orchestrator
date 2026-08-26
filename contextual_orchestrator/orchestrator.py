@@ -166,7 +166,12 @@ def validate_json_schema_contract(schema: dict[str, Any]) -> None:
             if unknown:
                 raise ValueError("json_schema contains an unsupported keyword")
             for key, child in value.items():
-                if key in {"properties", "$defs"} and isinstance(child, dict):
+                if key in {
+                    "properties",
+                    "$defs",
+                    "patternProperties",
+                    "dependentSchemas",
+                } and isinstance(child, dict):
                     for subschema in child.values():
                         visit(subschema)
                 elif key not in {"enum", "const", "default", "examples", "required"}:
@@ -3277,7 +3282,11 @@ class TaskOrchestrator:
                 ),
             },
         ]
-        primary = self._select_agent(task, "synthesizer")
+        primary = next(
+            agent
+            for agent in self._ranked_agents(task, "synthesizer")
+            if agent.id in admitted
+        )
         candidates = self._failover_candidates(primary, task, "synthesizer", set(admitted))
         for candidate in candidates:
             try:
@@ -3331,6 +3340,12 @@ class TaskOrchestrator:
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
         admitted = self._structured_admitted_agent_ids()
+        if model_name == self.FREE_MODEL:
+            admitted = frozenset(
+                agent.id
+                for agent in self.agents
+                if agent.id in admitted and self._is_free_agent(agent)
+            )
         if not admitted:
             raise NoViableAgentError(
                 retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
@@ -3379,6 +3394,25 @@ class TaskOrchestrator:
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "mode": record["mode"], "agent_count": len(record["trace"])},
         )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": record["workflow_run_id"],
+                "run_mode": record["mode"],
+                "policy_mode": "conduct",
+                "trace_step_count": len(record["trace"]),
+            },
+        )
+        for step in record["trace"]:
+            self.record_analytics_event(
+                "workflow_step_completed",
+                {
+                    "workflow_run_id": record["workflow_run_id"],
+                    "step_id": step.get("id"),
+                    "step_role": step.get("role"),
+                    "agent_id": step.get("agent_id"),
+                },
+            )
         result["workflow_run_id"] = record["workflow_run_id"]
         return result
 

@@ -83,6 +83,121 @@ def test_http_chat_accepts_response_format_json_object() -> None:
         thread.join(timeout=5)
 
 
+def test_http_structured_chat_rejects_batch_routing() -> None:
+    """Provider-native structured synthesis has no batch execution contract."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "json"}],
+                "response_format": {"type": "json_object"},
+                "routing": {"channel": "batch"},
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_routing"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_structured_chat_applies_sampling_to_evidence_calls() -> None:
+    """Conducted evidence and final synthesis share request-scoped sampling."""
+    orchestrator = build()
+    observed: list[float | None] = []
+    original_chat = orchestrator.client.chat
+
+    def observed_chat(agent, messages, **kwargs):
+        observed.append(orchestrator.client.request_settings_snapshot()["temperature"])
+        return original_chat(agent, messages, **kwargs)
+
+    orchestrator.client.chat = observed_chat
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "json"}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.25,
+            },
+        )
+        assert status == 200, body
+        assert observed and set(observed) == {0.25}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_structured_image_rejects_text_only_model_as_client_error() -> None:
+    """An explicit capability mismatch is a 4xx request error, not a 500."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "inspect"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "data:image/png;base64,AA=="},
+                            },
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> None:
+    """Automatic routing reports an unavailable image capability as a 4xx error."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "inspect"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "data:image/png;base64,AA=="},
+                            },
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_accepts_valid_json_schema_response_format() -> None:
     server, thread, port = _server()
     try:

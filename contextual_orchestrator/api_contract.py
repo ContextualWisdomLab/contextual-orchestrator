@@ -426,20 +426,38 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial-readiness report"}},
             }
         },
+        "/api/v1/commercial_evidence_manifests/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_evidence_manifest",
+                "summary": "Review evidence gaps before commercial due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial evidence manifest"}},
+            }
+        },
+        "/api/v1/commercial_handoff_bundles/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_handoff_bundle",
+                "summary": "Review handoff evidence and resolve remaining commercial gaps",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial handoff bundle"}},
+            }
+        },
         "/api/v1/buyer_evidence_manifests/latest": {
             "get": {
                 "operationId": "get_latest_buyer_evidence_manifest",
-                "summary": "Get buyer evidence manifest for commercial due diligence",
+                "summary": "Deprecated alias; use the commercial evidence manifest",
+                "deprecated": True,
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Buyer evidence manifest"}},
+                "responses": {"200": {"description": "Commercial evidence manifest"}},
             }
         },
         "/api/v1/buyer_handoff_bundles/latest": {
             "get": {
                 "operationId": "get_latest_buyer_handoff_bundle",
-                "summary": "Get buyer handoff bundle for commercial due diligence",
+                "summary": "Deprecated alias; use the commercial handoff bundle",
+                "deprecated": True,
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Buyer handoff bundle"}},
+                "responses": {"200": {"description": "Commercial handoff bundle"}},
             }
         },
         "/api/v1/saleability_decisions/latest": {

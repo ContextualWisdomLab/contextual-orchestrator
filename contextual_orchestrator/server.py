@@ -6034,6 +6034,12 @@ def build_server(
                                 for key in ("tools", "tool_choice", "functions", "function_call")
                             )
                         ):
+                            if stream:
+                                raise RequestError(
+                                    400,
+                                    "invalid_request",
+                                    "streaming is not supported for orchestrated json_schema responses",
+                                )
                             messages = _validate_messages(body.get("messages"))
                             attribution = dict(_validate_attribution(body.get("attribution")) or {})
                             end_user_id = _validate_completions_user(body)

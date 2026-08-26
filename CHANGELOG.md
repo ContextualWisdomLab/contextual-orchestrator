@@ -12,9 +12,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-- ADR 0006 defines evidence-gated CPU, MLX, CUDA/OpenCL, Compose, and
-  Kubernetes accelerator runtime boundaries.
-- Bound decoded and structured-passthrough provider retries and failover by an explicit request-scoped monotonic deadline while preserving structured workflow and cost lineage.
+- Bounded first-valid-completion racing for operator-declared equivalent model
+  group endpoints across text and media capabilities, with fail-closed contract
+  comparison and winner/cancellation provenance.
+- Commercial evidence and handoff resources now use customer-facing canonical
+  REST and Python names; the former `buyer_*` entry points remain explicit
+  deprecated aliases so existing integrations can migrate without disruption.
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and
@@ -58,8 +61,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- Route embedding batches through configured remote embedding agents instead
-  of returning the standalone deterministic vector.
+- Mixed structured workflows now retain a cost-ledger row for calls whose
+  provider omitted usage, using the existing token-counting fallback while
+  preserving reported counts for the other calls in the same workflow.
+- Virtual-model tools, structured-output, and Responses passthrough requests now
+  advance once across distinct capability-ranked providers after explicit
+  upstream rejection, stale-model responses, or temporary pre-request DNS
+  failure; concrete models and ambiguous network outcomes fail closed.
 - Make per-request budget checks constant time while preserving exact parity
   with full spend analytics across persisted, replaced, estimated, and
   provider-reported workflow runs.
