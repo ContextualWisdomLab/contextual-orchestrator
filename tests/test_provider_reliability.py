@@ -15,6 +15,7 @@ import threading
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from dataclasses import replace
@@ -739,13 +740,32 @@ def test_conduct_attempts_only_ready_candidates_once_after_failures() -> None:
     ]
     orchestrator = TaskOrchestrator(agents, client=client)
     orchestrator._structured_readiness = {
-        agent.id: {"status": "ready", "checked_at": 0.0} for agent in agents
+        agent.id: {"status": "ready", "checked_at": orchestrator_module.time.monotonic()}
+        for agent in agents
     }
 
     with pytest.raises(NoViableAgentError):
         orchestrator.conduct([{"role": "user", "content": "structured task"}])
 
     assert sorted(client.called) == sorted(agent.id for agent in agents)
+
+
+def test_conduct_rejects_expired_structured_readiness_without_calling_provider() -> None:
+    """Expired readiness evidence requires a new admin probe job."""
+
+    client = ModelClient()
+    agent = ModelAgent(
+        "expired_agent", "provider/expired", base_url="https://provider.example/v1"
+    )
+    orchestrator = TaskOrchestrator([agent], client=client)
+    orchestrator._structured_readiness[agent.id] = {
+        "status": "ready",
+        "checked_at": orchestrator_module.time.monotonic() - orchestrator.circuit_reset_seconds,
+    }
+    with patch.object(client, "chat") as chat:
+        with pytest.raises(NoViableAgentError):
+            orchestrator.conduct([{"role": "user", "content": "structured task"}])
+    chat.assert_not_called()
 
 
 def test_circuit_breaker_counts_concurrent_failures() -> None:

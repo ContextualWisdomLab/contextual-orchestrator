@@ -3025,12 +3025,22 @@ class TaskOrchestrator:
         explicit deterministic test capability; every external transport must
         have a recent successful structured probe.
         """
+        now = time.monotonic()
         with self._provider_readiness_lock:
             return frozenset(
                 agent.id
                 for agent in self.agents
                 if agent.base_url.startswith("mock://")
-                or self._structured_readiness.get(agent.id, {}).get("status") == "ready"
+                or (
+                    self._structured_readiness.get(agent.id, {}).get("status") == "ready"
+                    and now
+                    - float(
+                        self._structured_readiness.get(agent.id, {}).get(
+                            "checked_at", -math.inf
+                        )
+                    )
+                    < self.circuit_reset_seconds
+                )
             )
 
     def _reload_state(self) -> None:
