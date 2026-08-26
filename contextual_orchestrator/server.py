@@ -5674,6 +5674,7 @@ def build_server(
                     return
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    body.setdefault("model", orchestrator.AUTO_MODEL)
                     _validate_chat_audio_web_search_surface(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/chat/completions")
                     _validate_tool_resources(body, endpoint_path="/v1/chat/completions")
