@@ -293,7 +293,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     ]
     if not agents:
         return {"added": [], "updated": []}
-    return orchestrator.sync_discovered_agents(agents)
+    result = orchestrator.sync_discovered_agents(agents)
+    for candidate in tuple(orchestrator.agents):
+        if candidate.base_url.startswith("mock://"):
+            orchestrator.patch_agent(
+                "default", candidate.id, {"status": "disabled"}
+            )
+            result["updated"].append(candidate.id)
+    return result
 
 
 def main(argv: list[str] | None = None) -> None:

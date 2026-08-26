@@ -38,6 +38,8 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert agent.disabled is False
     assert "chat" in agent.tags
     assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
+    assert all(not candidate.base_url.startswith("mock://") for candidate in orchestrator.agents)
+    assert "bootstrap_agent" in result["updated"]
 
 
 def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
