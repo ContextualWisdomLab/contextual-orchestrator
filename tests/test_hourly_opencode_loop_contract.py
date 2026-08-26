@@ -19,5 +19,6 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     ):
         assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
+    assert "node node_modules/opencode-ai/postinstall.mjs" in workflow
     assert "pull-requests: write" in workflow
     assert "docs/product-technical-gap-baseline.md" in workflow
