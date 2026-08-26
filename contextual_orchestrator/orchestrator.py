@@ -5171,9 +5171,17 @@ class TaskOrchestrator:
         allowed_agent_ids: set[str] | None = None,
     ) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
-        if allowed_agent_ids is not None:
-            ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
-        if allowed_agent_ids is None:
+        admitted = self._request_admitted_agents.get()
+        effective_allowed = (
+            set(allowed_agent_ids)
+            if allowed_agent_ids is not None
+            else set(admitted)
+            if admitted is not None
+            else None
+        )
+        if effective_allowed is not None:
+            ranked = [agent for agent in ranked if agent.id in effective_allowed]
+        if effective_allowed is None:
             ranked = [
                 agent
                 for agent in ranked
@@ -5186,7 +5194,7 @@ class TaskOrchestrator:
             ]
         ordered = (
             [primary]
-            if allowed_agent_ids is None or primary.id in allowed_agent_ids
+            if effective_allowed is None or primary.id in effective_allowed
             else []
         ) + [agent for agent in ranked if agent.id != primary.id]
         ordered = [agent for agent in ordered if is_general_chat_agent_model_id(agent.model)]

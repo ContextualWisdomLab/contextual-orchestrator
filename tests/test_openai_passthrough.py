@@ -156,11 +156,13 @@ def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() 
             calls.append(agent.id)
             return '{"ok":true}'
 
+    unprobed = ModelAgent("unprobed_primary", "mock")
     agent = ModelAgent("plain_only", "mock")
-    result = TaskOrchestrator([agent], client=PlainOnly()).probe_structured_workflow(agent)
+    result = TaskOrchestrator([unprobed, agent], client=PlainOnly()).probe_structured_workflow(agent)
 
     assert result["status"] == "ready"
     assert len(calls) > 1
+    assert set(calls) == {"plain_only"}
 
 
 def test_json_schema_contract_accepts_nullable_enum_and_rejects_unknown_keyword() -> None:
