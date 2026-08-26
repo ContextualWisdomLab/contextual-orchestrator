@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 import pytest
 
 from contextual_orchestrator.credentials import (
@@ -88,6 +91,19 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
         assert second.last_known_good_model_count == 1
         assert second.catalog_refresh_failure_count == 1
         assert second.providers_with_errors == ("openai",)
+        refreshes = second.as_dict()["catalog_refreshes"]
+        assert isinstance(refreshes, list)
+        assert [row["provider_account_id"] for row in refreshes] == [
+            "openai_openai_api_key",
+            "openrouter_openrouter_api_key",
+        ]
+        assert [row["refresh_status"] for row in refreshes] == [
+            "failed",
+            "succeeded",
+        ]
+        assert refreshes[0]["error_code"] == "provider_discovery_error"
+        assert refreshes[1]["error_code"] is None
+        assert all(row["finished_at"].endswith("+00:00") for row in refreshes)
         assert set(second.selected_agent_ids) == {
             "openai_gpt_live",
             "openrouter_router_new",
@@ -167,6 +183,43 @@ def test_unexpected_discovery_failure_restores_entire_credential_inventory() -> 
             name: get_credential(name)
             for name in PROVIDER_CREDENTIAL_NAMES
         } == previous
+    finally:
+        set_backend(None)
+
+
+def test_concurrent_bootstraps_report_only_their_own_refresh_evidence() -> None:
+    """A shared store must not mix concurrent bootstrap refresh evidence."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        openrouter = _source("openrouter", "OPENROUTER_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        discoveries_ready = threading.Barrier(2)
+
+        def run(source: ProviderModelSource):
+            def discover(_sources):
+                discoveries_ready.wait()
+                return [_model(source, f"{source.provider_name}-live")], []
+
+            return bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=store,
+                sources=(source,),
+                discovery=discover,
+                model_limit=1,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            reports = tuple(executor.map(run, (openai, openrouter)))
+
+        assert [
+            [row.provider_account_id for row in report.catalog_refreshes]
+            for report in reports
+        ] == [
+            ["openai_openai_api_key"],
+            ["openrouter_openrouter_api_key"],
+        ]
+        assert len(store.refresh_evidence()) == 2
     finally:
         set_backend(None)
 
