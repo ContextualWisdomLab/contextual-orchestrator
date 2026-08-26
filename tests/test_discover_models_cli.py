@@ -126,7 +126,7 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
                 "zero_data_retention": "unknown",
                 "no_training": "unknown",
                 "no_prompt_retention": "unknown",
-                "policy_sources": [],
+                "policy_sources": ["https://platform.openai.com/docs/guides/your-data"],
             },
         }
     ]

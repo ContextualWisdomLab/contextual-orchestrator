@@ -29,6 +29,13 @@ publish the same fields through model metadata, but a logical model receives a
 value only when every deployment agrees. Thus free status never implies privacy,
 and paid status never implies retention.
 
+OpenAI catalog rows also retain OpenAI's official data-controls documentation
+as policy evidence. Because approval and enablement are organization/project
+settings that the Models API does not disclose, discovery leaves the actual ZDR
+status unknown instead of converting endpoint eligibility into a false runtime
+claim. This source/effective-state split is the contract for adding further
+providers.
+
 Durable provider-catalog refreshes store explicit cost, capability, and directed
 modality evidence in normalized serving-tag rows. Last-known-good reads reconstruct
 those semantics before selection and Agent Pool synchronization; otherwise

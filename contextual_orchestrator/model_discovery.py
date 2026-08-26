@@ -76,6 +76,7 @@ class ProviderModelSource:
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
     capabilities: tuple[str, ...] = ()
+    privacy_policy_urls: tuple[str, ...] = ()
 
 
 def configured_gateway_source(
@@ -137,6 +138,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         credential_name="OPENAI_API_KEY",
         list_url="https://api.openai.com/v1/models",
         chat_base_url="https://api.openai.com/v1",
+        privacy_policy_urls=("https://platform.openai.com/docs/guides/your-data",),
     ),
     ProviderModelSource(
         provider_name="openrouter",
@@ -620,6 +622,21 @@ def _openrouter_free_model_endpoints(
         return dict(executor.map(fetch, model_ids))
 
 
+def _privacy_policy_urls(
+    source: ProviderModelSource, row: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Return unique HTTPS privacy evidence from the provider and model row."""
+    raw = row.get("privacy_policy_urls")
+    values = (*source.privacy_policy_urls, *(raw if isinstance(raw, (list, tuple)) else ()))
+    return tuple(sorted({
+        value
+        for value in values
+        if isinstance(value, str)
+        and urlsplit(value).scheme == "https"
+        and urlsplit(value).hostname
+    }))
+
+
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
     rows = payload.get("data") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
@@ -686,11 +703,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     if isinstance(row.get("supports_no_prompt_retention"), bool)
                     else None
                 ),
-                privacy_policy_urls=tuple(
-                    value
-                    for value in row.get("privacy_policy_urls", ())
-                    if isinstance(value, str)
-                ),
+                privacy_policy_urls=_privacy_policy_urls(source, row),
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -719,6 +732,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
                 capabilities=source.capabilities,
+                privacy_policy_urls=_privacy_policy_urls(source, row),
                 # Bytez prices by GPU-second (meterPrice), not per-token; leaving
                 # per-1k pricing unset is more honest than a misleading estimate.
             )

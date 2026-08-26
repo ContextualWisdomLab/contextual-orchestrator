@@ -16,7 +16,9 @@ OpenRouter discovery joins its official ZDR endpoint inventory to the complete
 paid and free model catalog. Every reported model now carries explicit
 `supported`, `unsupported`, or `unknown` ZDR status; free endpoint policy
 evidence additionally records no-training, no-prompt-retention, and policy/TOS
-sources. Configured gateways preserve the same fields only with complete
+sources. OpenAI discovery attaches its official data-controls source but keeps
+effective ZDR unknown because the Models API does not expose organization or
+project enablement. Configured gateways preserve the same fields only with complete
 deployment consensus. The post-main focused discovery, Chat, Responses,
 passthrough, and failover slice is `129 passed`; the prior full branch suite was
 `2283 passed`. Replacement exact-head hosted checks, independent reviews, and
