@@ -10,8 +10,8 @@ from contextual_orchestrator.admin import ADMIN_HTML, ADMIN_TRANSLATIONS  # noqa
 
 
 def test_admin_surface_exists_for_enterprise_operations() -> None:
-    assert "Agent Pool" in ADMIN_HTML
-    assert "Orchestration Policy" in ADMIN_HTML
+    assert "Models" in ADMIN_HTML
+    assert "Routing Policy" in ADMIN_HTML
     assert "Audit &amp; Compliance" in ADMIN_HTML
     assert '<tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>' in ADMIN_HTML
     assert "PII-001" in ADMIN_HTML
@@ -23,7 +23,7 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'data-view="evaluations"' in ADMIN_HTML
     assert 'data-view="datasets"' in ADMIN_HTML
     assert 'data-view="access"' in ADMIN_HTML
-    assert "Access List Inspector" in ADMIN_HTML
+    assert "Permission review" in ADMIN_HTML
     assert "Evaluation Replay" in ADMIN_HTML
     assert 'id="mobileView"' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["view_label"] == "View"
@@ -45,7 +45,7 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "function agentStatus(index)" in ADMIN_HTML
     assert "no_agents_match" in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == (
-        "No agents match these filters. Clear a filter to see more agents."
+        "No models match these filters. Clear a filter to see more models."
     )
     assert '{ pass: "ok", warn: "warning", fail: "failure" }[row.status]' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["readiness_ok"] == "Pass"
@@ -53,7 +53,7 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
     assert "viewAudit: document.querySelector" in ADMIN_HTML
     assert 'els.viewAudit.addEventListener("click", () => showView("audit"))' in ADMIN_HTML
-    assert 'id="agentSettings" aria-label="Agent settings"' in ADMIN_HTML
+    assert 'id="agentSettings" aria-label="Model settings"' in ADMIN_HTML
     assert "agentSettings: document.querySelector" in ADMIN_HTML
     assert 'els.agentSettings.addEventListener("click", () => showView("settings"))' in ADMIN_HTML
     assert 'id="registerAgent"' in ADMIN_HTML
@@ -80,7 +80,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
         "group_deleted",
     ):
         assert key in ADMIN_TRANSLATIONS["en"] and key in ADMIN_TRANSLATIONS["ko"]
-    assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == "Register an agent to start routing requests."
+    assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == (
+        "Add a model connection to start routing requests."
+    )
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "Run a workflow to create your first audit event."
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`' in ADMIN_HTML
@@ -99,11 +101,33 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
         "worker_latency",
         "planner_capacity",
     )
-    internal_terms = ("clearfolio", "httponly", "bearer", "contextual_orchestrator_", "--clearfolio", "worker", "planner pool")
+    internal_terms = (
+        "clearfolio",
+        "httponly",
+        "bearer",
+        "contextual_orchestrator_",
+        "--clearfolio",
+        "worker",
+        "planner pool",
+        "verifier",
+        "synthesizer",
+    )
     for locale in ("en", "ko"):
         copy = " ".join(ADMIN_TRANSLATIONS[locale][key] for key in explanatory_keys).lower()
         assert not any(term in copy for term in internal_terms)
-    assert not any(term in ADMIN_HTML.lower() for term in ("clearfolio integrated", "httponly</span>", "worker exceeded", "planner pool"))
+    customer_html = ADMIN_HTML.lower()
+    assert not any(
+        term in customer_html
+        for term in (
+            "clearfolio integrated",
+            "httponly</span>",
+            "worker exceeded",
+            "planner pool",
+            ">worker<",
+            ">verifier<",
+            ">synthesizer<",
+        )
+    )
     assert "Mask email, phone" not in ADMIN_HTML
     assert "Field encryption and audited release" in ADMIN_HTML
 

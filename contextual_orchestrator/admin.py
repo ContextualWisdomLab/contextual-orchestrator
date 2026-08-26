@@ -4,8 +4,8 @@ ADMIN_TRANSLATIONS = {
     "en": {
         "brand_name": "Contextual Orchestrator",
         "nav_overview": "Overview",
-        "nav_agent_pool": "Agent Pool",
-        "nav_orchestration": "Orchestration",
+        "nav_agent_pool": "Models",
+        "nav_orchestration": "Routing",
         "nav_evaluations": "Evaluations",
         "nav_datasets": "Datasets",
         "nav_access_control": "Access Control",
@@ -19,8 +19,8 @@ ADMIN_TRANSLATIONS = {
         "view_label": "View",
         "healthy_status": "Healthy",
         "active_status": "Active",
-        "agent_pool_title": "Agent Pool",
-        "register_agent": "Register Agent",
+        "agent_pool_title": "Models",
+        "register_agent": "Add model connection",
         "model_groups_title": "Model groups",
         "group_name_label": "Group name",
         "group_members_label": "Provider model members",
@@ -29,16 +29,16 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "No model groups yet. Create one to route a logical model across providers.",
         "group_saved": "Group saved. Send requests with this group name to use measured routing.",
         "group_deleted": "Group deleted. Its provider models remain available.",
-        "search_agents": "Search agents",
+        "search_agents": "Search models",
         "all_statuses": "All statuses",
-        "no_agents_match": "No agents match these filters. Clear a filter to see more agents.",
-        "no_agents_configured": "Register an agent to start routing requests.",
+        "no_agents_match": "No models match these filters. Clear a filter to see more models.",
+        "no_agents_configured": "Add a model connection to start routing requests.",
         "no_audit_events": "Run a workflow to create your first audit event.",
-        "orchestration_policy": "Orchestration Policy",
+        "orchestration_policy": "Routing Policy",
         "simulation_title": "Simulation",
         "run_trace": "Run Trace",
         "live_workflow_trace": "Live Workflow Trace",
-        "view_json": "View JSON",
+        "view_json": "Copy run details",
         "audit_compliance": "Audit & Compliance",
         "recent_errors": "Recent Errors",
         "datasets_title": "Datasets",
@@ -72,7 +72,7 @@ ADMIN_TRANSLATIONS = {
         "policy_safe_routing_rate": "Policy-safe routing rate",
         "route_versus_conduct_mix": "Route-versus-conduct mix",
         "evaluation_replay_usage": "Evaluation replay usage",
-        "agent_health_coverage": "Agent health coverage",
+        "agent_health_coverage": "Model health coverage",
         "provider_exclusion_miss_rate": "Provider exclusion miss rate",
         "locale_key_parity": "Locale key parity",
         "readiness_summary": "Readiness summary",
@@ -204,7 +204,7 @@ ADMIN_TRANSLATIONS = {
         "dataset_name": "Dataset",
         "dataset_owner": "Owner",
         "dataset_prompts": "Prompts",
-        "access_inspector": "Access List Inspector",
+        "access_inspector": "Permission review",
         "step_header": "Step",
         "visible_context": "Visible Context",
         "provider_header": "Provider",
@@ -218,29 +218,29 @@ ADMIN_TRANSLATIONS = {
         "no_trace": "Run a conduct trace to populate workflow evidence.",
         "source_basis": "Source basis",
         "source_basis_text": "Routing uses measured quality, cost, and availability. Review the trace before applying policy changes.",
-        "agent_header": "Agent",
+        "agent_header": "Connection",
         "model_header": "Model",
         "tags_header": "Tags",
         "status_header": "Status",
-        "capacity_header": "EWMA latency",
+        "capacity_header": "Recent latency",
         "success_header": "Success",
         "status_healthy": "Healthy",
         "status_degraded": "Degraded",
         "latency_threshold": "Latency P95 route threshold",
-        "verifier_required": "Verifier required",
-        "agent_exclusion": "Agent exclusion policy",
+        "verifier_required": "Quality review required",
+        "agent_exclusion": "Model availability rules",
         "timeline_tab": "Timeline",
-        "access_list_tab": "Access List",
-        "json_tab": "JSON",
+        "access_list_tab": "Permissions",
+        "json_tab": "Run details",
         "rule_header": "Rule",
         "scope_header": "Scope",
         "exclusion_header": "Exclusion",
         "view_all": "View all",
         "route_degradation": "Route degradation",
-        "verifier_disagreement": "Verifier disagreement",
-        "agent_capacity": "Agent capacity",
+        "verifier_disagreement": "Quality review needs attention",
+        "agent_capacity": "Model capacity",
         "worker_latency": "A processing step is slower than the selected limit; review the trace before continuing.",
-        "confidence_low": "confidence below policy threshold",
+        "confidence_low": "Review the response evidence, then rerun it or adjust the quality threshold.",
         "planner_capacity": "Planning capacity is nearly full; reduce queued work or add capacity.",
         "evaluation_hint": "Replay prompts against route or conduct mode before policy rollout.",
         "golden_prompts": "Golden prompts",
@@ -252,8 +252,8 @@ ADMIN_TRANSLATIONS = {
     "ko": {
         "brand_name": "컨텍스트 오케스트레이터",
         "nav_overview": "개요",
-        "nav_agent_pool": "에이전트 풀",
-        "nav_orchestration": "오케스트레이션",
+        "nav_agent_pool": "모델",
+        "nav_orchestration": "라우팅",
         "nav_evaluations": "평가",
         "nav_datasets": "데이터셋",
         "nav_access_control": "접근 제어",
@@ -267,8 +267,8 @@ ADMIN_TRANSLATIONS = {
         "view_label": "화면",
         "healthy_status": "정상",
         "active_status": "활성",
-        "agent_pool_title": "에이전트 풀",
-        "register_agent": "에이전트 등록",
+        "agent_pool_title": "모델",
+        "register_agent": "모델 연결 추가",
         "model_groups_title": "모델 그룹",
         "group_name_label": "그룹 이름",
         "group_members_label": "공급자 모델 멤버",
@@ -277,16 +277,16 @@ ADMIN_TRANSLATIONS = {
         "no_model_groups": "모델 그룹이 없습니다. 논리 모델을 여러 공급자로 라우팅하려면 그룹을 만드세요.",
         "group_saved": "그룹을 저장했습니다. 측정 기반 라우팅에는 이 그룹 이름으로 요청하세요.",
         "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
-        "search_agents": "에이전트 검색",
+        "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
-        "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다. 더 보려면 필터를 해제하세요.",
-        "no_agents_configured": "요청 라우팅을 시작하려면 에이전트를 등록하세요.",
+        "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
+        "no_agents_configured": "요청 라우팅을 시작하려면 모델 연결을 추가하세요.",
         "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
-        "orchestration_policy": "오케스트레이션 정책",
+        "orchestration_policy": "라우팅 정책",
         "simulation_title": "시뮬레이션",
         "run_trace": "트레이스 실행",
         "live_workflow_trace": "실시간 워크플로 트레이스",
-        "view_json": "JSON 보기",
+        "view_json": "실행 세부 정보 복사",
         "audit_compliance": "감사 및 컴플라이언스",
         "recent_errors": "최근 오류",
         "datasets_title": "데이터셋",
@@ -320,7 +320,7 @@ ADMIN_TRANSLATIONS = {
         "policy_safe_routing_rate": "정책 안전 라우팅 비율",
         "route_versus_conduct_mix": "route/conduct 분포",
         "evaluation_replay_usage": "평가 리플레이 사용량",
-        "agent_health_coverage": "에이전트 상태 커버리지",
+        "agent_health_coverage": "모델 상태 커버리지",
         "provider_exclusion_miss_rate": "공급자 제외 누락률",
         "locale_key_parity": "로케일 키 일치율",
         "readiness_summary": "판매 준비 지표",
@@ -452,7 +452,7 @@ ADMIN_TRANSLATIONS = {
         "dataset_name": "데이터셋",
         "dataset_owner": "담당",
         "dataset_prompts": "프롬프트",
-        "access_inspector": "접근 목록 검사기",
+        "access_inspector": "권한 검토",
         "step_header": "단계",
         "visible_context": "보이는 컨텍스트",
         "provider_header": "공급자",
@@ -466,29 +466,29 @@ ADMIN_TRANSLATIONS = {
         "no_trace": "conduct 트레이스를 실행하면 워크플로 근거가 채워집니다.",
         "source_basis": "논문 근거",
         "source_basis_text": "라우팅에는 측정된 품질, 비용, 가용성을 사용합니다. 정책을 적용하기 전에 트레이스를 검토하세요.",
-        "agent_header": "에이전트",
+        "agent_header": "연결",
         "model_header": "모델",
         "tags_header": "태그",
         "status_header": "상태",
-        "capacity_header": "EWMA 지연 시간",
+        "capacity_header": "최근 지연 시간",
         "success_header": "성공률",
         "status_healthy": "정상",
         "status_degraded": "저하",
         "latency_threshold": "라우팅 P95 지연 임계값",
-        "verifier_required": "검증 단계 필수",
-        "agent_exclusion": "에이전트 제외 정책",
+        "verifier_required": "품질 검토 필수",
+        "agent_exclusion": "모델 가용성 규칙",
         "timeline_tab": "타임라인",
-        "access_list_tab": "접근 목록",
-        "json_tab": "JSON",
+        "access_list_tab": "권한",
+        "json_tab": "실행 세부 정보",
         "rule_header": "규칙",
         "scope_header": "범위",
         "exclusion_header": "제외 항목",
         "view_all": "전체 보기",
         "route_degradation": "라우팅 성능 저하",
-        "verifier_disagreement": "검증 불일치",
-        "agent_capacity": "에이전트 용량",
+        "verifier_disagreement": "품질 검토 필요",
+        "agent_capacity": "모델 용량",
         "worker_latency": "처리 단계가 선택한 제한보다 느립니다. 계속하기 전에 트레이스를 검토하세요.",
-        "confidence_low": "신뢰도가 정책 임계값보다 낮음",
+        "confidence_low": "응답 근거를 검토한 다음 다시 실행하거나 품질 기준을 조정하세요.",
         "planner_capacity": "계획 용량이 거의 찼습니다. 대기 작업을 줄이거나 용량을 추가하세요.",
         "evaluation_hint": "정책 롤아웃 전에 route 또는 conduct 모드로 프롬프트를 재생합니다.",
         "golden_prompts": "골든 프롬프트",
@@ -593,6 +593,7 @@ ADMIN_HTML = r"""<!doctype html>
       padding: 0 10px;
     }
     textarea { min-height: 72px; padding: 10px; resize: vertical; width: 100%; }
+    #modelGroupMembers { min-width: 240px; }
     .health {
       margin-left: auto;
       color: var(--green);
@@ -842,6 +843,11 @@ ADMIN_HTML = r"""<!doctype html>
       .field { min-width: 0; }
       select { max-width: 100%; }
     }
+    @media (max-width: 600px) {
+      .topbar .field:first-child { grid-column: 1 / -1; }
+      .topbar .field:first-child select { width: 100%; }
+      #modelGroupMembers { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -850,8 +856,8 @@ ADMIN_HTML = r"""<!doctype html>
       <div class="brand"><span class="mark"></span><span data-i18n="brand_name">Contextual Orchestrator</span></div>
       <nav aria-label="Admin navigation">
         <button class="nav-item" data-view="overview" aria-current="page"><span>⌂</span><span data-i18n="nav_overview">Overview</span></button>
-        <button class="nav-item" data-view="overview" data-section="agent-pool"><span>▦</span><span data-i18n="nav_agent_pool">Agent Pool</span></button>
-        <button class="nav-item" data-view="overview" data-section="orchestration-policy"><span>⌁</span><span data-i18n="nav_orchestration">Orchestration</span></button>
+        <button class="nav-item" data-view="overview" data-section="agent-pool"><span>▦</span><span data-i18n="nav_agent_pool">Models</span></button>
+        <button class="nav-item" data-view="overview" data-section="orchestration-policy"><span>⌁</span><span data-i18n="nav_orchestration">Routing</span></button>
         <button class="nav-item" data-view="evaluations"><span>◫</span><span data-i18n="nav_evaluations">Evaluations</span></button>
         <button class="nav-item" data-view="datasets"><span>▣</span><span data-i18n="nav_datasets">Datasets</span></button>
         <button class="nav-item" data-view="access"><span>□</span><span data-i18n="nav_access_control">Access Control</span></button>
@@ -885,16 +891,16 @@ ADMIN_HTML = r"""<!doctype html>
       <section class="grid view" data-view="overview">
         <section class="panel" id="agent-pool" tabindex="-1">
           <div class="panel-header">
-            <h1><span data-i18n="agent_pool_title">Agent Pool</span> <span id="agentCount" class="chip"></span></h1>
-            <div class="actions"><button class="btn primary" id="registerAgent">+ <span data-i18n="register_agent">Register Agent</span></button><button class="btn" id="agentSettings" aria-label="Agent settings">⚙</button></div>
+            <h1><span data-i18n="agent_pool_title">Models</span> <span id="agentCount" class="chip"></span></h1>
+            <div class="actions"><button class="btn primary" id="registerAgent">+ <span data-i18n="register_agent">Add model connection</span></button><button class="btn" id="agentSettings" aria-label="Model settings">⚙</button></div>
           </div>
           <div class="toolbar">
-            <input id="agentSearch" type="search" placeholder="Search agents" data-i18n-placeholder="search_agents">
+            <input id="agentSearch" type="search" placeholder="Search models" data-i18n-placeholder="search_agents">
             <select id="statusFilter"><option value="all" data-i18n="all_statuses">All statuses</option><option value="healthy" data-i18n="status_healthy">Healthy</option><option value="degraded" data-i18n="status_degraded">Degraded</option></select>
           </div>
           <table>
             <thead>
-              <tr><th data-i18n="agent_header">Agent</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">EWMA latency</th><th data-i18n="success_header">Success</th></tr>
+              <tr><th data-i18n="agent_header">Connection</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Recent latency</th><th data-i18n="success_header">Success</th></tr>
             </thead>
             <tbody id="agents"></tbody>
           </table>
@@ -913,7 +919,7 @@ ADMIN_HTML = r"""<!doctype html>
         </section>
         <section class="panel" id="orchestration-policy" tabindex="-1">
           <div class="panel-header">
-            <h2 data-i18n="orchestration_policy">Orchestration Policy</h2>
+            <h2 data-i18n="orchestration_policy">Routing Policy</h2>
             <span class="chip green" data-i18n="active_status">Active</span>
           </div>
           <div class="policy-list">
@@ -927,22 +933,22 @@ ADMIN_HTML = r"""<!doctype html>
             </div>
             <div class="metric source"><span data-i18n="source_basis">Source basis</span><strong data-i18n="source_basis_text">Routing uses measured quality, cost, and availability. Review the trace before applying policy changes.</strong></div>
             <div class="metric"><span data-i18n="latency_threshold">Latency P95 route threshold</span><strong>2.50s</strong></div>
-            <div class="metric"><span data-i18n="verifier_required">Verifier required</span><strong>Yes</strong></div>
-            <div class="metric"><span data-i18n="agent_exclusion">Agent exclusion policy</span><strong>Config</strong></div>
+            <div class="metric"><span data-i18n="verifier_required">Quality review required</span><strong>Yes</strong></div>
+            <div class="metric"><span data-i18n="agent_exclusion">Model availability rules</span><strong>Review</strong></div>
           </div>
         </section>
         <section class="panel workflow">
           <div class="panel-header">
             <h2 data-i18n="live_workflow_trace">Live Workflow Trace</h2>
-            <div class="actions"><span id="traceMode" class="chip green">Live</span><button class="btn" id="copyJson" data-i18n="view_json">View JSON</button></div>
+            <div class="actions"><span id="traceMode" class="chip green">Live</span><button class="btn" id="copyJson" data-i18n="view_json">Copy run details</button></div>
           </div>
           <div class="trace">
             <div class="steps" id="steps"></div>
           </div>
           <div class="tabs">
             <button class="tab active" data-tab="timeline" data-i18n="timeline_tab">Timeline</button>
-            <button class="tab" data-tab="access" data-i18n="access_list_tab">Access List</button>
-            <button class="tab" data-tab="json" data-i18n="json_tab">JSON</button>
+            <button class="tab" data-tab="access" data-i18n="access_list_tab">Permissions</button>
+            <button class="tab" data-tab="json" data-i18n="json_tab">Run details</button>
           </div>
           <div class="inspector" id="accessPanel" hidden></div>
           <pre class="json" id="traceJson" hidden></pre>
@@ -954,9 +960,9 @@ ADMIN_HTML = r"""<!doctype html>
               <thead><tr><th data-i18n="rule_header">Rule</th><th data-i18n="scope_header">Scope</th><th data-i18n="exclusion_header">Exclusion</th></tr></thead>
               <tbody>
                 <tr><td>PII-001</td><td>Purpose-authorized roles</td><td>Field encryption and audited release</td></tr>
-                <tr><td>SEC-002</td><td>worker</td><td>Tool web_search</td></tr>
-                <tr><td>DATA-003</td><td>verifier</td><td>Field ip_address</td></tr>
-                <tr><td>FIN-004</td><td>synthesizer</td><td>Record amount</td></tr>
+                <tr><td>SEC-002</td><td>Model responses</td><td>Review web search access</td></tr>
+                <tr><td>DATA-003</td><td>Network metadata</td><td>Review IP address access</td></tr>
+                <tr><td>FIN-004</td><td>Financial records</td><td>Review amount access</td></tr>
               </tbody>
             </table>
           </section>
@@ -964,8 +970,8 @@ ADMIN_HTML = r"""<!doctype html>
             <div class="panel-header"><h2 data-i18n="recent_errors">Recent Errors</h2><button class="btn" id="viewAudit" data-i18n="view_all">View all</button></div>
             <div class="audit-list">
               <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="route_degradation">Route degradation</b><br><small data-i18n="worker_latency">A processing step is slower than the selected limit; review the trace before continuing.</small></div><small>2m</small></div>
-              <div class="event"><span class="status-icon">!</span><div><b data-i18n="verifier_disagreement">Verifier disagreement</b><br><small data-i18n="confidence_low">confidence below policy threshold</small></div><small>11m</small></div>
-              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="agent_capacity">Agent capacity</b><br><small data-i18n="planner_capacity">Planning capacity is nearly full; reduce queued work or add capacity.</small></div><small>18m</small></div>
+              <div class="event"><span class="status-icon">!</span><div><b data-i18n="verifier_disagreement">Quality review needs attention</b><br><small data-i18n="confidence_low">Review the response evidence, then rerun it or adjust the quality threshold.</small></div><small>11m</small></div>
+              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="agent_capacity">Model capacity</b><br><small data-i18n="planner_capacity">Planning capacity is nearly full; reduce queued work or add capacity.</small></div><small>18m</small></div>
             </div>
           </section>
         </aside>
@@ -990,7 +996,7 @@ Summarize this research thread and verify claims.</textarea>
       </section>
       <section class="detail-grid view" data-view="access" hidden>
         <section class="panel wide">
-          <div class="panel-header"><h1 data-i18n="access_inspector">Access List Inspector</h1><span class="chip" id="accessRunId">No run</span></div>
+          <div class="panel-header"><h1 data-i18n="access_inspector">Permission review</h1><span class="chip" id="accessRunId">No run</span></div>
           <div class="inspector" id="accessPage"></div>
         </section>
       </section>
@@ -1129,10 +1135,10 @@ Summarize this research thread and verify claims.</textarea>
       const rows = state.agents
         .map((agent, index) => ({agent, index, status: agentStatus(index)}))
         .filter(({agent, status}) => (agent.id.toLowerCase().includes(q) || agent.model.toLowerCase().includes(q)) && (selectedStatus === "all" || status.key === selectedStatus));
-      els.agentCount.textContent = `${rows.length} agents`;
+      els.agentCount.textContent = `${rows.length} models`;
       els.agents.innerHTML = rows.map(({agent, index, status}) => `
         <tr>
-          <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.id)}</strong><br><small>${escapeHtml(agent.base_url)}</small></td>
+          <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.provider_name || "Configured")}</strong></td>
           <td>${escapeHtml(agent.model)}${agent.group_name ? `<br><span class="chip">${escapeHtml(agent.group_name)}</span>` : ""}</td>
           <td>${tags(agent.tags)}</td>
           <td><span class="chip ${status.chip}">${status.label}</span></td>
@@ -1143,7 +1149,7 @@ Summarize this research thread and verify claims.</textarea>
     function renderModelGroups() {
       const selected = new Set(Array.from(els.modelGroupMembers.selectedOptions).map(option => option.value));
       els.modelGroupMembers.innerHTML = state.agents.map(agent =>
-        `<option value="${escapeHtml(agent.id)}" ${selected.has(agent.id) ? "selected" : ""}>${escapeHtml(agent.id)} — ${escapeHtml(agent.model)} [${escapeHtml((agent.tags || []).join(", "))}]</option>`
+        `<option value="${escapeHtml(agent.id)}" ${selected.has(agent.id) ? "selected" : ""}>${escapeHtml(agent.provider_name || "Provider")} — ${escapeHtml(agent.model)}</option>`
       ).join("");
       els.modelGroups.innerHTML = (state.modelGroups || []).map(group => `
         <li><strong>${escapeHtml(group.group_name)}</strong> — ${escapeHtml(group.member_agent_ids.join(", "))}<br>
@@ -1257,7 +1263,7 @@ Summarize this research thread and verify claims.</textarea>
         return `<div class="kpi"><span>${escapeHtml(t(metric.metric_name) || metric.label)}</span><strong>${escapeHtml(rawValue)}${suffix}</strong></div>`;
       }).join("") || [
         ["Workflow runs", runs.length],
-        ["Enabled agents", state.agents.length],
+        ["Enabled models", state.agents.length],
         ["Verifier required", state.policy.verifier_required ? "Yes" : "No"]
       ].map(([label, value]) => `<div class="kpi"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
       els.runRows.innerHTML = runs.map(run => `
