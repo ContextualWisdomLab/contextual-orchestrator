@@ -3474,7 +3474,7 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
 # OpenAI o-series reasoning_effort levels. Without an effort plane this gateway
 # treats known levels as default-effort no-ops (parity with verbosity low/medium/high).
 _OPENAI_REASONING_EFFORT_LEVELS = frozenset(
-    {"none", "minimal", "low", "medium", "high"}
+    {"auto", "none", "minimal", "low", "medium", "high", "xhigh"}
 )
 
 
@@ -3503,7 +3503,7 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     raise RequestError(
         400,
         "invalid_reasoning_effort",
-        "reasoning_effort must be one of none, minimal, low, medium, high "
+        "reasoning_effort must be one of auto, none, minimal, low, medium, high, xhigh "
         "on /v1/chat/completions",
     )
 
