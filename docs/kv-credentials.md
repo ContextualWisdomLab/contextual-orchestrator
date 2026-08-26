@@ -35,6 +35,36 @@ The orchestrator resolves an agent's provider key through this seam only:
 Mock agents (`base_url` starting with `mock://`) early-return before any
 credential logic and stay keyless.
 
+### Wardnet policy-document boundary
+
+Privacy-policy analysis never resolves or connects to an arbitrary policy host
+inside contextual-orchestrator. Register `WARDNET_API_URL` and
+`WARDNET_ADMIN_TOKEN` in the same KV registry. The discovery command sends each
+bounded policy URL to Wardnet's authenticated `/api/outbound/fetch` endpoint;
+Wardnet owns public-destination policy, DNS pinning, redirects, and response
+limits. Contextual-orchestrator accepts only the returned bounded textual body,
+then asks an already-discovered ZDR-capable model for strict structured analysis.
+If either Wardnet credential, a grounded quote, or a ZDR analysis route is
+missing, policy-derived fields remain unknown.
+
+For JavaScript-rendered policies, install the `policy-browser` extra and
+register an authenticated Camoufox MCP Streamable HTTP endpoint. Wardnet must
+approve the URL first; Camoufox is only a rendering enhancement, and discovery
+falls back to Wardnet's static response if MCP is unavailable. Run the browser
+service in a restricted egress network because its own navigation is not a
+substitute for Wardnet's DNS-pinned fetch.
+
+```bash
+printf '%s' 'http://127.0.0.1:8080' | python -m contextual_orchestrator \
+  register-credential --name WARDNET_API_URL --value-stdin
+printf '%s' "$WARDNET_ADMIN_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name WARDNET_ADMIN_TOKEN --value-stdin
+printf '%s' 'http://127.0.0.1:9377/mcp' | python -m contextual_orchestrator \
+  register-credential --name CAMOUFOX_MCP_URL --value-stdin
+printf '%s' "$CAMOUFOX_MCP_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name CAMOUFOX_MCP_TOKEN --value-stdin
+```
+
 ### Agent credential naming
 
 `ModelAgent` gained a `credential_key` field (default `"OPENAI_API_KEY"`) that

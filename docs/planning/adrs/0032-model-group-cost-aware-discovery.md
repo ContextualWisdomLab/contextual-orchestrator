@@ -36,6 +36,19 @@ status unknown instead of converting endpoint eligibility into a false runtime
 claim. This source/effective-state split is the contract for adding further
 providers.
 
+When Wardnet is registered in the credential registry, discovery delegates
+policy crawling to Wardnet's authenticated bounded outbound-fetch API. Wardnet,
+not this Python service, owns destination policy, DNS pinning, redirects, and
+body limits. Contextual-orchestrator then selects only a discovered route with
+explicit ZDR evidence, requests a strict JSON-schema assessment, and accepts a
+verdict only when its evidence quote is a literal substring of the crawled
+document. The analyzer may enrich no-training and no-prompt-retention fields;
+optional ZDR availability is reported as policy analysis and never substituted
+for proof that an account enabled ZDR.
+An optional Camoufox MCP renderer handles client-rendered policy pages after
+Wardnet approval; it fails back to the bounded static document and requires
+restricted browser egress because Wardnet does not pin the browser's connection.
+
 Durable provider-catalog refreshes store explicit cost, capability, and directed
 modality evidence in normalized serving-tag rows. Last-known-good reads reconstruct
 those semantics before selection and Agent Pool synchronization; otherwise

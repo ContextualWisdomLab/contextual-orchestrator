@@ -32,6 +32,9 @@ from .orchestrator import (
     TaskOrchestrator,
     load_agents,
 )
+from .privacy_policy_analysis import (
+    analyze_discovered_privacy_policies,
+)
 from .server import SecurityConfig, serve
 
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
@@ -290,6 +293,7 @@ def _discover_models_command(argv: list[str]) -> None:
     except ValueError as exc:
         parser.error(str(exc))
     discovered, errors = discover_all_models(sources)
+    discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
     free_models = free_discovered_models(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
@@ -319,6 +323,9 @@ def _discover_models_command(argv: list[str]) -> None:
         },
         "priced_count": priced_count,
         "providers_with_errors": sorted({error.provider_name for error in errors}),
+        "privacy_policy_analysis": [
+            assessment.as_dict() for assessment in privacy_assessments
+        ],
         "enabled_agent_ids": enabled_agent_ids,
         "models": [
             {

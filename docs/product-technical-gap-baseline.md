@@ -24,6 +24,14 @@ passthrough, and failover slice is `129 passed`; the prior full branch suite was
 `2283 passed`. Replacement exact-head hosted checks, independent reviews, and
 normal protected merge remain required before this is release evidence.
 
+The next integrated head adds a Wardnet-owned crawl boundary and
+contextual-orchestrator-owned structured analysis: only explicitly ZDR-capable
+discovered models may analyze provider policies, every accepted verdict carries
+the source URL, analyzer identity, and a quote verified against the fetched
+document, and absence/failure remains unknown. Wardnet's outbound-fetch API is a
+stacked ecosystem dependency until its protected PR merges; no direct duplicate
+DNS/SSRF implementation is accepted in this repository.
+
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.

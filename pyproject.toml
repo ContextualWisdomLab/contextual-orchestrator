@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+policy-browser = [
+  "mcp==2.1.1",
+]
 test = [
   "hypothesis>=6.100",
 ]
