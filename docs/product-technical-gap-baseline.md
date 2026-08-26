@@ -44,6 +44,13 @@ are stacked protected dependencies; official Spamhaus DROP, URLhaus, and
 ThreatFox feed refresh is isolated in #115. No duplicate DNS/SSRF
 implementation is accepted in this repository.
 
+The optional `compose.camoufox-wardnet.yaml` overlay now makes that deployment
+contract inspectable: immutable Camofox browser/MCP artifacts, an immutable
+Wardnet build revision, dedicated auth boundaries, Wardnet port-53 DNS, and a
+browser attached only to Docker `internal` networks. Compose rendering and
+static contract tests prove the topology; a successfully started stack plus
+denied direct-DNS/direct-443 probes remain required runtime acceptance evidence.
+
 Local live verification on current implementation head `6d39bcc7` used the configured
 gateway and credential without recording either value. Discovery returned eight
 deployments with zero provider errors: seven had explicit chat capability and one

@@ -56,6 +56,28 @@ set Firefox `network.trr.mode=5`, and block direct web or external-DNS egress;
 the proxy and resolver are complementary controls. Discovery falls back to
 Wardnet's static response if MCP or the proxy is unavailable.
 
+The optional `compose.camoufox-wardnet.yaml` overlay makes this boundary
+deployable with `compose.yaml`. It pins Camofox MCP 1.15.0 (including the 1.13.2
+inbound-authentication fix), Camofox browser 2.4.7, and an immutable Wardnet
+revision. The browser joins only Docker `internal` networks, has no published
+port, and uses Wardnet's fixed address as its port-53 resolver. Wardnet alone is
+dual-homed for upstream DNS and HTTPS, so browser subprocesses cannot reach
+external DNS or TCP 80/443 without Wardnet.
+
+Start the overlay after registering matching KV values and supplying its
+dedicated deployment secrets plus Wardnet's PostgreSQL URL:
+
+```bash
+docker compose -f compose.yaml -f compose.camoufox-wardnet.yaml up -d
+```
+
+Register `WARDNET_EGRESS_PROXY_URL` as `http://172.30.0.2:8080` and
+`CAMOUFOX_MCP_URL` as `http://camofox-mcp:8080/mcp`. Use the same dedicated
+token values exposed to the corresponding containers. The browser has no
+general egress route, so encrypted-DNS attempts also fail closed.
+The browser release currently publishes a Linux AMD64 manifest, so the overlay
+declares that platform explicitly; ARM hosts require Docker's AMD64 emulation.
+
 ```bash
 printf '%s' 'http://127.0.0.1:8080' | python -m contextual_orchestrator \
   register-credential --name WARDNET_API_URL --value-stdin
