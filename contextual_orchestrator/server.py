@@ -6722,9 +6722,10 @@ def build_server(
                 nonlocal sequence
                 payload = {"type": event_type, "sequence_number": sequence, **values}
                 sequence += 1
-                self._write_sse(
+                if not self._write_sse(
                     f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                )
+                ):
+                    raise ConnectionAbortedError("Responses stream disconnected")
 
             def progress(role: str, status: str) -> None:
                 text = _REASONING_STAGE_SUMMARIES.get(role, "Processing the request.")
@@ -6800,6 +6801,8 @@ def build_server(
                         result = orchestrator.conduct(
                             messages, model_name=model_name, progress=progress
                         )
+                except ConnectionAbortedError:
+                    raise
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     failed = {
                         **created_response,
@@ -6874,6 +6877,8 @@ def build_server(
                 emit("response.completed", response=completed)
                 self._write_sse("data: [DONE]\n\n")
                 return True
+            except ConnectionAbortedError:
+                return False
             finally:
                 security.release_run_slot()
 

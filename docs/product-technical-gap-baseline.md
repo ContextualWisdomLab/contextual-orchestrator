@@ -19,6 +19,12 @@ actionable prompt. The focused admin/model-group contract is `38 passed`; the
 updated desktop render is recorded under `docs/images/ui-audit/`. This snapshot
 is branch evidence only, not protected-main or deployed evidence.
 
+The same head now treats a disconnected Responses reasoning-summary stream as
+cancellation evidence: it stops before the next orchestration stage and always
+releases the bounded execution slot. The disconnect, Responses stream, and
+passthrough slice is `32 passed`; this prevents paid work from continuing after
+the customer can no longer receive it.
+
 ## 2026-08-26 10:00 KST customer-copy and responsive evidence
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
