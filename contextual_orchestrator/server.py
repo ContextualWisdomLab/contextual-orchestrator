@@ -5834,8 +5834,8 @@ def build_server(
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
-                    # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the buyer selected on the chat Completions path.
+                    # Validate an explicit deployment when supplied; omission uses
+                    # the same advertised gateway default accepted by every text API.
                     model_name = _validate_completions_model(body)
                     _require_pool_model(orchestrator, model_name)
                     attribution = dict(attribution or {})
