@@ -3084,12 +3084,37 @@ class TaskOrchestrator:
         single selected agent so the full provider response shape survives; the
         orchestration path stays reserved for plain-text routing/verification.
         """
+        requested_model = body.get("model")
+        virtual_model = requested_model in {
+            None,
+            "contextual-orchestrator",
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
+        active_scope = self._request_failed_agents.get()
+        if virtual_model and active_scope is None:
+            admitted = self._structured_admitted_agent_ids()
+            if not admitted:
+                raise NoViableAgentError(
+                    retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+                )
+            failed_token = self._request_failed_agents.set(set())
+            admitted_token = self._request_admitted_agents.set(admitted)
+            try:
+                return self.proxy_completion(
+                    body,
+                    endpoint=endpoint,
+                    effort_profile=effort_profile,
+                )
+            finally:
+                self._request_admitted_agents.reset(admitted_token)
+                self._request_failed_agents.reset(failed_token)
+
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
         else:
             text = _coerce_input_text(body.get("input"))
-        requested_model = body.get("model")
         # When the client names a model, resolve a pool agent that actually serves
         # that model id (never silently rewrite to an unrelated agent.model --
         # a commercial honesty failure for OpenAI SDK passthrough tools/Responses
@@ -3103,32 +3128,53 @@ class TaskOrchestrator:
             agent = self._select_agent(
                 text, "worker", free_only=requested_model == self.FREE_MODEL
             )
-        upstream = {
-            key: value
-            for key, value in body.items()
-            if key not in self._ORCHESTRATION_ONLY_KEYS
-        }
-        upstream["model"] = agent.model
-        if effort_profile is not None:
-            upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
-        # v1 passthrough returns the full JSON body; SSE stream passthrough is a
-        # follow-up, so force a non-streamed upstream response here.
-        upstream["stream"] = False
-        measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
-        started_at = time.perf_counter()
-        try:
-            result = self.client.proxy_send(agent, endpoint, upstream)
-        except Exception as exc:
-            if isinstance(exc, RequestDeadlineExceeded):
-                raise
-            if measured:
-                self._group_router.observe_failure(agent.id)
-            raise
-        if measured:
-            self._group_router.observe_success(
-                agent.id, time.perf_counter() - started_at
+        admitted = self._request_admitted_agents.get()
+        candidates = (
+            self._failover_candidates(agent, text, "worker", set(admitted))
+            if admitted is not None
+            else [agent]
+        )
+        for candidate in candidates:
+            upstream = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS
+            }
+            upstream["model"] = candidate.model
+            if effort_profile is not None:
+                upstream = self.client.apply_effort_profile(
+                    candidate, upstream, effort_profile
+                )
+            # v1 passthrough returns the full JSON body; SSE stream passthrough is a
+            # follow-up, so force a non-streamed upstream response here.
+            upstream["stream"] = False
+            measured = bool(
+                candidate.group_name or requested_model == self.FREE_MODEL
             )
-        return result
+            started_at = time.perf_counter()
+            try:
+                result = self.client.proxy_send(candidate, endpoint, upstream)
+            except Exception as exc:
+                if isinstance(exc, RequestDeadlineExceeded):
+                    raise
+                if measured:
+                    self._group_router.observe_failure(candidate.id)
+                self._record_failure(candidate.id)
+                failed_agents = self._request_failed_agents.get()
+                if failed_agents is None:
+                    raise
+                self._record_structured_not_ready(candidate.id)
+                failed_agents.add(candidate.id)
+                continue
+            if measured:
+                self._group_router.observe_success(
+                    candidate.id, time.perf_counter() - started_at
+                )
+            self._record_success(candidate.id)
+            return result
+        raise NoViableAgentError(
+            retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+        )
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
