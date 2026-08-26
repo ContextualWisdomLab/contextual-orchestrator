@@ -12,7 +12,6 @@ import os
 import re
 import shutil
 import stat
-import tempfile
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -109,7 +108,8 @@ def validate_provenance(provenance: object) -> dict[str, str]:
 
 def _residue(final: Path, kind: str) -> list[Path]:
     """Return private publication residue for one final directory."""
-    return sorted(final.parent.glob(f".{final.name}.{kind}-*"))
+    prefix = f".{final.name}.{kind}-"
+    return sorted(path for path in final.parent.iterdir() if path.name.startswith(prefix))
 
 
 def _recover_publication(final: Path) -> None:
@@ -136,7 +136,10 @@ def publish_artifact_set(
         raise NimEvidenceError(
             "artifact set must contain exactly four non-empty byte payloads"
         )
-    provenance = json.loads(artifacts["run_provenance.json"].decode("utf-8"))
+    try:
+        provenance = json.loads(artifacts["run_provenance.json"].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise NimEvidenceError("run_provenance.json must contain valid UTF-8 JSON") from exc
     validate_provenance(provenance)
 
     final = Path(output_directory).expanduser()
@@ -147,8 +150,10 @@ def publish_artifact_set(
         raise NimEvidenceError("output directory must be a real directory")
     final.parent.mkdir(parents=True, exist_ok=True)
     _recover_publication(final)
-    staging = Path(tempfile.mkdtemp(dir=final.parent, prefix=f".{final.name}.staging-"))
-    staging.chmod(stat.S_IMODE(final.stat().st_mode) if final.exists() else 0o755)
+    staging = final.parent / f".{final.name}.staging-{uuid.uuid4().hex}"
+    staging.mkdir(mode=0o777)
+    if final.exists():
+        staging.chmod(stat.S_IMODE(final.stat().st_mode))
     backup: Path | None = None
     try:
         for name, payload in artifacts.items():

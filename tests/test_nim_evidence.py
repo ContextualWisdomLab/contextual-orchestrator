@@ -113,9 +113,13 @@ def test_complete_set_replaces_prior_set_and_rejects_partial_set(
         publish_artifact_set(tmp_path / "partial", {"benchmark_report.json": b"{}"})
 
     fresh = tmp_path / "fresh"
-    publish_artifact_set(fresh, _artifacts())
+    previous_umask = os.umask(0o027)
+    try:
+        publish_artifact_set(fresh, _artifacts())
+    finally:
+        os.umask(previous_umask)
     assert fresh.is_dir()
-    assert fresh.stat().st_mode & 0o777 == 0o755
+    assert fresh.stat().st_mode & 0o777 == 0o750
 
 
 def test_successful_replacement_preserves_mode_and_ignores_backup_cleanup_failure(
@@ -143,7 +147,7 @@ def test_publication_rejects_invalid_payloads_and_targets(tmp_path: Path) -> Non
         publish_artifact_set(tmp_path / "empty", empty)
     malformed = _artifacts()
     malformed["run_provenance.json"] = b"not-json"
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(NimEvidenceError, match="valid UTF-8 JSON"):
         publish_artifact_set(tmp_path / "malformed", malformed)
     regular_file = tmp_path / "regular"
     regular_file.write_text("x", encoding="utf-8")
@@ -211,6 +215,20 @@ def test_crash_residue_is_recovered_or_fails_closed(tmp_path: Path) -> None:
     second.mkdir()
     with pytest.raises(NimEvidenceError):
         publish_artifact_set(tmp_path / "ambiguous", _artifacts())
+
+
+def test_crash_recovery_treats_glob_metacharacters_as_literal(tmp_path: Path) -> None:
+    target = tmp_path / "nim[evidence]"
+    backup = tmp_path / ".nim[evidence].backup-old"
+    backup.mkdir()
+    unrelated = tmp_path / ".nime.backup-unrelated"
+    unrelated.mkdir()
+
+    publish_artifact_set(target, _artifacts())
+
+    assert target.is_dir()
+    assert not backup.exists()
+    assert unrelated.is_dir()
 
 
 def test_existing_final_discards_stale_backup(tmp_path: Path) -> None:
