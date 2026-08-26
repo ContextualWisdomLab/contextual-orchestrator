@@ -82,7 +82,9 @@ class CostRoutingCoordinator:
             client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
             self.batch_backend = LocalBatchBackend(
-                runner=lambda messages, mode: orchestrator.complete(messages, mode=mode),
+                runner=lambda messages, mode, model: orchestrator.complete(
+                    messages, mode=mode, model_name=model
+                ),
                 max_concurrency=local_concurrency,
                 job_registry=registry,
             )

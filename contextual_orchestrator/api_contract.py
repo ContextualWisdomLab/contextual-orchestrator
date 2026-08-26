@@ -7,14 +7,29 @@ OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
         "title": "Contextual Orchestrator API",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
     "components": {
         "securitySchemes": {
             "admin_bearer_auth": {"type": "http", "scheme": "bearer"},
             "inference_bearer_auth": {"type": "http", "scheme": "bearer"},
-        }
+        },
+        "schemas": {
+            "ModelGroupWrite": {
+                "type": "object",
+                "required": ["group_name", "member_agent_ids"],
+                "properties": {
+                    "group_name": {"type": "string"},
+                    "member_agent_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "uniqueItems": True,
+                        "items": {"type": "string"},
+                    },
+                },
+            }
+        },
     },
     "paths": {
         "/openapi.json": {
@@ -155,6 +170,39 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        **{
+            path: {
+                "post": {
+                    "operationId": operation_id,
+                    "summary": summary,
+                    "security": [{"inference_bearer_auth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": schema}},
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Capability response",
+                            "content": (
+                                {"audio/mpeg": {"schema": {"type": "string", "format": "binary"}}}
+                                if path == "/v1/audio/speech"
+                                else {"application/json": {"schema": {"type": "object"}}}
+                            ),
+                        },
+                        "400": {"description": "Invalid request"},
+                        "503": {"description": "No capable model group member is available"},
+                    },
+                }
+            }
+            for path, operation_id, summary, schema in (
+                ("/v1/images/generations", "create_image", "Generate an image", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
+                ("/v1/videos", "create_video", "Submit video generation", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
+                ("/v1/audio/speech", "create_speech", "Synthesize speech", {"type": "object", "required": ["input", "voice"], "properties": {"model": {"type": "string"}, "input": {"type": "string"}, "voice": {"type": "string"}}}),
+                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio", {"type": "object", "required": ["input_audio"], "properties": {"model": {"type": "string"}, "input_audio": {"type": "object", "required": ["data", "format"]}}}),
+                ("/v1/rerank", "create_rerank", "Rerank documents", {"type": "object", "required": ["query", "documents"], "properties": {"model": {"type": "string"}, "query": {"type": "string"}, "documents": {"type": "array", "minItems": 1}}}),
+                ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}}}),
+            )
+        },
         "/v1/responses": {
             "post": {
                 "operationId": "create_response",
@@ -220,6 +268,7 @@ OPENAPI_SPEC = {
                                     "priority": {"type": "integer"},
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "provider_exclusions": {"type": "array", "items": {"type": "string"}},
+                                    "group_name": {"type": "string"},
                                 },
                             },
                         },
@@ -227,6 +276,70 @@ OPENAPI_SPEC = {
                 },
                 "responses": {"200": {"description": "Worker agent updated"}},
             }
+        },
+        "/api/v1/model_groups": {
+            "get": {
+                "operationId": "list_model_groups",
+                "summary": "List logical model groups and measured member evidence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Model group collection"}},
+            },
+            "post": {
+                "operationId": "create_model_group",
+                "summary": "Create a logical model group from configured agents",
+                "security": [{"admin_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {"$ref": "#/components/schemas/ModelGroupWrite"}
+                        }
+                    },
+                },
+                "responses": {"201": {"description": "Model group created"}},
+            },
+        },
+        "/api/v1/model_groups/{group_name}": {
+            "get": {
+                "operationId": "get_model_group",
+                "summary": "Get one logical model group",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [{"name": "group_name", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "Model group"}, "404": {"description": "Not found"}},
+            },
+            "patch": {
+                "operationId": "replace_model_group_members",
+                "summary": "Replace group membership",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [{"name": "group_name", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["member_agent_ids"],
+                                "properties": {
+                                    "member_agent_ids": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "uniqueItems": True,
+                                        "items": {"type": "string"},
+                                    }
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {"200": {"description": "Model group updated"}},
+            },
+            "delete": {
+                "operationId": "delete_model_group",
+                "summary": "Delete group membership without deleting agents",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [{"name": "group_name", "in": "path", "required": True, "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "Model group deleted"}},
+            },
         },
         "/api/v1/orchestration_policies/default_policy": {
             "get": {

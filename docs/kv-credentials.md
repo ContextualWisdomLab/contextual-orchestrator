@@ -121,6 +121,10 @@ These open the KV. They are not provider API keys.
 
 ## Bootstrapping a credential
 
+The root `compose.yaml` uses the same stdin-only pattern for the server bearer
+token through a one-shot `credential_bootstrap` service and a Compose secret.
+Only KV connection/unlock values use environment bootstrap transport.
+
 A one-shot CLI subcommand writes a deploy-time secret into the KV:
 
 ```bash

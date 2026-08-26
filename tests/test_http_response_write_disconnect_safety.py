@@ -55,7 +55,7 @@ def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
     yielded: list[str] = []
 
     class Orchestrator:
-        def stream_route(self, messages, workflow_run_id):
+        def stream_route(self, messages, workflow_run_id, *, model_name):
             for delta in ("first", "second"):
                 yielded.append(delta)
                 yield delta
@@ -92,6 +92,88 @@ def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
         server.server_close()
 
 
+def test_responses_stream_does_not_start_orchestration_after_header_disconnect() -> None:
+    """A dead Responses peer must not trigger any paid provider work."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+
+    class Orchestrator:
+        def would_route(self, *_args, **_kwargs):
+            raise AssertionError("orchestration must not start")
+
+    class Security:
+        acquired = 0
+        released = 0
+
+        def acquire_run_slot(self):
+            self.acquired += 1
+
+        def release_run_slot(self):
+            self.released += 1
+
+    class Handler:
+        def _begin_sse(self):
+            return False
+
+    try:
+        security = Security()
+        result = server.RequestHandlerClass._stream_orchestrated_response(
+            Handler(), Orchestrator(), security, [], "orchestrator/auto"
+        )
+        assert result is False
+        assert security.acquired == security.released == 1
+    finally:
+        server.server_close()
+
+
+def test_responses_stream_stops_orchestration_after_event_disconnect() -> None:
+    """A disconnected reasoning-summary stream must stop later provider work."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    continued: list[str] = []
+
+    class Orchestrator:
+        def would_route(self, *_args, **_kwargs):
+            return False
+
+        def conduct(self, _messages, *, model_name, progress):
+            del model_name
+            progress("thinker", "started")
+            continued.append("after disconnect")
+            return {"answer": "must not be returned"}
+
+    class Security:
+        acquired = 0
+        released = 0
+
+        def acquire_run_slot(self):
+            self.acquired += 1
+
+        def release_run_slot(self):
+            self.released += 1
+
+    class Handler:
+        writes = 0
+
+        def _begin_sse(self):
+            return True
+
+        def _write_sse(self, _frame):
+            self.writes += 1
+            return self.writes < 3
+
+    try:
+        security = Security()
+        handler = Handler()
+        result = server.RequestHandlerClass._stream_orchestrated_response(
+            handler, Orchestrator(), security, [], "orchestrator/auto"
+        )
+        assert result is False
+        assert continued == []
+        assert handler.writes == 3
+        assert security.acquired == security.released == 1
+    finally:
+        server.server_close()
+
+
 def test_write_response_still_propagates_unrelated_errors() -> None:
     """Only disconnect-shaped errors are swallowed; real bugs must still surface."""
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
@@ -107,6 +189,39 @@ def test_write_response_still_propagates_unrelated_errors() -> None:
             pass
         else:
             raise AssertionError("expected TypeError to propagate, not be swallowed")
+    finally:
+        server.server_close()
+
+
+def test_binary_response_swallows_a_disconnect() -> None:
+    """Audio writes use the same disconnect boundary as JSON and SSE writes."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    handler_cls = server.RequestHandlerClass
+
+    class DisconnectedHandler:
+        wfile = None
+
+        def send_response(self, _status):
+            return None
+
+        def send_header(self, _name, _value):
+            return None
+
+        def _send_security_headers(self):
+            return None
+
+        def end_headers(self):
+            return None
+
+        def write(self, _payload):
+            raise BrokenPipeError("simulated audio client disconnect")
+
+        _write_response = handler_cls._write_response
+
+    try:
+        handler = DisconnectedHandler()
+        handler.wfile = handler
+        handler_cls._send_bytes(handler, b"audio", "audio/mpeg")
     finally:
         server.server_close()
 

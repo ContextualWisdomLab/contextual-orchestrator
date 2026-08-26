@@ -16,6 +16,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    free_discovered_models,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
@@ -231,34 +232,48 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Enable a price-honest, provider-diverse discovered agent pool in --agents-db (auto-optimization bootstrap; "
         "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
     )
+    parser.add_argument(
+        "--free-only",
+        action="store_true",
+        help="Report only models whose structured provider/catalog price metadata is entirely zero; "
+        "unknown or name-implied prices remain excluded, while the full report keeps every model.",
+    )
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
     discovered, errors = discover_all_models()
+    free_models = free_discovered_models(discovered)
+    reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
-    priced_count = refresh_price_book(discovered, price_book)
+    priced_count = refresh_price_book(reported, price_book)
 
     enabled_agent_ids: list[str] = []
     if args.agents_db:
         bootstrap = TaskOrchestrator(
             [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
         )
-        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in discovered])
+        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in reported])
         if args.enable_cheapest:
-            for model in select_bootstrap_discovered_agents(discovered, price_book, args.enable_cheapest):
+            for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
                 agent_id = agent_id_for(model)
                 bootstrap.patch_agent("default", agent_id, {"status": "active"})
                 enabled_agent_ids.append(agent_id)
 
     report = {
-        "discovered_count": len(discovered),
+        "discovered_count": len(reported),
+        "free_tier_count": len(free_models),
         "priced_count": priced_count,
         "providers_with_errors": sorted({error.provider_name for error in errors}),
         "enabled_agent_ids": enabled_agent_ids,
         "models": [
-            {"provider": model.provider_name, "model": model.model_id, "agent_id": agent_id_for(model)}
-            for model in discovered
+            {
+                "provider": model.provider_name,
+                "model": model.model_id,
+                "agent_id": agent_id_for(model),
+                "is_free": model.is_free,
+            }
+            for model in reported
         ],
     }
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
@@ -342,10 +357,8 @@ def main(argv: list[str] | None = None) -> None:
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
                         help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
-    parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
-                        help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
-    parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
-                        help="Auto-mode hint-count minimum that can trigger conduct instead of route.")
+    parser.add_argument("--no-realtime-judge", action="store_true", default=False,
+                        help="Disable real-time fast-mlsirm answer judging on direct route paths.")
     parser.add_argument("--chat-template-args", type=_json_object, default={},
                         help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
@@ -383,13 +396,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.auto_discover_model_agents:
         _auto_discover_runtime_agents(orchestrator)
 
-    if args.conduct_hint_threshold is not None or args.route_text_length_threshold is not None:
-        overrides: dict[str, int] = {}
-        if args.conduct_hint_threshold is not None:
-            overrides["conduct_hint_threshold"] = args.conduct_hint_threshold
-        if args.route_text_length_threshold is not None:
-            overrides["route_text_length_threshold"] = args.route_text_length_threshold
-        orchestrator.policy = replace(orchestrator.policy, **overrides)
+    if args.no_realtime_judge:
+        orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
 
     if args.eval:
         print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))
