@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import time
-import uuid
 from dataclasses import dataclass
+import hashlib
+import json
+import time
 from typing import Any
+import uuid
 
 
 class VideoJobContractError(RuntimeError):
@@ -23,6 +25,19 @@ class VideoJobOwner:
     owner_id: str = ""
     usage_measurement_status: str = "unavailable"
     provider_usage: dict[str, int] | None = None
+    agent_affinity_key: str = ""
+
+
+def video_agent_affinity_key(agent: Any) -> str:
+    """Fingerprint the non-secret routing identity used for provider follow-ups."""
+    identity = {
+        "base_url": agent.base_url,
+        "credential_name": agent.credential_name,
+        "auth_scheme": agent.auth_scheme,
+        "local_credential_key": agent.local_credential_key,
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class VideoJobRegistry:
@@ -34,7 +49,12 @@ class VideoJobRegistry:
         )
 
     def register(
-        self, provider_result: dict[str, Any], agent_id: str, owner_id: str
+        self,
+        provider_result: dict[str, Any],
+        agent_id: str,
+        owner_id: str,
+        *,
+        agent_affinity_key: str = "",
     ) -> dict[str, Any]:
         """Persist ownership and replace the provider id with an opaque gateway id."""
         provider_job_id = provider_result.get("id")
@@ -56,6 +76,7 @@ class VideoJobRegistry:
                 "measured" if reported_usage is not None else "unavailable"
             ),
             provider_usage=reported_usage,
+            agent_affinity_key=agent_affinity_key,
         )
         return self.public_response(provider_result, self._owners[gateway_job_id])
 
@@ -110,6 +131,7 @@ class VideoJobRegistry:
             owner_id=owner.owner_id,
             usage_measurement_status="measured",
             provider_usage=usage,
+            agent_affinity_key=owner.agent_affinity_key,
         )
         self._owners[owner.gateway_job_id] = updated
         return updated

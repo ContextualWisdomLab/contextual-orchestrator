@@ -201,6 +201,45 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
         server.shutdown()
 
 
+def test_video_followup_rejects_reconfigured_provider_account() -> None:
+    """A reused agent id cannot redirect an existing job to another account."""
+    agent = ModelAgent(
+        "video_owner", "provider/video", tags=("video",), credential_key="ACCOUNT_ONE"
+    )
+    orchestrator = TaskOrchestrator([agent])
+    followups: list[str] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda *_args: {"id": "provider-job", "status": "queued"}
+    )
+    orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: followups.append("called") or {}
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        status, raw, _ = _post(
+            port, "/v1/videos", {"model": "provider/video", "prompt": "demo"}
+        )
+        assert status == 200
+        gateway_job_id = json.loads(raw)["id"]
+        orchestrator.candidates[0] = ModelAgent(
+            "video_owner",
+            "provider/video",
+            tags=("video",),
+            credential_key="ACCOUNT_TWO",
+        )
+
+        status, body = _get_error(port, f"/v1/videos/{gateway_job_id}")
+        assert status == 503
+        assert body["error"]["code"] == "video_provider_unavailable"
+        assert followups == []
+    finally:
+        server.shutdown()
+
+
 def test_video_submission_does_not_race_uncancellable_async_jobs() -> None:
     """Equivalent endpoints submit one owned async job, never orphan losers."""
     agents = [

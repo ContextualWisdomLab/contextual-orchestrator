@@ -49,7 +49,11 @@ from .telemetry import (
     session_id_from_request,
     set_session_id,
 )
-from .video_jobs import VideoJobContractError, VideoJobRegistry
+from .video_jobs import (
+    VideoJobContractError,
+    VideoJobRegistry,
+    video_agent_affinity_key,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -5108,6 +5112,13 @@ def build_server(
                             "The video provider is unavailable; restore its configured account and retry.",
                         )
                         return
+                    if owner.agent_affinity_key != video_agent_affinity_key(agent):
+                        self._send_error(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        )
+                        return
                     provider_path = f"videos/{urllib.parse.quote(owner.provider_job_id, safe='')}"
                     try:
                         if content_request:
@@ -5660,7 +5671,12 @@ def build_server(
                     principal_id = security.principal_id(self.headers)
 
                     def register_video_job(agent: ModelAgent, provider_result: dict[str, Any]) -> dict[str, Any]:
-                        response = video_jobs.register(provider_result, agent.id, principal_id)
+                        response = video_jobs.register(
+                            provider_result,
+                            agent.id,
+                            principal_id,
+                            agent_affinity_key=video_agent_affinity_key(agent),
+                        )
                         coordinator.record_async_video_usage(
                             agent=agent,
                             usage=provider_result.get("usage"),

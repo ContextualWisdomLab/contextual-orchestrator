@@ -7,10 +7,15 @@ import io
 import pytest
 
 from contextual_orchestrator.batch_job_registry import JobRegistryFactory
-from contextual_orchestrator.orchestrator import ModelClient, ProviderResponseError
+from contextual_orchestrator.orchestrator import (
+    ModelAgent,
+    ModelClient,
+    ProviderResponseError,
+)
 from contextual_orchestrator.video_jobs import (
     VideoJobContractError,
     VideoJobRegistry,
+    video_agent_affinity_key,
 )
 
 
@@ -47,6 +52,17 @@ def test_register_replaces_provider_id_and_preserves_owner() -> None:
     assert owner.provider_job_id == "provider-job"
     assert owner.agent_id == "declared_video_agent"
     assert owner.gateway_job_id == response["id"]
+
+
+def test_video_agent_affinity_changes_with_provider_account_routing() -> None:
+    original = ModelAgent(
+        "video_agent", "video-model", credential_key="ACCOUNT_ONE"
+    )
+    replacement = ModelAgent(
+        "video_agent", "video-model", credential_key="ACCOUNT_TWO"
+    )
+
+    assert video_agent_affinity_key(original) != video_agent_affinity_key(replacement)
 
 
 def test_followup_with_a_different_provider_id_fails_closed() -> None:
