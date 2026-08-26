@@ -682,6 +682,30 @@ def test_conduct_excludes_failed_candidates_for_the_entire_request() -> None:
     assert client.calls == ["first_agent", "second_agent", "first_agent", "second_agent"]
 
 
+def test_expired_request_deadline_does_not_mark_provider_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caller-budget exhaustion before transport is not a provider failure."""
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: 10.0)
+    agent = ModelAgent(
+        "healthy_agent",
+        "healthy-model",
+        tags=("reasoning", "writing", "planning", "research", "verification"),
+    )
+    client = ModelClient(max_retries=0)
+    orchestrator = TaskOrchestrator([agent], client=client)
+
+    with client.request_settings(request_deadline_monotonic=9.0):
+        with pytest.raises(RequestDeadlineExceeded):
+            orchestrator.complete(
+                [{"role": "user", "content": "produce a verified report"}],
+                mode="conduct",
+            )
+
+    assert orchestrator._structured_readiness == {}
+    assert orchestrator._circuit == {}
+
+
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:

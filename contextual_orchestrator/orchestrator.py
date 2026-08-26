@@ -4754,11 +4754,10 @@ class TaskOrchestrator:
                     )
                 except Exception as exc:
                     if isinstance(exc, RequestDeadlineExceeded):
-                        self._record_failure(agent.id)
-                        self._record_structured_not_ready(agent.id)
-                        failed_agents = self._request_failed_agents.get()
-                        if failed_agents is not None:
-                            failed_agents.add(agent.id)
+                        # The shared caller budget may expire before this
+                        # provider is contacted. It is not provider-health
+                        # evidence and must not poison the cross-request
+                        # readiness or circuit state.
                         raise
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
