@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS model_serving_tag (
     PRIMARY KEY (provider_model_id, tag_name)
 );
 
+CREATE TABLE IF NOT EXISTS model_policy_source (
+    provider_model_id text NOT NULL
+        REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
+    policy_source_url text NOT NULL,
+    PRIMARY KEY (provider_model_id, policy_source_url)
+);
+
 CREATE TABLE IF NOT EXISTS catalog_refresh_run (
     catalog_refresh_run_id text PRIMARY KEY,
     provider_account_id text NOT NULL
@@ -300,6 +307,7 @@ def _restore_model_semantics(
         supports_no_prompt_retention=(
             True if "privacy:no_retention" in normalized else False if "privacy:retention_only" in normalized else None
         ),
+        privacy_policy_urls=tuple(model.privacy_policy_urls),
     )
 
 
@@ -531,6 +539,12 @@ class PostgresProviderCatalogStore:
                     "WHERE provider_account_id = %s)",
                     (account_id,),
                 )
+                cursor.execute(
+                    "DELETE FROM model_policy_source WHERE provider_model_id IN ("
+                    "SELECT provider_model_id FROM provider_model "
+                    "WHERE provider_account_id = %s)",
+                    (account_id,),
+                )
                 for model_name, model in normalized.items():
                     model_row_id = provider_model_id(source, model_name)
                     cursor.execute(
@@ -568,6 +582,13 @@ class PostgresProviderCatalogStore:
                                 "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                                 (model_row_id, tag),
                             )
+                    for policy_source_url in dict.fromkeys(model.privacy_policy_urls):
+                        cursor.execute(
+                            "INSERT INTO model_policy_source "
+                            "(provider_model_id, policy_source_url) "
+                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                            (model_row_id, policy_source_url),
+                        )
                 finished_at = _now()
                 cursor.execute(
                     "INSERT INTO catalog_refresh_run ("
@@ -670,9 +691,23 @@ class PostgresProviderCatalogStore:
                     (account_id,),
                 )
                 tag_rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT pm.model_name, mps.policy_source_url "
+                    "FROM model_policy_source AS mps "
+                    "JOIN provider_model AS pm ON pm.provider_model_id = mps.provider_model_id "
+                    "WHERE pm.provider_account_id = %s "
+                    "ORDER BY pm.model_name, mps.policy_source_url",
+                    (account_id,),
+                )
+                policy_source_rows = cursor.fetchall()
         tags_by_model: dict[str, list[str]] = {}
         for model_name, tag_name in tag_rows:
             tags_by_model.setdefault(model_name, []).append(tag_name)
+        policy_sources_by_model: dict[str, list[str]] = {}
+        for model_name, policy_source_url in policy_source_rows:
+            policy_sources_by_model.setdefault(model_name, []).append(
+                policy_source_url
+            )
         return [
             _restore_model_semantics(DiscoveredModel(
                 provider_name=source.provider_name,
@@ -683,6 +718,7 @@ class PostgresProviderCatalogStore:
                 prompt_price_per_1k=_normalize_price(row[3]),
                 completion_price_per_1k=_normalize_price(row[4]),
                 currency_code=_normalize_currency(row[5]),
+                privacy_policy_urls=tuple(policy_sources_by_model.get(row[0], ())),
             ), tags_by_model.get(row[0], ()))
             for row in rows
         ]
