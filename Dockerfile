@@ -13,6 +13,7 @@
 FROM ghcr.io/pyo3/maturin@sha256:b6c8b59a0170b77eb31a35b56034abd39972483ad0ebfff344deaa42a85f3bd3 AS token-builder
 COPY rust/Cargo.toml rust/Cargo.lock /build/rust/
 COPY rust/token_counter/ /build/rust/token_counter/
+COPY contextual_orchestrator/ /build/contextual_orchestrator/
 WORKDIR /build/rust/token_counter
 RUN maturin build --locked --release --out /build/wheels
 
