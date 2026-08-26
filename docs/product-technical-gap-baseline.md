@@ -1,5 +1,36 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 12:28 KST protected-main and open-queue snapshot
+
+PR #834 merged normally as protected `main`
+`9c299fa4669139dbe246638e0c44b62051ec8830`. Its Tests, Security, Fuzz,
+Dependency Graph, and provider-catalog canaries are still queued, so the merge
+is delivery evidence but not yet release evidence. PR #855 was closed after its
+tree became identical to that protected head.
+
+| PR | Exact head | Verified change and next acceptance action |
+| --- | --- | --- |
+| [#845](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/845) | `eecdb11398200b6574ef7cfb4212c4f3688cab11` | Repairs the observed scheduled provider-catalog failure when durable KV connection secrets are absent. Focused tests and `actionlint` pass; obtain exact-head Checks and independent approval, merge normally, then require one successful scheduled run. |
+| [#848](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/848) | `e5433911db3827b1d6a7eb48b9d72d392c9ed8db` | Makes planning ADR identifiers unique; the focused contract passes. Obtain exact-head Checks and independent approval. |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `d88e3218f093c7d4b77bd78a1d2b54445595ecb5` | Keeps health traffic responsive during 64 concurrent delayed requests. The current k6 run completed 229/229 checks with 0 failures, 25.062 inference requests/s, 14.77 ms health p99, and about 1.12 s inference p95. Production TLS, provider quotas, multiprocess capacity, and soak evidence remain open. |
+| [#850](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/850) | `83018885ec45110c9a900da3978109e506a468e7` | Preserves constant-time budget accounting with model-group ledger maintenance; `34` focused tests pass. Obtain exact-head Checks and independent approval. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `b221fa714539ac5b8523a6d70676304f1c7e0532` | Combines structured provider orchestration, distinct-provider failover, multimodal evidence, cost provenance, and measured group routing. The merged focused contract is `141 passed`; a full exact-head run is in progress. |
+| [#856](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/856) | `b9db99971f5f335a02719ed088988340647b3869` | Exposes a strictly validated request-body ceiling while retaining anti-heuristic routing. The current security/CLI/server slice is `40 passed`. |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | this baseline commit supersedes `03e95ebe5b1401ad76c2e22b3aab23aeff29393a` | Sends remote embedding batches to the selected provider, preserves reported token usage, retries transient failures through the shared transport, rejects malformed provider rows, accepts post-construction discovery, and resolves the default orchestration alias. All four review threads are resolved and `110` focused tests pass. |
+
+All seven open PRs have normal auto-merge enabled. No exact head has an
+independent approval and no failed exact-head Check is currently present;
+hosted jobs are queued. Queue time is neither success evidence nor authority to
+bypass review.
+
+Issue [#117](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/117)
+remains a customer-visible authorization gap. Current tests intentionally treat
+JSON `null` as an omitted trace request and legacy single-token mode can still
+authorize trace disclosure, while the issue requires a distinct, purpose- and
+resource-bound trace authority. Do not close it until streaming, batch,
+workflow, evidence-export, tenant, expiry/revocation, OpenAPI, and audit
+acceptance cases pass on protected main.
+
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
