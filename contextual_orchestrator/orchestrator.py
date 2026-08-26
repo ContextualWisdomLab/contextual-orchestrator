@@ -1325,8 +1325,10 @@ class ModelClient:
         connection_timeout = timeout
         if connection_timeout is None:
             connection_timeout = getattr(
-                self._local, "provider_transport_timeout", self.timeout
+                self._local, "provider_transport_timeout", None
             )
+        if connection_timeout is None:
+            connection_timeout = self.timeout
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.

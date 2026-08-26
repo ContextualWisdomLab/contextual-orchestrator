@@ -602,6 +602,7 @@ def test_https_provider_uses_verifying_connection_and_resolved_destination() -> 
             return None
 
     client = ModelClient()
+    client._local.provider_transport_timeout = None
     connection = FakeConnection()
     request = urllib.request.Request("https://provider.example/v1/chat/completions", method="POST")
     with patch(
