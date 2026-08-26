@@ -166,6 +166,10 @@ def test_server_request_body_limit_is_explicit() -> None:
                 "8388608",
             ],
         ),
+        patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+        patch("contextual_orchestrator.__main__.ModelClient"),
+        patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
         patch("contextual_orchestrator.__main__.serve") as serve,
     ):
         main()
