@@ -4343,8 +4343,11 @@ class TaskOrchestrator:
                 except Exception as exc:
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
-                    if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
+                    if isinstance(exc, ToolFallbackStoppedError):
                         raise
+                    if isinstance(exc, ProviderResponseError):
+                        self._record_failure(agent.id)
+                        break
                     decision = classify_tool_failure(exc)
                     action = decision.action
                     # A failed attempt is one Bernoulli stability observation
