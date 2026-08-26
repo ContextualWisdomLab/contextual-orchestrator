@@ -228,26 +228,47 @@ class _FastMLSIJudgeAdapter:
             raise ValueError("mode must be auto, route, or conduct")
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
-        agent = self._agent()
-        request = {
-            "model": agent.model,
-            "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
-            "max_tokens": self.orchestrator.client.max_output_tokens,
-            "response_format": response_format,
-        }
+        primary = self._agent()
         effort_profile = self.orchestrator._role_effort_profile("judge")
-        if effort_profile is not None:
-            request = self.orchestrator.client.apply_effort_profile(
-                agent, request, effort_profile
-            )
-        request["stream"] = False
-        response = self.orchestrator.client.proxy_send(
-            agent, "chat/completions", request
+        candidates = self.orchestrator._failover_candidates(
+            primary, self.text, "verifier", self.allowed_agent_ids
         )
-        output = ModelClient._response_content(agent, response)
-        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
-        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
+        for agent in candidates:
+            request = {
+                "model": agent.model,
+                "messages": messages,
+                "temperature": self.orchestrator.client.temperature,
+                "max_tokens": self.orchestrator.client.max_output_tokens,
+                "response_format": response_format,
+            }
+            if effort_profile is not None:
+                request = self.orchestrator.client.apply_effort_profile(
+                    agent, request, effort_profile
+                )
+            request["stream"] = False
+            try:
+                self.orchestrator.client.remaining_request_timeout()
+                started_at = time.perf_counter()
+                response = self.orchestrator.client.proxy_send(
+                    agent, "chat/completions", request
+                )
+                output = ModelClient._response_content(agent, response)
+            except RequestDeadlineExceeded:
+                raise
+            except Exception:  # noqa: BLE001 - bounded structured-provider failover
+                self.orchestrator._group_router.observe_failure(agent.id)
+                self.orchestrator._record_failure(agent.id)
+                continue
+            self.orchestrator._group_router.observe_success(
+                agent.id, time.perf_counter() - started_at
+            )
+            self.orchestrator._record_success(agent.id)
+            usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+            return self._completion_payload(
+                output, agent.id, usage, self.mode if mode is None else mode
+            )
+        self.orchestrator.client.remaining_request_timeout()
+        raise RuntimeError("all structured judge providers failed") from None
 
     def _completion_payload(
         self,

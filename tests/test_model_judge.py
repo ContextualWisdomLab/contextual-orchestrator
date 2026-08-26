@@ -19,7 +19,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, _parse_model_judge_reply  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    ProviderResponseError,
+    RequestDeadlineExceeded,
+    _parse_model_judge_reply,
+)
 
 
 RISKY_VERIFIER_REPORT = "The plan is sound overall but discusses downtime risks and error handling."
@@ -452,6 +457,92 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
     assert completion["mode"] == "conduct"
     assert completion["trace"][0]["usage"]["total_tokens"] == 5
+
+
+def test_fast_mlsirm_structured_judge_fails_over_with_shared_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A structural provider failure offers the request remainder to the backup."""
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class DeadlineClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=0)
+            self.calls: list[tuple[str, float]] = []
+
+        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
+            del endpoint, payload
+            remaining = self.remaining_request_timeout()
+            budget = min(float(self.timeout), remaining)
+            self.calls.append((agent.id, budget))
+            if agent.id == "primary_judge":
+                now[0] += budget
+                raise ProviderResponseError("primary structured response failed")
+            return {
+                "choices": [{"message": {"content": '{"accepted":true}'}}],
+                "usage": {"total_tokens": 7},
+            }
+
+    agents = [
+        ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
+        ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
+    ]
+    client = DeadlineClient()
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        TaskOrchestrator(agents, client=client),
+        "task",
+        "primary_judge",
+        allowed_agent_ids={"primary_judge", "backup_judge"},
+    )
+    with client.request_settings(request_deadline_monotonic=180.0):
+        completion = adapter.complete_structured(
+            [{"role": "user", "content": "judge"}],
+            response_format={"type": "json_object"},
+        )
+    assert completion["answer"] == '{"accepted":true}'
+    assert completion["trace"][0]["agent_id"] == "backup_judge"
+    assert client.calls == [("primary_judge", 90.0), ("backup_judge", 90.0)]
+
+
+def test_fast_mlsirm_structured_judge_all_fail_at_request_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All structured candidates fail closed when the shared deadline is exhausted."""
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class AllDownClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=0)
+            self.calls: list[tuple[str, float]] = []
+
+        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
+            del endpoint, payload
+            remaining = self.remaining_request_timeout()
+            budget = min(float(self.timeout), remaining)
+            self.calls.append((agent.id, budget))
+            now[0] += budget
+            raise ProviderResponseError("structured response failed")
+
+    agents = [
+        ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
+        ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
+    ]
+    client = AllDownClient()
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        TaskOrchestrator(agents, client=client),
+        "task",
+        "primary_judge",
+        allowed_agent_ids={"primary_judge", "backup_judge"},
+    )
+    with client.request_settings(request_deadline_monotonic=180.0):
+        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
+            adapter.complete_structured(
+                [{"role": "user", "content": "judge"}],
+                response_format={"type": "json_object"},
+            )
+    assert client.calls == [("primary_judge", 90.0), ("backup_judge", 90.0)]
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
