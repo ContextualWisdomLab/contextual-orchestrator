@@ -536,25 +536,34 @@ class CostRoutingCoordinator:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
-        existing_job_id = self._embedding_request_keys.get(request_key)
-        if existing_job_id:
-            existing_job = self._embedding_jobs.get(str(existing_job_id))
-            if existing_job is not None:
-                existing_backend = self._embedding_backend_for_job(existing_job.job_id)
-                existing_status = existing_backend.poll(existing_job).get("status")
-                if existing_status not in {"failed", "cancelled", "rejected"}:
-                    return existing_job
-        backend = backend or self._embedding_backend_for_model(model, routing_agent_id)
-        job = backend.submit(requests, metadata=metadata)
-        self._embedding_job_backends[job.job_id] = backend.name
-        self._embedding_jobs[job.job_id] = job
-        self._embedding_models[job.job_id] = model
-        self._embedding_requests[job.job_id] = requests
-        self._embedding_input_counts[job.job_id] = len(inputs)
-        self._embedding_part_counts[job.job_id] = part_counts
-        self._embedding_part_limits[job.job_id] = part_limits
-        self._embedding_request_keys[request_key] = job.job_id
-        return job
+        with self.job_registry.lock(
+            "embedding_request_keys",
+            request_key,
+            lease_seconds=(
+                self._embedding_claim_lease_seconds()
+                if self.job_registry.durable
+                else None
+            ),
+        ):
+            existing_job_id = self._embedding_request_keys.get(request_key)
+            if existing_job_id:
+                existing_job = self._embedding_jobs.get(str(existing_job_id))
+                if existing_job is not None:
+                    existing_backend = self._embedding_backend_for_job(existing_job.job_id)
+                    existing_status = existing_backend.poll(existing_job).get("status")
+                    if existing_status not in {"failed", "cancelled", "rejected"}:
+                        return existing_job
+            backend = backend or self._embedding_backend_for_model(model, routing_agent_id)
+            job = backend.submit(requests, metadata=metadata)
+            self._embedding_job_backends[job.job_id] = backend.name
+            self._embedding_jobs[job.job_id] = job
+            self._embedding_models[job.job_id] = model
+            self._embedding_requests[job.job_id] = requests
+            self._embedding_input_counts[job.job_id] = len(inputs)
+            self._embedding_part_counts[job.job_id] = part_counts
+            self._embedding_part_limits[job.job_id] = part_limits
+            self._embedding_request_keys[request_key] = job.job_id
+            return job
 
     def _build_embedding_requests(
         self,

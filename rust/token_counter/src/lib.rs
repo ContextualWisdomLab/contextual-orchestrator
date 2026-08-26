@@ -198,7 +198,11 @@ fn pack_cl100k(
         .collect();
     let mut parts = Vec::new();
     for (source_index, tokens) in encoded.iter().enumerate() {
-        let ranges = utf8_token_ranges(&tokenizer, tokens, max_tokens_per_input)?;
+        let ranges = utf8_token_ranges(
+            &tokenizer,
+            tokens,
+            max_tokens_per_input.min(max_total_tokens),
+        )?;
         let part_count = ranges.len();
         for (part_index, (token_start, token_end, text)) in ranges.into_iter().enumerate() {
             parts.push(PackedPart {
@@ -344,6 +348,21 @@ mod tests {
             over_inputs.push(exact_token_text(1));
             let (_, over) = pack_cl100k(over_inputs, 8192, 2048, 300_000).unwrap();
             assert_eq!(over.iter().map(Vec::len).collect::<Vec<_>>(), vec![40, 1]);
+        });
+    }
+
+    #[test]
+    fn total_token_limit_also_bounds_each_part() {
+        Python::with_gil(|_| {
+            let (parts, shards) = pack_cl100k(vec![exact_token_text(9)], 10, 2, 8).unwrap();
+            assert_eq!(
+                parts
+                    .iter()
+                    .map(|part| part.token_count)
+                    .collect::<Vec<_>>(),
+                vec![8, 1]
+            );
+            assert_eq!(shards.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1]);
         });
     }
 

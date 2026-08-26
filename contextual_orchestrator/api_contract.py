@@ -797,8 +797,10 @@ OPENAPI_SPEC = {
                     "200": {
                         "description": (
                             "Enforced max_request_body_bytes, max_tokens_per_part, "
-                            "max_chars_per_part, rate-budget-derived poll_after_ms, and "
-                            "configured job_retention_ms"
+                            "max_chars_per_part, rate-budget-derived poll_after_ms, "
+                            "configured job_retention_ms, and resolved provider model, "
+                            "max_inputs, max_total_tokens, tokenizer, and "
+                            "capability_authority_url when available"
                         )
                     }
                 },

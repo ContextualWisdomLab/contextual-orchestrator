@@ -598,6 +598,10 @@ class ProviderEmbeddingBatchBackend:
         self._executor: ThreadPoolExecutor | None = None
         self._executor_lock = threading.Lock()
         self._registry = job_registry or JobRegistryFactory()
+        if self._registry.durable and (
+            claim_lease_seconds is None or claim_lease_seconds <= 0
+        ):
+            raise ValueError("durable provider backend claim lease must be positive")
         self._claim_lease_seconds = claim_lease_seconds
         self._terminal_events: Dict[str, threading.Event] = {}
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
@@ -662,8 +666,9 @@ class ProviderEmbeddingBatchBackend:
     def __del__(self) -> None:  # pragma: no cover - interpreter timing varies
         try:
             self.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - interpreter teardown must not raise
             pass
+
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:

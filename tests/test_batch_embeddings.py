@@ -174,8 +174,9 @@ def test_http_poll_fields_do_not_mutate_cached_embedding_document() -> None:
             token,
         )
         assert status == 200
-        assert "poll_after_ms" not in cached
-        assert "job_retention_ms" not in cached
+        refetched = coordinator.embeddings_batch_document(created["batch_id"])
+        assert "poll_after_ms" not in refetched
+        assert "job_retention_ms" not in refetched
     finally:
         server.shutdown()
 

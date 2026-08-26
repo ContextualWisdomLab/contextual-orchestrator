@@ -599,7 +599,13 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
         return cached
     try:
         payload = json.loads(_http_error_body(error).decode("utf-8"))
-    except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (
+        AttributeError,
+        OSError,
+        RecursionError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
         result = False
     else:
         details = payload.get("error") if isinstance(payload, dict) else None
@@ -900,7 +906,7 @@ def _provider_limit_contract(
     """Extract only explicit machine-readable provider limits from an error."""
     try:
         document = json.loads(_http_error_body(exc, 16 * 1024).decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError):
         return None, None, None
 
     values: dict[str, Any] = {}
@@ -1630,6 +1636,9 @@ class ModelClient:
                 raise _provider_tool_execution_stopped(agent) from None
             if isinstance(exc, ToolFallbackStoppedError):
                 raise
+            if isinstance(exc, RequestDeadlineExceeded):
+                raise
+            self.remaining_request_timeout()
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
             # and exception cause inside the gateway; callers get one stable,
@@ -3229,6 +3238,8 @@ class TaskOrchestrator:
             for delta in stream:
                 parts.append(delta)
                 yield delta
+        except RequestDeadlineExceeded:
+            raise
         except Exception:
             if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
