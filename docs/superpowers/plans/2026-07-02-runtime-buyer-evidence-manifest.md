@@ -7,7 +7,7 @@ surface, not only a Markdown document.
 
 **Architecture:** Keep Contextual Orchestrator as one repository and one
 deployable control plane. Add `TaskOrchestrator.buyer_evidence_manifest_report()`,
-`GET /api/v1/buyer_evidence_manifests/latest`, OpenAPI/admin wiring, and focused
+`GET /api/v1/commercial_evidence_manifests/latest`, OpenAPI/admin wiring, and focused
 contract tests that reuse existing readiness and analytics reports without new
 dependencies, a library split, or a submodule.
 
@@ -106,7 +106,7 @@ Expected: `ok`.
 **Interfaces:**
 
 - Consumes: `TaskOrchestrator.buyer_evidence_manifest_report(...)`.
-- Produces: `GET /api/v1/buyer_evidence_manifests/latest`, operationId
+- Produces: `GET /api/v1/commercial_evidence_manifests/latest`, operationId
   `get_latest_buyer_evidence_manifest`, and admin observability display of
   buyer manifest status.
 
@@ -115,9 +115,9 @@ Expected: `ok`.
 Assert:
 
 ```python
-assert "/api/v1/buyer_evidence_manifests/latest" in OPENAPI_SPEC["paths"]
-assert OPENAPI_SPEC["paths"]["/api/v1/buyer_evidence_manifests/latest"]["get"]["operationId"] == "get_latest_buyer_evidence_manifest"
-assert "/api/v1/buyer_evidence_manifests/latest" in ADMIN_HTML
+assert "/api/v1/commercial_evidence_manifests/latest" in OPENAPI_SPEC["paths"]
+assert OPENAPI_SPEC["paths"]["/api/v1/commercial_evidence_manifests/latest"]["get"]["operationId"] == "get_latest_buyer_evidence_manifest"
+assert "/api/v1/commercial_evidence_manifests/latest" in ADMIN_HTML
 assert "buyer_evidence_manifest_title" in ADMIN_TRANSLATIONS["en"]
 assert "buyer_evidence_manifest_title" in ADMIN_TRANSLATIONS["ko"]
 ```

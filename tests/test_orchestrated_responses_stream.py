@@ -111,6 +111,26 @@ def test_conduct_preserves_responses_instructions_for_every_stage() -> None:
     assert all("Caller instructions:\nAnswer in Korean." in message for message in observed_system_messages)
 
 
+def test_conduct_keeps_planned_agent_when_no_vision_alternative_exists() -> None:
+    """A multimodal workflow may use its planned model when no tagged alternative exists."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent("workflow_agent", "mock-model", base_url="mock://provider"),
+    ])
+
+    result = orchestrator.conduct([
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "inspect"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+            ],
+        }
+    ])
+
+    assert result["trace"]
+    assert {step["agent_id"] for step in result["trace"]} == {"workflow_agent"}
+
+
 def test_duplicate_workflow_roles_close_each_reasoning_summary_part() -> None:
     token = "duplicate_role_stream_token"
     orchestrator = TaskOrchestrator([
@@ -202,6 +222,34 @@ def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
         _require_pool_model(
             orchestrator, "orchestrator/free", required_capability="video"
         )
+
+
+def test_virtual_text_models_require_an_enabled_eligible_pool() -> None:
+    """AUTO and FREE fail as client errors before an empty pool reaches routing."""
+    empty = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")])
+    empty.agents = []
+    paid_only = TaskOrchestrator([ModelAgent("paid_worker", "paid-model")])
+
+    with pytest.raises(RequestError, match="no enabled model") as auto_error:
+        _require_pool_model(empty, TaskOrchestrator.AUTO_MODEL)
+    assert auto_error.value.status == 400
+    with pytest.raises(RequestError, match="no enabled zero-cost model") as free_error:
+        _require_pool_model(paid_only, TaskOrchestrator.FREE_MODEL)
+    assert free_error.value.status == 400
+
+
+def test_virtual_and_group_models_exclude_disabled_members() -> None:
+    """Disabled agents are configuration records, never routable pool capacity."""
+    orchestrator = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")])
+    disabled = ModelAgent(
+        "disabled_agent", "disabled-model", disabled=True, group_name="disabled_group"
+    )
+    orchestrator.agents = [disabled]
+
+    with pytest.raises(RequestError, match="no enabled model"):
+        _require_pool_model(orchestrator, TaskOrchestrator.AUTO_MODEL)
+    with pytest.raises(RequestError, match="not available in the agent pool"):
+        _require_pool_model(orchestrator, "disabled-group")
 
 
 def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:

@@ -148,7 +148,14 @@ def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
         seen.append(request)
         return _Response()
 
-    with patch.object(client, "_open_provider", side_effect=open_provider):
+    # This is an authorization-header unit test, not a live DNS conformance
+    # test. Keep provider destination validation deterministic and exercise the
+    # real request/header construction below it.
+    with patch.object(
+        client,
+        "_validate_provider",
+        return_value=(2, ("93.184.216.34", 443)),
+    ), patch.object(client, "_open_provider", side_effect=open_provider):
         assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "ok"
     assert seen[0].get_header("Authorization") == "Key bytez-secret"
 

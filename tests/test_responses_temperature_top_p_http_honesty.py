@@ -66,6 +66,42 @@ def test_http_responses_accepts_valid_temperature_and_top_p() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_applies_sampling_to_evidence_calls() -> None:
+    """Responses sampling is request-scoped across conducted evidence calls."""
+    orchestrator = build()
+    observed: list[tuple[float, float]] = []
+    original_chat = orchestrator.client.chat
+
+    def observed_chat(agent, messages, **kwargs):
+        settings = orchestrator.client.request_settings_snapshot()
+        observed.append((settings["temperature"], settings["top_p"]))
+        return original_chat(agent, messages, **kwargs)
+
+    orchestrator.client.chat = observed_chat
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "mock-planner",
+                "input": "hello sampling",
+                "temperature": 0.7,
+                "top_p": 0.9,
+            },
+        )
+        assert status == 200, body
+        assert observed and set(observed) == {(0.7, 0.9)}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_rejects_out_of_range_temperature() -> None:
     server, thread, port = _server()
     try:

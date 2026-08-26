@@ -20,8 +20,19 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, NoViableAgentError  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    NoViableAgentError,
+    _responses_to_chat_payload,
+)
 from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
+
+
+def _provider_unavailable() -> urllib.error.HTTPError:
+    """Build a provider-shaped transient failure that authorizes safe failover."""
+    return urllib.error.HTTPError(
+        "https://provider.example/v1", 503, "unavailable", None, None
+    )
 
 
 def _build() -> TaskOrchestrator:
@@ -56,7 +67,6 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert result["echo"]["temperature"] == 0.1
     assert "max_tokens" not in result["echo"]
     assert "mode" not in result["echo"]
-    # model overridden to the selected agent's model.
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
 
 
@@ -69,7 +79,7 @@ def test_virtual_structured_passthrough_excludes_failed_candidate_for_request() 
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
             calls.append(agent.id)
             if len(calls) == 1:
-                raise RuntimeError("provider transport unavailable")
+                raise _provider_unavailable()
             return {
                 "id": "chatcmpl-test",
                 "object": "chat.completion",
@@ -119,7 +129,7 @@ def test_virtual_structured_passthrough_defers_after_each_ready_candidate_fails_
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
             del endpoint, body
             calls.append(agent.id)
-            raise RuntimeError("provider transport unavailable")
+            raise _provider_unavailable()
 
     agents = [ModelAgent(f"ready_{index}", "mock", tags=("reasoning",)) for index in range(2)]
     orchestrator = TaskOrchestrator(agents, client=AllDown())
@@ -172,6 +182,49 @@ def test_structured_passthrough_does_not_call_unadmitted_primary() -> None:
     assert result["model"] == "mock-ready"
 
 
+def test_orchestrated_structured_completion_preserves_native_shape_and_lineage() -> None:
+    """The HTTP opt-in path conducts evidence before provider-native synthesis."""
+    body = {
+        "model": "mock-planner",
+        "messages": [{"role": "user", "content": "extract JSON"}],
+        "response_format": {"type": "json_object"},
+    }
+
+    result = _build().proxy_completion(body, single_agent=False)
+
+    assert result["object"] == "chat.completion"
+    assert result["echo"]["response_format"] == body["response_format"]
+    assert result["orchestration"]["mode"] == "conduct"
+    assert result["orchestration"]["agent_count"] == 5
+
+
+def test_responses_translation_preserves_image_detail() -> None:
+    """Responses multimodal input remains available to evidence agents."""
+    translated = _responses_to_chat_payload(
+        {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "inspect"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,AA==",
+                            "detail": "high",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert translated["messages"][0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,AA==", "detail": "high"},
+    }
+
+
 def test_proxy_completion_forwards_tools() -> None:
     orch = _build()
     tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
@@ -217,7 +270,7 @@ def test_proxy_completion_free_model_never_fails_over_to_a_paid_agent() -> None:
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
             del endpoint, body
             calls.append(agent.id)
-            raise RuntimeError("provider transport unavailable")
+            raise _provider_unavailable()
 
     orchestrator = TaskOrchestrator(
         agents=[
@@ -246,6 +299,59 @@ def test_proxy_completion_free_model_fails_closed_without_a_free_agent() -> None
             "messages": [{"role": "user", "content": "call a tool"}],
             "tools": [],
         })
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "body"),
+    [
+        (
+            "chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+        ),
+        (
+            "responses",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "input": "return JSON",
+                "text": {"format": {"type": "json_object"}},
+            },
+        ),
+    ],
+)
+def test_structured_free_model_uses_free_agents_for_evidence_and_synthesis(
+    endpoint: str, body: dict,
+) -> None:
+    """Every conducted call stays inside the explicitly zero-cost pool."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_agent", "paid-model", priority=100),
+            ModelAgent("free_agent", "free-model", tags=("cost:free",)),
+        ]
+    )
+    called_agents: list[str] = []
+    original_chat = orchestrator.client.chat
+    original_proxy = orchestrator.client.proxy_send
+
+    def recording_chat(agent, *args, **kwargs):
+        called_agents.append(agent.id)
+        return original_chat(agent, *args, **kwargs)
+
+    def recording_proxy(agent, *args, **kwargs):
+        called_agents.append(agent.id)
+        return original_proxy(agent, *args, **kwargs)
+
+    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
+    orchestrator.client.proxy_send = recording_proxy  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(body, endpoint=endpoint, single_agent=False)
+
+    assert result["orchestration"]["mode"] == "conduct"
+    assert called_agents
+    assert set(called_agents) == {"free_agent"}
 
 
 def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
@@ -386,6 +492,77 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert status == 200  # previously rejected 400 'unknown_fields'
     assert body["object"] == "chat.completion"
     assert body["echo"]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.parametrize(
+    ("agents", "model", "expected_message"),
+    [
+        (None, TaskOrchestrator.AUTO_MODEL, "no enabled model"),
+        ([ModelAgent("paid_agent", "paid-model")], TaskOrchestrator.FREE_MODEL,
+         "no enabled zero-cost model"),
+    ],
+)
+def test_http_structured_virtual_models_reject_ineligible_pools(
+    agents: list[ModelAgent] | None, model: str, expected_message: str
+) -> None:
+    """Structured chat shares the normal virtual-model 400 eligibility boundary."""
+    token = "structured_pool_token"
+    orchestrator = TaskOrchestrator(
+        agents or [ModelAgent("seed_agent", "seed-model")]
+    )
+    if agents is None:
+        orchestrator.agents = []
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 400
+    assert expected_message in body["error"]["message"]
+
+
+def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
+    """Pool validation does not weaken the existing vision capability boundary."""
+    token = "structured_vision_token"
+    server = build_server(
+        TaskOrchestrator([ModelAgent("text_agent", "text-model")]),
+        port=0,
+        security=SecurityConfig(auth_token=token),
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "inspect"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                    ],
+                }],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 400
+    assert "vision-capable" in body["error"]["message"]
 
 
 def test_http_responses_endpoint_passes_through() -> None:
