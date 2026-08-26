@@ -40,6 +40,67 @@ NEW_AGENT = {
 }
 
 
+def _endpoint_contract() -> dict[str, object]:
+    return {
+        "contract_id": "shared_endpoint_contract",
+        "model_revision": "revision_2026_08",
+        "reasoning_effort_profile": "worker_medium",
+        "capability_set": ("image", "text"),
+        "structured_output_contract": "openai_compatible_v1",
+        "accuracy_class": "provider_full_precision",
+        "data_residency_policy": "kr_region_only",
+        "retention_policy": "zero_retention",
+        "context_limit": 128_000,
+        "pricing_evidence_id": "catalog_snapshot_2026_08_26",
+        "hedge_eligible": True,
+        "cancellation_supported": False,
+        "execution_policy": "immediate_race",
+    }
+
+
+def test_endpoint_equivalence_contract_is_normalized_and_survives_restart() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = os.path.join(directory, "endpoint-contract.db")
+        first = TaskOrchestrator(_seed(), agents_db=database_path)
+        first.patch_agent(
+            "default", "general_agent", {"endpoint_equivalence": _endpoint_contract()}
+        )
+        second = TaskOrchestrator(_seed(), agents_db=database_path)
+        assert second._agent("general_agent").endpoint_equivalence == _endpoint_contract()
+        with sqlite3.connect(database_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_contract"
+            ).fetchone() == (1,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_capability"
+            ).fetchone() == (2,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_member"
+            ).fetchone() == (1,)
+
+
+def test_clearing_last_endpoint_member_reaps_its_orphan_contract() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = os.path.join(directory, "endpoint-contract.db")
+        orchestrator = TaskOrchestrator(_seed(), agents_db=database_path)
+        orchestrator.patch_agent(
+            "default", "general_agent", {"endpoint_equivalence": _endpoint_contract()}
+        )
+        orchestrator.patch_agent(
+            "default", "general_agent", {"endpoint_equivalence": None}
+        )
+        with sqlite3.connect(database_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_member"
+            ).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_contract"
+            ).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_capability"
+            ).fetchone() == (0,)
+
+
 def test_add_patch_remove_survive_restart() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")

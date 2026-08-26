@@ -29,7 +29,7 @@ creates an extraction trigger.
 | Commercial value readiness | `/api/v1/commercial_value_readiness/latest` | Economic value evidence and buyer financial/proof gaps. |
 | Commercial security attestation | `/api/v1/commercial_security_attestations/latest` | Security trust packet and external attestation gaps. |
 | Commercial evidence export | `/api/v1/commercial_evidence_exports/latest` | Portable buyer data-room evidence index. |
-| Buyer handoff bundle | `/api/v1/buyer_handoff_bundles/latest` | Buyer-facing artifact bundle and follow-up context. |
+| Buyer handoff bundle | `/api/v1/commercial_handoff_bundles/latest` | Buyer-facing artifact bundle and follow-up context. |
 | Saleability decision | `/api/v1/saleability_decisions/latest` | Go/no-go status for buyer diligence. |
 | Analytics snapshot | `/api/v1/analytics_snapshots/latest`, `docs/analytics_spec.md` | Separates measured local evidence from proposed or buyer-specific metrics. |
 | Admin evidence surface | `/admin`, `docs/screen_design.md` | Operator-visible status, measurement, and warning/blocker summary. |

@@ -24,8 +24,10 @@
 | `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |
 | `GET` | `/api/v1/sales_readiness/latest` | Read local enterprise-pilot readiness criteria and evidence |
 | `GET` | `/api/v1/commercial_readiness/latest` | Read KRW 2,000,000,000 commercial due-diligence readiness criteria and evidence |
-| `GET` | `/api/v1/buyer_evidence_manifests/latest` | Read buyer evidence manifest for commercial diligence review |
-| `GET` | `/api/v1/buyer_handoff_bundles/latest` | Read buyer handoff bundle for commercial diligence review |
+| `GET` | `/api/v1/commercial_evidence_manifests/latest` | Review evidence gaps before commercial diligence |
+| `GET` | `/api/v1/commercial_handoff_bundles/latest` | Review handoff evidence and resolve remaining commercial gaps |
+| `GET` | `/api/v1/buyer_evidence_manifests/latest` | Deprecated compatibility alias for the commercial evidence manifest |
+| `GET` | `/api/v1/buyer_handoff_bundles/latest` | Deprecated compatibility alias for the commercial handoff bundle |
 | `GET` | `/api/v1/saleability_decisions/latest` | Read KRW 2,000,000,000 saleability decision for commercial diligence review |
 | `GET` | `/api/v1/commercial_evidence_exports/latest` | Read portable commercial evidence export for buyer due diligence |
 | `GET` | `/api/v1/commercial_acceptance_checks/latest` | Read commercial acceptance check for buyer due diligence |
@@ -72,8 +74,8 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/analytics_snapshots/latest` | Produce source-backed local KPI and guardrail evidence without claiming production telemetry. | Fugu evaluation discipline; TRINITY verification evidence; Conductor access-list guardrails. |
 | `GET` | `/api/v1/sales_readiness/latest` | Produce a sellable-pilot readiness gate from current runtime, admin, security, analytics, locale, and provider evidence. | Fugu API adoption; TRINITY verification; Conductor trace and access-list evidence. |
 | `GET` | `/api/v1/commercial_readiness/latest` | Produce a high-value buyer due-diligence readiness gate for the KRW 2,000,000,000 target without presenting it as a valuation guarantee. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; enterprise procurement review. |
-| `GET` | `/api/v1/buyer_evidence_manifests/latest` | Produce a buyer-facing evidence index across runtime reports, repository artifacts, Figma artifacts, verification commands, and caveats. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement evidence review. |
-| `GET` | `/api/v1/buyer_handoff_bundles/latest` | Produce the buyer handoff bundle that packages runtime reports, repository packet, Figma artifacts, verification commands, packaging decision, and explicit follow-ups. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement handoff review. |
+| `GET` | `/api/v1/commercial_evidence_manifests/latest` | Show evidence gaps and the next diligence action without exposing implementation boundaries. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement evidence review. |
+| `GET` | `/api/v1/commercial_handoff_bundles/latest` | Show packaged handoff evidence and the remaining commercial follow-ups. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement handoff review. |
 | `GET` | `/api/v1/saleability_decisions/latest` | Produce the final saleability decision gate that separates concrete blockers from warning follow-ups and review-process non-blockers. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence decision. |
 | `GET` | `/api/v1/commercial_evidence_exports/latest` | Produce the portable commercial evidence export that packages the saleability decision, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and required external evidence gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence export. |
 | `GET` | `/api/v1/commercial_acceptance_checks/latest` | Produce the buyer acceptance check that turns the commercial evidence export into ready, warning, or blocked acceptance status. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer acceptance review. |

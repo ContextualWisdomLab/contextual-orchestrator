@@ -17,6 +17,13 @@ pool before ordinary chat routing. The selector is deterministic eligibility
 and cost accounting; it is not a learned answer-quality judge and does not
 claim to reproduce the learning systems in the cited work.
 
+Virtual-model passthrough requests use that same provider-diverse pool for
+tools, structured output, and Responses payloads. Each candidate receives one
+attempt: RFC 9110 section 9.2.2 does not permit blind automatic replay of a
+non-idempotent request, so ambiguous timeout and connection outcomes fail
+closed. A rejected 429/5xx, stale 404/410 candidate, or temporary pre-request
+DNS failure can advance without changing an explicitly requested concrete model.
+
 ## Research-to-code mapping
 
 | Implementation boundary | Evidence-informed reason | Acceptance evidence |
@@ -24,6 +31,7 @@ claim to reproduce the learning systems in the cited work.
 | Reject malformed, negative, or non-finite price rows | A cost-aware router must not treat missing or invalid evidence as zero cost. | Discovery and persisted-price tests reject the row before selection. |
 | Keep unknown-price candidates only as an explicit fallback | Cost optimization must remain honest when price evidence is incomplete. | Selection tests never rank an unknown price above a valid priced candidate. |
 | Prefer distinct providers in the bootstrap pool | A gateway needs an upstream failover set rather than several aliases for one provider. | Provider-diversity tests assert the configured pool spans available providers. |
+| Fail over virtual-model passthrough once per provider | Preserve raw provider features without retry amplification; concrete model selection remains a caller contract. | Passthrough tests cover 404, 410, 429, 503, wrapped failures, caller errors, and exhaustion. |
 | Leave quality judgment to evaluation/review policy | Routing signals and answer-quality judgment have different failure modes. | Existing model-judge and fail-closed routing tests remain the quality boundary. |
 
 The routing papers and OA PDFs are already committed in the prerequisite
@@ -47,3 +55,6 @@ Learning Representations. https://arxiv.org/abs/2404.14618
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E.,
 Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with
 preference data*. arXiv. https://arxiv.org/abs/2406.18665
+
+Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics* (RFC
+9110). Internet Engineering Task Force. https://www.rfc-editor.org/rfc/rfc9110
