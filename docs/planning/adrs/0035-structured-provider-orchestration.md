@@ -25,6 +25,9 @@ success_criteria:
   - metric: "strict schema enforcement"
     target: "JSON Schema output validates locally; one governed repair is traced and a second violation fails closed"
     source: "tests/test_model_judge.py"
+  - metric: "provider health continuity"
+    target: "synthesis transport and repeated schema failures update the existing circuit ledger before a later independent request is routed"
+    source: "tests/test_model_judge.py"
 ---
 
 # Keep structured provider responses inside orchestration
@@ -66,6 +69,10 @@ One invalid synthesis receives one same-provider repair call with the original
 schema; both synthesis and repair remain distinct workflow trace and cost-ledger
 steps. A second violation fails closed as `invalid_structured_output`. There is
 no cross-provider replay, schema weakening, item dropping, or untraced repair.
+Provider transport and repeated schema failures update the existing circuit
+ledger; success clears it. This does not replay the same request across
+providers, but prevents later independent requests from repeatedly selecting a
+known failing synthesizer once the governed circuit threshold opens.
 
 ## Consequences
 

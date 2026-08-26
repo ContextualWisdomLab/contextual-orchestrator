@@ -508,6 +508,29 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
     assert _structured_output_error('{"input_count":6}', response_format) == "schema_violation"
 
 
+def test_structured_synthesis_failure_updates_provider_health() -> None:
+    """A failed final provider is excluded by the existing circuit policy."""
+    orchestrator, _ = _orch("unused")
+    with (
+        patch.object(
+            orchestrator.client,
+            "proxy_send",
+            side_effect=RuntimeError("synthetic provider failure"),
+        ),
+        pytest.raises(RuntimeError, match="synthetic provider failure"),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert orchestrator._circuit["general_agent"]["failures"] == 1
+
+
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:

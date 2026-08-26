@@ -3309,7 +3309,13 @@ class TaskOrchestrator:
         # Single-provider by design: no cross-provider failover on this
         # conducted synthesis call (see the docstring above) — only the plain
         # virtual passthrough / virtual tools paths fail over across providers.
-        raw = self.client.proxy_send(final_agent, endpoint, upstream)
+        try:
+            raw = self.client.proxy_send(final_agent, endpoint, upstream)
+        except Exception:
+            self._record_failure(final_agent.id)
+            if final_agent.group_name:
+                self._group_router.observe_failure(final_agent.id)
+            raise
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:
                 try:
@@ -3372,9 +3378,18 @@ class TaskOrchestrator:
                     {"role": "system", "content": repair_instruction},
                 ]
             repair_started = time.perf_counter()
-            repaired = self.client.proxy_send(final_agent, endpoint, repair_upstream)
+            try:
+                repaired = self.client.proxy_send(final_agent, endpoint, repair_upstream)
+            except Exception:
+                self._record_failure(final_agent.id)
+                if final_agent.group_name:
+                    self._group_router.observe_failure(final_agent.id)
+                raise
             repaired_output = provider_output(repaired)
             if _structured_output_error(repaired_output, response_format) is not None:
+                self._record_failure(final_agent.id)
+                if final_agent.group_name:
+                    self._group_router.observe_failure(final_agent.id)
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
@@ -3393,6 +3408,11 @@ class TaskOrchestrator:
                 )
             raw = repaired
             synthesis_output = repaired_output
+        self._record_success(final_agent.id)
+        if final_agent.group_name:
+            self._group_router.observe_success(
+                final_agent.id, time.perf_counter() - synthesis_started
+            )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
         echo = raw.get("echo")
