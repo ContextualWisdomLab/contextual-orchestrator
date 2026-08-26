@@ -1356,7 +1356,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
-        last_error: Exception | None = None
+        last_failure: tuple[Exception, ModelAgent] | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
@@ -3169,8 +3169,15 @@ class TaskOrchestrator:
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):
+                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
+                        raise classify_provider_failure(
+                            exc,
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            transport="passthrough",
+                        ) from exc
                     raise
-                last_error = exc
+                last_failure = (exc, candidate)
                 self._record_failure(candidate.id)
                 if candidate.group_name:
                     self._group_router.observe_failure(candidate.id)
@@ -3181,9 +3188,15 @@ class TaskOrchestrator:
                     candidate.id, time.perf_counter() - started_at
                 )
             return result
-        raise RuntimeError(
-            f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
-        ) from last_error
+        if last_failure is not None:
+            last_error, failed_candidate = last_failure
+            raise classify_provider_failure(
+                last_error,
+                agent_id=failed_candidate.id,
+                model=failed_candidate.model,
+                transport="passthrough",
+            ) from last_error
+        raise RuntimeError("passthrough has no eligible provider candidate")
 
     def _orchestrated_provider_completion(
         self,

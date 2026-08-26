@@ -16,6 +16,7 @@ from contextual_orchestrator import (
     TaskOrchestrator,
 )
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 
 class SequencedProxyClient:
@@ -198,13 +199,15 @@ def test_free_virtual_model_never_fails_over_to_a_paid_agent() -> None:
         client=client,
     )
 
-    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+    with pytest.raises(ProviderUpstreamError) as caught:
         orchestrator.proxy_completion(
             {
                 "model": TaskOrchestrator.FREE_MODEL,
                 "messages": [{"role": "user", "content": "x"}],
             }
         )
+
+    assert caught.value.agent_id == "free_agent"
 
     assert [agent_id for agent_id, _ in client.calls] == ["free_agent"]
 
@@ -219,10 +222,11 @@ def test_non_transient_error_is_not_replayed() -> None:
         }
     )
 
-    with pytest.raises(urllib.error.HTTPError) as caught:
+    with pytest.raises(ProviderUpstreamError) as caught:
         _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
-    assert caught.value is failure
+    assert caught.value.provider_status == 400
+    assert caught.value.__cause__ is failure
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
@@ -274,9 +278,11 @@ def test_all_candidates_chain_the_last_failure() -> None:
         SequencedProxyClient({"primary_agent": _http_error(429), "fallback_agent": final})
     )
 
-    with pytest.raises(RuntimeError, match="all 2 candidate agents failed") as caught:
+    with pytest.raises(ProviderUpstreamError) as caught:
         orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
+    assert caught.value.agent_id == "fallback_agent"
+    assert caught.value.provider_status == 503
     assert caught.value.__cause__ is final
 
 
@@ -491,9 +497,10 @@ def test_default_mock_endpoint_represents_one_fixture_provider() -> None:
         client=client,
     )
 
-    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+    with pytest.raises(ProviderUpstreamError) as caught:
         orchestrator.proxy_completion(
             {"model": orchestrator.AUTO_MODEL, "messages": [{"role": "user", "content": "x"}]}
         )
 
+    assert caught.value.agent_id == "first_mock"
     assert [agent_id for agent_id, _ in client.calls] == ["first_mock"]
