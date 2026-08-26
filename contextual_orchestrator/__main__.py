@@ -306,6 +306,13 @@ def _discover_models_command(argv: list[str]) -> None:
     report = {
         "discovered_count": len(reported),
         "free_tier_count": len(free_models),
+        "free_data_privacy": {
+            status: sum(1 for model in free_models if (
+                "supported" if model.supports_zero_data_retention is True else
+                "unsupported" if model.supports_zero_data_retention is False else "unknown"
+            ) == status)
+            for status in ("supported", "unsupported", "unknown")
+        },
         "priced_count": priced_count,
         "providers_with_errors": sorted({error.provider_name for error in errors}),
         "enabled_agent_ids": enabled_agent_ids,
@@ -315,6 +322,10 @@ def _discover_models_command(argv: list[str]) -> None:
                 "model": model.model_id,
                 "agent_id": agent_id_for(model),
                 "is_free": model.is_free,
+                "data_privacy": (
+                    "supported" if model.supports_zero_data_retention is True else
+                    "unsupported" if model.supports_zero_data_retention is False else "unknown"
+                ) if model.is_free else None,
             }
             for model in reported
         ],

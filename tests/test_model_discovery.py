@@ -28,6 +28,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ProviderDiscoveryError,
     ProviderModelSource,
     _merge_configured_gateway_metadata,
+    _merge_openrouter_zdr_metadata,
     _price_per_1k,
     agent_from_discovered,
     agent_id_for,
@@ -38,6 +39,16 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+
+
+def test_openrouter_zdr_metadata_distinguishes_supported_models() -> None:
+    payload = {"data": [{"id": "free/private"}, {"id": "free/training"}]}
+
+    merged = _merge_openrouter_zdr_metadata(
+        payload, {"data": [{"model_id": "free/private"}]}
+    )
+
+    assert [row["supports_zero_data_retention"] for row in merged["data"]] == [True, False]
 
 
 def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None:

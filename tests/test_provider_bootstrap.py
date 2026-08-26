@@ -245,10 +245,12 @@ def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
         input_modalities=("text", "image"),
         output_modalities=("text",),
         is_free=True,
+        supports_zero_data_retention=True,
     )
     tags = provider_bootstrap.serving_tags_for_discovered(model)
     assert {
         "cost:free",
+        "privacy:zdr",
         "chat",
         "text",
         "capability:chat",

@@ -36,6 +36,7 @@ DISCOVERY_TIMEOUT_SECONDS = 15.0
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
 _MODELS_DEV_OPENCODE_PROVIDER = "opencode"
+_OPENROUTER_ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
 CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
 MAX_DISCOVERY_RESPONSE_BYTES = 8 * 1024 * 1024
 
@@ -192,6 +193,7 @@ class DiscoveredModel:
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
     is_free: bool = False
+    supports_zero_data_retention: bool | None = None
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -481,6 +483,23 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
     return payload
 
 
+def _merge_openrouter_zdr_metadata(payload: Any, metadata: Any) -> Any:
+    """Mark models with at least one endpoint in OpenRouter's authoritative ZDR list."""
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    endpoints = metadata.get("data") if isinstance(metadata, dict) else None
+    if not isinstance(rows, list) or not isinstance(endpoints, list):
+        return payload
+    zdr_models = {
+        endpoint["model_id"]
+        for endpoint in endpoints
+        if isinstance(endpoint, dict) and isinstance(endpoint.get("model_id"), str)
+    }
+    for row in rows:
+        if isinstance(row, dict) and isinstance(row.get("id"), str):
+            row["supports_zero_data_retention"] = row["id"] in zdr_models
+    return payload
+
+
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
     rows = payload.get("data") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
@@ -531,6 +550,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     row["is_free"]
                     if isinstance(row.get("is_free"), bool)
                     else _pricing_is_free(pricing)
+                ),
+                supports_zero_data_retention=(
+                    row["supports_zero_data_retention"]
+                    if isinstance(row.get("supports_zero_data_retention"), bool)
+                    else None
                 ),
             )
         )
@@ -600,6 +624,12 @@ def discover_provider_models(
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
             metadata = None
         payload = _merge_models_dev_metadata(payload, metadata, _MODELS_DEV_OPENCODE_PROVIDER)
+    elif source.provider_name == "openrouter":
+        try:
+            metadata = _fetch_json(_OPENROUTER_ZDR_ENDPOINTS_URL, api_key=api_key, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            metadata = None
+        payload = _merge_openrouter_zdr_metadata(payload, metadata)
     elif source.provider_name == "configured_gateway":
         try:
             metadata = _fetch_configured_gateway_json(

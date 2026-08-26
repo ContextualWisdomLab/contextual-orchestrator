@@ -180,6 +180,7 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
         output_modalities=("text",),
         currency_code="USD",
         is_free=True,
+        supports_zero_data_retention=True,
     )
     store = InMemoryProviderCatalogStore()
     store.record_success(
@@ -194,6 +195,7 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
                 "capability:chat",
                 "capability:text",
                 "cost:free",
+                "privacy:zdr",
                 "input:text",
                 "input:image",
                 "output:text",
