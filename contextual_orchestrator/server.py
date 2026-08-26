@@ -5153,7 +5153,7 @@ def build_server(
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
                     return
                 if path == "/api/v1/spend_analytics/latest":
-                    self._send(orchestrator.spend_analytics(owner_id=self._principal_id))
+                    self._send(orchestrator.spend_analytics())
                     return
                 if path == "/api/v1/sales_readiness/latest":
                     self._send(orchestrator.sales_readiness_report(
@@ -5390,9 +5390,6 @@ def build_server(
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
-                        if agent_pool_id != "default":
-                            self._send_error(404, "agent_not_found", f"agent {worker_agent_id} not found")
-                            return
                         try:
                             payload = orchestrator._agent_to_admin_payload(
                                 orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
