@@ -37,6 +37,20 @@ are stacked protected dependencies; official Spamhaus DROP, URLhaus, and
 ThreatFox feed refresh is isolated in #115. No duplicate DNS/SSRF
 implementation is accepted in this repository.
 
+Local live verification on implementation head `4b98d55c` used the configured
+gateway and credential without recording either value. Discovery returned eight
+deployments with zero provider errors: seven had explicit chat capability and one
+had embedding capability. Both `/v1/chat/completions` and `/v1/responses` returned
+HTTP 200 for an omitted model, `contextual-orchestrator`, and
+`orchestrator/auto`; both returned HTTP 400 with the zero-cost eligibility error
+for `orchestrator/free` because this deployment currently exposes no model with
+complete zero-price evidence. A separate live OpenRouter discovery returned 502
+paid models (284 ZDR supported, 218 unsupported) and 59 free models (4 supported,
+55 unsupported), with zero unknown ZDR results and zero provider errors. These
+scrubbed observations prove the local discovery and routing contracts, not a
+protected merge or production deployment; current-head hosted checks and an
+independent approval remain required.
+
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
