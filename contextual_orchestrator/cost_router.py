@@ -749,7 +749,11 @@ class CostRoutingCoordinator:
             request_documents.append(document)
         request_key = hashlib.sha256(
             json.dumps(
-                request_documents,
+                {
+                    "model": model,
+                    "routing_agent_id": routing_agent_id,
+                    "requests": request_documents,
+                },
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),

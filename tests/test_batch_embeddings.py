@@ -1244,24 +1244,37 @@ def test_pending_batch_preserves_resolved_model_identity() -> None:
     assert polled["model"] == "resolved-embedding"
 
 
-def test_empty_batch_preserves_resolved_model_identity() -> None:
+def test_empty_batches_preserve_distinct_resolved_model_identities() -> None:
     orchestrator = TaskOrchestrator(
         [
             ModelAgent(
-                "embedding_worker",
-                "resolved-embedding",
+                agent_id,
+                model_name,
                 base_url="https://provider.example/v1",
                 tags=("embedding",),
+            )
+            for agent_id, model_name in (
+                ("first_embedding_worker", "first-resolved-embedding"),
+                ("second_embedding_worker", "second-resolved-embedding"),
             )
         ]
     )
     coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
 
-    document = coordinator.complete_embeddings_batch(
-        [], model="resolved-embedding", routing_agent_id="embedding_worker"
+    first = coordinator.complete_embeddings_batch(
+        [],
+        model="first-resolved-embedding",
+        routing_agent_id="first_embedding_worker",
+    )
+    second = coordinator.complete_embeddings_batch(
+        [],
+        model="second-resolved-embedding",
+        routing_agent_id="second_embedding_worker",
     )
 
-    assert document["model"] == "resolved-embedding"
+    assert first["batch_id"] != second["batch_id"]
+    assert first["model"] == "first-resolved-embedding"
+    assert second["model"] == "second-resolved-embedding"
     assert coordinator.ledger.records() == []
 
 
