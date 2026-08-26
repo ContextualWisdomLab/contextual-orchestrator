@@ -35,15 +35,23 @@ allowlisted error code, and UTC start/finish instants without secrets or raw
 provider diagnostics. It does not infer a freshness threshold, provider/model
 equivalence, or zero cost from missing price evidence.
 
-The open queue was re-read at exact heads #883 `3075985d`, #880 `bc1cdb88`,
-#879 `b6ba2560`, #876 `73a5510f`, #868 `b8cde232`, #858 `09f5f194`, #857
-`4da93814`, and #849 `7abf1b89`. PR #869 was closed unmerged because #868
+The open queue was re-read at exact heads #887 `c09cda2a`, #883 `6811a64b`,
+#880 `3685b616`, #879 `6482cb97`, #876 `73a5510f`, #868 `b8cde232`, #858
+`09f5f194`, #857 `4da93814`, and #849 `ede33b5d`. PR #869 was closed unmerged because #868
 preserves its OpenCode Zen workflow transport and unique-passphrase validation;
 no check or review evidence transfers between those heads. The queue covers
-video job ownership, this baseline, provider errors, pinned OpenCode runtime,
+the unsupported local tool-description cap, video job ownership, this baseline,
+provider errors, pinned OpenCode runtime,
 gateway aliases and discovery, customer copy, provider-backed embeddings, and
 asynchronous HTTP capacity. Each requires its current exact-head review and
 required checks before normal protected merge.
+
+PR #886 was closed unmerged after exact comparison with #887 and the current
+official OpenAI schemas. Those schemas define function descriptions as strings
+but do not establish the gateway's former 1,024-character maximum. #887 removes
+only that unsupported local restriction while retaining the bounded request and
+structural tool validation; #886's system-message indirection would instead
+change caller message semantics. No #886 evidence transfers to #887.
 
 Remaining acceptance gaps are deployment evidence, not invented policy:
 repeat the checked-in k6 workload through production TLS and real provider
