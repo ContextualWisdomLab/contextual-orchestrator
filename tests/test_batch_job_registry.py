@@ -127,8 +127,55 @@ def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
         time.sleep(0.01)
     assert document["completed_count"] == 1
     assert document["ready_count"] == 1
-    restarted = CostRoutingCoordinator(orchestrator, job_registry=JobRegistryFactory(client))
+    restarted_orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    restarted = CostRoutingCoordinator(
+        restarted_orchestrator, job_registry=JobRegistryFactory(client)
+    )
     assert restarted.provider_readiness_refresh_document(submitted["job_id"])["status"] == "completed"
+    assert restarted_orchestrator._structured_readiness[agent.id]["status"] == "ready"
+
+    persisted = registry.mapping("provider_readiness_jobs")[submitted["job_id"]]
+    persisted["completed_epoch"] = time.time() - 60.0
+    registry.mapping("provider_readiness_jobs")[submitted["job_id"]] = persisted
+    stale_orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    CostRoutingCoordinator(stale_orchestrator, job_registry=JobRegistryFactory(client))
+    assert stale_orchestrator._structured_readiness == {}
+
+
+def test_cancelled_readiness_refresh_cannot_publish_late_probe_results() -> None:
+    """Cancellation wins before a blocked provider result reaches admission state."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingProbeClient(ModelClient):
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            entered.set()
+            release.wait(timeout=2)
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
+    orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    coordinator = CostRoutingCoordinator(orchestrator)
+    submitted = coordinator.submit_provider_readiness_refresh(
+        agent_ids=[agent.id],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+    assert entered.wait(timeout=1)
+
+    cancelled = coordinator.cancel_provider_readiness_refresh(submitted["job_id"])
+    release.set()
+
+    assert cancelled["status"] == "cancelled"
+    for _ in range(100):
+        if coordinator.provider_readiness_refresh_document(submitted["job_id"])[
+            "status"
+        ] == "cancelled":
+            break
+        time.sleep(0.01)
+    assert orchestrator._structured_readiness == {}
 
 
 def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
