@@ -82,6 +82,34 @@ def test_sync_completion_preserves_provider_reported_usage() -> None:
     assert record["measurement_status"] == "measured"
 
 
+def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> None:
+    coordinator = _coordinator()
+    context = {
+        "route_mode": "route",
+        "attribution": {"team": "alpha"},
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": None,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "mock_worker",
+            ("duplicate", "mock_worker", {"prompt_tokens": 5, "completion_tokens": 2}),
+        )
+        assert coordinator.ledger.records() == []
+        context["workflow_run_id"] = "run_race"
+        coordinator._flush_race_endpoint_usage(context)
+    finally:
+        coordinator._race_usage_context.reset(token)
+    record = coordinator.ledger.records()[0]
+    assert record["prompt_tokens"] == 5
+    assert record["completion_tokens"] == 2
+    assert record["measurement_status"] == "measured"
+    assert record["workflow_run_id"] == "run_race"
+
+
 def test_conducted_plain_completion_records_every_step_usage() -> None:
     """A conducted run preserves measured and estimated evidence per provider call."""
     coordinator = _coordinator()

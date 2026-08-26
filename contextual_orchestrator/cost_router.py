@@ -19,6 +19,7 @@ store, never ``os.getenv``.
 from __future__ import annotations
 
 import re
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
@@ -66,6 +67,11 @@ class CostRoutingCoordinator:
         self.config = config_store or InMemoryConfigStore()
         self.price_book = price_book or PriceBook(self.config)
         self.ledger = ledger or CostLedger(self.price_book)
+        self._race_usage_context: ContextVar[dict[str, Any] | None] = ContextVar(
+            "race_usage_context", default=None
+        )
+        if hasattr(orchestrator, "_race_usage_sink"):
+            orchestrator._race_usage_sink = self._record_race_endpoint_usage
         self.token_counter = token_counter or (
             build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
         )
@@ -138,6 +144,49 @@ class CostRoutingCoordinator:
             return None
         return prompt, completion
 
+    def _record_race_endpoint_usage(self, endpoint_id: str, value: Any) -> None:
+        """Ledger provider-reported usage for completed non-winning race calls."""
+        context = self._race_usage_context.get()
+        if context is None:
+            return
+        if context["workflow_run_id"] is None:
+            context["pending_usage"].append((endpoint_id, value))
+            return
+        usage = None
+        if isinstance(value, tuple) and len(value) == 3:
+            usage = value[2]
+        elif isinstance(value, dict):
+            usage = value.get("usage")
+        counts = self._provider_usage(usage)
+        if counts is None:
+            return
+        agent = next(
+            (item for item in self.orchestrator.candidates if item.id == endpoint_id),
+            None,
+        )
+        if agent is None:  # pragma: no cover - endpoint came from the current pool
+            return
+        record = self._record_completion(
+            messages=[],
+            answer="",
+            route_mode=context["route_mode"],
+            request_channel="sync",
+            attribution=context["attribution"],
+            model_name=context["model_name"],
+            provider_model=(agent.provider_name, agent.model),
+            workflow_run_id=context["workflow_run_id"],
+            prompt_tokens=counts[0],
+            completion_tokens=counts[1],
+        )
+        context["records"].append(record)
+
+    def _flush_race_endpoint_usage(self, context: dict[str, Any]) -> None:
+        """Persist usage held until the workflow identity becomes available."""
+        pending = list(context["pending_usage"])
+        context["pending_usage"].clear()
+        for endpoint_id, value in pending:
+            self._record_race_endpoint_usage(endpoint_id, value)
+
     # ------------------------------------------------------------------
     # Sync + batch completion
     # ------------------------------------------------------------------
@@ -200,18 +249,36 @@ class CostRoutingCoordinator:
         if provider_request is not None:
             if provider_endpoint not in {"chat/completions", "responses"}:
                 raise ValueError("provider_endpoint must be chat/completions or responses")
-            provider_response = self.orchestrator.proxy_completion(
-                provider_request,
-                endpoint=provider_endpoint,
-                single_agent=False,
-            )
+            race_context = {
+                "route_mode": mode,
+                "attribution": attribution,
+                "model_name": model_name,
+                "workflow_run_id": workflow_run_id,
+                "records": [],
+                "pending_usage": [],
+            }
+            race_token = self._race_usage_context.set(race_context)
+            try:
+                provider_response = self.orchestrator.proxy_completion(
+                    provider_request,
+                    endpoint=provider_endpoint,
+                    single_agent=False,
+                )
+                lineage = provider_response.get("orchestration")
+                if isinstance(lineage, dict) and isinstance(
+                    lineage.get("workflow_run_id"), str
+                ):
+                    race_context["workflow_run_id"] = lineage["workflow_run_id"]
+                    self._flush_race_endpoint_usage(race_context)
+            finally:
+                self._race_usage_context.reset(race_token)
             lineage = provider_response.get("orchestration")
             if not isinstance(lineage, dict) or not isinstance(
                 lineage.get("workflow_run_id"), str
             ):
                 raise RuntimeError("provider completion omitted orchestration lineage")
             result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
-            records = []
+            records = list(race_context["records"])
             # The caller's request prompt is attributed at most once per
             # completion: the full prompt lands on the first trace step that
             # reports no provider usage of its own, and every later unreported
@@ -305,9 +372,24 @@ class CostRoutingCoordinator:
             run_kwargs["bypass_cache"] = True
         if cache_partition is not None:
             run_kwargs["cache_partition"] = cache_partition
-        result = self.orchestrator.run(messages, **run_kwargs)
+        race_context = {
+            "route_mode": mode,
+            "attribution": attribution,
+            "model_name": model_name,
+            "workflow_run_id": workflow_run_id,
+            "records": [],
+            "pending_usage": [],
+        }
+        race_token = self._race_usage_context.set(race_context)
+        try:
+            result = self.orchestrator.run(messages, **run_kwargs)
+            if isinstance(result.get("workflow_run_id"), str):
+                race_context["workflow_run_id"] = result["workflow_run_id"]
+                self._flush_race_endpoint_usage(race_context)
+        finally:
+            self._race_usage_context.reset(race_token)
         cache_hit = result.get("cache_status") == "hit"
-        records = []
+        records = list(race_context["records"])
         if cache_hit:
             records.append(
                 self._record_completion(

@@ -138,7 +138,10 @@ ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_SESSION_KEYS = {"token"}
-ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions", "group_name"}
+ALLOWED_AGENT_PATCH_KEYS = {
+    "status", "priority", "tags", "provider_exclusions", "group_name",
+    "endpoint_equivalence",
+}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
     "model",
@@ -151,6 +154,7 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_name",
     "provider_exclusions",
     "group_name",
+    "endpoint_equivalence",
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}

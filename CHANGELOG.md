@@ -12,6 +12,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Bounded first-valid-completion racing for operator-declared equivalent model
+  group endpoints across text and media capabilities, with fail-closed contract
+  comparison and winner/cancellation provenance.
 - Commercial evidence and handoff resources now use customer-facing canonical
   REST and Python names; the former `buyer_*` entry points remain explicit
   deprecated aliases so existing integrations can migrate without disruption.
