@@ -49,7 +49,7 @@ CONTRACT = json.loads(
 )
 
 
-def _serve():
+def _serve(*, embedding_batch_backend=None, security=None):
     agents = [
         ModelAgent(
             id="mock_worker",
@@ -75,10 +75,18 @@ def _serve():
     price_book.set_price(
         PriceEntry("acme-provider", "text-embedding-test", prompt_price_per_1k=0.13, completion_price_per_1k=0.0)
     )
-    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_batch_backend=embedding_batch_backend,
+    )
     token = "cost_token"
     server = build_server(
-        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+        orchestrator,
+        port=0,
+        security=security or SecurityConfig(auth_token=token),
+        coordinator=coordinator,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -109,6 +117,7 @@ def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> N
             "max_request_body_bytes": 64 * 1024,
             "max_tokens_per_part": 280_000,
             "max_chars_per_part": 240_000,
+            "poll_after_ms": 1_000,
         }
     finally:
         server.shutdown()
@@ -204,6 +213,34 @@ class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
 
     def poll(self, job):
         return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
+
+
+def test_pending_http_batch_declares_rate_budget_polling_cadence() -> None:
+    security = SecurityConfig(
+        auth_token="cost_token", rate_limit_requests=4, rate_limit_window_seconds=2
+    )
+    server, port, token, _coordinator = _serve(
+        embedding_batch_backend=_PendingEmbeddingBackend(), security=security
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, created = _request(
+            "POST",
+            f"{base}/v1/batch/embeddings",
+            token,
+            {"model": "text-embedding-test", "inputs": ["synthetic input"]},
+        )
+        assert status == 202
+        assert created["poll_after_ms"] == 500
+
+        time.sleep(created["poll_after_ms"] / 1000)
+        status, polled = _request(
+            "GET", f"{base}/v1/batch/embeddings/{created['batch_id']}", token
+        )
+        assert status == 200
+        assert polled["poll_after_ms"] == 500
+    finally:
+        server.shutdown()
 
 
 def test_identical_embedding_submission_reuses_durable_job() -> None:

@@ -471,6 +471,11 @@ class SecurityConfig:
                 raise RequestError(429, "rate_limit_exceeded", "request rate limit exceeded")
             self._rate_buckets[key] = (count + 1, reset_at)
 
+    @property
+    def batch_poll_after_ms(self) -> int:
+        """Return the rate-budget-derived minimum batch polling cadence."""
+        return math.ceil(self.rate_limit_window_seconds * 1000 / self.rate_limit_requests)
+
     def acquire_run_slot(self) -> None:
         """Reserve a run slot, rejecting quickly when the process is saturated."""
         if not self._run_semaphore.acquire(blocking=False):
@@ -5120,7 +5125,8 @@ def build_server(
                     self._authorize("inference")
                     self._send(
                         coordinator.embedding_batch_capabilities(
-                            max_request_body_bytes=security.max_body_bytes
+                            max_request_body_bytes=security.max_body_bytes,
+                            poll_after_ms=security.batch_poll_after_ms,
                         )
                     )
                     return
@@ -5130,7 +5136,9 @@ def build_server(
                     self._authorize("inference")
                     batch_id = path[len("/v1/batch/embeddings/"):]
                     try:
-                        self._send(coordinator.embeddings_batch_document(batch_id))
+                        document = coordinator.embeddings_batch_document(batch_id)
+                        document["poll_after_ms"] = security.batch_poll_after_ms
+                        self._send(document)
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
@@ -6165,6 +6173,7 @@ def build_server(
                             "embeddings_unavailable",
                             "all enabled embedding-capable model group members failed",
                         ) from last_embedding_error
+                    document["poll_after_ms"] = security.batch_poll_after_ms
                     is_complete = document.get("status") == "completed"
                     orchestrator.record_analytics_event(
                         "embeddings_batch_created",
