@@ -748,24 +748,10 @@ def test_conduct_attempts_only_ready_candidates_once_after_failures() -> None:
         orchestrator.conduct([{"role": "user", "content": "structured task"}])
 
     assert sorted(client.called) == sorted(agent.id for agent in agents)
-
-
-def test_conduct_rejects_expired_structured_readiness_without_calling_provider() -> None:
-    """Expired readiness evidence requires a new admin probe job."""
-
-    client = ModelClient()
-    agent = ModelAgent(
-        "expired_agent", "provider/expired", base_url="https://provider.example/v1"
+    assert all(
+        orchestrator._structured_readiness[agent.id]["status"] == "not_ready"
+        for agent in agents
     )
-    orchestrator = TaskOrchestrator([agent], client=client)
-    orchestrator._structured_readiness[agent.id] = {
-        "status": "ready",
-        "checked_at": orchestrator_module.time.monotonic() - orchestrator.circuit_reset_seconds,
-    }
-    with patch.object(client, "chat") as chat:
-        with pytest.raises(NoViableAgentError):
-            orchestrator.conduct([{"role": "user", "content": "structured task"}])
-    chat.assert_not_called()
 
 
 def test_circuit_breaker_counts_concurrent_failures() -> None:

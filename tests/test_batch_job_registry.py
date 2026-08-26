@@ -95,6 +95,9 @@ def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
     release = threading.Event()
 
     class BlockingProbeClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=1)
+
         def probe_structured(self, agent, *, timeout):  # type: ignore[override]
             del timeout
             entered.set()
@@ -127,6 +130,13 @@ def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
         time.sleep(0.01)
     assert document["completed_count"] == 1
     assert document["ready_count"] == 1
+    execution_claims = [
+        kwargs["timeout"]
+        for name, kwargs in client.locks
+        if "provider_readiness_job_execution" in name
+    ]
+    assert len(execution_claims) == 1
+    assert execution_claims[0] > orchestrator.client.timeout
     restarted = CostRoutingCoordinator(orchestrator, job_registry=JobRegistryFactory(client))
     assert restarted.provider_readiness_refresh_document(submitted["job_id"])["status"] == "completed"
 

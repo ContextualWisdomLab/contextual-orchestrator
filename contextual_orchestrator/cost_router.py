@@ -325,10 +325,16 @@ class CostRoutingCoordinator:
 
     def _run_provider_readiness_job(self, job_id: str) -> None:
         """Probe only a job's declared access list under durable claim ownership."""
-        lease = float(getattr(self.orchestrator.client, "timeout", 1.0))
+        initial = dict(self._readiness_jobs[job_id])
+        deadline_epoch = initial.get("deadline_epoch")
+        lease = (
+            max(1.0, float(deadline_epoch) - time.time())
+            if deadline_epoch is not None
+            else max(float(getattr(self.orchestrator.client, "timeout", 1.0)), 1.0)
+        )
         try:
             with self.job_registry.lock(
-                "provider_readiness_job_execution", job_id, lease_seconds=max(lease, 1.0)
+                "provider_readiness_job_execution", job_id, lease_seconds=lease
             ):
                 job = dict(self._readiness_jobs[job_id])
                 if job.get("status") not in {"queued", "running"}:
