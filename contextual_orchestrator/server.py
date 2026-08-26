@@ -5818,7 +5818,7 @@ def build_server(
                         )
                         stream = False if coerced_stream is None else coerced_stream
                     body["stream"] = stream
-                    include_trace = self._trace_requested(body, "/v1/chat/completions")
+                    include_trace = self._validate_trace_request(body)
                     # Sampling + unsupported controls before passthrough (honesty parity
                     # with the multi-agent route path).
                     sampling = _validate_chat_sampling_and_control_fields(
@@ -5899,6 +5899,8 @@ def build_server(
                         )
                         self._send(proxied)
                         return
+                    if include_trace:
+                        self._authorize_trace_access("/v1/chat/completions")
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     # stream + stream_options already coerced/validated before passthrough.
@@ -6508,7 +6510,9 @@ def build_server(
                     if not isinstance(prompt, str):
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
-                    include_trace = self._trace_requested(body, "/admin/simulate")
+                    include_trace = self._validate_trace_request(body)
+                    if include_trace:
+                        self._authorize_trace_access("/admin/simulate")
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace))
                     return
@@ -6518,7 +6522,9 @@ def build_server(
                     if not isinstance(prompt, str) or not prompt:
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = self._trace_requested(body, "/api/v1/workflow_runs")
+                    include_trace = self._validate_trace_request(body)
+                    if include_trace:
+                        self._authorize_trace_access("/api/v1/workflow_runs")
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace), 201)
                     return
@@ -6530,7 +6536,9 @@ def build_server(
                     if not isinstance(prompts, list) or not prompts:
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = self._trace_requested(body, "/api/v1/evaluation_runs")
+                    include_trace = self._validate_trace_request(body)
+                    if include_trace:
+                        self._authorize_trace_access("/api/v1/evaluation_runs")
                     evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
@@ -6657,8 +6665,8 @@ def build_server(
                     "trace access audit is unavailable",
                 ) from exc
 
-        def _trace_requested(self, body: dict[str, Any], endpoint_path: str) -> bool:
-            """Validate and authorize an explicit trace disclosure request."""
+        def _validate_trace_request(self, body: dict[str, Any]) -> bool:
+            """Validate whether the caller requested trace disclosure."""
             if "include_orchestration_trace" not in body:
                 include_trace = security.expose_trace_by_default
             elif type(body["include_orchestration_trace"]) is not bool:
@@ -6669,8 +6677,6 @@ def build_server(
                 )
             else:
                 include_trace = body["include_orchestration_trace"]
-            if include_trace:
-                self._authorize_trace_access(endpoint_path)
             return include_trace
 
         def _run(self, callback: Any) -> dict[str, Any]:

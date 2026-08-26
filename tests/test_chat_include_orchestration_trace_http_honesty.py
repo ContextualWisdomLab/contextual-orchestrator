@@ -206,6 +206,33 @@ def test_structured_chat_cannot_bypass_trace_flag_validation() -> None:
         thread.join(timeout=5)
 
 
+def test_structured_chat_does_not_audit_trace_disclosure_it_never_returns() -> None:
+    """Record granted access only when the response can disclose a trace."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 200, body
+    assert "trace" not in body.get("orchestration", {})
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
 def test_http_chat_accepts_include_orchestration_trace_true() -> None:
     server, thread, port = _server()
     try:
