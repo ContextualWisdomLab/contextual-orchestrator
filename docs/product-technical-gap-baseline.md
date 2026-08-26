@@ -2,14 +2,15 @@
 
 ## 2026-08-26 configured-gateway and privacy discovery continuation
 
-Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`.
+Protected `main` is `5a01759165be20ab38c05c2321d8a9f00ec331ea`.
 PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
-records its latest completed exact-head full-suite evidence at `3497d8fc`
-(`2386 passed`, `0 failed`). A
+records completed full-suite evidence at `3497d8fc` (`2386 passed`, `0 failed`)
+and focused discovery evidence at current head `7325bcaa` (`55 passed`). A
 configured OpenAI-compatible gateway now joins `/v1/models` with deployment
-metadata so chat, Responses, and embedding capabilities remain individually
-discoverable; conflicting or incomplete capability, price, or privacy evidence
-stays unknown. Omitted text models and `contextual-orchestrator` share
+metadata so chat, Responses, Completions, embedding, image generation/edit,
+speech, and transcription capabilities remain individually discoverable;
+conflicting or incomplete capability, price, or privacy evidence stays unknown.
+Omitted text models and `contextual-orchestrator` share
 `orchestrator/auto` selection, while `orchestrator/free` admits only complete
 structured zero-cost evidence and fails over only inside that bounded pool.
 
