@@ -14,12 +14,11 @@ def test_planning_adr_identifiers_are_unique_and_match_content() -> None:
     assert len(identifiers) == len(set(identifiers))
     for path, identifier in zip(adr_files, identifiers, strict=True):
         content = path.read_text(encoding="utf-8")
-        frontmatter_id = re.search(r'^id: "(\d{4})"$', content, re.MULTILINE)
-        heading_id = re.search(r"^# ADR (\d{4})(?::|\b)", content, re.MULTILINE)
-        declared_ids = {
-            match.group(1)
-            for match in (frontmatter_id, heading_id)
-            if match is not None
-        }
+        frontmatter = content.split("---", 2)[1] if content.startswith("---") else ""
+        frontmatter_ids = re.findall(r'^id: "(\d{4})"$', frontmatter, re.MULTILINE)
+        heading_ids = re.findall(r"^# ADR (\d{4})(?::|\b)", content, re.MULTILINE)
+        assert len(frontmatter_ids) <= 1, f"{path} has duplicate front matter IDs"
+        assert len(heading_ids) <= 1, f"{path} has duplicate ADR headings"
+        declared_ids = set(frontmatter_ids + heading_ids)
         assert declared_ids, f"{path} has no ADR identifier"
         assert declared_ids == {identifier}
