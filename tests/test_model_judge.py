@@ -642,6 +642,46 @@ def test_structured_readiness_without_ready_candidate_avoids_provider_call() -> 
     assert exc_info.value.retry_after_seconds == 30
 
 
+def test_conduct_excludes_failed_candidates_for_the_entire_request() -> None:
+    """A later workflow stage cannot retry a provider that failed in this request."""
+
+    class FailingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.calls: list[str] = []
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            self.calls.append(agent.id)
+            raise ProviderResponseError("provider response unavailable")
+
+    tags = ("reasoning", "writing", "planning", "research", "verification")
+    agents = [
+        ModelAgent("first_agent", "first-model", tags=tags, group_name="declared_group"),
+        ModelAgent("second_agent", "second-model", tags=tags, group_name="declared_group"),
+    ]
+    client = FailingClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    with pytest.raises(NoViableAgentError) as first_attempt:
+        orchestrator.complete(
+            [{"role": "user", "content": "produce a verified structured report"}],
+            mode="conduct",
+        )
+
+    assert first_attempt.value.retry_after_seconds == 30
+    assert client.calls == ["first_agent", "second_agent"]
+
+    # A later durable retry is a new request scope, so the candidates may be
+    # considered again after the caller has observed the Retry-After contract.
+    with pytest.raises(NoViableAgentError):
+        orchestrator.complete(
+            [{"role": "user", "content": "produce a verified structured report"}],
+            mode="conduct",
+        )
+    assert client.calls == ["first_agent", "second_agent", "first_agent", "second_agent"]
+
+
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:

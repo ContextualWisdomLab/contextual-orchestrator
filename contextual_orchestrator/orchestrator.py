@@ -2867,6 +2867,9 @@ class TaskOrchestrator:
         self._circuit_lock = threading.Lock()
         self._provider_readiness_lock = threading.Lock()
         self._structured_readiness: dict[str, dict[str, Any]] = {}
+        self._request_failed_agents: ContextVar[set[str] | None] = ContextVar(
+            f"request_failed_agents_{id(self)}", default=None
+        )
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -3130,6 +3133,28 @@ class TaskOrchestrator:
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
+        token = self._request_failed_agents.set(set())
+        try:
+            return self._complete_request(
+                messages,
+                mode,
+                bypass_cache=bypass_cache,
+                model_name=model_name,
+                cache_partition=cache_partition,
+            )
+        finally:
+            self._request_failed_agents.reset(token)
+
+    def _complete_request(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        bypass_cache: bool = False,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> dict[str, Any]:
+        """Complete one request inside its failed-provider exclusion scope."""
         if not isinstance(bypass_cache, bool):
             raise TypeError("bypass_cache must be a boolean")
         if not isinstance(model_name, str) or not model_name.strip():
@@ -4708,6 +4733,10 @@ class TaskOrchestrator:
             primary, text, eligibility_role or role, allowed_agent_ids
         )
         if not candidates:
+            if self._request_failed_agents.get():
+                raise NoViableAgentError(
+                    retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+                )
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
@@ -4725,6 +4754,11 @@ class TaskOrchestrator:
                     )
                 except Exception as exc:
                     if isinstance(exc, RequestDeadlineExceeded):
+                        self._record_failure(agent.id)
+                        self._record_structured_not_ready(agent.id)
+                        failed_agents = self._request_failed_agents.get()
+                        if failed_agents is not None:
+                            failed_agents.add(agent.id)
                         raise
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
@@ -4732,6 +4766,10 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderResponseError):
                         self._record_failure(agent.id)
+                        self._record_structured_not_ready(agent.id)
+                        failed_agents = self._request_failed_agents.get()
+                        if failed_agents is not None:
+                            failed_agents.add(agent.id)
                         break
                     decision = classify_tool_failure(exc)
                     action = decision.action
@@ -4779,6 +4817,10 @@ class TaskOrchestrator:
                 return output, agent.id, usage
         if hasattr(self.client, "remaining_request_timeout"):
             self.client.remaining_request_timeout()
+        if self._request_failed_agents.get():
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
@@ -4827,6 +4869,8 @@ class TaskOrchestrator:
             ]
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
         ordered = [agent for agent in ordered if is_general_chat_agent_model_id(agent.model)]
+        request_failed_agents = self._request_failed_agents.get() or set()
+        ordered = [agent for agent in ordered if agent.id not in request_failed_agents]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
