@@ -7,7 +7,7 @@ Protected `main` is exact commit
 merges of [PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
 at `56a898b85654f5c8468e3d8448d93120b24bd269` and
 [PR #881](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/881)
-at `5a01759165be20ab38c05c2321d8a9f00ec331ea`. Their reviewed source heads are
+at `5a01759165be20ab38c05c2321d8a9f00ec331ea`. Their source heads are
 `d49846d5c8deca55c60315a8fbb461ecdebf67eb` and
 `4acfe477014d56fbe76a2cd9db9ebd91552d0079`, respectively. The #851 source
 head now has terminal successful full-suite and security jobs, but its Strix
