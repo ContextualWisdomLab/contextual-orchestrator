@@ -9,9 +9,10 @@ pool from the persisted catalog.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import os
-from dataclasses import dataclass
+import threading
 from typing import Callable, Mapping, Sequence
 
 from .cost_ledger import PriceBook
@@ -45,10 +46,14 @@ from .provider_bootstrap import (
     serving_tags_for_discovered,
 )
 from .provider_catalog_store import (
+    CatalogRefreshEvidence,
     InMemoryProviderCatalogStore,
     PostgresProviderCatalogStore,
     ProviderCatalogStore,
 )
+
+
+_CATALOG_REFRESH_EVIDENCE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,7 @@ class ProviderCatalogBootstrapReport:
     providers_with_errors: tuple[str, ...]
     priced_model_count: int
     privacy_assessment_count: int
+    catalog_refreshes: tuple[CatalogRefreshEvidence, ...]
 
     def as_dict(self) -> dict[str, object]:
         """Return the stable JSON evidence contract without secret values."""
@@ -103,6 +109,18 @@ class ProviderCatalogBootstrapReport:
             "providers_with_errors": list(self.providers_with_errors),
             "priced_model_count": self.priced_model_count,
             "privacy_assessment_count": self.privacy_assessment_count,
+            "catalog_refreshes": [
+                {
+                    "provider_account_id": evidence.provider_account_id,
+                    "refresh_status": evidence.refresh_status,
+                    "observed_model_count": evidence.observed_model_count,
+                    "eligible_model_count": evidence.eligible_model_count,
+                    "error_code": evidence.error_code,
+                    "started_at": evidence.started_at.isoformat(),
+                    "finished_at": evidence.finished_at.isoformat(),
+                }
+                for evidence in self.catalog_refreshes
+            ],
         }
 
 
@@ -279,31 +297,43 @@ def bootstrap_provider_catalog_runtime(
         privacy_assessments: list[PrivacyPolicyAssessment] = []
         if analyze_privacy_policies:
             live_models, privacy_assessments = privacy_analysis(live_models)
-        snapshot = refresh_persisted_provider_catalog(
-            store,
-            sources=source_tuple,
-            registered_credentials=registered,
-            discovered=live_models,
-            errors=errors,
-        )
-        assessments_by_account: dict[tuple[str, str], list[PrivacyPolicyAssessment]] = {}
-        for assessment in privacy_assessments:
-            assessments_by_account.setdefault(
-                (assessment.subject_provider, assessment.subject_credential), []
-            ).append(assessment)
-        for source in source_tuple:
-            account_assessments = assessments_by_account.get(_source_key(source), [])
-            if account_assessments:
-                store.record_privacy_assessment_success(source, account_assessments)
-        privacy_assessment_count = (
-            sum(
-                len(store.privacy_assessments(source))
-                for source in source_tuple
-                if source.credential_name in registered
+        # The store evidence log is shared process state. Keep the offset,
+        # refresh writes, and tail capture in one atomic boundary so concurrent
+        # bootstrap reports cannot claim one another's provider attempts.
+        with _CATALOG_REFRESH_EVIDENCE_LOCK:
+            evidence_offset = len(store.refresh_evidence())
+            snapshot = refresh_persisted_provider_catalog(
+                store,
+                sources=source_tuple,
+                registered_credentials=registered,
+                discovered=live_models,
+                errors=errors,
             )
-            if analyze_privacy_policies
-            else 0
-        )
+            catalog_refreshes = store.refresh_evidence()[evidence_offset:]
+            assessments_by_account: dict[
+                tuple[str, str], list[PrivacyPolicyAssessment]
+            ] = {}
+            for assessment in privacy_assessments:
+                assessments_by_account.setdefault(
+                    (assessment.subject_provider, assessment.subject_credential), []
+                ).append(assessment)
+            for source in source_tuple:
+                account_assessments = assessments_by_account.get(
+                    _source_key(source), []
+                )
+                if account_assessments:
+                    store.record_privacy_assessment_success(
+                        source, account_assessments
+                    )
+            privacy_assessment_count = (
+                sum(
+                    len(store.privacy_assessments(source))
+                    for source in source_tuple
+                    if source.credential_name in registered
+                )
+                if analyze_privacy_policies
+                else 0
+            )
         failed_provider_names = {error.provider_name for error in errors}
         failed_credentials = {
             source.credential_name
@@ -369,6 +399,7 @@ def bootstrap_provider_catalog_runtime(
             providers_with_errors=snapshot.providers_with_errors,
             priced_model_count=priced_count,
             privacy_assessment_count=privacy_assessment_count,
+            catalog_refreshes=catalog_refreshes,
         )
     except Exception:
         try:
