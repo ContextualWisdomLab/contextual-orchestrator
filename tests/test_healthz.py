@@ -88,6 +88,48 @@ def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:
         thread.join(timeout=5)
 
 
+def test_provider_readiness_refresh_rejects_timeout_outside_probe_contract() -> None:
+    """An invalid probe timeout fails at submission instead of failing a job later."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent("probe_agent", "mock-agent", tags=("reasoning",)),
+    ])
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/v1/provider_readiness_refreshes",
+        data=json.dumps({
+            "agent_ids": ["probe_agent"],
+            "capability_code": "structured",
+            "timeout_seconds": 60,
+        }).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer admin_secret",
+            "Content-Type": "application/json",
+            "X-Request-Timeout-Ms": "5000",
+        },
+        method="POST",
+    )
+
+    try:
+        try:
+            urllib.request.urlopen(request, timeout=5)
+        except HTTPError as exc:
+            assert exc.code == 400
+            body = json.loads(exc.read().decode("utf-8"))
+            assert body["error"]["code"] == "invalid_probe_timeout"
+        else:  # pragma: no cover
+            raise AssertionError("out-of-range timeout must fail before job submission")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_healthz_is_unauthenticated_liveness()
     test_provider_readiness_refresh_is_authenticated_and_explicit()

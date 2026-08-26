@@ -29,6 +29,7 @@ from .orchestrator import (
     NoViableAgentError,
     RequestDeadlineExceeded,
     TaskOrchestrator,
+    _validate_provider_probe_timeout,
     _coerce_input_text,
     _new_chat_completion_id,
     chat_completion_chunks,
@@ -5630,14 +5631,12 @@ def build_server(
                     if not isinstance(agent_ids, list):
                         raise RequestError(400, "invalid_agent_ids", "agent_ids must be a list")
                     timeout_seconds = body.get("timeout_seconds")
-                    if (
-                        isinstance(timeout_seconds, bool)
-                        or not isinstance(timeout_seconds, (int, float))
-                        or timeout_seconds <= 0
-                    ):
+                    try:
+                        validated_timeout = _validate_provider_probe_timeout(timeout_seconds)
+                    except ValueError as exc:
                         raise RequestError(
-                            400, "invalid_probe_timeout", "timeout_seconds must be positive"
-                        )
+                            400, "invalid_probe_timeout", str(exc)
+                        ) from None
                     if request_deadline is None:
                         raise RequestError(
                             400,
@@ -5650,7 +5649,7 @@ def build_server(
                     document = coordinator.submit_provider_readiness_refresh(
                         agent_ids=agent_ids,
                         capability_code=body.get("capability_code"),
-                        timeout_seconds=float(timeout_seconds),
+                        timeout_seconds=validated_timeout,
                         deadline_epoch=deadline_epoch,
                     )
                     self._send(document, 202)
@@ -6319,6 +6318,13 @@ def build_server(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
                             )
+                        elif document.get("status") == "failed":
+                            last_embedding_error = RuntimeError(
+                                "embedding-capable model group member failed"
+                            )
+                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            document = None
+                            continue
                         break
                     if document is None:
                         raise RequestError(

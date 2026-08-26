@@ -129,11 +129,10 @@ class _ExplodingCounter:
         return 3
 
 
-def test_embedding_token_count_tolerates_counter_failure_and_clamps() -> None:
+def test_embedding_token_count_fails_closed_when_counter_is_unavailable() -> None:
     coordinator = _coordinator(token_counter=_ExplodingCounter())
-    # Adapter failure falls back to whitespace units.
-    assert coordinator._count_embedding_tokens("alpha beta gamma", "mock-e") == 3
-    assert coordinator._count_embedding_tokens("", "mock-e") == 0
+    with pytest.raises(RuntimeError, match="counter backend offline"):
+        coordinator._count_embedding_tokens("alpha beta gamma", "mock-e")
 
 
 class _ZeroCounter:
@@ -144,9 +143,10 @@ class _ZeroCounter:
         return 1
 
 
-def test_embedding_token_count_clamps_positive_text_to_one() -> None:
+def test_embedding_token_count_rejects_zero_for_positive_text() -> None:
     coordinator = _coordinator(token_counter=_ZeroCounter())
-    assert coordinator._count_embedding_tokens("nonempty", "mock-e") == 1
+    with pytest.raises(RuntimeError, match="invalid count"):
+        coordinator._count_embedding_tokens("nonempty", "mock-e")
 
 
 def test_split_empty_input_yields_single_empty_part() -> None:
@@ -410,8 +410,7 @@ def test_document_recounts_tokens_when_backend_reports_zero_usage() -> None:
     coordinator = _coordinator(embedding_batch_backend=_SilentEmbeddingBackend())
     job = coordinator.submit_embeddings_batch(["alpha beta gamma"])
     document = coordinator.embeddings_batch_document(job.job_id)
-    # HeuristicTokenCounter counts word units with the BPE expansion factor.
-    assert document["token_counts"] == [4]
+    assert document["token_counts"] == [3]
     assert document["token_count_provenance"] == ["measured_or_estimated_per_input"]
 
 

@@ -144,7 +144,8 @@ class JobRegistryFactory:
             claim = self._client.lock(
                 lock_name,
                 timeout=lease_seconds,
-                blocking=False,
+                blocking=True,
+                blocking_timeout=lease_seconds,
             )
 
             @contextmanager

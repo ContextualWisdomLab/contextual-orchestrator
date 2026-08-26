@@ -530,7 +530,9 @@ class LocalEmbeddingBatchBackend:
         dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
         job_registry: Any = None,
     ) -> None:
-        self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
+        if embedder is None or token_counter is None:
+            raise ValueError("local embedding backend requires explicit mock embedder and exact token counter")
+        self._embedder = embedder
         self._token_counter = token_counter
         # Computed results survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
@@ -543,10 +545,10 @@ class LocalEmbeddingBatchBackend:
         )
 
     def _count_tokens(self, text: str, model: str) -> int:
-        if self._token_counter is not None:
-            return int(self._token_counter.count_text(text, model))
-        # Dependency-free fallback: count word-ish units.
-        return len(text.split())
+        count = int(self._token_counter.count_text(text, model))
+        if count < 0 or (text and count == 0):
+            raise RuntimeError("exact token counter returned an invalid count")
+        return count
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
@@ -596,6 +598,10 @@ class ProviderEmbeddingBatchBackend:
         self._executor: ThreadPoolExecutor | None = None
         self._executor_lock = threading.Lock()
         self._registry = job_registry or JobRegistryFactory()
+        if self._registry.durable and (
+            claim_lease_seconds is None or claim_lease_seconds <= 0
+        ):
+            raise ValueError("durable provider backend claim lease must be positive")
         self._claim_lease_seconds = claim_lease_seconds
         self._terminal_events: Dict[str, threading.Event] = {}
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
@@ -660,8 +666,9 @@ class ProviderEmbeddingBatchBackend:
     def __del__(self) -> None:  # pragma: no cover - interpreter timing varies
         try:
             self.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - interpreter teardown must not raise
             pass
+
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:

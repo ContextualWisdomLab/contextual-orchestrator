@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 import contextual_orchestrator.orchestrator as orchestrator_module
 import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -756,6 +757,49 @@ def test_route_provider_failure_does_not_poison_structured_readiness() -> None:
         )
 
     assert orchestrator._structured_readiness == {}
+def test_structured_readiness_probe_does_not_mutate_transport_circuit() -> None:
+    """Capability probes neither clear nor increment provider transport failures."""
+
+    class ProbeClient(ModelClient):
+        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
+            del timeout
+            return {
+                "agent_id": agent.id,
+                "status": "ready" if agent.id == "ready_agent" else "not_ready",
+            }
+
+    agents = [
+        ModelAgent("ready_agent", "ready-model", tags=("verification",)),
+        ModelAgent("not_ready_agent", "not-ready-model", tags=("verification",)),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=ProbeClient())
+    orchestrator._record_failure("ready_agent")
+    before = {agent_id: dict(state) for agent_id, state in orchestrator._circuit.items()}
+
+    ready = orchestrator._structured_ready_candidates(
+        agents[0], "judge", {agent.id for agent in agents}
+    )
+
+    assert [agent.id for agent in ready] == ["ready_agent"]
+    assert orchestrator._circuit == before
+
+
+def test_structured_readiness_probe_preserves_request_deadline() -> None:
+    """Caller deadline exhaustion remains a typed deadline failure, not readiness 503."""
+
+    class DeadlineClient(ModelClient):
+        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
+            del agent, endpoint, payload
+            self.remaining_request_timeout()
+            raise AssertionError("expired deadline should raise first")
+
+    client = DeadlineClient()
+    agent = ModelAgent("judge_agent", "judge-model", tags=("verification",))
+    orchestrator = TaskOrchestrator([agent], client=client)
+
+    with client.request_settings(request_deadline_monotonic=time.monotonic() - 1.0):
+        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
+            orchestrator._structured_ready_candidates(agent, "judge", {agent.id})
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:

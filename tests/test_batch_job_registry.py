@@ -137,8 +137,48 @@ def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
     ]
     assert len(execution_claims) == 1
     assert execution_claims[0] > orchestrator.client.timeout
-    restarted = CostRoutingCoordinator(orchestrator, job_registry=JobRegistryFactory(client))
+    restarted_orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    restarted = CostRoutingCoordinator(
+        restarted_orchestrator, job_registry=JobRegistryFactory(client)
+    )
     assert restarted.provider_readiness_refresh_document(submitted["job_id"])["status"] == "completed"
+    assert restarted_orchestrator._structured_readiness[agent.id]["status"] == "ready"
+
+
+def test_cancelled_readiness_refresh_cannot_publish_late_probe_results() -> None:
+    """Cancellation wins before a blocked provider result reaches admission state."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingProbeClient(ModelClient):
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            entered.set()
+            release.wait(timeout=2)
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
+    orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    coordinator = CostRoutingCoordinator(orchestrator)
+    submitted = coordinator.submit_provider_readiness_refresh(
+        agent_ids=[agent.id],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+    assert entered.wait(timeout=1)
+
+    cancelled = coordinator.cancel_provider_readiness_refresh(submitted["job_id"])
+    release.set()
+
+    assert cancelled["status"] == "cancelled"
+    for _ in range(100):
+        if coordinator.provider_readiness_refresh_document(submitted["job_id"])[
+            "status"
+        ] == "cancelled":
+            break
+        time.sleep(0.01)
+    assert orchestrator._structured_readiness == {}
 
 
 def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
@@ -303,7 +343,8 @@ def test_valkey_claim_uses_bounded_lease_and_wait_not_result_retention() -> None
             "batch_job_registry:shards:claim:one",
             {
                 "timeout": 90.0,
-                "blocking": False,
+                "blocking": True,
+                "blocking_timeout": 90.0,
             },
         )
     ]

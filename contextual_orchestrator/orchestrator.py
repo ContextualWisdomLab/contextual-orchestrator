@@ -64,6 +64,7 @@ from .reasoning_effort_profile import (
     apply_request_profile,
     snapshot_role_effort_catalog,
 )
+from .token_counting import RustCl100kPacker
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -149,12 +150,8 @@ class NoViableAgentError(RuntimeError):
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
-
-    Honest floor for spend analytics on mock/runtime text; replace with provider-reported
-    usage when real workers return it.
-    """
-    return (len(text) + 3) // 4 if text else 0
+    """Return the exact cl100k count used when provider usage is unavailable."""
+    return RustCl100kPacker().count_text(text)
 
 
 def _step_output_tokens(step: Mapping[str, Any]) -> tuple[int, bool]:
@@ -602,7 +599,13 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
         return cached
     try:
         payload = json.loads(_http_error_body(error).decode("utf-8"))
-    except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (
+        AttributeError,
+        OSError,
+        RecursionError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
         result = False
     else:
         details = payload.get("error") if isinstance(payload, dict) else None
@@ -903,7 +906,7 @@ def _provider_limit_contract(
     """Extract only explicit machine-readable provider limits from an error."""
     try:
         document = json.loads(_http_error_body(exc, 16 * 1024).decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError):
         return None, None, None
 
     values: dict[str, Any] = {}
@@ -1063,6 +1066,10 @@ class ModelClient:
         """Apply provider settings to only the current server request thread."""
         current = self.request_settings_snapshot()
         current.update({key: value for key, value in overrides.items() if value is not None})
+        if "request_deadline_monotonic" in overrides:
+            # Background work may deliberately detach from the submitting HTTP
+            # request while retaining the remaining request-scoped settings.
+            current["request_deadline_monotonic"] = overrides["request_deadline_monotonic"]
         token = self._request_settings.set(current)
         try:
             yield
@@ -1321,6 +1328,8 @@ class ModelClient:
                         "stream": False,
                     },
                 )
+        except RequestDeadlineExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 - readiness is bounded evidence
             return {
                 "agent_id": agent.id,
@@ -1633,6 +1642,9 @@ class ModelClient:
                 raise _provider_tool_execution_stopped(agent) from None
             if isinstance(exc, ToolFallbackStoppedError):
                 raise
+            if isinstance(exc, RequestDeadlineExceeded):
+                raise
+            self.remaining_request_timeout()
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
             # and exception cause inside the gateway; callers get one stable,
@@ -2992,10 +3004,9 @@ class TaskOrchestrator:
                         "status": "ready" if ready else "not_ready",
                         "checked_at": checked_at,
                     }
-                    if ready:
-                        self._record_success(agent.id)
-                    else:
-                        self._record_failure(agent.id)
+                    # Capability readiness is separate from transport health.
+                    # Do not open or clear the shared provider circuit from a
+                    # structured-format probe outcome.
         with self._provider_readiness_lock:
             ready = [
                 agent
@@ -3273,6 +3284,8 @@ class TaskOrchestrator:
             for delta in stream:
                 parts.append(delta)
                 yield delta
+        except RequestDeadlineExceeded:
+            raise
         except Exception:
             if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
@@ -4491,15 +4504,8 @@ class TaskOrchestrator:
     def _cosine_similarity(
         vector_a: list[float], vector_b: list[float]
     ) -> float | None:
-        """Cosine of two equal-length vectors; None when either norm is zero."""
-        if len(vector_a) != len(vector_b) or not vector_a:
-            return None
-        dot = sum(a * b for a, b in zip(vector_a, vector_b))
-        norm_a = math.sqrt(sum(a * a for a in vector_a))
-        norm_b = math.sqrt(sum(b * b for b in vector_b))
-        if norm_a == 0.0 or norm_b == 0.0:
-            return None
-        return dot / (norm_a * norm_b)
+        """Return validated cosine similarity from the Rust numeric authority."""
+        return RustCl100kPacker().cosine_similarity(vector_a, vector_b)
 
     def _cache_put(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
         """Insert into one bounded LRU evidence cache under the evidence lock."""
@@ -5445,8 +5451,8 @@ class TaskOrchestrator:
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
 
-        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
-        usage. Cost is computed only for models with an operator-supplied price; models without
+        Tokens use provider-reported usage when available and exact local cl100k otherwise.
+        Cost is computed only for models with an operator-supplied price; models without
         one are reported under ``unpriced_models`` with a null cost. This is the honest local
         floor for spend observability, not a billing system.
         """
@@ -5515,7 +5521,7 @@ class TaskOrchestrator:
             "measurement_status": "local_runtime_estimate",
             "source_note": (
                 "output_tokens use provider-reported usage when available (usage_source=reported/mixed) and "
-                "fall back to a ~4 chars/token estimate otherwise; cost = output_tokens x operator-supplied price only."
+                "fall back to exact local cl100k otherwise; cost = output_tokens x operator-supplied price only."
             ),
             "pricing_configured": bool(prices),
             "totals": {

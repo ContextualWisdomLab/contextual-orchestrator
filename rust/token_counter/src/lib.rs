@@ -2,7 +2,21 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use std::sync::OnceLock;
 use tiktoken_rs::cl100k_base;
+
+static CL100K: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
+
+fn exact_tokenizer() -> PyResult<&'static tiktoken_rs::CoreBPE> {
+    if let Some(tokenizer) = CL100K.get() {
+        return Ok(tokenizer);
+    }
+    let tokenizer = cl100k_base().map_err(|_| PyValueError::new_err("cl100k unavailable"))?;
+    let _ = CL100K.set(tokenizer);
+    CL100K
+        .get()
+        .ok_or_else(|| PyValueError::new_err("cl100k initialization failed"))
+}
 
 #[pyclass(get_all)]
 #[derive(Clone)]
@@ -58,6 +72,78 @@ fn sum_token_counts(values: Vec<usize>) -> PyResult<usize> {
 }
 
 #[pyfunction]
+fn count_cl100k(text: &str) -> PyResult<usize> {
+    let tokenizer = exact_tokenizer()?;
+    Ok(tokenizer.encode_ordinary(text).len())
+}
+
+#[pyfunction]
+fn cosine_similarity(vector_a: Vec<f64>, vector_b: Vec<f64>) -> PyResult<Option<f64>> {
+    if vector_a.len() != vector_b.len() || vector_a.is_empty() {
+        return Ok(None);
+    }
+    if vector_a
+        .iter()
+        .chain(vector_b.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(PyValueError::new_err("cosine inputs must be finite"));
+    }
+    let dot = vector_a
+        .iter()
+        .zip(vector_b.iter())
+        .map(|(a, b)| a * b)
+        .sum::<f64>();
+    let norm_a = vector_a
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
+    let norm_b = vector_b
+        .iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return Ok(None);
+    }
+    let value = dot / (norm_a * norm_b);
+    if value.is_finite() {
+        Ok(Some(value))
+    } else {
+        Err(PyValueError::new_err("cosine result is not finite"))
+    }
+}
+
+#[pyfunction]
+fn root_mean_square_error(estimates: Vec<f64>, truths: Vec<f64>) -> PyResult<f64> {
+    if estimates.len() != truths.len() || estimates.is_empty() {
+        return Err(PyValueError::new_err(
+            "RMSE inputs must have one shared positive length",
+        ));
+    }
+    if estimates
+        .iter()
+        .chain(truths.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(PyValueError::new_err("RMSE inputs must be finite"));
+    }
+    let mean_square = estimates
+        .iter()
+        .zip(truths.iter())
+        .map(|(estimate, truth)| (estimate - truth).powi(2))
+        .sum::<f64>()
+        / estimates.len() as f64;
+    let value = mean_square.sqrt();
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(PyValueError::new_err("RMSE result is not finite"))
+    }
+}
+
+#[pyfunction]
 fn weighted_average_embeddings(parts: Vec<(Vec<f64>, usize)>) -> PyResult<Vec<f64>> {
     if parts.is_empty() {
         return Ok(Vec::new());
@@ -105,14 +191,18 @@ fn pack_cl100k(
     if texts.iter().any(String::is_empty) {
         return Err(PyValueError::new_err("embedding input must be non-empty"));
     }
-    let tokenizer = cl100k_base().map_err(|_| PyValueError::new_err("cl100k unavailable"))?;
+    let tokenizer = exact_tokenizer()?;
     let encoded: Vec<Vec<u32>> = texts
         .par_iter()
         .map(|text| tokenizer.encode_ordinary(text))
         .collect();
     let mut parts = Vec::new();
     for (source_index, tokens) in encoded.iter().enumerate() {
-        let ranges = utf8_token_ranges(&tokenizer, tokens, max_tokens_per_input)?;
+        let ranges = utf8_token_ranges(
+            &tokenizer,
+            tokens,
+            max_tokens_per_input.min(max_total_tokens),
+        )?;
         let part_count = ranges.len();
         for (part_index, (token_start, token_end, text)) in ranges.into_iter().enumerate() {
             parts.push(PackedPart {
@@ -149,6 +239,9 @@ fn _token_packer(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PackedPart>()?;
     module.add_function(wrap_pyfunction!(pack_cl100k, module)?)?;
     module.add_function(wrap_pyfunction!(sum_token_counts, module)?)?;
+    module.add_function(wrap_pyfunction!(count_cl100k, module)?)?;
+    module.add_function(wrap_pyfunction!(cosine_similarity, module)?)?;
+    module.add_function(wrap_pyfunction!(root_mean_square_error, module)?)?;
     module.add_function(wrap_pyfunction!(weighted_average_embeddings, module)?)?;
     Ok(())
 }
@@ -259,6 +352,21 @@ mod tests {
     }
 
     #[test]
+    fn total_token_limit_also_bounds_each_part() {
+        Python::with_gil(|_| {
+            let (parts, shards) = pack_cl100k(vec![exact_token_text(9)], 10, 2, 8).unwrap();
+            assert_eq!(
+                parts
+                    .iter()
+                    .map(|part| part.token_count)
+                    .collect::<Vec<_>>(),
+                vec![8, 1]
+            );
+            assert_eq!(shards.iter().map(Vec::len).collect::<Vec<_>>(), vec![1, 1]);
+        });
+    }
+
+    #[test]
     fn input_count_boundary_is_exact_at_2048_and_2049() {
         Python::with_gil(|_| {
             let (_, exact) = pack_cl100k(vec!["x".into(); 2048], 8192, 2048, 300_000).unwrap();
@@ -291,6 +399,23 @@ mod tests {
                 weighted_average_embeddings(vec![(vec![1.0], 1), (vec![1.0, 2.0], 1)]).is_err()
             );
             assert!(weighted_average_embeddings(vec![(Vec::new(), 1)]).is_err());
+        });
+    }
+
+    #[test]
+    fn exact_count_cosine_and_rmse_are_rust_owned() {
+        Python::with_gil(|_| {
+            assert_eq!(count_cl100k("hello world").unwrap(), 2);
+            assert_eq!(
+                cosine_similarity(vec![1.0, 0.0], vec![1.0, 0.0]).unwrap(),
+                Some(1.0)
+            );
+            assert_eq!(cosine_similarity(vec![0.0], vec![1.0]).unwrap(), None);
+            assert_eq!(
+                root_mean_square_error(vec![1.0, 3.0], vec![1.0, 1.0]).unwrap(),
+                2.0_f64.sqrt()
+            );
+            assert!(root_mean_square_error(Vec::new(), Vec::new()).is_err());
         });
     }
 }
