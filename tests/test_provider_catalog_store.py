@@ -277,6 +277,30 @@ def test_memory_privacy_evidence_replaces_success_and_survives_failure() -> None
     assert store.privacy_assessments(source) == (replacement,)
 
 
+def test_memory_successful_refresh_prunes_stale_privacy_evidence() -> None:
+    """Evidence cannot survive removal of its model or policy source."""
+    source = _source()
+    model = replace(
+        _model(source, "model-a"),
+        privacy_policy_urls=("https://provider.example/privacy",),
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source, [model], eligible_model_ids={model.model_id}, serving_tags={}
+    )
+    store.record_privacy_assessment_success(source, [_assessment(source)])
+
+    replacement = _model(source, "model-b")
+    store.record_success(
+        source,
+        [replacement],
+        eligible_model_ids={replacement.model_id},
+        serving_tags={},
+    )
+
+    assert store.privacy_assessments(source) == ()
+
+
 def test_memory_privacy_evidence_rejects_partial_batch_atomically() -> None:
     """One invalid row rejects the batch before any successful row is written."""
     source = _source()

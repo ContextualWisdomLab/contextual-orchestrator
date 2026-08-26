@@ -417,6 +417,16 @@ class InMemoryProviderCatalogStore:
             self._accounts[account_id] = source
             self._models[account_id] = normalized
             self._eligible[account_id] = eligible
+            current_policy_sources = {
+                (model_name, policy_source_url)
+                for model_name, model in normalized.items()
+                for policy_source_url in model.privacy_policy_urls
+            }
+            self._privacy = {
+                key: value
+                for key, value in self._privacy.items()
+                if key[0] != account_id or key[1:] in current_policy_sources
+            }
             for key in [key for key in self._tags if key[0] == account_id]:
                 del self._tags[key]
             for model_name in eligible:
@@ -679,6 +689,18 @@ class PostgresProviderCatalogStore:
                             "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (model_row_id, policy_source_url),
                         )
+                cursor.execute(
+                    "DELETE FROM model_policy_assessment AS mpa "
+                    "WHERE mpa.provider_model_id IN ("
+                    "SELECT pm.provider_model_id FROM provider_model AS pm "
+                    "WHERE pm.provider_account_id = %s AND ("
+                    "pm.enabled_flag = false OR NOT EXISTS ("
+                    "SELECT 1 FROM model_policy_source AS mps "
+                    "WHERE mps.provider_model_id = pm.provider_model_id "
+                    "AND mps.policy_source_url = "
+                    "mpa.policy_source_url)))",
+                    (account_id,),
+                )
                 finished_at = _now()
                 cursor.execute(
                     "INSERT INTO catalog_refresh_run ("
