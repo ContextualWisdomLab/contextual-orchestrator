@@ -468,18 +468,35 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             params = detail.get("litellm_params") if isinstance(detail.get("litellm_params"), dict) else {}
             mode = info.get("mode")
             normalized_mode = mode.casefold() if isinstance(mode, str) else ""
-            outputs = tuple(
-                capability
-                for capability, matching_modes in (
-                    ("text", {"chat", "responses", "completion"}),
-                    ("embedding", {"embedding"}),
-                )
-                if normalized_mode in matching_modes
+            mode_modalities = {
+                "chat": (("text",), ("text",)),
+                "responses": (("text",), ("text", "responses")),
+                "completion": (("text",), ("text", "completion")),
+                "embedding": (("text",), ("embedding",)),
+                "image_generation": (("text",), ("image",)),
+                "image_edit": (("text", "image"), ("image",)),
+                "audio_speech": (("text",), ("speech",)),
+                "audio_transcription": (("audio",), ("transcription",)),
+            }
+            fallback_inputs, fallback_outputs = mode_modalities.get(
+                normalized_mode, ((), ())
+            )
+            declared_inputs = info.get("supported_input_modalities")
+            declared_outputs = info.get("supported_output_modalities")
+            inputs = (
+                tuple(value for value in declared_inputs if isinstance(value, str))
+                if isinstance(declared_inputs, list)
+                else fallback_inputs
+            )
+            outputs = (
+                tuple(value for value in declared_outputs if isinstance(value, str))
+                if isinstance(declared_outputs, list)
+                else fallback_outputs
             )
             deployment_outputs.append(outputs)
-            deployment_inputs.append(
-                ("text", "image") if info.get("supports_vision") is True else ("text",)
-            )
+            if info.get("supports_vision") is True and "image" not in inputs:
+                inputs = (*inputs, "image")
+            deployment_inputs.append(inputs)
             prompt = info.get("input_cost_per_token", params.get("input_cost_per_token"))
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")

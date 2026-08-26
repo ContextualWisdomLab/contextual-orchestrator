@@ -204,6 +204,52 @@ def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
     assert "architecture" not in merged["data"][0]
 
 
+def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
+    payload = {
+        "data": [
+            {"id": "responses-model"},
+            {"id": "completion-model"},
+            {"id": "embedding-model"},
+            {"id": "image-model"},
+            {"id": "speech-model"},
+            {"id": "transcription-model"},
+        ]
+    }
+    metadata = {
+        "data": [
+            {"model_name": "responses-model", "model_info": {"mode": "responses"}},
+            {
+                "model_name": "completion-model",
+                "model_info": {"mode": "completion"},
+            },
+            {
+                "model_name": "embedding-model",
+                "model_info": {"mode": "embedding"},
+            },
+            {
+                "model_name": "image-model",
+                "model_info": {"mode": "image_generation"},
+            },
+            {"model_name": "speech-model", "model_info": {"mode": "audio_speech"}},
+            {
+                "model_name": "transcription-model",
+                "model_info": {"mode": "audio_transcription"},
+            },
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert [row["architecture"] for row in merged["data"]] == [
+        {"input_modalities": ["text"], "output_modalities": ["text", "responses"]},
+        {"input_modalities": ["text"], "output_modalities": ["text", "completion"]},
+        {"input_modalities": ["text"], "output_modalities": ["embedding"]},
+        {"input_modalities": ["text"], "output_modalities": ["image"]},
+        {"input_modalities": ["text"], "output_modalities": ["speech"]},
+        {"input_modalities": ["audio"], "output_modalities": ["transcription"]},
+    ]
+
+
 @pytest.fixture(autouse=True)
 def _fresh_backend():
     set_backend(InMemoryCredentialBackend())
