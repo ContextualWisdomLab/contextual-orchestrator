@@ -3,9 +3,7 @@
 The cost ledger needs prompt/completion token counts on every completion. Two
 strategies are provided behind one :class:`TokenCounter`-compatible surface:
 
-* :class:`HeuristicTokenCounter` — a dependency-free estimator (the default).
-  It approximates BPE token counts from whitespace/word structure so standalone
-  runs and tests get stable, deterministic numbers without Postgres.
+* :class:`RustCl100kTokenCounter` — the exact local cl100k authority.
 * :class:`PgTiktokenAdapter` — delegates to ``pg_llm_batch.TokenCounter``
   (``pg_tiktoken`` running *inside* Postgres) when a DSN + the package are
   available, so counts match exactly what the batch engine bills against.
@@ -16,14 +14,7 @@ environment: the DSN is passed in by the caller.
 
 from __future__ import annotations
 
-import math
-import re
 from typing import Any, List, Optional, Protocol
-
-_WORD_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
-
-# Rough BPE expansion: sub-word models emit slightly more tokens than words.
-_TOKENS_PER_WORD = 1.3
 
 
 class TokenCountingStrategy(Protocol):
@@ -34,36 +25,30 @@ class TokenCountingStrategy(Protocol):
         ...
 
 
-class HeuristicTokenCounter:
-    """Deterministic, dependency-free token estimator.
+class RustCl100kTokenCounter:
+    """Exact local cl100k counter backed by the Rust extension."""
 
-    Counts word-ish units (words and standalone punctuation) and applies a
-    fixed BPE expansion factor. Not exact, but stable and monotonic — good
-    enough for cost attribution when ``pg_tiktoken`` is not reachable, and it
-    never varies between runs so tests can assert on it.
-    """
-
-    def __init__(self, tokens_per_word: float = _TOKENS_PER_WORD) -> None:
-        self.tokens_per_word = tokens_per_word
+    def __init__(self, tokens_per_word: float | None = None) -> None:
+        if tokens_per_word is not None:
+            raise ValueError("tokens_per_word heuristics are not supported")
+        self._rust = RustCl100kPacker()
 
     def count_text(self, text: str, model: str = "") -> int:
-        """Estimate the number of tokens in ``text``."""
-        if not text:
-            return 0
-        units = _WORD_RE.findall(text)
-        if not units:
-            return 0
-        return max(1, math.ceil(len(units) * self.tokens_per_word))
+        """Return the exact cl100k token count for ``text``."""
+        return self._rust.count_text(text)
 
     def count_messages(self, messages: List[dict], model: str = "") -> int:
-        """Estimate prompt tokens across a list of chat messages."""
+        """Count message content exactly without invented framing constants."""
         total = 0
         for message in messages:
             content = message.get("content", "") if isinstance(message, dict) else ""
             total += self.count_text(str(content), model)
-            # Per-message framing overhead (role tags, delimiters).
-            total += 3
         return total
+
+
+# Import compatibility only; the implementation is exact and accepts no
+# multiplier. New production code uses ``RustCl100kTokenCounter`` directly.
+HeuristicTokenCounter = RustCl100kTokenCounter
 
 
 class PgTiktokenAdapter:
@@ -99,12 +84,30 @@ class RustCl100kPacker:
                 pack_cl100k,
                 sum_token_counts,
                 weighted_average_embeddings,
+                count_cl100k,
+                cosine_similarity,
+                root_mean_square_error,
             )
         except ImportError as exc:
             raise RuntimeError("Rust token packer extension is unavailable") from exc
         self._pack = pack_cl100k
         self._sum_token_counts = sum_token_counts
         self._weighted_average_embeddings = weighted_average_embeddings
+        self._count_cl100k = count_cl100k
+        self._cosine_similarity = cosine_similarity
+        self._root_mean_square_error = root_mean_square_error
+
+    def count_text(self, text: str) -> int:
+        """Return the exact cl100k count from Rust."""
+        return int(self._count_cl100k(text))
+
+    def cosine_similarity(self, vector_a: List[float], vector_b: List[float]) -> float | None:
+        """Return validated cosine similarity from Rust."""
+        return self._cosine_similarity(vector_a, vector_b)
+
+    def root_mean_square_error(self, estimates: List[float], truths: List[float]) -> float:
+        """Return validated RMSE from Rust."""
+        return float(self._root_mean_square_error(estimates, truths))
 
     def pack_texts(self, texts: List[str], *, max_tokens_per_input: int,
                    max_inputs: int, max_total_tokens: int):
@@ -126,11 +129,11 @@ def build_token_counter(
     postgres_dsn: Optional[str] = None,
     *,
     config: Any = None,
-) -> HeuristicTokenCounter | PgTiktokenAdapter:
+) -> RustCl100kTokenCounter | PgTiktokenAdapter:
     """Return the best available token counter.
 
     Prefers ``pg_tiktoken`` (via ``pg_llm_batch``) when a DSN is supplied and the
-    dependency is importable; otherwise returns the heuristic estimator. Never
+    dependency is importable; otherwise returns the exact Rust counter. Never
     reads the environment.
     """
     if postgres_dsn:
@@ -138,6 +141,6 @@ def build_token_counter(
             from pg_llm_batch import TokenCounter as PgTokenCounter  # type: ignore
 
             return PgTiktokenAdapter(PgTokenCounter(postgres_dsn, config=config))
-        except Exception:  # pragma: no cover - degrade to heuristic
-            return HeuristicTokenCounter()
-    return HeuristicTokenCounter()
+        except Exception:  # pragma: no cover - exact local authority remains required
+            return RustCl100kTokenCounter()
+    return RustCl100kTokenCounter()

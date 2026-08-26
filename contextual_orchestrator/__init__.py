@@ -1,5 +1,12 @@
 """Public package exports for the contextual orchestration runtime."""
 
+from pkgutil import extend_path
+
+# The ABI3 Rust extension is installed by a wheel while local development and
+# CI import Python sources from the checkout. Extend the regular package path so
+# the source package can find the wheel-owned native submodule.
+__path__ = extend_path(__path__, __name__)
+
 from .batch_routing import (
     BatchJob,
     BatchRequest,
@@ -47,7 +54,7 @@ from .reasoning_effort_profile import (
     parse_reasoning_effort_profile,
     snapshot_role_effort_catalog,
 )
-from .token_counting import HeuristicTokenCounter, build_token_counter
+from .token_counting import HeuristicTokenCounter, RustCl100kTokenCounter, build_token_counter
 from .response_cache import (
     RedisResponseCacheProvider,
     ResponseCacheProvider,
@@ -104,6 +111,7 @@ __all__ = [
     "InMemoryConfigStore",
     "get_config_store",
     "HeuristicTokenCounter",
+    "RustCl100kTokenCounter",
     "build_token_counter",
     "ResponseCacheProvider",
     "RedisResponseCacheProvider",

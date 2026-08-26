@@ -35,13 +35,14 @@ from .batch_routing import (
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
     ProviderEmbeddingBatchBackend,
+    heuristic_embedding,
     RoutingHints,
     RoutingPolicy,
 )
 from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
-from .token_counting import HeuristicTokenCounter, RustCl100kPacker, build_token_counter
+from .token_counting import RustCl100kPacker, build_token_counter
 from .embedding_capabilities import embedding_model_capability
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
@@ -71,9 +72,7 @@ class CostRoutingCoordinator:
         self.config = config_store or InMemoryConfigStore()
         self.price_book = price_book or PriceBook(self.config)
         self.ledger = ledger or CostLedger(self.price_book)
-        self.token_counter = token_counter or (
-            build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
-        )
+        self.token_counter = token_counter or build_token_counter(postgres_dsn)
         self._cl100k_packer: Any = None
         self.policy = routing_policy or RoutingPolicy(self.config)
         # Job registries live in Valkey when the credential registry carries
@@ -98,7 +97,9 @@ class CostRoutingCoordinator:
             self.batch_backend = batch_backend
         self._embedding_backend_override = embedding_batch_backend
         self._local_embedding_backend = LocalEmbeddingBatchBackend(
-            token_counter=self.token_counter, job_registry=registry
+            embedder=heuristic_embedding,
+            token_counter=self.token_counter,
+            job_registry=registry,
         )
 
         def embed(
@@ -838,14 +839,11 @@ class CostRoutingCoordinator:
         )
 
     def _count_embedding_tokens(self, text: str, model: str) -> int:
-        """Count tokens for embedding split decisions, tolerating adapters."""
-        try:
-            value = int(self.token_counter.count_text(text, model))
-        except Exception:
-            value = len(text.split())
-        if text and value <= 0:
-            return 1
-        return max(0, value)
+        """Count tokens exactly for embedding split decisions or fail closed."""
+        value = int(self.token_counter.count_text(text, model))
+        if value < 0 or (text and value == 0):
+            raise RuntimeError("exact token counter returned an invalid count")
+        return value
 
     def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
         """Serialize terminal materialization so cost is recorded exactly once."""

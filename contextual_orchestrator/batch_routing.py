@@ -530,7 +530,9 @@ class LocalEmbeddingBatchBackend:
         dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
         job_registry: Any = None,
     ) -> None:
-        self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
+        if embedder is None or token_counter is None:
+            raise ValueError("local embedding backend requires explicit mock embedder and exact token counter")
+        self._embedder = embedder
         self._token_counter = token_counter
         # Computed results survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
@@ -543,10 +545,10 @@ class LocalEmbeddingBatchBackend:
         )
 
     def _count_tokens(self, text: str, model: str) -> int:
-        if self._token_counter is not None:
-            return int(self._token_counter.count_text(text, model))
-        # Dependency-free fallback: count word-ish units.
-        return len(text.split())
+        count = int(self._token_counter.count_text(text, model))
+        if count < 0 or (text and count == 0):
+            raise RuntimeError("exact token counter returned an invalid count")
+        return count
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None

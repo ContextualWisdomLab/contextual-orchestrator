@@ -7,7 +7,7 @@ import types
 from typing import Any
 
 from contextual_orchestrator.token_counting import (
-    HeuristicTokenCounter,
+    RustCl100kTokenCounter,
     PgTiktokenAdapter,
     build_token_counter,
 )
@@ -27,20 +27,17 @@ class _PgCounter:
         return str(len(text))
 
 
-def test_heuristic_counter_handles_empty_text_punctuation_and_calibration() -> None:
-    """Keep dependency-free estimates deterministic across realistic text shapes."""
-    default_counter = HeuristicTokenCounter()
-    calibrated_counter = HeuristicTokenCounter(tokens_per_word=0.5)
-
-    assert default_counter.count_text("") == 0
-    assert default_counter.count_text(" \t\n") == 0
-    assert default_counter.count_text("hello, world", model="ignored-model") == 4
-    assert calibrated_counter.count_text("hello, world") == 2
+def test_exact_counter_handles_realistic_text_shapes() -> None:
+    """Use cl100k rather than a configurable word multiplier."""
+    counter = RustCl100kTokenCounter()
+    assert counter.count_text("") == 0
+    assert counter.count_text(" \t\n") > 0
+    assert counter.count_text("hello, world", model="ignored-model") == 3
 
 
-def test_heuristic_message_count_includes_framing_for_every_input_item() -> None:
-    """Count message content plus framing even when a caller supplies a non-mapping item."""
-    counter = HeuristicTokenCounter(tokens_per_word=1.0)
+def test_exact_message_count_uses_content_without_invented_framing() -> None:
+    """Count available content without an arbitrary per-message constant."""
+    counter = RustCl100kTokenCounter()
 
     assert counter.count_messages(
         [
@@ -49,7 +46,7 @@ def test_heuristic_message_count_includes_framing_for_every_input_item() -> None
             "malformed-message",
         ],
         model="ignored-model",
-    ) == 11
+    ) == 2
 
 
 def test_postgres_adapter_delegates_text_and_message_counts() -> None:
@@ -72,7 +69,7 @@ def test_postgres_adapter_delegates_text_and_message_counts() -> None:
 
 def test_counter_factory_uses_heuristic_without_a_database() -> None:
     """Keep standalone execution dependency-free when no DSN is requested."""
-    assert isinstance(build_token_counter(), HeuristicTokenCounter)
+    assert isinstance(build_token_counter(), RustCl100kTokenCounter)
 
 
 def test_counter_factory_builds_postgres_adapter_with_explicit_config(monkeypatch) -> None:
@@ -101,5 +98,5 @@ def test_counter_factory_falls_back_when_postgres_counter_cannot_start(monkeypat
 
     assert isinstance(
         build_token_counter("postgresql://example/tokens"),
-        HeuristicTokenCounter,
+        RustCl100kTokenCounter,
     )

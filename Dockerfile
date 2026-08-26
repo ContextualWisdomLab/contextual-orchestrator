@@ -58,13 +58,6 @@ RUN set -eu; \
     test "$#" -eq 1 && test -f "$1" || { \
       echo "pinned Rust token-packer build must produce exactly one wheel" >&2; exit 1; \
     }; \
-    python -m zipfile -e "$1" /tmp/token-wheel-unpacked; \
-    set -- /tmp/token-wheel-unpacked/contextual_orchestrator/_token_packer*.so; \
-    test "$#" -eq 1 && test -f "$1" || { \
-      echo "pinned Rust token-packer wheel must contain exactly one extension" >&2; exit 1; \
-    }; \
-    cp "$1" /io/contextual_orchestrator/; \
-    set -- /tmp/token-wheels/*.whl; \
     uv run --python /usr/local/bin/python --no-project \
       --with-requirements requirements.lock \
       --with-requirements fuzz/requirements-property.txt \

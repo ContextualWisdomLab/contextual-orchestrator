@@ -64,6 +64,7 @@ from .reasoning_effort_profile import (
     apply_request_profile,
     snapshot_role_effort_catalog,
 )
+from .token_counting import RustCl100kPacker
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -149,12 +150,8 @@ class NoViableAgentError(RuntimeError):
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
-
-    Honest floor for spend analytics on mock/runtime text; replace with provider-reported
-    usage when real workers return it.
-    """
-    return (len(text) + 3) // 4 if text else 0
+    """Return the exact cl100k count used when provider usage is unavailable."""
+    return RustCl100kPacker().count_text(text)
 
 
 def _step_output_tokens(step: Mapping[str, Any]) -> tuple[int, bool]:
@@ -4419,15 +4416,8 @@ class TaskOrchestrator:
     def _cosine_similarity(
         vector_a: list[float], vector_b: list[float]
     ) -> float | None:
-        """Cosine of two equal-length vectors; None when either norm is zero."""
-        if len(vector_a) != len(vector_b) or not vector_a:
-            return None
-        dot = sum(a * b for a, b in zip(vector_a, vector_b))
-        norm_a = math.sqrt(sum(a * a for a in vector_a))
-        norm_b = math.sqrt(sum(b * b for b in vector_b))
-        if norm_a == 0.0 or norm_b == 0.0:
-            return None
-        return dot / (norm_a * norm_b)
+        """Return validated cosine similarity from the Rust numeric authority."""
+        return RustCl100kPacker().cosine_similarity(vector_a, vector_b)
 
     def _cache_put(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
         """Insert into one bounded LRU evidence cache under the evidence lock."""
@@ -5355,8 +5345,8 @@ class TaskOrchestrator:
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
 
-        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
-        usage. Cost is computed only for models with an operator-supplied price; models without
+        Tokens use provider-reported usage when available and exact local cl100k otherwise.
+        Cost is computed only for models with an operator-supplied price; models without
         one are reported under ``unpriced_models`` with a null cost. This is the honest local
         floor for spend observability, not a billing system.
         """
@@ -5425,7 +5415,7 @@ class TaskOrchestrator:
             "measurement_status": "local_runtime_estimate",
             "source_note": (
                 "output_tokens use provider-reported usage when available (usage_source=reported/mixed) and "
-                "fall back to a ~4 chars/token estimate otherwise; cost = output_tokens x operator-supplied price only."
+                "fall back to exact local cl100k otherwise; cost = output_tokens x operator-supplied price only."
             ),
             "pricing_configured": bool(prices),
             "totals": {

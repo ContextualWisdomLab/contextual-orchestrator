@@ -48,7 +48,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _provider_limit_contract,
     is_transient_error,
 )
-from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
+from contextual_orchestrator.token_counting import RustCl100kTokenCounter  # noqa: E402
 from contextual_orchestrator.batch_job_registry import JobRegistryFactory  # noqa: E402
 from contextual_orchestrator.embedding_capabilities import EmbeddingModelCapability  # noqa: E402
 
@@ -1297,7 +1297,7 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
         orchestrator,
         config,
         price_book=price_book,
-        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        token_counter=RustCl100kTokenCounter(),
         embedding_batch_backend=backend,
     )
 
@@ -1348,7 +1348,7 @@ def test_batch_embeddings_char_guard_splits_no_whitespace_input() -> None:
     coordinator = CostRoutingCoordinator(
         orchestrator,
         config,
-        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        token_counter=RustCl100kTokenCounter(),
         embedding_batch_backend=backend,
     )
 

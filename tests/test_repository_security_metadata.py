@@ -172,6 +172,7 @@ def test_local_full_suite_installs_runtime_and_test_lockfiles():
     makefile_text = read_text("Makefile")
     runner_text = read_text("scripts/run_hash_locked_tests.sh")
     dockerfile_text = read_text("Dockerfile")
+    package_text = read_text("contextual_orchestrator/__init__.py")
 
     assert "./scripts/run_hash_locked_tests.sh" in makefile_text
     assert "ghcr.io/pyo3/maturin@sha256:" in runner_text
@@ -180,8 +181,9 @@ def test_local_full_suite_installs_runtime_and_test_lockfiles():
     assert "make test requires Docker" in runner_text
     assert "maturin build --locked" in dockerfile_text
     assert "FROM runtime-base AS test-runner" in dockerfile_text
-    assert 'python -m zipfile -e "$1"' in dockerfile_text
-    assert 'cp "$1" /io/contextual_orchestrator/' in dockerfile_text
+    assert "python -m zipfile" not in dockerfile_text
+    assert 'cp "$1" /io/contextual_orchestrator/' not in dockerfile_text
+    assert "extend_path(__path__, __name__)" in package_text
     assert "--with-requirements requirements.lock" in dockerfile_text
     assert "--with-requirements fuzz/requirements-property.txt" in dockerfile_text
     assert '--with "$1"' in dockerfile_text
