@@ -785,10 +785,16 @@ def discover_provider_models(
             policies = _fetch_json(_OPENROUTER_PROVIDER_POLICIES_URL, timeout=timeout)
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
             policies = None
+        provider_rows = policies.get("data") if isinstance(policies, dict) else None
+        endpoints_by_model = (
+            _openrouter_free_model_endpoints(payload, api_key=api_key, timeout=timeout)
+            if isinstance(provider_rows, list)
+            else {}
+        )
         payload = _merge_openrouter_provider_privacy(
             payload,
             policies,
-            _openrouter_free_model_endpoints(payload, api_key=api_key, timeout=timeout),
+            endpoints_by_model,
         )
     elif source.provider_name == "configured_gateway":
         try:

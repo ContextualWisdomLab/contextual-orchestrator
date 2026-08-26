@@ -1,8 +1,10 @@
 """Grounded privacy-policy analysis through a discovered ZDR model."""
 
+import asyncio
 import base64
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from contextual_orchestrator.credentials import (
@@ -12,6 +14,7 @@ from contextual_orchestrator.credentials import (
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.privacy_policy_analysis import (
+    _render_policy_document_with_camoufox,
     _wardnet_browser_proxy,
     analyze_discovered_privacy_policies,
     crawl_policy_document,
@@ -187,6 +190,87 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
         "username": "wardnet",
         "password": "wardnet-proxy-test-token",
     }
+
+
+def test_pinned_mcp_client_renders_and_closes_camoufox_tab() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class _Context:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, transport: object) -> None:
+            assert transport == "streamable-transport"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def call_tool(self, name: str, arguments: dict[str, object]):
+            calls.append((name, arguments))
+            payload = {
+                "create_tab": {"tabId": "policy-tab"},
+                "camofox_get_page_html": {"html": "<html>Rendered policy</html>"},
+                "close_tab": {},
+            }[name]
+            return SimpleNamespace(
+                is_error=False,
+                content=[SimpleNamespace(text=json.dumps(payload))],
+            )
+
+    set_backend(InMemoryCredentialBackend())
+    for name, value in {
+        "WARDNET_EGRESS_PROXY_URL": "http://127.0.0.1:8080",
+        "WARDNET_EGRESS_PROXY_TOKEN": "proxy-token",
+        "CAMOUFOX_MCP_URL": "http://127.0.0.1:9377/mcp",
+        "CAMOUFOX_MCP_TOKEN": "mcp-token",
+    }.items():
+        register_credential(name, value)
+    try:
+        with patch("mcp.Client", _Client), patch(
+            "mcp.client.streamable_http.streamable_http_client",
+            side_effect=lambda url, http_client: (
+                "streamable-transport"
+                if url == "http://127.0.0.1:9377/mcp" and http_client is not None
+                else None
+            ),
+        ), patch(
+            "mcp.shared._httpx_utils.create_mcp_http_client",
+            side_effect=lambda **kwargs: (
+                _Context()
+                if kwargs == {"headers": {"authorization": "Bearer mcp-token"}}
+                else None
+            ),
+        ):
+            rendered = asyncio.run(
+                _render_policy_document_with_camoufox("https://provider.example/privacy")
+            )
+    finally:
+        set_backend(None)
+
+    assert rendered == "<html>Rendered policy</html>"
+    assert calls == [
+        (
+            "create_tab",
+            {
+                "url": "https://provider.example/privacy",
+                "proxy": {
+                    "host": "127.0.0.1",
+                    "port": "8080",
+                    "username": "wardnet",
+                    "password": "proxy-token",
+                },
+            },
+        ),
+        ("camofox_get_page_html", {"tabId": "policy-tab"}),
+        ("close_tab", {"tabId": "policy-tab"}),
+    ]
 
 
 def test_analysis_preserves_provider_truth_and_requires_complete_consensus() -> None:

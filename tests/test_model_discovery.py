@@ -330,6 +330,24 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
 
 
+def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_json",
+        side_effect=[
+            {"data": [{"id": "free/model", "pricing": {"prompt": "0", "completion": "0"}}]},
+            {"data": []},
+            urllib.error.URLError("provider policy unavailable"),
+        ],
+    ), patch(
+        "contextual_orchestrator.model_discovery._openrouter_free_model_endpoints"
+    ) as endpoint_fetch:
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert [model.model_id for model in discovered] == ["free/model"]
+    endpoint_fetch.assert_not_called()
+
+
 def test_discovery_treats_null_modality_arrays_as_unspecified() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     with patch(
