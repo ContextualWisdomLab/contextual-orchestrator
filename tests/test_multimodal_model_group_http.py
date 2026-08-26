@@ -35,11 +35,11 @@ def _equivalence(capability: str) -> dict[str, object]:
     }
 
 
-def _post(port: int, path: str, payload: dict) -> tuple[int, bytes, str]:
+def _post(port: int, path: str, payload: dict, *, token: str = TOKEN) -> tuple[int, bytes, str]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode(),
-        headers={"content-type": "application/json", "authorization": f"Bearer {TOKEN}"},
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -54,21 +54,21 @@ def _post_error(port: int, path: str, payload: dict) -> tuple[int, dict]:
     raise AssertionError("request unexpectedly succeeded")
 
 
-def _get(port: int, path: str) -> tuple[int, bytes, str]:
+def _get(port: int, path: str, *, token: str = TOKEN) -> tuple[int, bytes, str]:
     """Issue one authenticated inference GET request."""
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
-        headers={"authorization": f"Bearer {TOKEN}"},
+        headers={"authorization": f"Bearer {token}"},
         method="GET",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         return response.status, response.read(), response.headers.get_content_type()
 
 
-def _get_error(port: int, path: str) -> tuple[int, dict]:
+def _get_error(port: int, path: str, *, token: str = TOKEN) -> tuple[int, dict]:
     """Issue one authenticated GET request and decode its error envelope."""
     try:
-        _get(port, path)
+        _get(port, path, token=token)
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read())
     raise AssertionError("request unexpectedly succeeded")
@@ -147,7 +147,7 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
         }
     )
     orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
-        lambda agent, endpoint: (
+        lambda agent, endpoint, **_kwargs: (
             followups.append((agent.id, endpoint))
             or {
                 "id": "provider-video-123",
@@ -159,7 +159,7 @@ def test_video_poll_and_content_use_the_submission_provider() -> None:
         )
     )
     orchestrator.client.proxy_get_bytes = (  # type: ignore[method-assign]
-        lambda agent, endpoint: (
+        lambda agent, endpoint, **_kwargs: (
             followups.append((agent.id, endpoint)) or (b"video", "video/mp4")
         )
     )
@@ -243,6 +243,27 @@ def test_video_submission_does_not_race_uncancellable_async_jobs() -> None:
         server.shutdown()
 
 
+def test_video_job_is_scoped_to_authenticated_principal() -> None:
+    agent = ModelAgent("video_owner", "provider/video", tags=("video",))
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.proxy_send = lambda *_args: {"id": "provider-job", "status": "queued"}  # type: ignore[method-assign]
+    orchestrator.client.proxy_get_json = lambda *_args, **_kwargs: {"id": "provider-job", "status": "completed"}  # type: ignore[method-assign]
+    security = SecurityConfig(
+        bearer_verifier=lambda token, scope: scope == "inference" and token in {"tenant-one", "tenant-two"}
+    )
+    server = build_server(orchestrator, port=0, security=security)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        _, raw, _ = _post(port, "/v1/videos", {"prompt": "demo"}, token="tenant-one")
+        job_id = json.loads(raw)["id"]
+        status, body = _get_error(port, f"/v1/videos/{job_id}", token="tenant-two")
+        assert status == 404 and body["error"]["code"] == "video_job_not_found"
+        assert _get(port, f"/v1/videos/{job_id}", token="tenant-one")[0] == 200
+    finally:
+        server.shutdown()
+
+
 def test_untrackable_video_submission_is_not_recorded_as_routing_success() -> None:
     """Ownership registration must succeed before routing records success."""
     agent = ModelAgent("video_owner", "provider/video", tags=("video",))
@@ -273,7 +294,7 @@ def test_video_provider_outage_returns_documented_503() -> None:
         lambda _agent, _endpoint, _payload: {"id": "provider-job", "status": "queued"}
     )
     orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
-        lambda _agent, _endpoint: (_ for _ in ()).throw(ConnectionError("offline"))
+        lambda _agent, _endpoint, **_kwargs: (_ for _ in ()).throw(ConnectionError("offline"))
     )
     server = build_server(
         orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN)
@@ -298,7 +319,7 @@ def test_expired_provider_video_job_stops_polling_with_404() -> None:
         lambda _agent, _endpoint, _payload: {"id": "provider-job", "status": "queued"}
     )
     orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
-        lambda _agent, endpoint: (_ for _ in ()).throw(
+        lambda _agent, endpoint, **_kwargs: (_ for _ in ()).throw(
             urllib.error.HTTPError(endpoint, 404, "gone", {}, None)
         )
     )

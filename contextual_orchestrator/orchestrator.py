@@ -27,7 +27,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
@@ -1700,7 +1700,7 @@ class ModelClient:
         with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
             return response.read(), response.headers.get_content_type()
 
-    def proxy_get_json(self, agent: ModelAgent, endpoint: str) -> dict[str, Any]:
+    def proxy_get_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
         """Retrieve provider JSON from the exact agent that owns an async job."""
         if agent.base_url.startswith("mock://"):
             return {"id": endpoint.rsplit("/", 1)[-1], "status": "completed"}
@@ -1709,9 +1709,10 @@ class ModelClient:
             "GET",
             f"/{endpoint.lstrip('/')}",
             destination=self._validate_provider(agent),
+            max_response_bytes=max_response_bytes,
         )
 
-    def proxy_get_bytes(self, agent: ModelAgent, endpoint: str) -> tuple[bytes, str]:
+    def proxy_get_bytes(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> tuple[bytes, str]:
         """Retrieve provider media from the exact agent that owns an async job."""
         if agent.base_url.startswith("mock://"):
             return b"mock video", "video/mp4"
@@ -1727,7 +1728,7 @@ class ModelClient:
         with self._open_provider(  # pragma: no cover
             request, self._validate_provider(agent)
         ) as response:
-            return response.read(), response.headers.get_content_type()
+            return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
 
     def _send_raw_with_retry(
         self,
@@ -2054,6 +2055,7 @@ class ModelClient:
         path: str,
         payload: dict[str, Any] | None = None,
         destination: ProviderDestination | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
@@ -2066,7 +2068,23 @@ class ModelClient:
             method=method,
         )
         with self._open_provider(request, destination) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
+            return json.loads(raw.decode("utf-8"))
+
+    @staticmethod
+    def _read_bounded_response(response: Any, max_bytes: int) -> bytes:
+        """Read at most ``max_bytes`` and fail closed on oversized provider data."""
+        declared = response.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > max_bytes:
+                    raise ProviderResponseError("provider response exceeds the configured limit")
+            except ValueError as exc:
+                raise ProviderResponseError("provider returned an invalid content length") from exc
+        body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ProviderResponseError("provider response exceeds the configured limit")
+        return body
 
     def _batch_raw(self, agent: ModelAgent, path: str, destination: ProviderDestination | None = None) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
@@ -4245,7 +4263,6 @@ class TaskOrchestrator:
         trace_rows: list[dict[str, Any]] = []
         answer = ""
         served_id = ""
-        usage: dict[str, Any] | None = None
         verification: dict[str, Any] = {
             "accepted": False,
             "reason": "no candidate attempted",

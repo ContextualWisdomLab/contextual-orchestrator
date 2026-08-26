@@ -5076,6 +5076,7 @@ def build_server(
                     return
                 if path.startswith("/v1/videos/"):
                     self._authorize("inference")
+                    principal_id = security.principal_id(self.headers)
                     suffix = path[len("/v1/videos/") :]
                     content_request = suffix.endswith("/content")
                     gateway_job_id = (
@@ -5086,7 +5087,7 @@ def build_server(
                             400, "invalid_video_job", "video job id must be one path segment"
                         )
                     try:
-                        owner = video_jobs.owner(gateway_job_id)
+                        owner = video_jobs.owner(gateway_job_id, principal_id)
                     except KeyError:
                         self._send_error(
                             404, "video_job_not_found", "video job was not found"
@@ -5112,15 +5113,22 @@ def build_server(
                         if content_request:
                             raw, content_type = self._run(
                                 lambda: orchestrator.client.proxy_get_bytes(
-                                    agent, f"{provider_path}/content"
+                                    agent, f"{provider_path}/content",
+                                    max_response_bytes=security.max_body_bytes,
                                 )
                             )
                             self._send_bytes(raw, content_type)
                         else:
                             result = self._run(
                                 lambda: orchestrator.client.proxy_get_json(
-                                    agent, provider_path
+                                    agent, provider_path,
+                                    max_response_bytes=security.max_body_bytes,
                                 )
+                            )
+                            owner = video_jobs.observe_provider_result(owner, result)
+                            coordinator.record_async_video_usage(
+                                agent=agent, usage=result.get("usage"),
+                                gateway_job_id=owner.gateway_job_id,
                             )
                             self._send(video_jobs.public_response(result, owner))
                     except urllib.error.HTTPError as exc:
@@ -5647,6 +5655,7 @@ def build_server(
                 if path in capability_routes:
                     _validate_capability_request(path, body)
                     capability, endpoint, binary = capability_routes[path]
+                    principal_id = security.principal_id(self.headers)
                     try:
                         result = self._run(
                             lambda: orchestrator.proxy_capability(
@@ -5657,7 +5666,7 @@ def build_server(
                                 selection_sink=(
                                     (
                                         lambda agent, provider_result: video_jobs.register(
-                                            provider_result, agent.id
+                                            provider_result, agent.id, principal_id
                                         )
                                     )
                                     if capability == "video"

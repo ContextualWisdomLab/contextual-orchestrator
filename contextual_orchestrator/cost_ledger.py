@@ -534,6 +534,8 @@ class InMemoryLedgerStore:
 
     def append(self, record: UsageRecord) -> None:
         """Append a flattened record row."""
+        if any(row["usage_record_id"] == record.usage_record_id for row in self._rows):
+            return
         self._rows.append(record.as_dict())
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -699,14 +701,14 @@ _CORE_USAGE_INSERT_SQL = {
         "(usage_record_id, created_at, workflow_run_id, request_channel, "
         "route_mode, provider_name, model_name, prompt_tokens, completion_tokens, "
         "total_tokens, cost_amount, currency_code) VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
     "pyformat": (
         "INSERT INTO llm_usage_records "
         "(usage_record_id, created_at, workflow_run_id, request_channel, "
         "route_mode, provider_name, model_name, prompt_tokens, completion_tokens, "
         "total_tokens, cost_amount, currency_code) VALUES "
-        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
 }
 _ATTRIBUTION_VALUE_INSERT_SQL = {
@@ -1083,6 +1085,7 @@ class CostLedger:
         attribution: Optional[AttributionDimensions | Dict[str, Any]] = None,
         measurement_status: str = "measured",
         created_at: Optional[int] = None,
+        usage_record_id: Optional[str] = None,
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
         if isinstance(attribution, dict) or attribution is None:
@@ -1119,7 +1122,7 @@ class CostLedger:
         if measurement_status not in {"measured", "estimated", "unavailable"}:
             raise ValueError("measurement_status must be measured, estimated, or unavailable")
         record = UsageRecord(
-            usage_record_id=f"usage_{uuid.uuid4().hex}",
+            usage_record_id=usage_record_id or f"usage_{uuid.uuid4().hex}",
             created_at=created_at if created_at is not None else self._clock(),
             workflow_run_id=workflow_run_id,
             request_channel=request_channel,

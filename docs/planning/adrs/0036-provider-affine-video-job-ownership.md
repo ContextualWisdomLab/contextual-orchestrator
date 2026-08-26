@@ -34,9 +34,10 @@ ordering, and endpoint guesses are not evidence of ownership.
 
 After a provider accepts a video submission, the gateway records an opaque
 gateway job id, the provider job id, the exact agent id, and submission time in
-the existing job-registry boundary. Status and content requests resolve that
-record and call the recorded agent without routing again. The provider id is
-not returned to the client.
+the existing job-registry boundary. The record is also bound to the authenticated
+principal. Foreign and pre-ownership legacy records fail closed as the same 404
+as an unknown id. Status and content requests call the recorded agent without
+routing again. The provider id is not returned to the client.
 
 Video submission does not use immediate speculative racing when provider-side
 job cancellation is unavailable. It follows the measured sequential failover
@@ -55,6 +56,12 @@ A configured owner that is temporarily unreachable also returns the same
 redacted 503 rather than a generic 500. Provider responses are recursively
 rewritten so an exact provider job id repeated in nested metadata or URLs is
 replaced by the gateway id before crossing the public boundary.
+
+Status and media reads reuse the operator-configured HTTP body ceiling and
+enforce it against both declared and actually read bytes. Async usage remains
+explicitly unavailable until the provider returns complete non-negative token
+counts. Concrete counts are ledgered under a deterministic job-derived identity
+so repeated polling cannot duplicate cost; absent counts never become zero.
 
 The registry inherits the existing operator-configured lifecycle. With Valkey
 configured, ownership survives process restart and is shared across replicas;
