@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-27 03:51 KST live queue evidence
+## 2026-08-27 04:38 KST live queue evidence
 
 Protected `main` remains exact commit
 `5a01759165be20ab38c05c2321d8a9f00ec331ea`. This refresh is limited to
@@ -11,10 +11,10 @@ protected-main evidence.
 The current queue heads are #888
 `ffadebefd118a6c02b93d3a97d0d5e61129c74e7`, #889
 `a310ce09e523b5d42899f6091fc93391ad5152ac`, #890
-`7c1d5c24965954263e5bbe20bf2fda81fc914a7c`, #880
+`7a7054a5414a04475cef3695354673494e42bd11`, #880
 `ab591be259c49f56746a11ae2b99b0b2aae2f475`, #879
 `be6972c43cbf6506121633f9a3880c2c9567137c`, #857
-`cc1ec2c70d4dae75c0dd34e03abed41245b22169`, #876
+`0aec4a543a684e3bdb0545749bfac187a7364248`, #876
 `73a5510f099742003f7242b6f2c55e10f8ff9dab`, and #849
 `ede33b5d4c23070f2d5ee961acf7bd7ee03fabf0`. No current head has an
 independent approval.
@@ -27,11 +27,14 @@ Strix job failed, OpenCode remains pending, and independent approval is absent.
 collector (`28 passed`), `21` focused downstream-chain tests, and all eight
 review threads resolved. Its Strix job failed and qualifying independent
 approval is absent, so the successful jobs are regression evidence rather than
-protected merge authority. #890 now has exact-head focused evidence of `15
-passed`, official full-suite evidence of `2368 passed in 770.92s`, and zero
-unresolved review threads at `7c1d5c24`. Replacement hosted required jobs remain
-pending and independent approval is absent. That local result is regression
-evidence only, not a successful hosted Check or merge authority. #880 is this
+protected merge authority. #890 moved to `7a7054a5` with the reviewed
+read-only publication-mode repair. Its current exact-head focused evidence is
+`16 passed`, zero review threads are unresolved, and every completed required
+job except Strix is successful. Earlier full-suite results belong to the prior
+head and are not transferred to this one. A protected-main `strix-scan`
+repository dispatch for this exact head is queued as run `33006163284` to test
+the newly protected OpenRouter fallback; queued evidence is not a clean scan or
+merge authority. #880 is this
 baseline refresh at exact head `ab591be2`; its required hosted jobs remain
 queued and approval is absent. Normal auto-merge remains enabled.
 
@@ -39,9 +42,11 @@ queued and approval is absent. Normal auto-merge remains enabled.
 `be6972c4`; its `139` focused tests and official exact-head full suite (`2383
 passed in 826.26s`) passed, and all 31 review threads are resolved. Remaining
 hosted jobs and independent approval are still authoritative delivery gates.
-`#857` is remotely at `cc1ec2c7`. Agent-local work has advanced to `e4a8`, but
-its full suite remains in progress and neither the unpushed commit nor its test
-run is remote exact-head evidence. #849
+`#857` is remotely at `0aec4a54`, where the concurrent change records queued
+batch health and verifies the generated native wheel with hash enforcement.
+Agent-local integration preserves that intent together with the HTTP response
+flush repair, but exact-head diagnostic/full tests remain in progress; no local
+or stale-head result is promoted to delivery evidence. #849
 and #876 retain successful exact-head
 full/security evidence but a failed Strix result. Their exact-head retries also
 failed closed after NVIDIA NIM returned `429`/`410` and the OpenAI fallback
@@ -60,16 +65,26 @@ archive/control mapping. Queue activity and local test results do not close
 either acceptance gap.
 
 Central [`.github#1357`](https://github.com/ContextualWisdomLab/.github/pull/1357)
-is open at exact head `9df27a1396ec42212ed7eadc9e552aeb51fc7da8`.
-Its NVIDIA exhaustion chain now routes through `openrouter/free` before the
-existing direct-OpenAI fallback, preserves the downscoped status-publication
-permission, and keeps provider or incomplete-scan outcomes fail-closed. Focused
-fallback contracts passed `28` tests and all review threads are resolved, but
-hosted replacement gates remain pending. The temporary trusted-main smoke
-compatibility marker and inline-comment parser accommodation must be removed
-only after #1357 normally merges and the updated smoke contract is protected
-`main`; until then they are an explicit post-merge cleanup gap, not delivered
-runtime evidence.
+normally squash-merged as protected-main commit
+`31e5f5337d8a8d844c456fe03f123c51b62416c9`. Its NVIDIA exhaustion chain now
+routes through `openrouter/free` before the existing direct-OpenAI fallback,
+preserves the downscoped status-publication permission, and keeps provider or
+incomplete-scan outcomes fail-closed. The merge head passed the exact-head path
+policy and `28` focused fallback contracts with no unresolved review thread.
+Its pre-merge Strix run still used the then-protected legacy chain and failed
+closed after NVIDIA `429`, retired-model `410`, and OpenAI quota `429`; that
+failure is not relabeled as success. Run `33006163284` is the first exact target
+dispatch using the newly protected chain and remains queued. The temporary
+trusted-main smoke compatibility marker remains a cleanup Gap until the updated
+smoke is the only supported protected contract.
+
+The local hourly LaunchAgent remains registered with `StartInterval=3600`, but
+the currently loaded job reports `runs = 0` and `last exit code = (never
+exited)`. Registration therefore proves scheduling configuration only, not a
+successful hourly development run. Its live prompt now explicitly requires
+Compose-backed asynchronous web verification, k6 concurrency/latency/error-rate
+evidence, measured bottleneck repair, customer-actionable copy, and screenshot
+inspection for changed UI.
 
 ## 2026-08-27 02:03 KST protected-main and exact-head queue evidence
 
