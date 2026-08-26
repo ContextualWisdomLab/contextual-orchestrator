@@ -38,6 +38,7 @@ from .chat_capability import (
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .telemetry import inject_trace_context, traced
@@ -7305,8 +7306,9 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the local buyer-facing commercial release-candidate manifest."""
+        """Return product evidence separately from protected release authority."""
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
@@ -7320,6 +7322,7 @@ class TaskOrchestrator:
         concrete_blockers = acceptance["concrete_blockers"]
         acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
         runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
+        release_authorization = evaluate_release_authorization(release_authority)
         release_artifacts = [
             self._buyer_evidence_item(
                 "commercial_acceptance_check",
@@ -7475,8 +7478,18 @@ class TaskOrchestrator:
                 ["docs/commercial_saleability_decision.md", "docs/commercial_release_candidate.md"],
                 "repository_artifact",
                 "ready",
-                "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
-                "Block only on concrete security, API contract, document, or product defects.",
+                "Product evidence remains inspectable while protected release authority is evaluated separately.",
+                "Supply a fresh protected-main authority snapshot before authorizing release.",
+            ),
+            self._buyer_evidence_item(
+                "release_authority_collector",
+                "Protected-head authority collector",
+                "Release owner",
+                ["scripts/ci/release_authority_snapshot.py", "docs/doctoring/release-authorization.md"],
+                "repository_artifact",
+                "ready" if has_file("scripts/ci/release_authority_snapshot.py") else "blocked",
+                "Read-only gh API collector binds checks and reviews to the exact pull-request head without emitting secrets.",
+                "Run the collector with the exact candidate SHA and attach its JSON snapshot to release review.",
             ),
             self._buyer_evidence_item(
                 "packaging_decision",
@@ -7503,9 +7516,17 @@ class TaskOrchestrator:
             for item in acceptance["follow_up_items"]
         ]
         summary = self._buyer_manifest_summary(release_artifacts + external_release_gaps)
-        blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
+        product_blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
+        product_evidence_status = (
+            "commercial_release_blocked"
+            if product_blocked_count
+            else "commercial_release_ready_with_warnings"
+            if acceptance["follow_up_items"]
+            else "commercial_release_ready"
+        )
+        release_blocked_count = product_blocked_count + len(release_authorization["blockers"])
+        if release_blocked_count:
             release_status = "commercial_release_blocked"
         elif warning_count:
             release_status = "commercial_release_ready_with_warnings"
@@ -7514,6 +7535,8 @@ class TaskOrchestrator:
 
         return {
             "release_status": release_status,
+            "product_evidence_status": product_evidence_status,
+            "release_authorization": release_authorization,
             "target_contract_value_krw": target_contract_value_krw,
             "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
             "measurement_status": "local_commercial_release_candidate",
@@ -7526,9 +7549,10 @@ class TaskOrchestrator:
             ),
             "release_summary": {
                 "artifact_count": len(release_artifacts),
-                "blocked_count": blocked_count,
+                "blocked_count": release_blocked_count,
+                "product_blocked_count": product_blocked_count,
                 "warning_count": warning_count,
-                "review_process_is_blocker": acceptance["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "release_artifacts": release_artifacts,
             "external_release_gaps": external_release_gaps,
@@ -7567,12 +7591,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return an owner/action register for commercial release-candidate gaps."""
         release = self.commercial_release_candidate_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         concrete_blockers = release["concrete_blockers"]
         release_blocked = release["release_status"] == "commercial_release_blocked"
@@ -7601,7 +7627,13 @@ class TaskOrchestrator:
                 "is_blocker": False,
             })
 
-        blocked_count = len(concrete_blockers) + (1 if release_blocked else 0)
+        release_authority_blockers = release["release_authorization"]["blockers"]
+        product_blocked_count = release["release_summary"]["product_blocked_count"]
+        blocked_count = (
+            max(1, product_blocked_count + len(release_authority_blockers))
+            if release_blocked
+            else len(concrete_blockers)
+        )
         if blocked_count:
             gap_register_status = "commercial_gap_register_blocked"
         elif gap_items:
@@ -7626,10 +7658,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "blocked_count": blocked_count,
-                "review_process_is_blocker": release["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "gap_items": gap_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release["release_authorization"],
             "gap_status_rules": [
                 {
                     "gap_status": "production_input_required",
@@ -7647,6 +7680,7 @@ class TaskOrchestrator:
             "review_process_policy": release["review_process_policy"],
             "related_runtime_reports": {
                 "commercial_release_status": release["release_status"],
+                "release_authorization_status": release["release_authorization"]["status"],
                 **release["related_runtime_reports"],
             },
             "library_split_decision": release["library_split_decision"],
@@ -7664,12 +7698,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a procurement/legal readiness gate over commercial evidence."""
         gap_register = self.commercial_gap_register_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -7680,6 +7716,8 @@ class TaskOrchestrator:
         production_gap = gap_by_status.get("production_input_required")
         buyer_gap = gap_by_status.get("buyer_input_required")
         concrete_blockers = gap_register["concrete_blockers"]
+        release_authorization = gap_register["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         procurement_items = [
             {
                 "item_name": "license_and_rights",
@@ -7825,9 +7863,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "review_process_is_blocker": gap_register["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "procurement_items": procurement_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "procurement_status_rules": [
                 {
                     "procurement_status": "commercial_procurement_ready",
@@ -7862,12 +7902,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a contract-readiness gate over procurement evidence."""
         procurement = self.commercial_procurement_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -7881,6 +7923,8 @@ class TaskOrchestrator:
         buyer_item = procurement_by_name["buyer_legal_roi_procurement_input"]
         packaging_item = procurement_by_name["packaging_decision"]
         concrete_blockers = procurement["concrete_blockers"]
+        release_authorization = procurement["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         support_slo_gap_count = 1 if support_item["completion_state"] == "warning" else 0
         buyer_order_form_gap_count = 1 if buyer_item["completion_state"] == "warning" else 0
         contract_items = [
@@ -8028,9 +8072,11 @@ class TaskOrchestrator:
                 "support_slo_gap_count": support_slo_gap_count,
                 "buyer_order_form_gap_count": buyer_order_form_gap_count,
                 "review_process_is_blocker": procurement["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "contract_items": contract_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "contract_status_rules": [
                 {
                     "contract_status": "commercial_contract_ready",
@@ -8065,12 +8111,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a paid-onboarding readiness gate over contract evidence."""
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -8082,6 +8130,7 @@ class TaskOrchestrator:
         buyer_item = contract_by_name["buyer_order_form_input"]
         packaging_item = contract_by_name["packaging_decision"]
         concrete_blockers = contract["concrete_blockers"]
+        release_authorization = contract["release_authorization"]
         support_slo_action_count = 1 if support_item["completion_state"] == "warning" else 0
         buyer_input_action_count = 1 if buyer_item["completion_state"] == "warning" else 0
         onboarding_items = [
@@ -8226,9 +8275,11 @@ class TaskOrchestrator:
                 "support_slo_action_count": support_slo_action_count,
                 "buyer_input_action_count": buyer_input_action_count,
                 "review_process_is_blocker": contract["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "onboarding_items": onboarding_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "onboarding_status_rules": [
                 {
                     "onboarding_status": "commercial_onboarding_ready",

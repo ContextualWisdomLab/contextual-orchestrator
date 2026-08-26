@@ -14,7 +14,7 @@ import struct
 import threading
 import time
 import urllib.parse
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
@@ -38,6 +38,7 @@ from .orchestrator import (
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
+from .release_authorization import verify_release_authority_snapshot
 from .telemetry import (
     attach_trace_context,
     configure_telemetry,
@@ -4960,6 +4961,7 @@ def build_server(
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server.
 
@@ -4969,6 +4971,7 @@ def build_server(
     """
     security = security or SecurityConfig()
     security.check_bind(host)
+    release_authority = verify_release_authority_snapshot(release_authority)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
     configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
@@ -5150,7 +5153,7 @@ def build_server(
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
                     return
                 if path == "/api/v1/spend_analytics/latest":
-                    self._send(orchestrator.spend_analytics())
+                    self._send(orchestrator.spend_analytics(owner_id=self._principal_id))
                     return
                 if path == "/api/v1/sales_readiness/latest":
                     self._send(orchestrator.sales_readiness_report(
@@ -5222,30 +5225,35 @@ def build_server(
                     self._send(orchestrator.commercial_release_candidate_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_gap_registers/latest":
                     self._send(orchestrator.commercial_gap_register_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_procurement_readiness/latest":
                     self._send(orchestrator.commercial_procurement_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_contract_readiness/latest":
                     self._send(orchestrator.commercial_contract_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_onboarding_readiness/latest":
                     self._send(orchestrator.commercial_onboarding_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_operations_readiness/latest":
@@ -5382,6 +5390,9 @@ def build_server(
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
+                        if agent_pool_id != "default":
+                            self._send_error(404, "agent_not_found", f"agent {worker_agent_id} not found")
+                            return
                         try:
                             payload = orchestrator._agent_to_admin_payload(
                                 orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
@@ -7084,8 +7095,9 @@ def serve(
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> None:
-    """Serve the admin console and resource-oriented orchestration API."""
+    """Serve the API with an optional persisted release-authority snapshot."""
     server = build_server(
         orchestrator,
         host=host,
@@ -7093,6 +7105,7 @@ def serve(
         security=security,
         clearfolio_url=clearfolio_url,
         coordinator=coordinator,
+        release_authority=release_authority,
     )
     print(f"listening on http://{host}:{port}")
     server.serve_forever()
