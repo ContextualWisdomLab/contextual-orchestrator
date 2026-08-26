@@ -18,7 +18,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
 
-from .model_discovery import DiscoveredModel, ProviderModelSource
+from .model_discovery import (
+    UNIT_PRICE_DIMENSIONS,
+    DiscoveredModel,
+    ModelUnitPrice,
+    ProviderModelSource,
+)
 
 if TYPE_CHECKING:
     from .privacy_policy_analysis import PrivacyPolicyAssessment
@@ -60,6 +65,15 @@ CREATE TABLE IF NOT EXISTS model_serving_tag (
         REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
     tag_name text NOT NULL,
     PRIMARY KEY (provider_model_id, tag_name)
+);
+
+CREATE TABLE IF NOT EXISTS model_unit_price (
+    provider_model_id text NOT NULL
+        REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
+    price_dimension text NOT NULL,
+    unit_price numeric NOT NULL CHECK (unit_price >= 0),
+    currency_code text NOT NULL,
+    PRIMARY KEY (provider_model_id, price_dimension)
 );
 
 CREATE TABLE IF NOT EXISTS model_policy_source (
@@ -286,6 +300,12 @@ def normalize_discovered_model(
         or model.credential_name != source.credential_name
     ):
         raise ProviderCatalogError("provider model belongs to a different account")
+    unit_prices = tuple(
+        ModelUnitPrice(item.dimension, price, _normalize_currency(item.currency_code))
+        for item in model.unit_prices
+        if item.dimension in UNIT_PRICE_DIMENSIONS
+        and (price := _normalize_price(item.price)) is not None
+    )
     return DiscoveredModel(
         provider_name=source.provider_name,
         model_id=name,
@@ -297,6 +317,7 @@ def normalize_discovered_model(
             model.completion_price_per_1k
         ),
         currency_code=_normalize_currency(model.currency_code),
+        unit_prices=unit_prices,
         capabilities=tuple(model.capabilities),
         input_modalities=tuple(model.input_modalities),
         output_modalities=tuple(model.output_modalities),
@@ -329,6 +350,7 @@ def _restore_model_semantics(
         prompt_price_per_1k=model.prompt_price_per_1k,
         completion_price_per_1k=model.completion_price_per_1k,
         currency_code=model.currency_code,
+        unit_prices=model.unit_prices,
         is_free="cost:free" in normalized,
         supports_zero_data_retention=(
             True if "privacy:zdr" in normalized else False if "privacy:no_zdr" in normalized else None
@@ -640,6 +662,12 @@ class PostgresProviderCatalogStore:
                     (account_id,),
                 )
                 cursor.execute(
+                    "DELETE FROM model_unit_price WHERE provider_model_id IN ("
+                    "SELECT provider_model_id FROM provider_model "
+                    "WHERE provider_account_id = %s)",
+                    (account_id,),
+                )
+                cursor.execute(
                     "DELETE FROM model_policy_source WHERE provider_model_id IN ("
                     "SELECT provider_model_id FROM provider_model "
                     "WHERE provider_account_id = %s)",
@@ -688,6 +716,12 @@ class PostgresProviderCatalogStore:
                             "(provider_model_id, policy_source_url) "
                             "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                             (model_row_id, policy_source_url),
+                        )
+                    for unit_price in model.unit_prices:
+                        cursor.execute(
+                            "INSERT INTO model_unit_price (provider_model_id, price_dimension, "
+                            "unit_price, currency_code) VALUES (%s, %s, %s, %s)",
+                            (model_row_id, unit_price.dimension, unit_price.price, unit_price.currency_code),
                         )
                 cursor.execute(
                     "DELETE FROM model_policy_assessment AS mpa "
@@ -814,6 +848,14 @@ class PostgresProviderCatalogStore:
                     (account_id,),
                 )
                 policy_source_rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT pm.model_name, mup.price_dimension, mup.unit_price, mup.currency_code "
+                    "FROM model_unit_price AS mup JOIN provider_model AS pm "
+                    "ON pm.provider_model_id = mup.provider_model_id "
+                    "WHERE pm.provider_account_id = %s ORDER BY pm.model_name, mup.price_dimension",
+                    (account_id,),
+                )
+                unit_price_rows = cursor.fetchall()
         tags_by_model: dict[str, list[str]] = {}
         for model_name, tag_name in tag_rows:
             tags_by_model.setdefault(model_name, []).append(tag_name)
@@ -822,6 +864,13 @@ class PostgresProviderCatalogStore:
             policy_sources_by_model.setdefault(model_name, []).append(
                 policy_source_url
             )
+        unit_prices_by_model: dict[str, list[ModelUnitPrice]] = {}
+        for model_name, dimension, price, currency in unit_price_rows:
+            normalized_price = _normalize_price(price)
+            if normalized_price is not None:
+                unit_prices_by_model.setdefault(model_name, []).append(
+                    ModelUnitPrice(dimension, normalized_price, _normalize_currency(currency))
+                )
         return [
             _restore_model_semantics(DiscoveredModel(
                 provider_name=source.provider_name,
@@ -832,6 +881,7 @@ class PostgresProviderCatalogStore:
                 prompt_price_per_1k=_normalize_price(row[3]),
                 completion_price_per_1k=_normalize_price(row[4]),
                 currency_code=_normalize_currency(row[5]),
+                unit_prices=tuple(unit_prices_by_model.get(row[0], ())),
                 privacy_policy_urls=tuple(policy_sources_by_model.get(row[0], ())),
             ), tags_by_model.get(row[0], ()))
             for row in rows

@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id
@@ -182,6 +182,32 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
 
 
 @dataclass(frozen=True)
+class ModelUnitPrice:
+    """A provider-reported price whose billing unit is not a text token."""
+
+    dimension: Literal[
+        "input_cost_per_image", "input_cost_per_pixel", "input_cost_per_second",
+        "input_cost_per_audio_per_second", "input_cost_per_video_per_second",
+        "output_cost_per_image", "output_cost_per_pixel", "output_cost_per_second",
+        "output_cost_per_second_480p", "output_cost_per_second_1080p",
+        "output_cost_per_second_4k", "output_cost_per_audio_per_second",
+        "output_cost_per_video_per_second",
+    ]
+    price: float
+    currency_code: str = "USD"
+
+
+UNIT_PRICE_DIMENSIONS = frozenset({
+    "input_cost_per_image", "input_cost_per_pixel", "input_cost_per_second",
+    "input_cost_per_audio_per_second", "input_cost_per_video_per_second",
+    "output_cost_per_image", "output_cost_per_pixel", "output_cost_per_second",
+    "output_cost_per_second_480p", "output_cost_per_second_1080p",
+    "output_cost_per_second_4k", "output_cost_per_audio_per_second",
+    "output_cost_per_video_per_second",
+})
+
+
+@dataclass(frozen=True)
 class DiscoveredModel:
     """One general-chat model found on a provider, with reported pricing."""
 
@@ -196,6 +222,7 @@ class DiscoveredModel:
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
+    unit_prices: tuple[ModelUnitPrice, ...] = ()
     is_free: bool = False
     supports_zero_data_retention: bool | None = None
     supports_no_training: bool | None = None
@@ -442,6 +469,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         # below may restore these fields.
         row.pop("pricing", None)
         row.pop("architecture", None)
+        row.pop("unit_pricing", None)
         for key in (
             "supports_zero_data_retention",
             "supports_no_training",
@@ -454,6 +482,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         deployment_inputs: list[tuple[str, ...]] = []
         prices: set[tuple[object, object]] = set()
         pricing_complete = bool(model_details)
+        unit_price_maps: list[tuple[tuple[str, object], ...]] = []
         privacy_values = {
             key: []
             for key in (
@@ -515,6 +544,12 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 prices.add((prompt, completion))
             else:
                 pricing_complete = False
+            unit_prices: list[tuple[str, object]] = []
+            for key in sorted(UNIT_PRICE_DIMENSIONS):
+                value = info.get(key, params.get(key))
+                if _valid_price_component(value):
+                    unit_prices.append((key, value))
+            unit_price_maps.append(tuple(unit_prices))
             for key, values in privacy_values.items():
                 values.append(info.get(key))
             for key in ("privacy_policy_url", "terms_of_service_url"):
@@ -540,6 +575,8 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:
                 row["pricing"] = {"prompt": prompt, "completion": completion}
+        if unit_price_maps and unit_price_maps[0] and len(set(unit_price_maps)) == 1:
+            row["unit_pricing"] = dict(unit_price_maps[0])
         for key, values in privacy_values.items():
             if values and all(isinstance(value, bool) for value in values) and len(set(values)) == 1:
                 row[key] = values[0]
@@ -700,6 +737,15 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         )
         prompt_price = _price_per_1k(pricing.get("prompt"))
         completion_price = _price_per_1k(pricing.get("completion"))
+        raw_unit_prices = row.get("unit_pricing")
+        unit_prices = tuple(
+            ModelUnitPrice(dimension=key, price=float(value))
+            for key, value in sorted(
+                raw_unit_prices.items() if isinstance(raw_unit_prices, dict) else ()
+            )
+            if key in UNIT_PRICE_DIMENSIONS
+            and _valid_price_component(value)
+        )
         discovered.append(
             DiscoveredModel(
                 provider_name=source.provider_name,
@@ -712,6 +758,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 output_modalities=outputs,
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
+                unit_prices=unit_prices,
                 is_free=(
                     row["is_free"]
                     if isinstance(row.get("is_free"), bool)

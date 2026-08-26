@@ -25,12 +25,14 @@ from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
+    ModelUnitPrice,
     ProviderDiscoveryError,
     ProviderModelSource,
     _merge_configured_gateway_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
     _price_per_1k,
+    _parse_openai_compatible,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -183,6 +185,38 @@ def test_configured_gateway_preserves_consensus_privacy_evidence() -> None:
     assert merged["data"][0]["privacy_policy_urls"] == [
         "https://provider.example/privacy"
     ]
+
+
+def test_configured_gateway_preserves_only_consensus_unit_prices() -> None:
+    """Official non-token units survive only whole-deployment consensus."""
+    payload = {"data": [{"id": "image-model"}, {"id": "mixed-model"}]}
+    agreed = {"model_name": "image-model", "model_info": {
+        "mode": "image_generation", "output_cost_per_image": 0.04,
+        "output_cost_per_second": 0.01,
+    }}
+    metadata = {"data": [agreed, agreed,
+        {"model_name": "mixed-model", "model_info": {"mode": "video_generation", "output_cost_per_video_per_second": 0.2}},
+        {"model_name": "mixed-model", "model_info": {"mode": "video_generation", "output_cost_per_video_per_second": 0.3}},
+    ]}
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert merged["data"][0]["unit_pricing"] == {
+        "output_cost_per_image": 0.04, "output_cost_per_second": 0.01,
+    }
+    assert "unit_pricing" not in merged["data"][1]
+
+    source = ProviderModelSource(
+        provider_name="gateway", credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("image",),
+    )
+    discovered = _parse_openai_compatible(merged, source)
+    assert discovered[0].unit_prices == (
+        ModelUnitPrice("output_cost_per_image", 0.04),
+        ModelUnitPrice("output_cost_per_second", 0.01),
+    )
 
 
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:

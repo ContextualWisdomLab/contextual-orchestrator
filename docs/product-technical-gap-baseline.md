@@ -1,5 +1,11 @@
 # Product and Technical Gap Baseline
 
+Configured LiteLLM Gateway discovery preserves unanimous deployment pricing in
+its native billing dimension. Token prices alone feed the comparable PriceBook;
+image, pixel, audio/video second, and resolution-specific second prices remain
+separate typed catalog rows. Conflicting deployment metadata remains unknown.
+The dimensions follow LiteLLM's `ModelInfoBase` pricing schema.
+
 ## 2026-08-26 configured-gateway and privacy discovery continuation
 
 Protected `main` is `5a01759165be20ab38c05c2321d8a9f00ec331ea`.

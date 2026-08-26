@@ -10,6 +10,7 @@ import pytest
 
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
+    ModelUnitPrice,
     ProviderModelSource,
     _currency_is_comparable,
 )
@@ -58,6 +59,7 @@ def test_schema_is_normalized_and_contains_no_secret_value_column() -> None:
     for table in (
         "provider_account",
         "provider_model",
+        "model_unit_price",
         "model_serving_tag",
         "model_policy_source",
         "model_policy_assessment",
@@ -188,6 +190,7 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
         supports_no_training=True,
         supports_no_prompt_retention=True,
         privacy_policy_urls=("https://provider.example/privacy",),
+        unit_prices=(ModelUnitPrice("output_cost_per_image", 0.04),),
     )
     store = InMemoryProviderCatalogStore()
     store.record_success(
@@ -324,13 +327,15 @@ class _FakeCursor:
     """Minimal DB-API cursor recording parameterized catalog statements."""
 
     def __init__(
-        self, rows=None, tag_rows=None, policy_source_rows=None, privacy_rows=None
+        self, rows=None, tag_rows=None, policy_source_rows=None, privacy_rows=None,
+        unit_price_rows=None,
     ) -> None:
         self.calls: list[tuple[str, object]] = []
         self.rows = list(rows or [])
         self.tag_rows = list(tag_rows or [])
         self.policy_source_rows = list(policy_source_rows or [])
         self.privacy_rows = list(privacy_rows or [])
+        self.unit_price_rows = list(unit_price_rows or [])
         self._current_rows = self.rows
 
     def __enter__(self):
@@ -342,7 +347,9 @@ class _FakeCursor:
     def execute(self, statement: str, params=None) -> None:
         self.calls.append((statement, params))
         self._current_rows = (
-            self.tag_rows
+            self.unit_price_rows
+            if "FROM model_unit_price AS mup" in statement
+            else self.tag_rows
             if "FROM model_serving_tag AS mst" in statement
             else self.privacy_rows
             if "FROM model_policy_assessment AS mpa" in statement
@@ -359,10 +366,11 @@ class _FakeConnection:
     """Minimal transaction object exercising the PostgreSQL adapter."""
 
     def __init__(
-        self, rows=None, tag_rows=None, policy_source_rows=None, privacy_rows=None
+        self, rows=None, tag_rows=None, policy_source_rows=None, privacy_rows=None,
+        unit_price_rows=None,
     ) -> None:
         self.cursor_object = _FakeCursor(
-            rows, tag_rows, policy_source_rows, privacy_rows
+            rows, tag_rows, policy_source_rows, privacy_rows, unit_price_rows
         )
         self.commits = 0
 
@@ -471,6 +479,9 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
             ("model-b", "input:text"),
         ],
         [("model-b", "https://provider.example/privacy")],
+        unit_price_rows=[
+            ("model-b", "output_cost_per_image", Decimal("0.04"), "usd")
+        ],
     )
     store = PostgresProviderCatalogStore(
         "postgresql://catalog.example/db",
@@ -490,16 +501,19 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
             input_modalities=("text",),
             is_free=True,
             privacy_policy_urls=("https://provider.example/privacy",),
+            unit_prices=(ModelUnitPrice("output_cost_per_image", 0.04),),
         )
     ]
-    model_query, model_params = connection.cursor_object.calls[-3]
-    tag_query, tag_params = connection.cursor_object.calls[-2]
-    policy_query, policy_params = connection.cursor_object.calls[-1]
+    model_query, model_params = connection.cursor_object.calls[-4]
+    tag_query, tag_params = connection.cursor_object.calls[-3]
+    policy_query, policy_params = connection.cursor_object.calls[-2]
+    unit_query, unit_params = connection.cursor_object.calls[-1]
     assert "JOIN provider_account AS pa" in model_query
     assert "FROM model_serving_tag AS mst" in tag_query
     assert "FROM model_policy_source AS mps" in policy_query
+    assert "FROM model_unit_price AS mup" in unit_query
     assert "serving_eligible_flag = true" in model_query
-    assert model_params == tag_params == policy_params == (provider_account_id(source),)
+    assert model_params == tag_params == policy_params == unit_params == (provider_account_id(source),)
 
 
 def test_postgres_privacy_evidence_is_parameterized_and_read_only() -> None:
