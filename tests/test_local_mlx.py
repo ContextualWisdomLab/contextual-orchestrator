@@ -414,6 +414,28 @@ def test_local_responses_passthrough_omits_empty_template_arguments() -> None:
     assert "chat_template_kwargs" not in send.call_args.args[2]
 
 
+def test_local_chat_passthrough_applies_default_without_mutating_request() -> None:
+    """An omitted cap uses local configuration; an explicit cap remains authoritative."""
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_output_tokens=321)
+    omitted = {"model": "local-model", "messages": [{"role": "user", "content": "ping"}]}
+    explicit = {**omitted, "max_tokens": 17}
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={"choices": [{"message": {"content": "OK"}}]},
+    ) as send:
+        client.proxy_send(agent, "chat/completions", omitted)
+        omitted_forwarded = send.call_args.args[2]
+        client.proxy_send(agent, "chat/completions", explicit)
+        explicit_forwarded = send.call_args.args[2]
+
+    assert omitted_forwarded["max_tokens"] == 321
+    assert explicit_forwarded["max_tokens"] == 17
+    assert "max_tokens" not in omitted
+    assert explicit["max_tokens"] == 17
+
+
 def test_local_responses_rejects_unproven_response_format_capability() -> None:
     """A local worker must explicitly declare structured-output support."""
     agent = ModelAgent(

@@ -1640,6 +1640,17 @@ class ModelClient:
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ):
+            if (
+                normalized_endpoint == "chat/completions"
+                and _is_local_provider_url(agent.base_url)
+            ):
+                # Preserve caller ownership while supplying the configured cap
+                # that local OpenAI-compatible servers require when SDKs omit it.
+                payload = dict(payload)
+                payload.setdefault(
+                    "max_tokens",
+                    self.request_settings_snapshot()["max_output_tokens"],
+                )
             if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
                 chat_payload = _responses_to_chat_payload(payload)
                 if "response_format" in chat_payload and not (
@@ -3630,21 +3641,43 @@ class TaskOrchestrator:
         additional_cost_usd: float = 0.0,
     ) -> None:
         """Fail before another provider call would cross an operator budget."""
-        budget = self.budget_status()
-        spent_tokens = budget["spent_output_tokens"] + additional_output_tokens
-        spent_cost = budget["spent_cost_usd"]
-        effective_cost = (
-            spent_cost + additional_cost_usd if spent_cost is not None else None
+        with self._budget_spend_lock:
+            spent_output_tokens = self._budget_spent_output_tokens
+            spent_cost_decimal = self._budget_spent_cost_usd
+            budget = self._budget_block(
+                spent_output_tokens,
+                float(spent_cost_decimal) if self.price_per_million else None,
+            )
+            spent_tokens = spent_output_tokens + additional_output_tokens
+            spent_cost = budget["spent_cost_usd"]
+            effective_cost = (
+                spent_cost + additional_cost_usd if spent_cost is not None else None
+            )
+            if budget["exceeded"] or (
+                budget["max_output_tokens"] is not None
+                and spent_tokens >= budget["max_output_tokens"]
+            ) or (
+                budget["max_cost_usd"] is not None
+                and effective_cost is not None
+                and effective_cost >= budget["max_cost_usd"]
+            ):
+                raise BudgetExceededError("spend budget exceeded", detail=budget)
+
+    def _trace_budget_spend(self, trace: list[dict[str, Any]]) -> tuple[int, float]:
+        """Return completed provider-call spend for a workflow budget checkpoint."""
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        output_tokens = sum(_step_output_token_count(step) for step in trace)
+        output_cost = sum(
+            _step_output_token_count(step) / 1_000_000 * self.price_per_million[model]
+            for step in trace
+            if (
+                model := model_by_agent.get(
+                    step.get("served_agent_id") or step.get("agent_id")
+                )
+            )
+            in self.price_per_million
         )
-        if budget["exceeded"] or (
-            budget["max_output_tokens"] is not None
-            and spent_tokens >= budget["max_output_tokens"]
-        ) or (
-            budget["max_cost_usd"] is not None
-            and effective_cost is not None
-            and effective_cost >= budget["max_cost_usd"]
-        ):
-            raise BudgetExceededError("spend budget exceeded", detail=budget)
+        return output_tokens, round(output_cost, 6)
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -4316,6 +4349,7 @@ class TaskOrchestrator:
         progress: Any = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
+        self._raise_if_spend_budget_exceeded()
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
         required_tags = ("vision",) if source_images else ()
@@ -4331,6 +4365,8 @@ class TaskOrchestrator:
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
+            except BudgetExceededError:
+                raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
                 plan_source = "template_fallback"
@@ -4355,6 +4391,12 @@ class TaskOrchestrator:
         )
 
         for step in steps:
+            if plan_source == "generated":
+                in_flight_tokens, in_flight_cost = self._trace_budget_spend(trace)
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
             agent = self._agent(step.agent_id)
             if any(tag not in agent.tags for tag in required_tags):
                 try:
