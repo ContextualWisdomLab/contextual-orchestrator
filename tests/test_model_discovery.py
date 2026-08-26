@@ -52,7 +52,7 @@ def test_openrouter_zdr_metadata_covers_paid_and_free_models() -> None:
     assert [row["supports_zero_data_retention"] for row in merged["data"]] == [True, False]
 
 
-def test_openrouter_provider_privacy_preserves_terms_and_mixed_safe_routes() -> None:
+def test_openrouter_provider_privacy_preserves_terms_and_withholds_mixed_claims() -> None:
     payload = {"data": [{"id": "free/model"}]}
     providers = {
         "data": [
@@ -83,13 +83,32 @@ def test_openrouter_provider_privacy_preserves_terms_and_mixed_safe_routes() -> 
 
     assert merged["data"][0] == {
         "id": "free/model",
-        "supports_no_training": True,
-        "supports_no_prompt_retention": True,
         "privacy_policy_urls": [
             "https://private.example/privacy",
             "https://training.example/terms",
         ],
     }
+
+
+def test_openrouter_provider_privacy_requires_complete_safe_consensus() -> None:
+    payload = {"data": [{"id": "free/model"}]}
+    providers = {
+        "data": [
+            {
+                "slug": "private",
+                "dataPolicy": {"training": False, "retainsPrompts": False},
+            }
+        ]
+    }
+
+    merged = _merge_openrouter_provider_privacy(
+        payload,
+        providers,
+        {"free/model": {"endpoints": [{"tag": "private"}]}},
+    )
+
+    assert merged["data"][0]["supports_no_training"] is True
+    assert merged["data"][0]["supports_no_prompt_retention"] is True
 
 
 def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None:
