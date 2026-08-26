@@ -6,6 +6,7 @@ from pathlib import Path
 def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() -> None:
     """Keep scheduled agent traffic on the seeded gateway and required key set."""
     workflow = Path(".github/workflows/opencode-hourly-loop.yml").read_text()
+    prompt = Path(".github/opencode/hourly-loop-prompt.md").read_text()
 
     assert 'cron: "23 * * * *"' in workflow
     assert "--auto-discover-model-agents" in workflow
@@ -30,3 +31,10 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "postinstall.mjs" not in workflow
     assert "pull-requests: write" in workflow
     assert "docs/product-technical-gap-baseline.md" in workflow
+    assert "Retry-After" in prompt
+    assert "inventing a retry count" in prompt
+    assert "Other agents may have pushed concurrently" in prompt
+    assert "normal merge" in prompt
+    assert "clear redundancy or" in prompt
+    assert "Rust is authoritative" in prompt
+    assert "LLM-token arithmetic in Python" in prompt
