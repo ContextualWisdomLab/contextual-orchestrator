@@ -62,10 +62,10 @@ jobs:
           import os
           import secrets
 
+          passphrase = secrets.token_urlsafe(32)
+          print(f"::add-mask::{passphrase}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
-              environment.write(
-                  f"RUN_SCOPED_KV_PASSPHRASE={secrets.token_urlsafe(32)}\n"
-              )
+              environment.write(f"RUN_SCOPED_KV_PASSPHRASE={passphrase}\n")
               environment.write("CATALOG_STORAGE_SCOPE=run-scoped\n")
           PY
           else

@@ -73,7 +73,9 @@ def test_catalog_sync_supplies_the_complete_provider_inventory() -> None:
         encoding="utf-8"
     )
 
-    assert all(workflow.count(name) >= 3 for name in PROVIDER_CREDENTIAL_NAMES)
+    for credential_name in PROVIDER_CREDENTIAL_NAMES:
+        assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
+        assert f"'{credential_name}'," in workflow
 
 
 def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() -> None:
@@ -87,6 +89,7 @@ def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() ->
     assert "KV DSN and passphrase must be configured together" in workflow
     assert "RUN_SCOPED_KV_DSN=postgresql://" in workflow
     assert 'export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${RUN_SCOPED_KV_DSN}"' in workflow
+    assert 'print(f"::add-mask::{passphrase}")' in workflow
 
 
 if __name__ == "__main__":  # pragma: no cover
