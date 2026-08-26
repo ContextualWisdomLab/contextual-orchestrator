@@ -3833,19 +3833,14 @@ class TaskOrchestrator:
 
     @staticmethod
     def _validated_structured_text(text: str, schema: dict[str, Any]) -> str | None:
-        """Return canonical JSON for the first schema-valid value in model text."""
+        """Return canonical JSON when the complete model text satisfies the schema."""
         validator = Draft202012Validator(schema)
-        decoder = json.JSONDecoder()
-        for offset, character in enumerate(text):
-            if character not in "[{":
-                continue
-            try:
-                value, _ = decoder.raw_decode(text[offset:])
-                validator.validate(value)
-            except (json.JSONDecodeError, ValidationError):
-                continue
-            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        return None
+        try:
+            value = json.loads(text.strip())
+            validator.validate(value)
+        except (json.JSONDecodeError, ValidationError):
+            return None
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
     def _structured_contract_messages(

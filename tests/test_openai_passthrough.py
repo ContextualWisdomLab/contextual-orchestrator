@@ -163,6 +163,33 @@ def test_virtual_structured_repair_without_chat_candidate_is_typed_deferral() ->
             )
 
 
+@pytest.mark.parametrize(
+    ("raw", "schema", "expected"),
+    [
+        ("42", {"type": "integer"}, "42"),
+        ('"ready"', {"type": "string"}, '"ready"'),
+        ("true", {"type": "boolean"}, "true"),
+    ],
+)
+def test_structured_validation_accepts_complete_scalar_json(
+    raw: str, schema: dict[str, object], expected: str
+) -> None:
+    """Draft 2020-12 scalar instances remain valid structured outputs."""
+    assert TaskOrchestrator._validated_structured_text(raw, schema) == expected
+
+
+def test_structured_validation_rejects_nested_partial_json() -> None:
+    """An invalid outer value cannot be replaced by a schema-valid inner object."""
+    assert TaskOrchestrator._validated_structured_text(
+        '[{"case":"inner"}]',
+        {
+            "type": "object",
+            "properties": {"case": {"type": "string"}},
+            "required": ["case"],
+        },
+    ) is None
+
+
 def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() -> None:
     calls: list[str] = []
     saw_schema_instruction = False

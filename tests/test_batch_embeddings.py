@@ -492,13 +492,20 @@ def test_provider_batch_total_keeps_per_input_token_counts_explicitly_unknown() 
     coordinator = CostRoutingCoordinator(
         TaskOrchestrator([agent]), embedding_batch_backend=backend
     )
-    document = coordinator.complete_embeddings_batch(["alpha", "beta"], wait_for_terminal=True)
+    document = coordinator.complete_embeddings_batch(
+        ["alpha", "beta"],
+        input_attributions=[{"team": "alpha"}, {"team": "beta"}],
+        wait_for_terminal=True,
+    )
     assert document["total_tokens"] == 17
     assert document["token_counts"] == [0, 0]
     assert document["token_count_provenance"] == [
         "unknown_provider_batch_total_only",
         "unknown_provider_batch_total_only",
     ]
+    assert [
+        item["team"] for item in coordinator.ledger.records()[0]["input_attributions"]
+    ] == ["alpha", "beta"]
 
 
 def test_sync_provider_embeddings_wait_is_bounded_by_caller_deadline() -> None:
