@@ -1,5 +1,23 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-27 trace-authority acceptance slice
+
+Protected `main` at `5a01759165be20ab38c05c2321d8a9f00ec331ea`
+contains the trace-purpose gate delivered through protected PR #781, but issue
+#117 remains open. Current-main probes found two central bypasses: structured
+chat accepted a non-Boolean trace flag before returning early, and an
+admin/inference principal without trace authority could read access-report
+steps and accessed outputs. This slice moves strict flag validation ahead of
+every chat execution branch and requires trace authority before access-report
+resource lookup, making owned and unknown identifiers indistinguishable to a
+non-trace caller.
+
+This is not full #117 closure. Batch routing jobs still lack principal-bound
+ownership; the bearer-verifier contract lacks tenant, resource, purpose,
+lifetime, and revocation context; and legacy single-token production migration
+does not yet have a fail-closed deployment gate. Those requirements need their
+own protected implementation and HTTP acceptance evidence.
+
 ## 2026-08-26 protected-main catalog evidence slice
 
 Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`

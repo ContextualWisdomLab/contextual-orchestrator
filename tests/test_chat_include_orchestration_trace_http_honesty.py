@@ -185,6 +185,27 @@ def test_http_chat_rejects_include_orchestration_trace_null() -> None:
         thread.join(timeout=5)
 
 
+def test_structured_chat_cannot_bypass_trace_flag_validation() -> None:
+    """Validate the trace flag before structured chat can return early."""
+    server, thread, port = _server()
+    try:
+        for invalid in ("false", 1, None, [], {}):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "return JSON"}],
+                    "response_format": {"type": "json_object"},
+                    "include_orchestration_trace": invalid,
+                },
+            )
+            assert status == 400, (invalid, body)
+            assert body["error"]["code"] == "invalid_include_orchestration_trace"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_accepts_include_orchestration_trace_true() -> None:
     server, thread, port = _server()
     try:
@@ -245,6 +266,7 @@ if __name__ == "__main__":
     test_trace_is_not_released_when_audit_persistence_fails()
     test_http_chat_rejects_include_orchestration_trace_non_boolean()
     test_http_chat_rejects_include_orchestration_trace_null()
+    test_structured_chat_cannot_bypass_trace_flag_validation()
     test_http_chat_accepts_include_orchestration_trace_true()
     test_http_chat_accepts_include_orchestration_trace_false()
     test_http_chat_accepts_include_orchestration_trace_omitted()

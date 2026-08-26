@@ -53,7 +53,7 @@
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
 | `GET` | `/api/v1/workflow_runs/{workflow_run_id}` | Inspect one run and trace |
-| `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list evidence |
+| `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list and accessed-output evidence; requires both admin and trace-purpose authorization before resource lookup. |
 | `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status/priority/tags/provider exclusions |
 | `DELETE` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Remove a worker only when it belongs to the addressed pool |
 | `POST` | `/api/v1/evaluation_runs` | Replay prompts and return a reproducible evaluation run |

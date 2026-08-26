@@ -5351,8 +5351,7 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        if security.expose_trace_by_default:
-                            self._authorize_trace_access("/api/v1/access_reports/{workflow_run_id}")
+                        self._authorize_trace_access("/api/v1/access_reports/{workflow_run_id}")
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
                             {
@@ -5819,6 +5818,7 @@ def build_server(
                         )
                         stream = False if coerced_stream is None else coerced_stream
                     body["stream"] = stream
+                    include_trace = self._trace_requested(body, "/v1/chat/completions")
                     # Sampling + unsupported controls before passthrough (honesty parity
                     # with the multi-agent route path).
                     sampling = _validate_chat_sampling_and_control_fields(
@@ -5901,7 +5901,6 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    include_trace = self._trace_requested(body, "/v1/chat/completions")
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
