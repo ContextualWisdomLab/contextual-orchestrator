@@ -1777,6 +1777,15 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        response_format = payload.get("response_format")
+        if response_format is None and isinstance(payload.get("text"), dict):
+            response_format = payload["text"].get("format")
+        mock_content = (
+            "{}"
+            if isinstance(response_format, dict)
+            and str(response_format.get("type", "")).strip().lower() == "json_schema"
+            else f"[{agent.id}] chat-mock"
+        )
         echoed = {
             key: payload[key]
             for key in (
@@ -1803,7 +1812,7 @@ class ModelClient:
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                        "content": [{"type": "output_text", "text": mock_content}],
                     }
                 ],
                 "echo": echoed,
@@ -1815,7 +1824,7 @@ class ModelClient:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "message": {"role": "assistant", "content": mock_content},
                     "finish_reason": "stop",
                 }
             ],
