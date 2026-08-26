@@ -5304,6 +5304,8 @@ class TaskOrchestrator:
                 continue
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
+        if isinstance(last_error, ProviderUpstreamError):
+            raise last_error
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(

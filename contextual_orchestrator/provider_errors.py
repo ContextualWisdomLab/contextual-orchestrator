@@ -222,6 +222,18 @@ def classify_provider_failure(
             retryable=True,
             transport=transport,
         )
+    dns_error = exc if isinstance(exc, socket.gaierror) else exc.__cause__
+    if isinstance(dns_error, socket.gaierror):
+        return ProviderUpstreamError(
+            agent_id=agent_id,
+            model=model,
+            error_code="provider_connection_error",
+            message=f"the provider {agent_id} host could not be resolved",
+            client_status=502,
+            provider_status=None,
+            retryable=dns_error.errno == socket.EAI_AGAIN,
+            transport=transport,
+        )
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return ProviderUpstreamError(
             agent_id=agent_id,

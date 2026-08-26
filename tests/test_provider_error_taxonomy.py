@@ -154,6 +154,20 @@ def test_classification_handles_network_tls_and_unknown_causes() -> None:
     for exc in (socket.timeout("slow"), TimeoutError("deadline"), ConnectionError("reset")):
         assert classify_provider_failure(exc, agent_id="a", model="m").retryable
 
+    temporary_dns = socket.gaierror(socket.EAI_AGAIN, "temporary DNS failure")
+    wrapped_dns = RuntimeError("provider host could not be resolved")
+    wrapped_dns.__cause__ = temporary_dns
+    for exc in (temporary_dns, wrapped_dns):
+        dns = classify_provider_failure(exc, agent_id="a", model="m")
+        assert dns.error_code == "provider_connection_error"
+        assert dns.retryable
+
+    permanent_dns = classify_provider_failure(
+        socket.gaierror(socket.EAI_NONAME, "unknown host"), agent_id="a", model="m"
+    )
+    assert permanent_dns.error_code == "provider_connection_error"
+    assert not permanent_dns.retryable
+
     cert = ssl.SSLCertVerificationError("bad chain")
     tls_verify = classify_provider_failure(cert, agent_id="a", model="m")
     assert tls_verify.error_code == "tls_verification_failed"
@@ -180,6 +194,34 @@ def test_classification_handles_network_tls_and_unknown_causes() -> None:
         retryable=True,
     )
     assert classify_provider_failure(original, agent_id="b", model="n") is original
+
+
+def test_capability_dispatch_preserves_last_classified_provider_failure() -> None:
+    """Non-chat capability exhaustion keeps the actionable upstream taxonomy."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("image_agent", "image-model", tags=("image",))]
+    )
+    expected = ProviderUpstreamError(
+        agent_id="image_agent",
+        model="image-model",
+        error_code="rate_limit_exceeded",
+        message="provider rate limit reached",
+        client_status=429,
+        retryable=True,
+    )
+    def fail(*_args: object, **_kwargs: object) -> dict:
+        raise expected
+
+    orchestrator.client.proxy_send = fail  # type: ignore[method-assign]
+
+    try:
+        orchestrator.proxy_capability(
+            {"prompt": "demo"}, capability="image", endpoint="images/generations"
+        )
+    except ProviderUpstreamError as raised:
+        assert raised is expected
+    else:
+        raise AssertionError("classified capability failure was not raised")
 
 
 def test_detail_and_transport_are_preserved_for_callers() -> None:
