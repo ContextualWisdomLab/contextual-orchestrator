@@ -52,8 +52,12 @@ register an authenticated Camoufox MCP Streamable HTTP endpoint and
 `WARDNET_EGRESS_PROXY_URL`. Wardnet must approve the URL first, and every
 Camoufox tab receives the authenticated Wardnet proxy using its dedicated token
 from KV. Deploy Camoufox with Wardnet as its UDP/TCP container DNS resolver,
-set Firefox `network.trr.mode=5`, and block direct web or external-DNS egress;
-the proxy and resolver are complementary controls. Discovery falls back to
+and block direct web or external-DNS egress; the proxy and resolver are
+complementary controls. Camofox browser 2.4.7 does not expose a checked-in
+Firefox `network.trr.mode=5` setting, so do not claim that encrypted DNS itself
+is disabled. The sealed network still prevents it from becoming a direct
+bypass: any HTTPS request, including one to a DoH service, must use Wardnet's
+authenticated, destination-checked CONNECT path. Discovery falls back to
 Wardnet's static response if MCP or the proxy is unavailable.
 
 The optional `compose.camoufox-wardnet.yaml` overlay makes this boundary
@@ -68,7 +72,11 @@ Start the overlay after registering matching KV values and supplying its
 dedicated deployment secrets plus Wardnet's PostgreSQL URL. Because Wardnet
 binds non-loopback interfaces in this profile, the URL must use `postgres://`
 or `postgresql://` and explicitly select `sslmode=require`, `verify-ca`, or
-`verify-full`; an omitted mode or `sslmode=disable` fails startup:
+`verify-full`; an omitted mode or `sslmode=disable` fails startup. This must be
+an external PostgreSQL endpoint whose certificate validates against Wardnet's
+built-in Mozilla roots. The plaintext development PostgreSQL service in
+`compose.yaml` is not Wardnet's production control plane and cannot satisfy
+this prerequisite:
 
 ```bash
 docker compose -f compose.yaml -f compose.camoufox-wardnet.yaml up -d
@@ -77,7 +85,8 @@ docker compose -f compose.yaml -f compose.camoufox-wardnet.yaml up -d
 Register `WARDNET_EGRESS_PROXY_URL` as `http://172.30.0.2:8080` and
 `CAMOUFOX_MCP_URL` as `http://camofox-mcp:8080/mcp`. Use the same dedicated
 token values exposed to the corresponding containers. The browser has no
-general egress route, so encrypted-DNS attempts also fail closed.
+general egress route, so encrypted DNS cannot bypass Wardnet's CONNECT policy;
+this does not assert that the browser refuses all DoH requests.
 The browser release currently publishes a Linux AMD64 manifest, so the overlay
 declares that platform explicitly; ARM hosts require Docker's AMD64 emulation.
 

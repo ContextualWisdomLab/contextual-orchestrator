@@ -38,9 +38,12 @@ discovered models may analyze provider policies, every accepted verdict carries
 the source URL, analyzer identity, and a quote verified against the fetched
 document, and absence/failure remains unknown. Client-rendered sources may use
 Camoufox MCP only through Wardnet's dedicated-token egress proxy; deployment
-also assigns Wardnet as the browser container's UDP/TCP DNS resolver, disables
-Firefox trusted recursive resolution, and denies direct web or external-DNS
-egress. Wardnet destination policy #96, bounded fetch #113, and DNS/proxy #116
+also assigns Wardnet as the browser container's UDP/TCP DNS resolver, denies
+direct web or external-DNS egress, and forces all browser HTTPS (including DoH)
+through Wardnet's destination-checked CONNECT path. Camofox browser 2.4.7 does
+not expose a verified `network.trr.mode=5` deployment setting, so disabling
+Firefox trusted recursive resolution remains an unproved acceptance item.
+Wardnet destination policy #96, bounded fetch #113, and DNS/proxy #116
 are stacked protected dependencies; official Spamhaus DROP, URLhaus, and
 ThreatFox feed refresh is isolated in #115. No duplicate DNS/SSRF
 implementation is accepted in this repository.
@@ -50,7 +53,9 @@ contract inspectable: immutable Camofox browser/MCP artifacts, an immutable
 Wardnet build revision, dedicated auth boundaries, Wardnet port-53 DNS, and a
 browser attached only to Docker `internal` networks. Its non-loopback Wardnet
 bind also requires an explicit TLS PostgreSQL mode (`require`, `verify-ca`, or
-`verify-full`). Compose rendering and
+`verify-full`) against an external endpoint with a certificate trusted by
+Wardnet's built-in Mozilla roots; the base Compose plaintext development
+PostgreSQL service does not meet that production prerequisite. Compose rendering and
 static contract tests prove the topology; a successfully started stack plus
 denied direct-DNS/direct-443 probes remain required runtime acceptance evidence.
 
