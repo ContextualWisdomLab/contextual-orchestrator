@@ -388,6 +388,57 @@ def test_provider_shard_resume_reuses_completed_shards_in_original_order(monkeyp
     assert [item["embedding"] for item in document["embeddings"]] == [[97.0], [98.0], [116.0]]
 
 
+def test_concurrent_identical_shards_have_one_provider_receipt(monkeypatch) -> None:
+    """Concurrent retries share one atomic claim and incur one provider call."""
+    capability = EmbeddingModelCapability(
+        "openai", "text-embedding-3-large", 2048, 8192, 300_000,
+        "cl100k_base", "https://example.test",
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router.embedding_model_capability",
+        lambda provider, model: capability if provider == "openai" else None,
+    )
+
+    class Client:
+        local_concurrency = 2
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.guard = threading.Lock()
+
+        def embed_with_usage(self, _agent, texts):
+            with self.guard:
+                self.calls += 1
+            time.sleep(0.05)
+            return [[float(index)] for index, _text in enumerate(texts)], len(texts)
+
+    client = Client()
+    registry = JobRegistryFactory()
+    agent = ModelAgent(
+        "openai_embedding", "text-embedding-3-large",
+        base_url="https://provider.example/v1", provider_name="openai",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client), job_registry=registry,
+    )
+    jobs = [
+        coordinator.complete_embeddings_batch(
+            ["alpha", "beta"], model=agent.model, routing_agent_id=agent.id,
+        )["batch_id"]
+        for _ in range(2)
+    ]
+    for _attempt in range(200):
+        documents = [coordinator.embeddings_batch_document(job) for job in jobs]
+        if all(document["status"] == "completed" for document in documents):
+            break
+        time.sleep(0.01)
+
+    assert all(document["status"] == "completed" for document in documents)
+    assert client.calls == 1
+    assert documents[0]["embeddings"] == documents[1]["embeddings"]
+
+
 def test_provider_limit_parser_keeps_only_machine_readable_limits() -> None:
     error = urllib.error.HTTPError(
         "https://provider.example/v1/embeddings",
