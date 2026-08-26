@@ -4937,8 +4937,10 @@ class TaskOrchestrator:
         return self._capability_agents(capability, model_name)[0]
 
     @staticmethod
-    def _equivalent_race_members(candidates: list[ModelAgent]) -> list[ModelAgent]:
-        """Return a proven replica set, or an empty list for sequential failover."""
+    def _equivalent_race_members(
+        candidates: list[ModelAgent], *, capability: str
+    ) -> list[ModelAgent]:
+        """Return replicas proven equivalent for the requested capability."""
         if len(candidates) < 2 or not candidates[0].group_name:
             return []
         declared = [agent for agent in candidates if agent.endpoint_equivalence is not None]
@@ -4946,7 +4948,11 @@ class TaskOrchestrator:
             return []
         first = declared[0]
         contract = EndpointEquivalenceContract(**first.endpoint_equivalence)  # type: ignore[arg-type]
-        if not contract.hedge_eligible or contract.execution_policy != "immediate_race":
+        if (
+            capability not in contract.capability_set
+            or not contract.hedge_eligible
+            or contract.execution_policy != "immediate_race"
+        ):
             return []
         peers = [
             agent
@@ -5068,7 +5074,7 @@ class TaskOrchestrator:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
-        race_members = self._equivalent_race_members(candidates)
+        race_members = self._equivalent_race_members(candidates, capability=capability)
         if race_members:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
                 raise ValueError(
@@ -5193,7 +5199,7 @@ class TaskOrchestrator:
             )
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
-        race_members = self._equivalent_race_members(candidates)
+        race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
                 raise ValueError(

@@ -162,6 +162,28 @@ def test_incomplete_equivalence_contract_is_rejected(changes: dict[str, object])
         contract(**changes)
 
 
+def test_race_requires_equivalence_for_the_requested_capability() -> None:
+    """A contract for one modality must not authorize racing another modality."""
+    raw_contract = dict(contract(capability_set=("image",)).__dict__)
+    agents = [
+        ModelAgent(
+            endpoint_id,
+            "provider/shared",
+            tags=("reasoning", "image"),
+            group_name="shared_group",
+            endpoint_equivalence=raw_contract,
+        )
+        for endpoint_id in ("first_endpoint", "second_endpoint")
+    ]
+
+    assert TaskOrchestrator._equivalent_race_members(
+        agents, capability="text"
+    ) == []
+    assert TaskOrchestrator._equivalent_race_members(
+        agents, capability="image"
+    ) == agents
+
+
 def test_text_group_uses_same_complete_valid_race_boundary() -> None:
     raw_contract = dict(contract(capability_set=("text",)).__dict__)
     agents = [
