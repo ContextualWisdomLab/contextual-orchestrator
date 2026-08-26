@@ -43,11 +43,21 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "prefers-reduced-motion: reduce" in ADMIN_HTML
     assert 'behavior: reducedMotion ? "auto" : "smooth"' in ADMIN_HTML
     assert 'id="statusFilter"' in ADMIN_HTML
-    assert 'option value="healthy" data-i18n="status_healthy"' in ADMIN_HTML
-    assert 'option value="degraded" data-i18n="status_degraded"' in ADMIN_HTML
+    assert 'option value="active" data-i18n="active_status"' in ADMIN_HTML
+    assert 'option value="disabled" data-i18n="status_disabled"' in ADMIN_HTML
     assert "statusFilter: document.querySelector" in ADMIN_HTML
     assert 'els.statusFilter.addEventListener("change", renderAgents)' in ADMIN_HTML
-    assert "function agentStatus(index)" in ADMIN_HTML
+    assert "function agentStatus(agent)" in ADMIN_HTML
+    assert 'agent.status === "disabled"' in ADMIN_HTML
+    assert ".map(agent => ({agent, status: agentStatus(agent)}))" in ADMIN_HTML
+    assert "index === 1" not in ADMIN_HTML
+    assert "button:focus-visible" in ADMIN_HTML
+    assert "button, input, select { min-height: 44px; }" in ADMIN_HTML
+    assert 'id="modelsTableScroll" tabindex="0" role="region"' in ADMIN_HTML
+    assert 'aria-describedby="modelsTableHint"' in ADMIN_HTML
+    assert ADMIN_TRANSLATIONS["en"]["models_table_scroll_hint"].endswith(
+        "review latency and success."
+    )
     assert "no_agents_match" in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == (
         "No models match these filters. Clear a filter to see more models."
@@ -108,6 +118,12 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'finally {\n        els.sessionToken.value = "";' in ADMIN_HTML
     assert 'headers: {"origin": window.location.origin}' not in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
+    assert ADMIN_TRANSLATIONS["en"]["session_action"] == (
+        "Session required — open Access Control to sign in"
+    )
+    assert 'id="sessionAction"' in ADMIN_HTML
+    assert "els.sessionAction.hidden = false" in ADMIN_HTML
+    assert 'els.sessionAction?.addEventListener("click", () => showView("access"))' in ADMIN_HTML
     explanatory_keys = (
         "doc_viewer_desc",
         "doc_viewer_hint",

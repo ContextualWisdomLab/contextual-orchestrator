@@ -29,6 +29,7 @@ ADMIN_TRANSLATIONS = {
         "search_agents": "Search models",
         "all_statuses": "All statuses",
         "no_agents_match": "No models match these filters. Clear a filter to see more models.",
+        "models_table_scroll_hint": "Model details table. Scroll horizontally to review latency and success.",
         "no_agents_configured": "Add a model connection to start routing requests.",
         "no_audit_events": "Run a workflow to create your first audit event.",
         "no_policy_evidence": "No policy evidence is loaded. Open Audit to review recorded events.",
@@ -67,6 +68,7 @@ ADMIN_TRANSLATIONS = {
         "session_end": "End session",
         "session_status_ready": "Session established",
         "session_status_missing": "Session required",
+        "session_action": "Session required — open Access Control to sign in",
         "compatible_api_adoption": "Compatible API adoption",
         "trace_complete_workflow_rate": "Trace-complete workflow rate",
         "policy_safe_routing_rate": "Policy-safe routing rate",
@@ -234,6 +236,7 @@ ADMIN_TRANSLATIONS = {
         "success_header": "Success",
         "status_healthy": "Healthy",
         "status_degraded": "Degraded",
+        "status_disabled": "Disabled",
         "latency_threshold": "Latency P95 route threshold",
         "verifier_required": "Quality review required",
         "agent_exclusion": "Model availability rules",
@@ -285,6 +288,7 @@ ADMIN_TRANSLATIONS = {
         "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
+        "models_table_scroll_hint": "모델 상세 표입니다. 지연 시간과 성공률을 보려면 가로로 스크롤하세요.",
         "no_agents_configured": "요청 라우팅을 시작하려면 모델 연결을 추가하세요.",
         "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
         "no_policy_evidence": "불러온 정책 근거가 없습니다. 기록된 이벤트를 검토하려면 감사를 여세요.",
@@ -323,6 +327,7 @@ ADMIN_TRANSLATIONS = {
         "session_end": "세션 종료",
         "session_status_ready": "세션이 설정되었습니다",
         "session_status_missing": "세션이 필요합니다",
+        "session_action": "세션 필요 — 접근 제어에서 로그인",
         "compatible_api_adoption": "호환 API 사용량",
         "trace_complete_workflow_rate": "트레이스 완성 워크플로 비율",
         "policy_safe_routing_rate": "정책 안전 라우팅 비율",
@@ -490,6 +495,7 @@ ADMIN_TRANSLATIONS = {
         "success_header": "성공률",
         "status_healthy": "정상",
         "status_degraded": "저하",
+        "status_disabled": "비활성",
         "latency_threshold": "라우팅 P95 지연 임계값",
         "verifier_required": "품질 검토 필수",
         "agent_exclusion": "모델 가용성 규칙",
@@ -549,6 +555,10 @@ ADMIN_HTML = r"""<!doctype html>
       letter-spacing: 0;
     }
     button, input, select, textarea { font: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 2px;
+    }
     .app { min-height: 100vh; display: grid; grid-template-columns: 248px 1fr; }
     .sidebar {
       background: var(--surface);
@@ -611,6 +621,7 @@ ADMIN_HTML = r"""<!doctype html>
     textarea { min-height: 72px; padding: 10px; resize: vertical; width: 100%; }
     #modelGroupMembers { min-width: 240px; }
     .language-switch { margin-left: auto; }
+    .session-action[hidden] { display: none; }
     .mobile-nav {
       display: none;
       padding: 10px 12px;
@@ -679,6 +690,8 @@ ADMIN_HTML = r"""<!doctype html>
     }
     .toolbar input { min-width: 240px; }
     table { width: 100%; border-collapse: collapse; }
+    .table-scroll { max-width: 100%; overflow-x: auto; }
+    .table-scroll:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
     th { color: var(--muted); font-weight: 650; background: #fbfcfc; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; background: var(--green); }
@@ -853,6 +866,10 @@ ADMIN_HTML = r"""<!doctype html>
     @media (max-width: 600px) {
       .language-switch { margin-left: 0; }
       #modelGroupMembers { width: 100%; }
+      button, input, select { min-height: 44px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; }
     }
   </style>
 </head>
@@ -876,6 +893,7 @@ ADMIN_HTML = r"""<!doctype html>
     </aside>
     <main class="main">
       <header class="topbar">
+        <button class="btn session-action" id="sessionAction" type="button" hidden data-i18n="session_action">Session required — open Access Control to sign in</button>
         <div class="field language-switch"><span data-i18n="language_label">Language</span><select id="language"><option value="en">English</option><option value="ko">한국어</option></select></div>
       </header>
       <div class="mobile-nav">
@@ -899,14 +917,17 @@ ADMIN_HTML = r"""<!doctype html>
           </div>
           <div class="toolbar">
             <input id="agentSearch" type="search" placeholder="Search models" data-i18n-placeholder="search_agents">
-            <select id="statusFilter"><option value="all" data-i18n="all_statuses">All statuses</option><option value="healthy" data-i18n="status_healthy">Healthy</option><option value="degraded" data-i18n="status_degraded">Degraded</option></select>
+            <select id="statusFilter"><option value="all" data-i18n="all_statuses">All statuses</option><option value="active" data-i18n="active_status">Active</option><option value="disabled" data-i18n="status_disabled">Disabled</option></select>
           </div>
-          <table>
-            <thead>
-              <tr><th data-i18n="agent_header">Connection</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Recent latency</th><th data-i18n="success_header">Success</th></tr>
-            </thead>
-            <tbody id="agents"></tbody>
-          </table>
+          <span class="sr-only" id="modelsTableHint" data-i18n="models_table_scroll_hint">Model details table. Scroll horizontally to review latency and success.</span>
+          <div class="table-scroll" id="modelsTableScroll" tabindex="0" role="region" aria-describedby="modelsTableHint">
+            <table>
+              <thead>
+                <tr><th data-i18n="agent_header">Connection</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Recent latency</th><th data-i18n="success_header">Success</th></tr>
+              </thead>
+              <tbody id="agents"></tbody>
+            </table>
+          </div>
           <form id="modelGroupForm" class="policy-list" aria-labelledby="modelGroupsTitle">
             <h2 id="modelGroupsTitle" data-i18n="model_groups_title">Model groups</h2>
             <label><span data-i18n="group_name_label">Group name</span>
@@ -1092,6 +1113,7 @@ Summarize this research thread and verify claims.</textarea>
       sessionForm: document.querySelector("#sessionForm"),
       sessionToken: document.querySelector("#sessionToken"),
       sessionStatus: document.querySelector("#sessionStatus"),
+      sessionAction: document.querySelector("#sessionAction"),
       endSession: document.querySelector("#endSession")
     };
     let state = {agents: [], modelGroups: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
@@ -1118,19 +1140,19 @@ Summarize this research thread and verify claims.</textarea>
     function tags(tags) {
       return tags.map(tag => `<span class="chip">${escapeHtml(tag)}</span>`).join("");
     }
-    function agentStatus(index) {
-      return index === 1
-        ? {key: "degraded", chip: "amber", dot: "warn", label: t("status_degraded")}
-        : {key: "healthy", chip: "green", dot: "", label: t("status_healthy")};
+    function agentStatus(agent) {
+      return agent.status === "disabled"
+        ? {key: "disabled", chip: "amber", dot: "warn", label: t("status_disabled")}
+        : {key: "active", chip: "green", dot: "", label: t("active_status")};
     }
     function renderAgents() {
       const q = els.agentSearch.value.toLowerCase();
       const selectedStatus = els.statusFilter.value;
       const rows = state.agents
-        .map((agent, index) => ({agent, index, status: agentStatus(index)}))
+        .map(agent => ({agent, status: agentStatus(agent)}))
         .filter(({agent, status}) => (agent.id.toLowerCase().includes(q) || agent.model.toLowerCase().includes(q)) && (selectedStatus === "all" || status.key === selectedStatus));
       els.agentCount.textContent = `${rows.length} models`;
-      els.agents.innerHTML = rows.map(({agent, index, status}) => `
+      els.agents.innerHTML = rows.map(({agent, status}) => `
         <tr>
           <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.provider_name || "Configured")}</strong></td>
           <td>${escapeHtml(agent.model)}${agent.group_name ? `<br><span class="chip">${escapeHtml(agent.group_name)}</span>` : ""}</td>
@@ -1591,8 +1613,10 @@ Summarize this research thread and verify claims.</textarea>
       const res = await apiFetch("/admin/state");
       if (!res.ok) {
         if (els.sessionStatus) els.sessionStatus.textContent = t("session_status_missing");
+        if (els.sessionAction) els.sessionAction.hidden = false;
         return;
       }
+      if (els.sessionAction) els.sessionAction.hidden = true;
       state = await res.json();
       await refreshModelGroups();
       await refreshAnalytics();
@@ -1681,6 +1705,7 @@ Summarize this research thread and verify claims.</textarea>
         const result = await res.json();
         if (res.ok) {
           els.sessionStatus.textContent = t("session_status_ready");
+          if (els.sessionAction) els.sessionAction.hidden = true;
           await load();
         } else {
           els.sessionStatus.textContent = result.error?.message || t("session_status_missing");
@@ -1732,6 +1757,7 @@ Summarize this research thread and verify claims.</textarea>
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     els.sessionForm?.addEventListener("submit", startSession);
     els.endSession?.addEventListener("click", endSession);
+    els.sessionAction?.addEventListener("click", () => showView("access"));
     document.querySelector("#copyJson").addEventListener("click", () => {
       renderTraceTab("json");
       navigator.clipboard?.writeText(els.traceJson.textContent);
