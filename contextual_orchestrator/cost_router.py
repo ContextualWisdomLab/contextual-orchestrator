@@ -22,6 +22,11 @@ import dataclasses
 import hashlib
 import json
 import re
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
@@ -82,6 +87,15 @@ class CostRoutingCoordinator:
         # their results survive a restart too.
         registry = job_registry if job_registry is not None else build_job_registry(self.config)
         self.job_registry = registry
+        self._readiness_jobs = registry.mapping("provider_readiness_jobs")
+        self._readiness_singleflight = registry.mapping("provider_readiness_singleflight")
+        self._readiness_concurrency = getattr(
+            getattr(orchestrator, "client", None), "local_concurrency", 1
+        )
+        # One coordinator job owns the provider-concurrency budget at a time;
+        # its probe pool below uses the provider-owned local_concurrency value.
+        self._readiness_executor = ThreadPoolExecutor(max_workers=1)
+        self._readiness_executor_lock = threading.Lock()
         embedding_shards = registry.mapping("embedding_provider_shards")
         client = getattr(orchestrator, "client", None)
         if batch_backend is None:
@@ -253,6 +267,201 @@ class CostRoutingCoordinator:
         self._embedding_documents = registry.mapping("embedding_documents")
         self._embedding_job_backends = registry.mapping("embedding_job_backends")
         self._embedding_request_keys = registry.mapping("embedding_request_keys")
+        for readiness_job_id in list(self._readiness_jobs):
+            readiness_job = self._readiness_jobs[readiness_job_id]
+            if readiness_job.get("status") == "completed" and readiness_job.get("capability_code") == "structured":
+                checked_at = time.monotonic()
+                with self.orchestrator._provider_readiness_lock:
+                    for agent_id, status in readiness_job.get("results", {}).items():
+                        self.orchestrator._structured_readiness[agent_id] = {
+                            "status": status,
+                            "checked_at": checked_at,
+                        }
+            elif readiness_job.get("status") in {"queued", "running"}:
+                self._readiness_executor.submit(
+                    copy_context().run, self._run_provider_readiness_job, readiness_job_id
+                )
+
+    def submit_provider_readiness_refresh(
+        self,
+        *,
+        agent_ids: List[str],
+        capability_code: str,
+        timeout_seconds: float,
+        deadline_epoch: float | None,
+    ) -> Dict[str, Any]:
+        """Submit one explicit, durable, single-flight provider-readiness refresh."""
+        if not agent_ids or any(not isinstance(value, str) or not value for value in agent_ids):
+            raise ValueError("agent_ids must be a non-empty list of agent identifiers")
+        if len(set(agent_ids)) != len(agent_ids):
+            raise ValueError("agent_ids must not contain duplicates")
+        if capability_code not in {"chat", "structured"}:
+            raise ValueError("capability_code must be chat or structured")
+        known = {agent.id for agent in self.orchestrator.candidates}
+        if not set(agent_ids) <= known:
+            raise ValueError("agent_ids contains an unknown agent")
+        scope_key = hashlib.sha256(
+            json.dumps(
+                {"agent_ids": sorted(agent_ids), "capability_code": capability_code},
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        lease = max(float(getattr(self.orchestrator.client, "timeout", 1.0)), 1.0)
+        with self.job_registry.lock(
+            "provider_readiness_singleflight", scope_key, lease_seconds=lease
+        ):
+            existing_id = self._readiness_singleflight.get(scope_key)
+            if existing_id:
+                existing = self._readiness_jobs.get(existing_id)
+                if existing and existing.get("status") in {"queued", "running"}:
+                    return self.provider_readiness_refresh_document(existing_id)
+            job_id = f"readiness_{uuid.uuid4().hex}"
+            self._readiness_jobs[job_id] = {
+                "job_id": job_id,
+                "scope_key": scope_key,
+                "agent_ids": list(agent_ids),
+                "capability_code": capability_code,
+                "timeout_seconds": timeout_seconds,
+                "deadline_epoch": deadline_epoch,
+                "status": "queued",
+                "requested_count": len(agent_ids),
+                "completed_count": 0,
+                "ready_count": 0,
+            }
+            self._readiness_singleflight[scope_key] = job_id
+        self._readiness_executor.submit(
+            copy_context().run, self._run_provider_readiness_job, job_id
+        )
+        return self.provider_readiness_refresh_document(job_id)
+
+    def _run_provider_readiness_job(self, job_id: str) -> None:
+        """Probe only a job's declared access list under durable claim ownership."""
+        initial = dict(self._readiness_jobs[job_id])
+        deadline_epoch = initial.get("deadline_epoch")
+        lease = (
+            max(1.0, float(deadline_epoch) - time.time())
+            if deadline_epoch is not None
+            else max(float(getattr(self.orchestrator.client, "timeout", 1.0)), 1.0)
+        )
+        try:
+            with self.job_registry.lock(
+                "provider_readiness_job_execution", job_id, lease_seconds=lease
+            ):
+                with self.job_registry.lock(
+                    "provider_readiness_job_state", job_id, lease_seconds=max(lease, 1.0)
+                ):
+                    job = dict(self._readiness_jobs[job_id])
+                    if job.get("status") not in {"queued", "running"}:
+                        return
+                    deadline_epoch = job.get("deadline_epoch")
+                    if deadline_epoch is not None and time.time() >= float(deadline_epoch):
+                        job["status"] = "expired"
+                        self._readiness_jobs[job_id] = job
+                        return
+                    job["status"] = "running"
+                    self._readiness_jobs[job_id] = job
+                agents = {agent.id: agent for agent in self.orchestrator.candidates}
+                probe = (
+                    self.orchestrator.client.probe_structured
+                    if job["capability_code"] == "structured"
+                    else self.orchestrator.client.probe
+                )
+                worker_count = min(
+                    len(job["agent_ids"]),
+                    self._readiness_concurrency,
+                )
+                with ThreadPoolExecutor(max_workers=worker_count) as probes:
+                    futures = {
+                        probes.submit(
+                            copy_context().run,
+                            probe,
+                            agents[agent_id],
+                            timeout=float(job["timeout_seconds"]),
+                        ): agent_id
+                        for agent_id in job["agent_ids"]
+                    }
+                    results: Dict[str, str] = {}
+                    for future in as_completed(futures):
+                        agent_id = futures[future]
+                        result = future.result()
+                        status = "ready" if result.get("status") == "ready" else "not_ready"
+                        results[agent_id] = status
+                        with self.job_registry.lock(
+                            "provider_readiness_job_state",
+                            job_id,
+                            lease_seconds=max(lease, 1.0),
+                        ):
+                            current = dict(self._readiness_jobs[job_id])
+                            if current.get("status") == "cancelled":
+                                for pending in futures:
+                                    pending.cancel()
+                                return
+                            if deadline_epoch is not None and time.time() >= float(deadline_epoch):
+                                current["status"] = "expired"
+                                self._readiness_jobs[job_id] = current
+                                for pending in futures:
+                                    pending.cancel()
+                                return
+                            current["completed_count"] = len(results)
+                            current["ready_count"] = sum(
+                                value == "ready" for value in results.values()
+                            )
+                            self._readiness_jobs[job_id] = current
+                with self.job_registry.lock(
+                    "provider_readiness_job_state", job_id, lease_seconds=max(lease, 1.0)
+                ):
+                    job = dict(self._readiness_jobs[job_id])
+                    if job.get("status") == "cancelled":
+                        return
+                    if job["capability_code"] == "structured":
+                        checked_at = time.monotonic()
+                        with self.orchestrator._provider_readiness_lock:
+                            for agent_id, status in results.items():
+                                self.orchestrator._structured_readiness[agent_id] = {
+                                    "status": status,
+                                    "checked_at": checked_at,
+                                }
+                    job["status"] = "completed"
+                    job["results"] = results
+                    self._readiness_jobs[job_id] = job
+        except Exception as exc:  # noqa: BLE001 - expose only a typed terminal class
+            with self.job_registry.lock(
+                "provider_readiness_job_state", job_id, lease_seconds=max(lease, 1.0)
+            ):
+                job = dict(self._readiness_jobs.get(job_id, {"job_id": job_id}))
+                if job.get("status") != "cancelled":
+                    job["status"] = "failed"
+                    job["failure"] = {"error_type": type(exc).__name__}
+                    self._readiness_jobs[job_id] = job
+
+    def provider_readiness_refresh_document(self, job_id: str) -> Dict[str, Any]:
+        """Return one bounded readiness-job progress document."""
+        job = dict(self._readiness_jobs[job_id])
+        document = {
+            key: job[key]
+            for key in (
+                "job_id", "status", "capability_code", "requested_count",
+                "completed_count", "ready_count",
+            )
+        }
+        if job["status"] in {"completed", "failed", "cancelled", "expired"}:
+            if "results" in job:
+                document["results"] = dict(job["results"])
+            if "failure" in job:
+                document["failure"] = dict(job["failure"])
+        return document
+
+    def cancel_provider_readiness_refresh(self, job_id: str) -> Dict[str, Any]:
+        """Cancel one readiness job; late probe results cannot update admission state."""
+        lease = max(float(getattr(self.orchestrator.client, "timeout", 1.0)), 1.0)
+        with self.job_registry.lock(
+            "provider_readiness_job_state", job_id, lease_seconds=lease
+        ):
+            job = dict(self._readiness_jobs[job_id])
+            if job.get("status") not in {"completed", "failed", "cancelled", "expired"}:
+                job["status"] = "cancelled"
+                self._readiness_jobs[job_id] = job
+        return self.provider_readiness_refresh_document(job_id)
 
     def _embedding_agent_for_model(self, model: str) -> Any:
         """Resolve one current embedding-capable agent without freezing discovery state."""

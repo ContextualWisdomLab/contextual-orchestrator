@@ -145,7 +145,7 @@ class NoViableAgentError(RuntimeError):
     code = "no_viable_agent"
 
     def __init__(self, *, retry_after_seconds: int) -> None:
-        super().__init__("no ready structured-capable agent")
+        super().__init__("no viable agent is currently ready")
         self.retry_after_seconds = retry_after_seconds
 
 
@@ -2879,6 +2879,12 @@ class TaskOrchestrator:
         self._circuit_lock = threading.Lock()
         self._provider_readiness_lock = threading.Lock()
         self._structured_readiness: dict[str, dict[str, Any]] = {}
+        self._request_failed_agents: ContextVar[set[str] | None] = ContextVar(
+            f"request_failed_agents_{id(self)}", default=None
+        )
+        self._request_admitted_agents: ContextVar[frozenset[str] | None] = ContextVar(
+            f"request_admitted_agents_{id(self)}", default=None
+        )
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -3022,6 +3028,23 @@ class TaskOrchestrator:
                 "checked_at": time.monotonic(),
             }
 
+    def _structured_admitted_agent_ids(self) -> frozenset[str]:
+        """Return agents with latest successful structured-readiness evidence.
+
+        A conducted request must never turn discovery rows into live provider
+        calls merely to discover whether they work.  Mock transports are an
+        explicit deterministic test capability. External evidence remains
+        admitted until a provider failure records contradictory evidence;
+        an arbitrary wall-clock freshness heuristic is intentionally absent.
+        """
+        with self._provider_readiness_lock:
+            return frozenset(
+                agent.id
+                for agent in self.agents
+                if agent.base_url.startswith("mock://")
+                or self._structured_readiness.get(agent.id, {}).get("status") == "ready"
+            )
+
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
@@ -3141,6 +3164,24 @@ class TaskOrchestrator:
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
+        return self._complete_request(
+            messages,
+            mode,
+            bypass_cache=bypass_cache,
+            model_name=model_name,
+            cache_partition=cache_partition,
+        )
+
+    def _complete_request(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        bypass_cache: bool = False,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> dict[str, Any]:
+        """Complete one request inside its failed-provider exclusion scope."""
         if not isinstance(bypass_cache, bool):
             raise TypeError("bypass_cache must be a boolean")
         if not isinstance(model_name, str) or not model_name.strip():
@@ -4059,6 +4100,34 @@ class TaskOrchestrator:
         progress: Any = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
+        active_scope = self._request_failed_agents.get()
+        if active_scope is not None:
+            return self._conduct_request(
+                messages, model_name=model_name, progress=progress
+            )
+        admitted = self._structured_admitted_agent_ids()
+        if not admitted:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
+        token = self._request_failed_agents.set(set())
+        admitted_token = self._request_admitted_agents.set(admitted)
+        try:
+            return self._conduct_request(
+                messages, model_name=model_name, progress=progress
+            )
+        finally:
+            self._request_admitted_agents.reset(admitted_token)
+            self._request_failed_agents.reset(token)
+
+    def _conduct_request(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = "contextual-orchestrator",
+        progress: Any = None,
+    ) -> dict[str, Any]:
+        """Conduct one workflow inside its request-scoped exclusion boundary."""
         task = self._latest_user_text(messages)
         caller_instructions = "\n\n".join(
             message["content"]
@@ -4342,6 +4411,9 @@ class TaskOrchestrator:
             if (not free_only or self._is_free_agent(agent))
             and (not chat_only or is_general_chat_agent_model_id(agent.model))
         ]
+        admitted = self._request_admitted_agents.get()
+        if admitted is not None:
+            candidates = [agent for agent in candidates if agent.id in admitted]
         if not candidates:
             if free_only:
                 raise RuntimeError("no enabled zero-cost model is available")
@@ -4714,6 +4786,10 @@ class TaskOrchestrator:
             primary, text, eligibility_role or role, allowed_agent_ids
         )
         if not candidates:
+            if self._request_failed_agents.get():
+                raise NoViableAgentError(
+                    retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+                )
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
@@ -4731,6 +4807,10 @@ class TaskOrchestrator:
                     )
                 except Exception as exc:
                     if isinstance(exc, RequestDeadlineExceeded):
+                        # The shared caller budget may expire before this
+                        # provider is contacted. It is not provider-health
+                        # evidence and must not poison the cross-request
+                        # readiness or circuit state.
                         raise
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
@@ -4738,6 +4818,10 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderResponseError):
                         self._record_failure(agent.id)
+                        failed_agents = self._request_failed_agents.get()
+                        if failed_agents is not None:
+                            self._record_structured_not_ready(agent.id)
+                            failed_agents.add(agent.id)
                         break
                     decision = classify_tool_failure(exc)
                     action = decision.action
@@ -4785,6 +4869,10 @@ class TaskOrchestrator:
                 return output, agent.id, usage
         if hasattr(self.client, "remaining_request_timeout"):
             self.client.remaining_request_timeout()
+        if self._request_failed_agents.get():
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
@@ -4833,6 +4921,8 @@ class TaskOrchestrator:
             ]
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
         ordered = [agent for agent in ordered if is_general_chat_agent_model_id(agent.model)]
+        request_failed_agents = self._request_failed_agents.get() or set()
+        ordered = [agent for agent in ordered if agent.id not in request_failed_agents]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.

@@ -352,7 +352,7 @@ OPENAPI_SPEC = {
         "/api/v1/provider_readiness/latest": {
             "get": {
                 "operationId": "get_latest_provider_readiness",
-                "summary": "Read or explicitly refresh bounded provider chat readiness",
+                "summary": "Read cached provider chat readiness without starting probes",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [{
                     "name": "refresh",
@@ -360,7 +360,34 @@ OPENAPI_SPEC = {
                     "required": False,
                     "schema": {"type": "boolean", "default": False},
                 }],
-                "responses": {"200": {"description": "Provider readiness report"}},
+                "responses": {
+                    "200": {"description": "Provider readiness report"},
+                    "409": {"description": "Inline refresh must use an asynchronous job"},
+                },
+            }
+        },
+        "/api/v1/provider_readiness_refreshes": {
+            "post": {
+                "operationId": "create_provider_readiness_refresh",
+                "summary": "Probe an explicit provider access list asynchronously",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"202": {"description": "Readiness refresh accepted"}},
+            }
+        },
+        "/api/v1/provider_readiness_refreshes/{job_id}": {
+            "get": {
+                "operationId": "get_provider_readiness_refresh",
+                "summary": "Poll readiness refresh progress",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Readiness refresh progress"}},
+            }
+        },
+        "/api/v1/provider_readiness_refreshes/{job_id}/cancel": {
+            "post": {
+                "operationId": "cancel_provider_readiness_refresh",
+                "summary": "Cancel readiness refresh work",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Readiness refresh cancelled"}},
             }
         },
         "/api/v1/analytics_snapshots/latest": {

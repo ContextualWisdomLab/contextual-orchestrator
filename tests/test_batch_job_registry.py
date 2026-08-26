@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gc
 import sys
+import threading
 import time
 import weakref
 from pathlib import Path
@@ -84,6 +85,158 @@ class FakeValkeyClient:
         self.expirations[key] = seconds
         return True
 
+
+def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
+    """One declared readiness scope returns immediately and survives restart."""
+
+    client = FakeValkeyClient()
+    registry = JobRegistryFactory(client)
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingProbeClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=1)
+
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            entered.set()
+            release.wait(timeout=2)
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
+    orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    first = CostRoutingCoordinator(orchestrator, job_registry=registry)
+    submitted = first.submit_provider_readiness_refresh(
+        agent_ids=[agent.id],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+    assert submitted["status"] in {"queued", "running"}
+    assert entered.wait(timeout=1)
+    duplicate = first.submit_provider_readiness_refresh(
+        agent_ids=[agent.id],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+    assert duplicate["job_id"] == submitted["job_id"]
+    release.set()
+    for _ in range(100):
+        document = first.provider_readiness_refresh_document(submitted["job_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+    assert document["completed_count"] == 1
+    assert document["ready_count"] == 1
+    execution_claims = [
+        kwargs["timeout"]
+        for name, kwargs in client.locks
+        if "provider_readiness_job_execution" in name
+    ]
+    assert len(execution_claims) == 1
+    assert execution_claims[0] > orchestrator.client.timeout
+    restarted_orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    restarted = CostRoutingCoordinator(
+        restarted_orchestrator, job_registry=JobRegistryFactory(client)
+    )
+    assert restarted.provider_readiness_refresh_document(submitted["job_id"])["status"] == "completed"
+    assert restarted_orchestrator._structured_readiness[agent.id]["status"] == "ready"
+
+
+def test_cancelled_readiness_refresh_cannot_publish_late_probe_results() -> None:
+    """Cancellation wins before a blocked provider result reaches admission state."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingProbeClient(ModelClient):
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            entered.set()
+            release.wait(timeout=2)
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
+    orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    coordinator = CostRoutingCoordinator(orchestrator)
+    submitted = coordinator.submit_provider_readiness_refresh(
+        agent_ids=[agent.id],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+    assert entered.wait(timeout=1)
+
+    cancelled = coordinator.cancel_provider_readiness_refresh(submitted["job_id"])
+    release.set()
+
+    assert cancelled["status"] == "cancelled"
+    for _ in range(100):
+        if coordinator.provider_readiness_refresh_document(submitted["job_id"])[
+            "status"
+        ] == "cancelled":
+            break
+        time.sleep(0.01)
+    assert orchestrator._structured_readiness == {}
+
+
+def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
+    """The admin job cannot expand an empty or unknown access list."""
+
+    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
+    for agent_ids in ([], ["unknown_agent"]):
+        try:
+            coordinator.submit_provider_readiness_refresh(
+                agent_ids=agent_ids,
+                capability_code="structured",
+                timeout_seconds=1.0,
+                deadline_epoch=None,
+            )
+        except ValueError:
+            pass
+        else:  # pragma: no cover
+            raise AssertionError("implicit or unknown readiness scope must fail closed")
+
+
+def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> None:
+    """Access-list size is body-bounded; provider calls obey configured concurrency."""
+
+    lock = threading.Lock()
+    counters = {"active": 0, "maximum": 0}
+
+    class BoundedProbeClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(local_concurrency=2)
+
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            with lock:
+                counters["active"] += 1
+                counters["maximum"] = max(counters["maximum"], counters["active"])
+            time.sleep(0.001)
+            with lock:
+                counters["active"] -= 1
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    agents = [ModelAgent(f"declared_{index}", "mock") for index in range(65)]
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator(agents, client=BoundedProbeClient())
+    )
+    job = coordinator.submit_provider_readiness_refresh(
+        agent_ids=[agent.id for agent in agents],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+    for _ in range(200):
+        document = coordinator.provider_readiness_refresh_document(job["job_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+    assert document["ready_count"] == len(agents)
+    assert counters["maximum"] == 2
 
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
     """Dataclasses, dataclass lists, and JSON scalars all survive the trip."""

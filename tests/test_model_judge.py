@@ -643,6 +643,120 @@ def test_structured_readiness_without_ready_candidate_avoids_provider_call() -> 
     assert exc_info.value.retry_after_seconds == 30
 
 
+def test_conduct_excludes_failed_candidates_for_the_entire_request() -> None:
+    """A later workflow stage cannot retry a provider that failed in this request."""
+
+    class FailingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.calls: list[str] = []
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            self.calls.append(agent.id)
+            raise ProviderResponseError("provider response unavailable")
+
+    tags = ("reasoning", "writing", "planning", "research", "verification")
+    agents = [
+        ModelAgent("first_agent", "first-model", tags=tags, group_name="declared_group"),
+        ModelAgent("second_agent", "second-model", tags=tags, group_name="declared_group"),
+    ]
+    client = FailingClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    with pytest.raises(NoViableAgentError) as first_attempt:
+        orchestrator.complete(
+            [{"role": "user", "content": "produce a verified structured report"}],
+            mode="conduct",
+        )
+
+    assert first_attempt.value.retry_after_seconds == 30
+    assert client.calls == ["first_agent", "second_agent"]
+
+    # A later durable retry is a new request scope, so the candidates may be
+    # considered again after the caller has observed the Retry-After contract.
+    with pytest.raises(NoViableAgentError):
+        orchestrator.complete(
+            [{"role": "user", "content": "produce a verified structured report"}],
+            mode="conduct",
+        )
+    assert client.calls == ["first_agent", "second_agent", "first_agent", "second_agent"]
+
+
+def test_expired_request_deadline_does_not_mark_provider_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caller-budget exhaustion before transport is not a provider failure."""
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: 10.0)
+    agent = ModelAgent(
+        "healthy_agent",
+        "healthy-model",
+        tags=("reasoning", "writing", "planning", "research", "verification"),
+    )
+    client = ModelClient(max_retries=0)
+    orchestrator = TaskOrchestrator([agent], client=client)
+
+    with client.request_settings(request_deadline_monotonic=9.0):
+        with pytest.raises(RequestDeadlineExceeded):
+            orchestrator.complete(
+                [{"role": "user", "content": "produce a verified report"}],
+                mode="conduct",
+            )
+
+    assert orchestrator._structured_readiness == {}
+    assert orchestrator._circuit == {}
+
+
+def test_direct_conduct_entrypoint_has_request_scoped_exclusion() -> None:
+    """Streaming callers that invoke conduct directly retain the same boundary."""
+
+    class FailingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.calls: list[str] = []
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            self.calls.append(agent.id)
+            raise ProviderResponseError("provider response unavailable")
+
+    tags = ("reasoning", "writing", "planning", "research", "verification")
+    agents = [
+        ModelAgent("first_agent", "first-model", tags=tags, group_name="declared_group"),
+        ModelAgent("second_agent", "second-model", tags=tags, group_name="declared_group"),
+    ]
+    client = FailingClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.conduct(
+            [{"role": "user", "content": "produce a verified structured report"}]
+        )
+
+    assert client.calls == ["first_agent", "second_agent"]
+
+
+def test_route_provider_failure_does_not_poison_structured_readiness() -> None:
+    """Ordinary chat failure remains separate from structured probe evidence."""
+
+    class FailingClient(ModelClient):
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            raise ProviderResponseError("provider response unavailable")
+
+    agent = ModelAgent(
+        "route_agent",
+        "route-model",
+        tags=("reasoning", "writing", "planning", "research", "verification"),
+    )
+    orchestrator = TaskOrchestrator([agent], client=FailingClient(max_retries=0))
+
+    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+        orchestrator.complete(
+            [{"role": "user", "content": "answer directly"}], mode="route"
+        )
+
+    assert orchestrator._structured_readiness == {}
 def test_structured_readiness_probe_does_not_mutate_transport_circuit() -> None:
     """Capability probes neither clear nor increment provider transport failures."""
 
