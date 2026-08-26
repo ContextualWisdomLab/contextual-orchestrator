@@ -8,7 +8,8 @@ An HTTP consumer can have a shorter patience budget than the sum of provider
 retries and cross-provider failover. Reapplying a transport timeout to every
 retry therefore permits an otherwise bounded workflow to outlive its caller.
 The OpenAI-compatible JSON body is a provider contract and cannot carry
-server-only scheduling controls.
+server-only scheduling controls. Structured-output, tool, Responses API, and
+model-judge paths use raw passthrough and require the same deadline boundary.
 
 ## Decision
 
@@ -17,7 +18,8 @@ server immediately converts it to a process-local monotonic deadline and never
 forwards the header or a corresponding field to a provider. Every orchestration
 attempt reads the same deadline. A provider receives the lesser of the remaining
 request duration and the configured provider timeout; all transport retries for
-that provider share that single budget. Backoff consumes the same budget.
+that provider share that single budget. Backoff consumes the same budget. This
+applies to decoded chat, full structured JSON, and binary provider responses.
 
 The deadline does not allocate a fraction to a provider, change model order,
 change reasoning effort, or modify cost attribution. Successful failover retains
