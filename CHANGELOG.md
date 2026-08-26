@@ -61,6 +61,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Accept function-tool descriptions up to the existing bounded request-body
+  limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Mixed structured workflows now retain a cost-ledger row for calls whose
   provider omitted usage, using the existing token-counting fallback while
   preserving reported counts for the other calls in the same workflow.
