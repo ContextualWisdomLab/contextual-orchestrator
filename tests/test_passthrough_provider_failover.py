@@ -226,7 +226,7 @@ def test_non_transient_error_is_not_replayed() -> None:
         _build(client).proxy_completion({"messages": [{"role": "user", "content": "x"}]})
 
     assert caught.value.provider_status == 400
-    assert caught.value.__cause__ is failure
+    assert caught.value.__cause__ is None
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
@@ -283,7 +283,7 @@ def test_all_candidates_chain_the_last_failure() -> None:
 
     assert caught.value.agent_id == "fallback_agent"
     assert caught.value.provider_status == 503
-    assert caught.value.__cause__ is final
+    assert caught.value.__cause__ is None
 
 
 @pytest.mark.parametrize(

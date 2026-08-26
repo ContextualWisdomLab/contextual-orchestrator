@@ -3187,7 +3187,7 @@ class TaskOrchestrator:
                             agent_id=candidate.id,
                             model=candidate.model,
                             transport="passthrough",
-                        ) from exc
+                        ) from None
                     raise
                 last_failure = (exc, candidate)
                 self._record_failure(candidate.id)
@@ -3207,7 +3207,7 @@ class TaskOrchestrator:
                 agent_id=failed_candidate.id,
                 model=failed_candidate.model,
                 transport="passthrough",
-            ) from last_error
+            ) from None
         raise RuntimeError("passthrough has no eligible provider candidate")
 
     def _orchestrated_provider_completion(
