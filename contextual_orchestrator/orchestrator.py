@@ -1491,6 +1491,8 @@ class ModelClient:
             )
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, normalized_endpoint, payload)
+        remaining = self.remaining_request_timeout()
+        provider_timeout = self.timeout if remaining is None else min(self.timeout, remaining)
         destination = self._validate_provider(agent)  # pragma: no cover
         parsed_provider = urlparse(agent.base_url)
         operation_name = {
@@ -1514,13 +1516,23 @@ class ModelClient:
                 chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                with _local_provider_slot(agent, self.local_concurrency, provider_timeout):
                     chat_response = self._send_raw_with_retry(
-                        agent, "chat/completions", chat_payload, destination
+                        agent,
+                        "chat/completions",
+                        chat_payload,
+                        destination,
+                        timeout=provider_timeout,
                     )
                 return _chat_to_responses_payload(chat_response, payload)
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-                return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
+            with _local_provider_slot(agent, self.local_concurrency, provider_timeout):  # pragma: no cover
+                return self._send_raw_with_retry(
+                    agent,
+                    normalized_endpoint,
+                    payload,
+                    destination,
+                    timeout=provider_timeout,
+                )
 
     def proxy_send_bytes(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -1538,7 +1550,11 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
+        remaining = self.remaining_request_timeout()  # pragma: no cover
+        timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
+        with self._open_provider(  # pragma: no cover
+            request, self._validate_provider(agent), timeout=timeout
+        ) as response:
             return response.read(), response.headers.get_content_type()
 
     def _send_raw_with_retry(
@@ -1547,18 +1563,32 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
-        """Passthrough transport with the same transient-failure retry policy as _send."""
+        """Passthrough transport sharing one timeout budget across all retries."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        provider_timeout = self.timeout if timeout is None else float(timeout)
+        deadline = time.monotonic() + provider_timeout
         for attempt in range(retry_limit + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                last_error = TimeoutError("provider attempt deadline exceeded")
+                break
             try:
+                self._local.provider_transport_timeout = remaining
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
-                self._sleep(self._backoff_delay(attempt))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._sleep(min(self._backoff_delay(attempt), remaining))
+            finally:
+                self._local.provider_transport_timeout = None
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
@@ -1569,6 +1599,8 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
         api_key = _provider_credential(agent)
@@ -1582,7 +1614,10 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
+        effective_timeout = timeout
+        if effective_timeout is None:
+            effective_timeout = getattr(self._local, "provider_transport_timeout", None)
+        with self._open_provider(request, destination, timeout=effective_timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _mock_raw(

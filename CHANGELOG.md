@@ -1,6 +1,6 @@
 # Changelog
 
-- Bound provider retries and failover by an explicit request-scoped monotonic deadline while preserving structured workflow and cost lineage.
+- Bound decoded and structured-passthrough provider retries and failover by an explicit request-scoped monotonic deadline while preserving structured workflow and cost lineage.
 
 All notable changes to `contextual-orchestrator` are documented here. The
 project follows Semantic Versioning; a version is released only after the

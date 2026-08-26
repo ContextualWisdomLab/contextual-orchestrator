@@ -394,6 +394,37 @@ def test_provider_retry_reuses_one_timeout_budget(monkeypatch: pytest.MonkeyPatc
     assert client.timeouts == [90.0, 30.0]
 
 
+def test_structured_passthrough_retries_share_one_provider_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structured raw-provider retries cannot restart the transport timeout."""
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class TimedRawFailureClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=2, retry_backoff=0.0)
+            self.timeouts: list[float] = []
+
+        def _send_raw(self, agent, endpoint, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, endpoint, payload, destination, timeout
+            remaining = self._local.provider_transport_timeout
+            self.timeouts.append(remaining)
+            now[0] += min(60.0, remaining)
+            raise TimeoutError("structured provider timed out")
+
+    client = TimedRawFailureClient()
+    agent = ModelAgent("provider_worker", "provider-model", base_url="https://provider.example/v1")
+    with pytest.raises(RuntimeError, match="passthrough request failed"):
+        client._send_raw_with_retry(
+            agent,
+            "chat/completions",
+            {"model": agent.model, "response_format": {"type": "json_object"}},
+        )
+    assert client.timeouts == [90.0, 30.0]
+    assert now[0] == 90.0
+
+
 def test_request_deadline_allows_backup_only_the_remaining_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
