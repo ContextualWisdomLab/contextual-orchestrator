@@ -3129,9 +3129,16 @@ class TaskOrchestrator:
                 text, "worker", free_only=requested_model == self.FREE_MODEL
             )
         admitted = self._request_admitted_agents.get()
+        allowed_candidates = set(admitted) if admitted is not None else None
+        if allowed_candidates is not None and requested_model == self.FREE_MODEL:
+            allowed_candidates &= {
+                candidate.id
+                for candidate in self.agents
+                if self._is_free_agent(candidate)
+            }
         candidates = (
-            self._failover_candidates(agent, text, "worker", set(admitted))
-            if admitted is not None
+            self._failover_candidates(agent, text, "worker", allowed_candidates)
+            if allowed_candidates is not None
             else [agent]
         )
         for candidate in candidates:

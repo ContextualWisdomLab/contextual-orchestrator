@@ -176,6 +176,37 @@ def test_proxy_completion_free_model_uses_only_an_explicitly_free_agent() -> Non
     assert result["model"] == "free-model"
 
 
+def test_proxy_completion_free_model_never_fails_over_to_a_paid_agent() -> None:
+    """A zero-cost request remains zero-cost when its ready provider fails."""
+
+    calls: list[str] = []
+
+    class FreeDown(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del endpoint, body
+            calls.append(agent.id)
+            raise RuntimeError("provider transport unavailable")
+
+    orchestrator = TaskOrchestrator(
+        agents=[
+            ModelAgent("free_agent", "mock-free", tags=("cost:free",)),
+            ModelAgent("paid_agent", "mock-paid"),
+        ],
+        client=FreeDown(),
+    )
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.proxy_completion(
+            {
+                "model": orchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "synthetic request"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    assert calls == ["free_agent"]
+
+
 def test_proxy_completion_free_model_fails_closed_without_a_free_agent() -> None:
     with pytest.raises(RuntimeError, match="no enabled zero-cost model"):
         _build().proxy_completion({
