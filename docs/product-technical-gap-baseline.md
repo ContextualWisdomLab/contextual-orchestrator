@@ -3,13 +3,18 @@
 ## 2026-08-26 20:35 KST protected-main delivery evidence
 
 Protected `main` is exact commit
-`56a898b85654f5c8468e3d8448d93120b24bd269`, the normal protected merge of
+`56a898b85654f5c8468e3d8448d93120b24bd269`, the GitHub merge commit for
 [PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
 from reviewed source head `d49846d5c8deca55c60315a8fbb461ecdebf67eb`.
-No terminal hosted gate failed on the merged PR; the final source-head
-hash-locked suite passed `2352` tests with zero failures. This supersedes the
-older #851 branch-only entries below without rewriting their historical audit
-record.
+The merge commit has protected `main` as its first parent and that source head
+as its second parent, which proves delivery provenance. At this audit, however,
+the required workflow Check Runs attached to the source head remain `queued`;
+only the CodeRabbit and Devin status contexts are successful. No repository or
+GitHub record located by this audit supports transferring an earlier local test
+count to the final source head. This entry therefore proves protected-main code
+presence, not terminal hosted-suite completion or independent approval. It
+supersedes the older #851 branch-only delivery claims below without rewriting
+their historical audit record.
 
 This protected-main delivery closes
 [issue #102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102)
