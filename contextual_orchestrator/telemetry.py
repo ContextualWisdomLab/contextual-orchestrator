@@ -41,7 +41,15 @@ _ALLOWED_ATTRIBUTE_KEYS = frozenset(
         "gen_ai.operation.name",
         "gen_ai.provider.name",
         "gen_ai.request.model",
+        "gen_ai.response.finish_reasons",
+        "gen_ai.response.model",
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.usage.total_tokens",
         "contextual_orchestrator.agent_id",
+        "contextual_orchestrator.error_code",
+        "contextual_orchestrator.latency_ms",
+        "contextual_orchestrator.provider_status_code",
         "contextual_orchestrator.session_id_hash",
         "server.address",
         "server.port",
@@ -168,6 +176,45 @@ def _safe_attributes(
     return result
 
 
+def annotate_current_span(attributes: Mapping[str, Any]) -> None:
+    """Apply the allow-list filter to one attribute set on the ACTIVE span.
+
+    Callers inside a ``traced`` block use this to attach per-call evidence
+    (token counts, latency, served model) without bypassing redaction.
+    """
+    if trace is None:  # pragma: no cover - dependency is declared by the project
+        return
+    span = trace.get_current_span()
+    if span is None or not span.is_recording():
+        return
+    for key, value in _safe_attributes(attributes).items():
+        span.set_attribute(key, value)
+
+
+def record_provider_usage(usage: Mapping[str, Any] | None) -> None:
+    """Record OpenAI-compatible token usage as GenAI semantic-convention counts."""
+    if trace is None or not isinstance(usage, Mapping):  # pragma: no cover - guarded above
+        return
+
+    def _count(key: str) -> int | None:
+        value = usage.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    attributes: dict[str, Any] = {}
+    input_tokens = _count("prompt_tokens") if "prompt_tokens" in usage else _count("input_tokens")
+    output_tokens = (
+        _count("completion_tokens") if "completion_tokens" in usage else _count("output_tokens")
+    )
+    total_tokens = _count("total_tokens")
+    if input_tokens is not None:
+        attributes["gen_ai.usage.input_tokens"] = input_tokens
+    if output_tokens is not None:
+        attributes["gen_ai.usage.output_tokens"] = output_tokens
+    if total_tokens is not None:
+        attributes["gen_ai.usage.total_tokens"] = total_tokens
+    annotate_current_span(attributes)
+
+
 def configure_telemetry(
     service_name: str = "contextual-orchestrator",
     *,
@@ -219,7 +266,13 @@ def traced(
     name: str,
     attributes: Mapping[str, Any] | None = None,
 ) -> Iterator[Any]:
-    """Trace one provider CLIENT operation and preserve all failures."""
+    """Trace one provider CLIENT operation and preserve all failures.
+
+    On failure the span records the classified error code (not just the
+    Python exception class), the upstream status when one existed, and a
+    non-recording-safe ERROR status — so exported traces answer *why* the
+    model call failed.
+    """
     if trace is None:  # pragma: no cover - dependency is declared by the project
         yield None
         return
@@ -235,12 +288,21 @@ def traced(
         try:
             yield span
         except Exception as exc:
+            from .provider_errors import classify_provider_failure
+
+            classified = classify_provider_failure(exc, agent_id="", model="")
+            failure_code = classified.error_code
+            provider_status = classified.provider_status
             if Status is not None and StatusCode is not None:
-                span.set_attribute("error.type", type(exc).__name__)
+                span.set_attribute("error.type", failure_code)
+                if provider_status is not None:
+                    span.set_attribute(
+                        "contextual_orchestrator.provider_status_code", provider_status
+                    )
                 span.set_status(Status(StatusCode.ERROR))
             _LOGGER.warning(
                 "telemetry.operation_failed operation=%s error_type=%s",
                 name,
-                type(exc).__name__,
+                failure_code,
             )
             raise

@@ -1,5 +1,33 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 18:05 KST error-surface and telemetry-gap snapshot
+
+Customer-visible gap: every upstream model failure surfaced as one opaque
+`internal_error`, telemetry spans carried no per-call evidence (no token
+counts, latency, served model, or classified cause), and workflow traces
+omitted which model/provider served each step. Branch
+`fix/provider-error-taxonomy-telemetry` closes all three at once:
+
+- `contextual_orchestrator.provider_errors` classifies upstream HTTP status,
+  network, TLS, and transport failures into OpenAI-compatible codes with
+  client status, retryability, and bounded redacted messages (CWE-209);
+  chat/passthrough/stream/batch transports surface the classification and a
+  fully-failed pool surfaces the final classified cause after measured
+  failover. Server payloads add next-step guidance per failure family.
+- Provider spans now record GenAI semantic-convention usage counts, served
+  response model, finish reason, request latency, and classified `error.type`
+  plus upstream status on failures (`docs/adr/0005` deadline evidence gains a
+  concrete span counterpart).
+- Route/stream/batch/conduct trace steps now carry `model`, `provider`, and
+  `latency_ms`; streamed steps previously had none.
+
+Evidence: full suite `2279 passed` locally on the exact head; docstring
+coverage `100%` (interrogate); `provider_errors.py`/`telemetry.py` statement
+coverage `100%`. Remaining open gaps tracked below stay unchanged until their
+PRs merge: #849 keep-alive session correlation + k6 gate, #851 structured
+passthrough batch routing, #857 streaming deadline + baseline SHA row, #858
+measurement-status i18n. The standing hourly loop re-checks this queue.
+
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.

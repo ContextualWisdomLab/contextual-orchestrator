@@ -1,10 +1,14 @@
 """Tests for request session binding and prompt-safe telemetry."""
 
 import hashlib
+import io
+import json
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 import contextual_orchestrator.orchestrator as orchestrator_module
 import contextual_orchestrator.server as server_module
@@ -435,6 +439,134 @@ def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(mon
         set_status_on_exception=False,
     )
     span.record_exception.assert_not_called()
-    span.set_attribute.assert_called_once_with("error.type", "TimeoutError")
+    # Failures record the CLASSIFIED cause family (network timeout here), not
+    # the Python exception class, and never the exception text.
+    span.set_attribute.assert_called_once_with("error.type", "provider_connection_error")
     assert "provider-response-secret" not in caplog.text
     assert "session-secret" not in caplog.text
+
+
+def test_traced_records_upstream_status_for_http_failures(monkeypatch):
+    """An upstream HTTP failure exposes its semantic code and original status."""
+    import urllib.error
+
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        with traced("chat model-x"):
+            raise urllib.error.HTTPError(
+                "https://p.example", 429, "err", None, io.BytesIO(b"{}")
+            )
+    assert excinfo.value.code == 429
+    span.set_attribute.assert_any_call("error.type", "rate_limit_exceeded")
+    span.set_attribute.assert_any_call(
+        "contextual_orchestrator.provider_status_code", 429
+    )
+
+
+def test_annotate_and_usage_helpers_filter_to_allowed_genai_attributes():
+    """Span annotation keeps approved scalars only; prompts never enter spans."""
+    span = MagicMock()
+    span.is_recording.return_value = True
+    fake_trace = SimpleNamespace(get_current_span=lambda: span)
+    original_trace = telemetry_module.trace
+    telemetry_module.trace = fake_trace
+    try:
+        telemetry_module.annotate_current_span(
+            {
+                "gen_ai.response.model": "gpt-x",
+                "gen_ai.usage.input_tokens": 11,
+                "gen_ai.usage.output_tokens": 7,
+                "gen_ai.usage.total_tokens": 18,
+                "prompt": "secret",
+                "nested": {"a": 1},
+                "bad_ratio": object(),
+            }
+        )
+        telemetry_module.record_provider_usage(
+            {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}
+        )
+        telemetry_module.record_provider_usage(None)
+    finally:
+        telemetry_module.trace = original_trace
+
+    calls = [tuple(call.args) for call in span.set_attribute.call_args_list]
+    assert ("gen_ai.response.model", "gpt-x") in calls
+    assert ("gen_ai.usage.input_tokens", 11) in calls
+    assert ("gen_ai.usage.output_tokens", 7) in calls
+    assert ("gen_ai.usage.total_tokens", 18) in calls
+    # The second record_provider_usage call re-annotates the OpenAI-keyed counts.
+    assert ("gen_ai.usage.input_tokens", 3) in calls
+    assert all(key not in {"prompt", "nested"} for key, _value in calls)
+
+
+def test_record_provider_usage_accepts_responses_style_keys(monkeypatch):
+    """``input_tokens``/``output_tokens`` aliases map onto GenAI counts."""
+    span = MagicMock()
+    span.is_recording.return_value = True
+    fake_trace = SimpleNamespace(get_current_span=lambda: span)
+    original_trace = telemetry_module.trace
+    telemetry_module.trace = fake_trace
+    try:
+        telemetry_module.record_provider_usage({"input_tokens": 5, "output_tokens": 2})
+        # A recording-less span must be a silent no-op.
+        empty_span = MagicMock()
+        empty_span.is_recording.return_value = False
+        telemetry_module.trace = SimpleNamespace(get_current_span=lambda: empty_span)
+        telemetry_module.record_provider_usage({"total_tokens": 9})
+    finally:
+        telemetry_module.trace = original_trace
+
+    calls = [call.args[0] for call in span.set_attribute.call_args_list]
+    assert calls == [
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+    ]
+
+
+def test_provider_response_telemetry_records_latency_model_finish_reason(monkeypatch):
+    """One completed provider response annotates usage, model, reason, latency."""
+    captured: dict[str, list] = {"annotate": [], "usage": []}
+
+    @contextmanager
+    def capture(name, attributes):  # noqa: ARG001 - signature parity
+        yield None
+
+    class FakeResponse(io.BytesIO):
+        pass
+
+    client = ModelClient()
+    agent = ModelAgent(
+        "worker_agent",
+        "gpt-x",
+        base_url="https://provider.example/v1",
+        credential_key="",
+    )
+
+    @contextmanager
+    def fake_open(request, destination, timeout=None):  # noqa: ARG001
+        yield FakeResponse(
+            json.dumps({
+                "model": "gpt-x-served",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+            }).encode("utf-8")
+        )
+
+    monkeypatch.setattr(client, "_validate_provider", lambda unused: None)
+    monkeypatch.setattr(client, "_open_provider", fake_open)
+    monkeypatch.setattr(orchestrator_module, "traced", capture)
+    monkeypatch.setattr(orchestrator_module, "annotate_current_span", lambda a: captured["annotate"].append(a))
+    monkeypatch.setattr(orchestrator_module, "record_provider_usage", lambda u: captured["usage"].append(u))
+
+    content = client.chat(agent, [{"role": "user", "content": "hi"}])
+    assert content == "ok"
+    annotated = captured["annotate"][0]
+    assert annotated["gen_ai.response.model"] == "gpt-x-served"
+    assert annotated["gen_ai.response.finish_reasons"] == "stop"
+    assert isinstance(annotated["contextual_orchestrator.latency_ms"], float)
+    assert captured["usage"] == [
+        {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11}
+    ]

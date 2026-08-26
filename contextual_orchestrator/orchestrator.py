@@ -39,7 +39,13 @@ from .chat_capability import (
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .model_group import ModelGroupRouter, canonical_group_name
-from .telemetry import inject_trace_context, traced
+from .provider_errors import ProviderUpstreamError, classify_provider_failure
+from .telemetry import (
+    annotate_current_span,
+    inject_trace_context,
+    record_provider_usage,
+    traced,
+)
 from .pii_protection import (
     DEFAULT_PII_KEY_NAME,
     ENCRYPTED_FIELDS_KEY,
@@ -832,6 +838,31 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> None:
+    """Annotate the active provider span with one response's concrete evidence.
+
+    Records GenAI semantic-convention usage counts, the served model name,
+    the finish reason, and request latency so traces carry real per-call
+    telemetry instead of transport metadata alone.
+    """
+    if not isinstance(data, dict):
+        return
+    attributes: dict[str, Any] = {
+        "contextual_orchestrator.latency_ms": round((time.monotonic() - started_monotonic) * 1000, 2)
+    }
+    served_model = data.get("model")
+    if isinstance(served_model, str) and served_model:
+        attributes["gen_ai.response.model"] = served_model
+    choices = data.get("choices")
+    finish_reason = (
+        choices[0].get("finish_reason") if isinstance(choices, list) and isinstance(choices[0], dict) else None
+    )
+    if isinstance(finish_reason, str) and finish_reason:
+        attributes["gen_ai.response.finish_reasons"] = finish_reason
+    annotate_current_span(attributes)
+    record_provider_usage(data.get("usage"))
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -1184,7 +1215,9 @@ class ModelClient:
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
-        raise RuntimeError(f"provider {agent.id} request failed") from None
+        # Classify instead of collapsing: a 401/404/429 upstream failure is
+        # caller-actionable and must not surface as one opaque internal error.
+        raise classify_provider_failure(last_error, agent_id=agent.id, model=agent.model)
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -1215,6 +1248,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        started = time.monotonic()
         opened = (
             self._open_provider(request, destination)
             if timeout is None
@@ -1222,6 +1256,7 @@ class ModelClient:
         )
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
+        _record_provider_response_telemetry(data, started)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -1241,7 +1276,6 @@ class ModelClient:
                 "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
             )
         raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
-
     @staticmethod
     def _connect_validated(
         destination: ProviderDestination, timeout: float | None, source_address: tuple[str, int] | None
@@ -1403,6 +1437,8 @@ class ModelClient:
             method="POST",
         )
         stream_error: RuntimeError | None = None
+        started = time.monotonic()
+        stream_usage: dict[str, Any] | None = None
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1416,10 +1452,15 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
+                        stream_usage = chunk["usage"]
                     choices = chunk.get("choices") or [{}]
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
+            _record_provider_response_telemetry(
+                {"usage": stream_usage} if stream_usage else {}, started
+            )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
             # The gateway's own terminal tool-stop contract must survive the
             # boundary: convert the provider HTTP shape into the package-owned
@@ -1431,8 +1472,10 @@ class ModelClient:
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
             # and exception cause inside the gateway; callers get one stable,
-            # package-owned error instead of raw provider diagnostics.
-            stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+            # classified, package-owned error instead of raw provider diagnostics.
+            stream_error = classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport="stream"
+            )
         if stream_error is not None:
             raise stream_error
 
@@ -1528,7 +1571,11 @@ class ModelClient:
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
+        if last_error is None:  # pragma: no cover - the loop always attempts once
+            raise RuntimeError(f"provider {agent.id} passthrough request failed")
+        raise classify_provider_failure(
+            last_error, agent_id=agent.id, model=agent.model, transport="passthrough"
+        ) from None
 
     def _send_raw(
         self,
@@ -1696,16 +1743,19 @@ class ModelClient:
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
-            batch_error: RuntimeError | None = None
+            batch_error: ProviderUpstreamError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
                     agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
                 )
-            except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
+            except Exception as exc:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
                 # public gateway boundary; provider bodies and exception text stay
-                # inside the authorized provider observability system.
-                batch_error = RuntimeError(f"provider {agent.id} batch request failed")
+                # inside the authorized provider observability system. The failure
+                # is still classified so callers can act on the cause.
+                batch_error = classify_provider_failure(
+                    exc, agent_id=agent.id, model=agent.model, transport="batch"
+                )
             if batch_error is not None:
                 raise batch_error
         return _validate_batch_results(requests, results)
@@ -2905,8 +2955,17 @@ class TaskOrchestrator:
                 "prompt_text": text,
                 "answer": answer,
                 "trace": [
-                    {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                     "access": [], "output": answer}
+                    {
+                        "id": 0,
+                        "role": "worker",
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": agent.provider_name or agent.base_url.split("://", 1)[-1],
+                        "subtask": "Direct route (streamed)",
+                        "access": [],
+                        "latency_ms": round(latency_seconds * 1000, 2),
+                        "output": answer,
+                    }
                 ],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {**verification, "verifier_output": answer},
@@ -3076,6 +3135,8 @@ class TaskOrchestrator:
             result = answers[index]
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
+                "model": agent.model,
+                "provider": agent.provider_name or agent.base_url.split("://", 1)[-1],
                 "subtask": "Direct route (batched)", "access": [], "output": result["content"],
             }
             if result.get("usage") is not None:
@@ -3582,6 +3643,8 @@ class TaskOrchestrator:
                 "id": attempt_index,
                 "role": "worker",
                 "agent_id": candidate.id,
+                "model": candidate.model,
+                "provider": candidate.provider_name or candidate.base_url.split("://", 1)[-1],
                 "subtask": "Direct route",
                 "access": [],
                 "latency_ms": round(latency_seconds * 1000, 2),
@@ -3758,6 +3821,8 @@ class TaskOrchestrator:
             outputs[step.id] = output
             row = step.as_dict()
             row["latency_ms"] = round(elapsed, 2)
+            row["model"] = agent.model
+            row["provider"] = agent.provider_name or agent.base_url.split("://", 1)[-1]
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
@@ -4338,6 +4403,10 @@ class TaskOrchestrator:
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        # The final classified upstream failure survives the candidate loop so a
+        # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
+        # one opaque collapse message.
+        last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -4354,6 +4423,8 @@ class TaskOrchestrator:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
+                    if isinstance(exc, ProviderUpstreamError):
+                        last_upstream_error = exc
                     decision = classify_tool_failure(exc)
                     action = decision.action
                     # A failed attempt is one Bernoulli stability observation
@@ -4398,6 +4469,8 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
+        if last_upstream_error is not None:
+            raise last_upstream_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(

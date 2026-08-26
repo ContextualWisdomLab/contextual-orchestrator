@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
@@ -132,7 +133,12 @@ def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
         try:
             list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
         except RuntimeError as error:
-            assert "streaming request failed" in str(error)
+            # Classified, package-owned failure: the upstream status is kept,
+            # while the provider URL, body text, and cause stay inside.
+            assert isinstance(error, ProviderUpstreamError)
+            assert error.error_code == "api_error"
+            assert error.client_status == 502
+            assert "HTTP 500" in str(error)
             assert "http://" not in str(error)  # provider URL stays inside
             assert "upstream-secret-diagnostic" not in str(error)
             assert error.__cause__ is None
