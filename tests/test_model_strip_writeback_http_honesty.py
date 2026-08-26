@@ -9,6 +9,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -141,6 +143,40 @@ def test_http_chat_accepts_advertised_gateway_default_model() -> None:
         with urllib.request.urlopen(models_request, timeout=10) as response:
             listed = json.loads(response.read().decode("utf-8"))
         assert listed["data"][0]["id"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_http_responses_accepts_advertised_gateway_default_model(stream: bool) -> None:
+    """Responses must share the advertised gateway-default virtual model contract."""
+    server, thread, port = _server()
+    try:
+        payload = {
+            "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+            "input": "gateway default responses",
+            "stream": stream,
+        }
+        if stream:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/responses",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+                    "connection": "close",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.status == 200
+                assert response.headers.get_content_type() == "text/event-stream"
+                assert b"response.completed" in response.read()
+        else:
+            status, body = _post(port, "/v1/responses", payload)
+            assert status == 200, body
+            assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     finally:
         server.shutdown()
         thread.join(timeout=5)

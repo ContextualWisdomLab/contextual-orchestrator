@@ -6292,14 +6292,20 @@ def build_server(
                             message="stream must be a boolean",
                         ))
                         if stream and model_name not in {
-                            TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
                         }:
                             raise RequestError(
                                 400,
                                 "invalid_stream",
-                                "stream is not supported for this model on /v1/responses; use orchestrator/auto or orchestrator/free",
+                                "stream is not supported for this model on /v1/responses; use the gateway default, orchestrator/auto, or orchestrator/free",
                             )
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    }:
                         _require_pool_model(orchestrator, model_name)
                         if body.get("tools"):
                             raise RequestError(
