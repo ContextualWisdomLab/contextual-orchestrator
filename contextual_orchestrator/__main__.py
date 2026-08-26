@@ -13,8 +13,12 @@ from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
+    CONFIGURED_GATEWAY_CREDENTIAL_NAME,
+    PROVIDER_MODEL_SOURCES,
+    ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
+    configured_gateway_source,
     discover_all_models,
     free_discovered_models,
     refresh_price_book,
@@ -207,6 +211,17 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _bootstrap_discovery_sources() -> tuple[ProviderModelSource, ...]:
+    """Promote a configured gateway secret to KV and return discovery sources."""
+    source = configured_gateway_source(os.environ)
+    if source is None:
+        return PROVIDER_MODEL_SOURCES
+    secret = os.environ.get(CONFIGURED_GATEWAY_CREDENTIAL_NAME, "")
+    if secret.strip():
+        register_credential(CONFIGURED_GATEWAY_CREDENTIAL_NAME, secret.rstrip("\r\n"))
+    return (*PROVIDER_MODEL_SOURCES, source)
+
+
 def _discover_models_command(argv: list[str]) -> None:
     """Query every provider with a KV-registered credential and report the models found.
 
@@ -242,7 +257,7 @@ def _discover_models_command(argv: list[str]) -> None:
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
-    discovered, errors = discover_all_models()
+    discovered, errors = discover_all_models(_bootstrap_discovery_sources())
     free_models = free_discovered_models(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
@@ -283,7 +298,12 @@ def _discover_models_command(argv: list[str]) -> None:
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate only models with explicit chat capability evidence."""
-    discovered, _errors = discover_all_models()
+    sources = _bootstrap_discovery_sources()
+    discovered, _errors = (
+        discover_all_models()
+        if sources is PROVIDER_MODEL_SOURCES
+        else discover_all_models(sources)
+    )
     chat_models = [model for model in discovered if "chat" in model.capabilities]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [

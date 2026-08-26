@@ -213,12 +213,21 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
 | Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+| Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
+
+For a configured gateway, the one-shot discovery/bootstrap boundary accepts
+`LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
+host is listed in `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`. It promotes
+`LLM_GATEWAY_API_KEY` into the KV before discovery; provider requests and normal
+runtime routing then read the key only from KV. The full capability catalog and
+model-info pricing remain visible, while `--free-only` selects only structured
+zero-price evidence.
 
 Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
 doesn't use the OpenAI-compatible default.
 
-Register any subset of the five keys, then discover:
+Register any subset of the provider keys, then discover:
 
 ```bash
 echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator \
