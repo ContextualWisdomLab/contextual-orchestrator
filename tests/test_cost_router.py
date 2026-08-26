@@ -92,7 +92,7 @@ def test_structured_provider_workflow_records_each_reported_call() -> None:
 
 
 def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
-    """Mixed provider usage still leaves one cost-ledger row per workflow call."""
+    """Mixed usage bills each measured call plus one fallback prompt estimate."""
     coordinator = _coordinator()
     calls = iter(
         [
@@ -124,6 +124,19 @@ def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     assert result["cost"]["measurement_status"] == "estimated"
     assert records[1]["total_tokens"] > 0
     assert records[3]["total_tokens"] > 0
+    request_prompt = coordinator.token_counter.count_messages(
+        [{"role": "user", "content": "return mixed usage JSON"}], "mock-a"
+    )
+    assert sum(record["prompt_tokens"] for record in records) == request_prompt + 5
+    assert [
+        record["prompt_tokens"]
+        for record in records
+        if record["measurement_status"] == "measured"
+    ] == [2, 3, 0]
+    estimated = [
+        record for record in records if record["measurement_status"] == "estimated"
+    ]
+    assert [record["prompt_tokens"] for record in estimated] == [request_prompt, 0]
 
 
 def test_unreported_provider_calls_bill_request_prompt_once() -> None:

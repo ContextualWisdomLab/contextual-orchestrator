@@ -167,9 +167,12 @@ class CostRoutingCoordinator:
         row. Rows backed by provider-reported token counts are labeled
         ``measurement_status="measured"``; rows that fall back to heuristic
         estimates are labeled ``"estimated"``. The original request prompt is
-        attributed at most once per completion: it lands in full on the first
-        unreported step, and later unreported steps estimate only their own
-        output tokens.
+        attributed at most once across unreported rows: it lands in full on the
+        first unreported step, and later unreported steps estimate only their
+        own output tokens. Provider-reported prompt counts remain attached to
+        their respective rows because each trace step is a separate billable
+        provider call; they are neither deduplicated against nor replaced by
+        the fallback estimate for a different call.
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
@@ -214,6 +217,9 @@ class CostRoutingCoordinator:
             # reports no provider usage of its own, and every later unreported
             # step estimates only its own output tokens. One workflow run must
             # never bill the same request prompt once per unreported step.
+            # Reported prompt counts describe separate provider calls and stay
+            # on their own measured rows; suppressing them would undercount the
+            # provider invoice rather than deduplicate one request.
             request_prompt_attributed = False
             for step in result.get("trace", []):
                 if not isinstance(step, dict):

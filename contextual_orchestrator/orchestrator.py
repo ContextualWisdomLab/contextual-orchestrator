@@ -1623,6 +1623,13 @@ class ModelClient:
         ):
             if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
                 chat_payload = _responses_to_chat_payload(payload)
+                if "response_format" in chat_payload and not (
+                    "response_format" in agent.tags
+                    or "capability:response_format" in agent.tags
+                ):
+                    raise ValueError(
+                        "selected model does not support the requested response format"
+                    )
                 chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
@@ -2922,7 +2929,11 @@ class TaskOrchestrator:
         allowed_agent_ids = (
             {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
             if requested_model == self.FREE_MODEL
-            else None
+            else (
+                {candidate.id for candidate in self.agents}
+                if requested_model == self.AUTO_MODEL
+                else None
+            )
         )
         # Cross-provider failover lives ONLY on this plain virtual passthrough
         # path (and the virtual tools path reached with single_agent=True).

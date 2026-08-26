@@ -138,6 +138,48 @@ def test_virtual_model_names_use_provider_failover(model: str) -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
 
 
+def test_auto_virtual_model_fails_over_across_model_groups() -> None:
+    """Global AUTO may cross logical-model groups to reach another provider."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(429),
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                priority=10,
+                provider_name="primary",
+                group_name="primary_group",
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                priority=1,
+                provider_name="fallback",
+                group_name="fallback_group",
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "x"}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
 def test_free_virtual_model_never_fails_over_to_a_paid_agent() -> None:
     """The free selector exhausts only explicitly zero-cost providers."""
     client = SequencedProxyClient(

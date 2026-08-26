@@ -414,6 +414,48 @@ def test_local_responses_passthrough_omits_empty_template_arguments() -> None:
     assert "chat_template_kwargs" not in send.call_args.args[2]
 
 
+def test_local_responses_rejects_unproven_response_format_capability() -> None:
+    """A local worker must explicitly declare structured-output support."""
+    agent = ModelAgent(
+        "local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1"
+    )
+    client = ModelClient()
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_send_raw_with_retry"
+    ) as send:
+        with pytest.raises(ValueError, match="does not support the requested response format"):
+            client.proxy_send(
+                agent,
+                "responses",
+                {"input": "ping", "text": {"format": {"type": "json_object"}}},
+            )
+
+    send.assert_not_called()
+
+
+def test_local_responses_forwards_declared_response_format_capability() -> None:
+    """Capability metadata authorizes forwarding the translated chat control."""
+    agent = ModelAgent(
+        "local_agent",
+        "local-model",
+        base_url="mlx://127.0.0.1:8080/v1",
+        tags=("capability:response_format",),
+    )
+    client = ModelClient()
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={"choices": [{"message": {"content": "OK"}}]},
+    ) as send:
+        client.proxy_send(
+            agent,
+            "responses",
+            {"input": "ping", "text": {"format": {"type": "json_object"}}},
+        )
+
+    assert send.call_args.args[2]["response_format"] == {"type": "json_object"}
+
+
 def test_local_responses_adapter_preserves_supported_items_and_controls() -> None:
     payload = _responses_to_chat_payload(
         {
