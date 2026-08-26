@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-27 01:15 KST protected-main and exact-head queue evidence
+## 2026-08-27 01:51 KST protected-main and exact-head queue evidence
 
 Protected `main` is exact commit
 `5a01759165be20ab38c05c2321d8a9f00ec331ea`. It contains the normal protected
@@ -35,8 +35,8 @@ allowlisted error code, and UTC start/finish instants without secrets or raw
 provider diagnostics. It does not infer a freshness threshold, provider/model
 equivalence, or zero cost from missing price evidence.
 
-The open queue was re-read at exact heads #887 `c09cda2a`, #883 `6811a64b`,
-#880 `3685b616`, #879 `6482cb97`, #876 `73a5510f`, #868 `b8cde232`, #858
+The open queue was re-read at exact heads #887 `5e07bc6e`, #883 `0175df2e`,
+#880 `062090d4`, #879 `f2c444aa`, #876 `73a5510f`, #868 `fd0cd254`, #858
 `09f5f194`, #857 `4da93814`, and #849 `ede33b5d`. PR #869 was closed unmerged because #868
 preserves its OpenCode Zen workflow transport and unique-passphrase validation;
 no check or review evidence transfers between those heads. The queue covers
@@ -45,6 +45,16 @@ provider errors, pinned OpenCode runtime,
 gateway aliases and discovery, customer copy, provider-backed embeddings, and
 asynchronous HTTP capacity. Each requires its current exact-head review and
 required checks before normal protected merge.
+
+At this snapshot, #876 has terminal successful full-suite, security, Noema,
+and focused OpenCode bootstrap evidence; its coverage-evidence job remains
+queued and Strix remains in progress. #883 and #879 have newly attached hosted
+jobs, but those jobs remain queued. #887 and #880 expose only successful
+third-party review statuses so far; absent required hosted jobs are not success
+evidence. #883 keeps auto-merge disabled while its exact local full suite is
+still running, and #868 keeps auto-merge disabled while replacement review and
+hosted jobs attach. No queued, running, or absent job is promoted to protected
+delivery evidence.
 
 PR #886 was closed unmerged after exact comparison with #887 and the current
 official OpenAI schemas. Those schemas define function descriptions as strings
