@@ -6708,8 +6708,6 @@ def build_server(
                 self.send_header("content-type", "application/json; charset=utf-8")
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 for name, value in (extra_headers or {}).items():
                     self.send_header(name, value)
                 self.end_headers()
@@ -6725,8 +6723,6 @@ def build_server(
                 self.send_header("content-type", content_type)
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 self.end_headers()
                 self.wfile.write(raw)
 
@@ -6752,8 +6748,6 @@ def build_server(
                 self.send_header("cache-control", "no-cache")
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 self.end_headers()
                 self.wfile.write(raw)
 
@@ -6768,8 +6762,6 @@ def build_server(
                 self.send_header("content-type", "text/event-stream; charset=utf-8")
                 self.send_header("cache-control", "no-cache")
                 self._send_security_headers()
-                if self.close_connection:
-                    self.send_header("connection", "close")
                 self.end_headers()
 
             return self._write_response(_write)

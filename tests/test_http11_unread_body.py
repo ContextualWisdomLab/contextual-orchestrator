@@ -63,7 +63,7 @@ def _post_headers(*, token: str, content_type: str, body: bytes) -> bytes:
 def _assert_single_closed_response(response: bytes, status: bytes) -> None:
     """Assert the rejected body cannot become another parsed request."""
     assert response.startswith(b"HTTP/1.1 " + status)
-    assert b"connection: close\r\n" in response.lower()
+    assert response.lower().count(b"connection: close\r\n") == 1
     assert response.count(b"HTTP/1.1 ") == 1
     assert b'"status": "ok"' not in response
 
