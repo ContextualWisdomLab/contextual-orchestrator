@@ -1,5 +1,25 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 11:46 KST exact-head queue snapshot
+
+Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+The open queue was re-read at #856 `cf4af71e`, #855 `f2e66db7`, #851
+`d42172b3`, #850 `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845
+`24219ace`, and #834 implementation head `b189e108`. Every PR retains normal
+auto-merge. No exact head has an independent approval, so none is eligible for
+protected merge. #855 and #851 have terminal successful required jobs; the
+other heads have queued review or security jobs. Queue delay is not treated as
+success or bypass authority.
+
+#856 adds the operator-configurable request-body ceiling and validates direct
+`SecurityConfig` construction, including rejection of Boolean and non-integer
+limits. Its full exact tree exposed only the stale legacy-table assertion
+already repaired by #855; the stacked repair leaves its replacement Checks
+queued. #834's complete exact tree is `2253 passed`; its seven previously
+undocumented public persistence, cache, and judge-adapter boundaries now have
+explicit docstrings, with `111` focused tests passing. These are branch
+evidence, not protected-main delivery.
+
 ## 2026-08-26 10:30 KST review-remediation snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
