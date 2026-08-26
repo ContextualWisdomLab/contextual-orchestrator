@@ -3037,7 +3037,7 @@ class TaskOrchestrator:
         upstream["stream"] = False
         if requested_model not in (
             None,
-            "contextual-orchestrator",
+            self.GATEWAY_DEFAULT_MODEL,
             self.AUTO_MODEL,
             self.FREE_MODEL,
         ):
@@ -5330,6 +5330,9 @@ class TaskOrchestrator:
                     if isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             raise
+                        decision = classify_tool_failure(exc)
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        self._record_failure(agent.id)
                         break
                     decision = classify_tool_failure(exc)
                     action = decision.action

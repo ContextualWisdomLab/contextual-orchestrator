@@ -449,7 +449,14 @@ def analyze_discovered_privacy_policies(
             )
         )
 
-    by_url = {assessment.source_url: assessment for assessment in source_assessments}
+    by_url: dict[str, PrivacyPolicyAssessment] = {}
+    ambiguous_urls: set[str] = set()
+    for assessment in source_assessments:
+        if assessment.source_url in by_url:
+            ambiguous_urls.add(assessment.source_url)
+            by_url.pop(assessment.source_url)
+        elif assessment.source_url not in ambiguous_urls:
+            by_url[assessment.source_url] = assessment
 
     def inferred_consensus(
         values: list[bool | None],

@@ -101,6 +101,40 @@ def test_analysis_rejects_hallucinated_quote_and_non_zdr_analyzer() -> None:
     assert absent == []
 
 
+def test_analysis_rejects_ambiguous_duplicate_source_assessments() -> None:
+    """Conflicting rows for one source cannot become order-dependent truth."""
+    policy_url = "https://provider.example/privacy"
+    analyzer_model = _model("openrouter", "zdr-analyzer", zdr=True)
+    target = _model("provider", "model", policy_urls=(policy_url,))
+    policy_text = "Inputs are used for training. Inputs are not used for training."
+
+    enriched, evidence = analyze_discovered_privacy_policies(
+        [analyzer_model, target],
+        crawler=lambda _url: policy_text,
+        analyzer=lambda _candidate, _documents: {
+            "assessments": [
+                {
+                    "source_url": policy_url,
+                    "zero_data_retention_available": None,
+                    "no_training": True,
+                    "no_prompt_retention": None,
+                    "evidence_quote": "Inputs are not used for training.",
+                },
+                {
+                    "source_url": policy_url,
+                    "zero_data_retention_available": None,
+                    "no_training": False,
+                    "no_prompt_retention": None,
+                    "evidence_quote": "Inputs are used for training.",
+                },
+            ]
+        },
+    )
+
+    assert enriched[1].supports_no_training is None
+    assert evidence == []
+
+
 def test_policy_crawler_delegates_external_fetch_to_wardnet() -> None:
     class _Response:
         def __enter__(self):

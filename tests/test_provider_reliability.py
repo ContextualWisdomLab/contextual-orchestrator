@@ -376,6 +376,9 @@ def test_structural_provider_response_stays_inside_explicit_pool_failover() -> N
     )
 
     assert (answer, served_id) == ("bounded backup", "backup_worker")
+    assert orchestrator._circuit["primary_worker"]["failures"] == 1.0
+    assert orchestrator._audit_events[-1]["event_type"] == "tool_fallback_decision"
+    assert orchestrator._audit_events[-1]["event_detail"]["agent_id"] == "primary_worker"
 
 
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:

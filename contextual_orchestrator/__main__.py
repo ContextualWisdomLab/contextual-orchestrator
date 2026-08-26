@@ -377,9 +377,11 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in chat_models
         if agent_id_for(model) not in existing_ids
     ]
-    if not agents:
-        return {"added": [], "updated": []}
-    result = orchestrator.sync_discovered_agents(agents)
+    result = (
+        orchestrator.sync_discovered_agents(agents)
+        if agents
+        else {"added": [], "updated": []}
+    )
     if any(model.provider_name == "configured_gateway" for model in chat_models):
         for agent in tuple(orchestrator.candidates):
             if agent.provider_name == "configured_gateway" and not agent.model.strip():
