@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from contextvars import ContextVar
 
 import pytest
 
@@ -112,6 +113,41 @@ def test_deadline_is_enforced_without_publishing_late_output() -> None:
     release.set()
 
 
+def test_immediate_race_rejects_capacity_that_cannot_start_every_endpoint() -> None:
+    with pytest.raises(ValueError, match="concurrency capacity"):
+        race_first_valid(
+            [
+                EndpointAttempt("first_endpoint", contract(), lambda: "first"),
+                EndpointAttempt("second_endpoint", contract(), lambda: "second"),
+            ],
+            validate=bool,
+            deadline_seconds=1,
+            max_concurrency=1,
+        )
+
+
+def test_race_workers_receive_an_independent_copy_of_request_context() -> None:
+    request_id = ContextVar("request_id", default="missing")
+    request_id.set("request_123")
+    observed: list[str] = []
+
+    def call() -> str:
+        observed.append(request_id.get())
+        return "complete"
+
+    race_first_valid(
+        [
+            EndpointAttempt("first_endpoint", contract(), call),
+            EndpointAttempt("second_endpoint", contract(), call),
+        ],
+        validate=bool,
+        deadline_seconds=1,
+        max_concurrency=2,
+    )
+    assert observed
+    assert set(observed) == {"request_123"}
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -152,3 +188,46 @@ def test_text_group_uses_same_complete_valid_race_boundary() -> None:
     )
     assert result["trace"][0]["agent_id"] == "fast_endpoint"
     assert result["answer"] == "completed by fast_endpoint"
+
+
+def test_text_race_preserves_request_scoped_sampling_and_token_limits() -> None:
+    raw_contract = dict(contract(capability_set=("text",)).__dict__)
+    agents = [
+        ModelAgent(
+            endpoint_id,
+            "provider/shared",
+            tags=("reasoning",),
+            group_name="shared_text_group",
+            endpoint_equivalence=raw_contract,
+        )
+        for endpoint_id in ("first_endpoint", "second_endpoint")
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    observed: list[dict[str, object]] = []
+
+    def chat(_agent: ModelAgent, _messages: list[dict], **_kwargs: object) -> str:
+        observed.append(orchestrator.client.request_settings_snapshot())
+        return "complete"
+
+    orchestrator.client.chat = chat  # type: ignore[method-assign]
+    with orchestrator.client.request_settings(temperature=0.73, max_output_tokens=37):
+        orchestrator.route_once(
+            [{"role": "user", "content": "preserve my request settings"}],
+            model_name="shared-text-group",
+        )
+    assert observed
+    assert all(item["temperature"] == 0.73 for item in observed)
+    assert all(item["max_output_tokens"] == 37 for item in observed)
+
+
+def test_race_usage_sink_receives_completed_loser_but_not_winner() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("first_endpoint", "mock-a", tags=("reasoning",))]
+    )
+    emitted: list[str] = []
+    orchestrator._race_usage_sink = lambda endpoint_id, _value: emitted.append(endpoint_id)
+    completed, finalize = orchestrator._race_attempt_collector("text")
+    completed("winner_endpoint", ("winner", "winner_endpoint", {"prompt_tokens": 1, "completion_tokens": 1}), None)
+    completed("loser_endpoint", ("loser", "loser_endpoint", {"prompt_tokens": 2, "completion_tokens": 2}), None)
+    finalize("winner_endpoint")
+    assert emitted == ["loser_endpoint"]

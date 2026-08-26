@@ -79,6 +79,28 @@ def test_endpoint_equivalence_contract_is_normalized_and_survives_restart() -> N
             ).fetchone() == (1,)
 
 
+def test_clearing_last_endpoint_member_reaps_its_orphan_contract() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        database_path = os.path.join(directory, "endpoint-contract.db")
+        orchestrator = TaskOrchestrator(_seed(), agents_db=database_path)
+        orchestrator.patch_agent(
+            "default", "general_agent", {"endpoint_equivalence": _endpoint_contract()}
+        )
+        orchestrator.patch_agent(
+            "default", "general_agent", {"endpoint_equivalence": None}
+        )
+        with sqlite3.connect(database_path) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_member"
+            ).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_contract"
+            ).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM endpoint_equivalence_capability"
+            ).fetchone() == (0,)
+
+
 def test_add_patch_remove_survive_restart() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from dataclasses import dataclass
 import time
 from typing import Callable, Generic, TypeVar
@@ -89,8 +90,10 @@ def race_first_valid(
     """
     if len(attempts) < 2:
         raise ValueError("a race requires at least two endpoint attempts")
-    if max_concurrency < 1:
-        raise ValueError("max_concurrency must be positive")
+    if max_concurrency < 2:
+        raise ValueError("immediate_race requires concurrency capacity of at least two")
+    if max_concurrency < len(attempts):
+        raise ValueError("immediate_race capacity must cover every declared endpoint")
     if deadline_seconds <= 0:
         raise ValueError("deadline_seconds must be positive")
     contract = attempts[0].contract
@@ -107,6 +110,8 @@ def race_first_valid(
     def execute(attempt: EndpointAttempt[T]) -> T:
         try:
             value = attempt.call()
+            if not validate(value):
+                raise ValueError("endpoint returned an invalid completed response")
         except BaseException as exc:
             if on_attempt_complete is not None:
                 on_attempt_complete(attempt.endpoint_id, None, exc)
@@ -116,7 +121,7 @@ def race_first_valid(
         return value
 
     futures: dict[Future[T], tuple[int, EndpointAttempt[T]]] = {
-        pool.submit(execute, attempt): (index, attempt)
+        pool.submit(copy_context().run, execute, attempt): (index, attempt)
         for index, attempt in enumerate(attempts)
     }
     pending = set(futures)
@@ -134,9 +139,6 @@ def race_first_valid(
                     value = future.result()
                 except BaseException as exc:  # retain the final provider cause
                     last_error = exc
-                    continue
-                if not validate(value):
-                    last_error = ValueError("endpoint returned an invalid completed response")
                     continue
                 winner = futures[future][1]
                 cancellations: list[tuple[str, str]] = []

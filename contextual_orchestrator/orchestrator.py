@@ -2400,6 +2400,12 @@ class _AgentPoolStore:
                     "WHERE model_group_member.group_name = model_group.group_name)"
                 )
                 conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
+                conn.execute(
+                    "DELETE FROM endpoint_equivalence_contract WHERE NOT EXISTS ("
+                    "SELECT 1 FROM endpoint_equivalence_member "
+                    "WHERE endpoint_equivalence_member.contract_id = "
+                    "endpoint_equivalence_contract.contract_id)"
+                )
                 if agent.endpoint_equivalence is not None:
                     contract = EndpointEquivalenceContract(**agent.endpoint_equivalence)
                     conn.execute(
@@ -2799,6 +2805,9 @@ class TaskOrchestrator:
         # production always uses the exact-schema implementation below.
         self._triage_fn = self._triage_workflow_required
         self.client = client or ModelClient()
+        # The cost coordinator installs this optional sink. Direct orchestrator
+        # callers still retain audit evidence without inventing price or usage.
+        self._race_usage_sink: Callable[[str, Any], None] | None = None
         if (
             isinstance(tool_retry_attempts, bool)
             or not isinstance(tool_retry_attempts, int)
@@ -4988,6 +4997,66 @@ class TaskOrchestrator:
             },
         )
 
+    def _record_race_attempt(
+        self,
+        endpoint_id: str,
+        value: Any | None,
+        error: BaseException | None,
+        *,
+        capability: str,
+    ) -> None:
+        """Share race completion evidence with normal stability/circuit ledgers."""
+        self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
+        if error is not None:
+            self._group_router.observe_failure(endpoint_id)
+            self._record_failure(endpoint_id)
+
+    def _race_attempt_collector(
+        self, capability: str
+    ) -> tuple[
+        Callable[[str, Any | None, BaseException | None], None],
+        Callable[[str | None], None],
+    ]:
+        """Return callbacks that ledger completed loser usage after winner selection."""
+        state_lock = threading.Lock()
+        pending: list[tuple[str, Any]] = []
+        state: dict[str, Any] = {"finalized": False, "winner": None}
+
+        def emit(endpoint_id: str, value: Any) -> None:
+            sink = self._race_usage_sink
+            if sink is not None:
+                sink(endpoint_id, value)
+
+        def completed(
+            endpoint_id: str,
+            value: Any | None,
+            error: BaseException | None,
+        ) -> None:
+            self._record_race_attempt(
+                endpoint_id, value, error, capability=capability
+            )
+            if error is not None or value is None:
+                return
+            with state_lock:
+                if not state["finalized"]:
+                    pending.append((endpoint_id, value))
+                    return
+                winner = state["winner"]
+            if winner is None or endpoint_id != winner:
+                emit(endpoint_id, value)
+
+        def finalize(winner_endpoint_id: str | None) -> None:
+            with state_lock:
+                state["finalized"] = True
+                state["winner"] = winner_endpoint_id
+                ready = list(pending)
+                pending.clear()
+            for endpoint_id, value in ready:
+                if winner_endpoint_id is None or endpoint_id != winner_endpoint_id:
+                    emit(endpoint_id, value)
+
+        return completed, finalize
+
     def proxy_capability(
         self,
         body: dict[str, Any],
@@ -5001,6 +5070,10 @@ class TaskOrchestrator:
         candidates = self._capability_agents(capability, requested_model)
         race_members = self._equivalent_race_members(candidates)
         if race_members:
+            if len(race_members) > MAX_LOCAL_CONCURRENCY:
+                raise ValueError(
+                    "immediate_race endpoint count exceeds the supported concurrency capacity"
+                )
             def call(agent: ModelAgent) -> dict[str, Any] | tuple[bytes, str]:
                 payload = {
                     key: value for key, value in body.items()
@@ -5018,37 +5091,43 @@ class TaskOrchestrator:
                 )
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
-            outcome = race_first_valid(
-                [
-                    EndpointAttempt(
-                        agent.id,
-                        contract,
-                        lambda agent=agent: call(agent),
-                        cancellation_supported=False,
-                    )
-                    for agent in race_members
-                ],
-                validate=(
-                    (
-                        lambda value: isinstance(value, tuple)
-                        and len(value) == 2
-                        and isinstance(value[0], bytes)
-                        and bool(value[0])
-                    )
-                    if binary
-                    else (lambda value: isinstance(value, dict) and bool(value))
-                ),
-                deadline_seconds=self.client.timeout,
-                max_concurrency=self.client.local_concurrency,
-                on_attempt_complete=lambda endpoint_id, value, error: self._record_endpoint_attempt(
-                    endpoint_id, value, error, capability=capability
-                ),
+            attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
+            try:
+                outcome = race_first_valid(
+                    [
+                        EndpointAttempt(
+                            agent.id,
+                            contract,
+                            lambda agent=agent: call(agent),
+                            cancellation_supported=False,
+                        )
+                        for agent in race_members
+                    ],
+                    validate=(
+                        (
+                            lambda value: isinstance(value, tuple)
+                            and len(value) == 2
+                            and isinstance(value[0], bytes)
+                            and bool(value[0])
+                        )
+                        if binary
+                        else (lambda value: isinstance(value, dict) and bool(value))
+                    ),
+                    deadline_seconds=self.client.timeout,
+                    max_concurrency=len(race_members),
+                    on_attempt_complete=attempt_completed,
+                )
+            except (RuntimeError, TimeoutError):
+                outcome = None
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id
             )
-            self._record_endpoint_race(outcome, capability=capability)
-            self._group_router.observe_success(
-                outcome.winner_endpoint_id, outcome.completion_ms / 1000
-            )
-            return outcome.value
+            if outcome is not None:
+                self._record_endpoint_race(outcome, capability=capability)
+                self._group_router.observe_success(
+                    outcome.winner_endpoint_id, outcome.completion_ms / 1000
+                )
+                return outcome.value
         last_error: Exception | None = None
         for agent in candidates:
             payload = {
@@ -5116,19 +5195,27 @@ class TaskOrchestrator:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         race_members = self._equivalent_race_members(candidates)
         if race_members:
+            if len(race_members) > MAX_LOCAL_CONCURRENCY:
+                raise ValueError(
+                    "immediate_race endpoint count exceeds the supported concurrency capacity"
+                )
             effort_profile = self._role_effort_profile(role)
+            request_settings = self.client.request_settings_snapshot()
 
             def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
-                output = (
-                    self.client.chat(agent, messages, effort_profile=effort_profile)
-                    if effort_profile is not None
-                    else self.client.chat(agent, messages)
-                )
-                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                with self.client.request_settings(**request_settings):
+                    output = (
+                        self.client.chat(agent, messages, effort_profile=effort_profile)
+                        if effort_profile is not None
+                        else self.client.chat(agent, messages)
+                    )
+                    usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 return output, agent.id, usage
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
-            outcome = race_first_valid(
+            attempt_completed, finalize_attempts = self._race_attempt_collector("text")
+            try:
+                outcome = race_first_valid(
                 [
                     EndpointAttempt(
                         agent.id,
@@ -5136,28 +5223,32 @@ class TaskOrchestrator:
                         lambda agent=agent: call(agent),
                     )
                     for agent in race_members
-                ],
-                validate=lambda value: isinstance(value[0], str) and bool(value[0]),
-                deadline_seconds=self.client.timeout,
-                max_concurrency=self.client.local_concurrency,
-                on_attempt_complete=lambda endpoint_id, value, error: self._record_endpoint_attempt(
-                    endpoint_id, value, error, capability="text"
-                ),
+                    ],
+                    validate=lambda value: isinstance(value[0], str) and bool(value[0]),
+                    deadline_seconds=self.client.timeout,
+                    max_concurrency=len(race_members),
+                    on_attempt_complete=attempt_completed,
+                )
+            except (RuntimeError, TimeoutError):
+                outcome = None
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id
             )
-            self._record_endpoint_race(outcome, capability="text")
-            self._record_success(outcome.winner_endpoint_id)
-            usage = outcome.value[2]
-            output_tokens = None
-            if isinstance(usage, dict):
-                reported = usage.get("completion_tokens", usage.get("output_tokens"))
-                if type(reported) is int and reported > 0:
-                    output_tokens = reported
-            self._group_router.observe_success(
-                outcome.winner_endpoint_id,
-                outcome.completion_ms / 1000,
-                output_tokens=output_tokens,
-            )
-            return outcome.value
+            if outcome is not None:
+                self._record_endpoint_race(outcome, capability="text")
+                self._record_success(outcome.winner_endpoint_id)
+                usage = outcome.value[2]
+                output_tokens = None
+                if isinstance(usage, dict):
+                    reported = usage.get("completion_tokens", usage.get("output_tokens"))
+                    if type(reported) is int and reported > 0:
+                        output_tokens = reported
+                self._group_router.observe_success(
+                    outcome.winner_endpoint_id,
+                    outcome.completion_ms / 1000,
+                    output_tokens=output_tokens,
+                )
+                return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
             retry_attempt = 0
