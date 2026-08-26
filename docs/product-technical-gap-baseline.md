@@ -5,7 +5,7 @@
 Protected `main` is `5a01759165be20ab38c05c2321d8a9f00ec331ea`.
 PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
 records completed full-suite evidence at `3497d8fc` (`2386 passed`, `0 failed`)
-and focused discovery evidence at current head `7325bcaa` (`55 passed`). A
+and focused discovery evidence at current head `f9348ee7` (`55 passed`). A
 configured OpenAI-compatible gateway now joins `/v1/models` with deployment
 metadata so chat, Responses, Completions, embedding, image generation/edit,
 speech, and transcription capabilities remain individually discoverable;
@@ -38,7 +38,7 @@ are stacked protected dependencies; official Spamhaus DROP, URLhaus, and
 ThreatFox feed refresh is isolated in #115. No duplicate DNS/SSRF
 implementation is accepted in this repository.
 
-Local live verification on current implementation head `2ccff004` used the configured
+Local live verification on current implementation head `f9348ee7` used the configured
 gateway and credential without recording either value. Discovery returned eight
 deployments with zero provider errors: seven had explicit chat capability and one
 had embedding capability; two preserved an explicit Responses capability, all
