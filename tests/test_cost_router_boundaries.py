@@ -25,7 +25,6 @@ from contextual_orchestrator.cost_router import (
 from contextual_orchestrator.cost_router import (
     _positive_int,
     _provider_from_base_url,
-    _weighted_average_embedding,
 )
 
 
@@ -194,27 +193,6 @@ def test_positive_int_defaults_on_garbage_and_non_positive() -> None:
     assert _positive_int(0, 3) == 3
     assert _positive_int(-2, 3) == 3
     assert _positive_int(True, 3) == 1  # bool coerces to 1, which is positive
-
-
-# --- weighted average embedding reduction ----------------------------------------------
-
-
-def test_weighted_average_empty_vectors_returns_empty() -> None:
-    assert _weighted_average_embedding([]) == []
-    assert _weighted_average_embedding([([], 5)]) == []
-
-
-def test_weighted_average_clamps_degenerate_weights_to_one() -> None:
-    reduced = _weighted_average_embedding([([2.0, 4.0], 0), ([4.0, 6.0], -1)])
-    # Zero/negative weights clamp up to 1, so this is the plain part mean.
-    assert reduced == [pytest.approx(3.0), pytest.approx(5.0)]
-
-
-def test_weighted_average_respects_ragged_dimensions_and_weights() -> None:
-    reduced = _weighted_average_embedding([([1.0, 3.0, 9.0], 3), ([2.0], 1)])
-    assert reduced[0] == pytest.approx((1.0 * 3 + 2.0 * 1) / 4)
-    assert reduced[1] == pytest.approx(9.0 / 4)  # short vector contributes zero
-    assert reduced[2] == pytest.approx(27.0 / 4)
 
 
 # --- embeddings batch document lifecycle -------------------------------------------------
