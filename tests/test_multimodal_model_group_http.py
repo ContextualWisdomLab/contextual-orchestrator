@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -13,6 +14,24 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 TOKEN = "multimodal_group_token"
+
+
+def _equivalence(capability: str) -> dict[str, object]:
+    return {
+        "contract_id": "reviewed_replica_contract",
+        "model_revision": "revision_2026_08",
+        "reasoning_effort_profile": "not_applicable",
+        "capability_set": (capability,),
+        "structured_output_contract": "openai_compatible_v1",
+        "accuracy_class": "provider_full_precision",
+        "data_residency_policy": "kr_region_only",
+        "retention_policy": "zero_retention",
+        "context_limit": 128_000,
+        "pricing_evidence_id": "catalog_snapshot_2026_08_26",
+        "hedge_eligible": True,
+        "cancellation_supported": False,
+        "execution_policy": "immediate_race",
+    }
 
 
 def _post(port: int, path: str, payload: dict) -> tuple[int, bytes, str]:
@@ -170,3 +189,89 @@ def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
         assert status == 400 and body["error"]["code"] == "invalid_model"
     finally:
         server.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("capability", "endpoint", "binary"),
+    [
+        ("image", "images/generations", False),
+        ("video", "videos", False),
+        ("speech", "audio/speech", True),
+        ("transcription", "audio/transcriptions", False),
+        ("embedding", "embeddings", False),
+        ("rerank", "rerank", False),
+        ("audio", "chat/completions", False),
+    ],
+)
+def test_explicit_equivalent_endpoints_race_for_every_capability(
+    capability: str, endpoint: str, binary: bool
+) -> None:
+    agents = [
+        ModelAgent(
+            "slow_endpoint", "provider/shared", tags=(capability,),
+            group_name="shared_model_group", endpoint_equivalence=_equivalence(capability),
+        ),
+        ModelAgent(
+            "fast_endpoint", "provider/shared", tags=(capability,),
+            group_name="shared_model_group", endpoint_equivalence=_equivalence(capability),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def result(agent: ModelAgent) -> dict | tuple[bytes, str]:
+        if agent.id == "slow_endpoint":
+            time.sleep(0.05)
+        return (b"media", "audio/mpeg") if binary else {"model": agent.model, "data": []}
+
+    orchestrator.client.proxy_send = lambda agent, _endpoint, _payload: result(agent)  # type: ignore[method-assign]
+    orchestrator.client.proxy_send_bytes = lambda agent, _endpoint, _payload: result(agent)  # type: ignore[method-assign]
+    value = orchestrator.proxy_capability(
+        {"model": "shared-model-group", "prompt": "request"},
+        capability=capability,
+        endpoint=endpoint,
+        binary=binary,
+    )
+    assert value == ((b"media", "audio/mpeg") if binary else {"model": "provider/shared", "data": []})
+    events = orchestrator.list_recent_audit_events()
+    race_event = next(event for event in events if event["event_type"] == "equivalent_endpoint_race_completed")
+    assert race_event["event_detail"]["winner_endpoint_id"] == "fast_endpoint"
+    assert set(race_event["event_detail"]["attempted_endpoint_ids"]) == {
+        "slow_endpoint", "fast_endpoint"
+    }
+    attempt_events = [
+        event for event in events
+        if event["event_type"] == "equivalent_endpoint_attempt_completed"
+    ]
+    assert attempt_events
+    assert all(
+        event["event_detail"]["duplicate_cost_evidence"]
+        == "unavailable_requires_provider_invoice"
+        for event in attempt_events
+    )
+
+
+def test_fast_empty_media_response_cannot_beat_slower_valid_response() -> None:
+    agents = [
+        ModelAgent(
+            "empty_endpoint", "provider/shared", tags=("image",),
+            group_name="shared_image_group", endpoint_equivalence=_equivalence("image"),
+        ),
+        ModelAgent(
+            "valid_endpoint", "provider/shared", tags=("image",),
+            group_name="shared_image_group", endpoint_equivalence=_equivalence("image"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        if agent.id == "valid_endpoint":
+            time.sleep(0.01)
+            return {"data": [{"url": "https://example.invalid/image.png"}]}
+        return {}
+
+    orchestrator.client.proxy_send = send  # type: ignore[method-assign]
+    assert orchestrator.proxy_capability(
+        {"model": "shared-image-group", "prompt": "diagram"},
+        capability="image",
+        endpoint="images/generations",
+    ) == {"data": [{"url": "https://example.invalid/image.png"}]}

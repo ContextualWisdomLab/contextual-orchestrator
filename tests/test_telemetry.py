@@ -410,7 +410,9 @@ def test_stream_and_passthrough_provider_calls_create_client_spans(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "traced", capture)
     monkeypatch.setattr(client, "_validate_provider", lambda unused_agent: None)
     monkeypatch.setattr(client, "_stream_send", lambda *_args: iter(("delta",)))
-    monkeypatch.setattr(client, "_send_raw_with_retry", lambda *_args: {"ok": True})
+    monkeypatch.setattr(
+        client, "_send_raw_with_retry", lambda *_args, **_kwargs: {"ok": True}
+    )
 
     assert list(client.stream_chat(agent, [{"role": "user", "content": "x"}])) == ["delta"]
     assert client.proxy_send(agent, "responses", {"input": "x"}) == {"ok": True}

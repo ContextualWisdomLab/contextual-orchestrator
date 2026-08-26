@@ -31,8 +31,8 @@ evidence control plane.
 |---|---|---|
 | Commercial evidence export | `/api/v1/commercial_evidence_exports/latest` | Primary evidence export input. |
 | Saleability decision | `/api/v1/saleability_decisions/latest` | Concrete blocker and warning source. |
-| Buyer handoff bundle | `/api/v1/buyer_handoff_bundles/latest` | Handoff status and buyer package state. |
-| Buyer evidence manifest | `/api/v1/buyer_evidence_manifests/latest` | Evidence item source, owner, and caveat model. |
+| Buyer handoff bundle | `/api/v1/commercial_handoff_bundles/latest` | Handoff status and buyer package state. |
+| Buyer evidence manifest | `/api/v1/commercial_evidence_manifests/latest` | Evidence item source, owner, and caveat model. |
 | Readiness endpoints | `/api/v1/sales_readiness/latest`, `/api/v1/commercial_readiness/latest` | Local readiness gate source. |
 | Analytics snapshot | `/api/v1/analytics_snapshots/latest` | Measured local KPI and guardrail source. |
 | Admin console | `/admin` | Operator-visible acceptance status. |

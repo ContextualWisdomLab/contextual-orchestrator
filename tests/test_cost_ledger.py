@@ -94,6 +94,19 @@ def test_price_computation_uses_per_1k_rates() -> None:
     assert record.cost_amount == 4.0
     assert record.currency_code == "USD"
     assert record.total_tokens == 1500
+    assert record.measurement_status == "measured"
+
+
+def test_usage_measurement_status_rejects_unknown_provenance() -> None:
+    """Usage rows cannot persist an unrecognized measurement claim."""
+    with pytest.raises(ValueError, match="measurement_status"):
+        _priced_ledger().record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            measurement_status="guessed",
+        )
 
 
 def test_unpriced_model_costs_zero_and_still_records() -> None:

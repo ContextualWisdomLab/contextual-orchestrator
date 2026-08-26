@@ -260,6 +260,7 @@ class UsageRecord:
     total_tokens: int
     cost_amount: float
     currency_code: str
+    measurement_status: str = "measured"
     attribution: AttributionDimensions = field(default_factory=AttributionDimensions)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -279,6 +280,7 @@ class UsageRecord:
             "total_tokens": self.total_tokens,
             "cost_amount": self.cost_amount,
             "currency_code": self.currency_code,
+            "measurement_status": self.measurement_status,
         }
         row.update(
             {
@@ -577,6 +579,14 @@ CREATE TABLE IF NOT EXISTS llm_usage_records (
     currency_code     TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS usage_measurements (
+    usage_record_id    TEXT PRIMARY KEY,
+    measurement_status TEXT NOT NULL,
+    CONSTRAINT usage_measurements_record_foreign_key
+        FOREIGN KEY (usage_record_id) REFERENCES llm_usage_records(usage_record_id)
+        ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS cost_attribution_values (
     dimension_name  TEXT NOT NULL,
     dimension_value TEXT NOT NULL,
@@ -634,6 +644,7 @@ _USAGE_COLUMNS = (
     "total_tokens",
     "cost_amount",
     "currency_code",
+    "measurement_status",
 )
 _RELATIONAL_ATTRIBUTION_COLUMNS = {
     "account": "account_name",
@@ -716,6 +727,16 @@ _RECORD_ATTRIBUTION_INSERT_SQL = {
     )
     for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
 }
+_USAGE_MEASUREMENT_INSERT_SQL = {
+    "qmark": (
+        "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
+        "VALUES (?, ?)"
+    ),
+    "pyformat": (
+        "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
+        "VALUES (%s, %s)"
+    ),
+}
 _USAGE_SELECT_SQL = (
     "SELECT u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
     "u.route_mode, u.provider_name, u.model_name, "
@@ -725,14 +746,16 @@ _USAGE_SELECT_SQL = (
     "COALESCE(MAX(CASE WHEN a.dimension_name = 'team' THEN a.dimension_value END), 'unattributed') AS team_name, "
     "COALESCE(MAX(CASE WHEN a.dimension_name = 'group' THEN a.dimension_value END), 'unattributed') AS group_name, "
     "COALESCE(MAX(CASE WHEN a.dimension_name = 'company' THEN a.dimension_value END), 'unattributed') AS company_name, "
-    "u.prompt_tokens, u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code "
+    "u.prompt_tokens, u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code, "
+    "COALESCE(m.measurement_status, 'unavailable') AS measurement_status "
     "FROM llm_usage_records AS u "
-    "LEFT JOIN usage_record_attributions AS a ON a.usage_record_id = u.usage_record_id"
+    "LEFT JOIN usage_record_attributions AS a ON a.usage_record_id = u.usage_record_id "
+    "LEFT JOIN usage_measurements AS m ON m.usage_record_id = u.usage_record_id"
 )
 _USAGE_GROUP_ORDER_SQL = (
     " GROUP BY u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
     "u.route_mode, u.provider_name, u.model_name, u.prompt_tokens, "
-    "u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code "
+    "u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code, m.measurement_status "
     "ORDER BY u.created_at, u.usage_record_id"
 )
 _USAGE_QUERY_SQL = {
@@ -852,6 +875,10 @@ class SqlLedgerStore:
                 _CORE_USAGE_INSERT_SQL[self._paramstyle],
                 tuple(row[column] for column in _CORE_USAGE_COLUMNS),
             )
+            cur.execute(
+                _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
+                (row["usage_record_id"], "unavailable"),
+            )
             self._insert_normalized_attribution(cur, row)
 
     def _create_schema(self) -> None:
@@ -962,6 +989,10 @@ class SqlLedgerStore:
                 _CORE_USAGE_INSERT_SQL[self._paramstyle],
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
             )
+            cur.execute(
+                _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
+                (row["usage_record_id"], row.get("measurement_status", "unavailable")),
+            )
             self._insert_normalized_attribution(cur, row)
             if outer_transaction:
                 cur.execute("RELEASE SAVEPOINT usage_record_append")
@@ -1050,6 +1081,7 @@ class CostLedger:
         route_mode: Optional[str] = None,
         workflow_run_id: Optional[str] = None,
         attribution: Optional[AttributionDimensions | Dict[str, Any]] = None,
+        measurement_status: str = "measured",
         created_at: Optional[int] = None,
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
@@ -1084,6 +1116,8 @@ class CostLedger:
         cost_amount, currency = self.price_book.compute_cost(
             provider, model, prompt_tokens, completion_tokens
         )
+        if measurement_status not in {"measured", "estimated", "unavailable"}:
+            raise ValueError("measurement_status must be measured, estimated, or unavailable")
         record = UsageRecord(
             usage_record_id=f"usage_{uuid.uuid4().hex}",
             created_at=created_at if created_at is not None else self._clock(),
@@ -1097,6 +1131,7 @@ class CostLedger:
             total_tokens=prompt_tokens + completion_tokens,
             cost_amount=cost_amount,
             currency_code=currency,
+            measurement_status=measurement_status,
             attribution=dims,
         )
         try:

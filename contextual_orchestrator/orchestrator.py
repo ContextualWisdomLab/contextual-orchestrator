@@ -39,6 +39,7 @@ from .chat_capability import (
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .model_group import ModelGroupRouter, canonical_group_name
+from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .provider_errors import ProviderUpstreamError, classify_provider_failure
 from .telemetry import (
     annotate_current_span,
@@ -76,6 +77,8 @@ from .reasoning_effort_profile import (
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
+_PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410})
+_PROVIDER_ERROR_CHAIN_LIMIT = 8
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
@@ -137,10 +140,17 @@ def estimate_tokens(text: str) -> int:
 def _step_output_tokens(step: Mapping[str, Any]) -> tuple[int, bool]:
     """Return provider-reported output tokens or the existing text estimate."""
     usage = step.get("usage")
-    reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
-    if isinstance(reported, int):
-        return reported, True
+    if isinstance(usage, dict):
+        for key in ("completion_tokens", "output_tokens"):
+            reported = usage.get(key)
+            if type(reported) is int and reported >= 0:
+                return reported, True
     return estimate_tokens(step.get("output", "")), False
+
+
+def _step_output_token_count(step: Mapping[str, Any]) -> int:
+    """Return the output count used by in-flight structured budget checks."""
+    return _step_output_tokens(step)[0]
 
 
 def _cost_usd_decimal(output_tokens: int, price_per_million: float) -> Decimal:
@@ -370,6 +380,8 @@ class ModelAgent:
     # ``None`` means provider support is unproven. Opt-in effort profiles then
     # fail closed unless the profile explicitly requests the safe ``omit`` fallback.
     reasoning_effort_supported: bool | None = None
+    # Explicit reviewed replica contract. A group never races when this is absent.
+    endpoint_equivalence: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -383,6 +395,9 @@ class ModelAgent:
             raise ValueError("auth_scheme must be a non-empty string")
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
+        if self.endpoint_equivalence is not None:
+            contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
+            object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -401,6 +416,7 @@ class ModelAgent:
             "auth_scheme": self.auth_scheme,
             "group_name": self.group_name,
             "reasoning_effort_supported": self.reasoning_effort_supported,
+            "endpoint_equivalence": self.endpoint_equivalence,
         }
 
     @property
@@ -432,6 +448,7 @@ class ModelAgent:
             auth_scheme=value.get("auth_scheme", "Bearer"),
             group_name=value.get("group_name", ""),
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
+            endpoint_equivalence=value.get("endpoint_equivalence"),
         )
 
 
@@ -705,7 +722,33 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
                 role = "system"
             if role not in {"system", "user", "assistant"}:
                 raise ValueError(f"unsupported local Responses message role: {role}")
-            content = _responses_text(item.get("content"))
+            raw_content = item.get("content")
+            content: str | list[dict[str, Any]] = _responses_text(raw_content)
+            if isinstance(raw_content, list):
+                parts: list[dict[str, Any]] = []
+                for part in raw_content:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = part.get("type")
+                    if part_type in {"input_text", "output_text", "text"} and isinstance(
+                        part.get("text"), str
+                    ):
+                        parts.append({"type": "text", "text": part["text"]})
+                    elif part_type in {"input_image", "image_url"}:
+                        image_url = part.get("image_url")
+                        if isinstance(image_url, str):
+                            image_url = {
+                                "url": image_url,
+                                **(
+                                    {"detail": part["detail"]}
+                                    if isinstance(part.get("detail"), str)
+                                    else {}
+                                ),
+                            }
+                        if isinstance(image_url, dict):
+                            parts.append({"type": "image_url", "image_url": image_url})
+                if any(part.get("type") == "image_url" for part in parts):
+                    content = parts
             if content:
                 messages.append({"role": role, "content": content})
         elif item_type == "function_call_output":
@@ -747,8 +790,14 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     if "max_output_tokens" in request and "max_tokens" not in payload:
         payload["max_tokens"] = request["max_output_tokens"]
 
+    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
+    if response_format is None and isinstance(request.get("response_format"), dict):
+        response_format = request["response_format"]
+    if response_format is not None:
+        payload["response_format"] = response_format
+
     tools: list[dict[str, Any]] = []
-    for tool in request.get("tools", []):
+    for tool in request.get("tools") or []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
         function = {
@@ -767,6 +816,43 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             "function": {"name": tool_choice.get("name", "")},
         }
     return payload
+
+
+def _responses_text_format_to_chat_response_format(
+    text: Any,
+) -> dict[str, Any] | None:
+    """Translate a validated Responses text format for workflow evidence calls."""
+    if not isinstance(text, dict) or not isinstance(text.get("format"), dict):
+        return None
+    fmt = text["format"]
+    if fmt.get("type") in {"text", "json_object"}:
+        return {"type": fmt["type"]}
+    if fmt.get("type") != "json_schema":
+        return None
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            key: fmt[key]
+            for key in ("name", "schema", "description", "strict")
+            if key in fmt
+        },
+    }
+
+
+def _canonical_provider_usage(
+    usage: dict[str, Any], *, responses: bool
+) -> dict[str, Any]:
+    """Copy provider usage with aliases consumed by existing spend accounting."""
+    canonical = dict(usage)
+    if responses:
+        for responses_key, chat_key in (
+            ("input_tokens", "prompt_tokens"),
+            ("output_tokens", "completion_tokens"),
+        ):
+            value = canonical.get(responses_key)
+            if type(value) is int and value >= 0:
+                canonical.setdefault(chat_key, value)
+    return canonical
 
 
 def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
@@ -830,6 +916,8 @@ def is_transient_error(exc: BaseException) -> bool:
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True
+    if isinstance(exc, socket.gaierror):
+        return exc.errno == socket.EAI_AGAIN
     # A VPN/socket path can surface as an SSL EOF or SSL_ERROR_SYSCALL. Keep
     # certificate verification failures non-transient so a bad trust boundary
     # is never retried as if it were a network fault.
@@ -869,6 +957,65 @@ def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> 
         attributes["gen_ai.response.finish_reasons"] = finish_reasons
     annotate_current_span(attributes)
     record_provider_usage(data.get("usage"))
+
+
+_PASSTHROUGH_TRIGGER_KEYS = (
+    "response_format",
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+)
+
+
+def _is_omit_equivalent_control(key: str, value: Any) -> bool:
+    """Mirror the HTTP-boundary treat-as-omit rules for optional provider controls.
+
+    ``response_format`` / ``tool_choice`` / ``function_call`` treat JSON null,
+    empty objects, and blank strings as omit; the choice keys additionally treat
+    the honest no-op keywords ``"none"`` / ``"auto"`` as omit. ``tools`` /
+    ``functions`` treat JSON null and empty arrays as omit. A trigger key
+    carrying only such a value is omit-equivalent to the key being absent, so it
+    must not select the conducted-evidence + synthesis path on its own (parity
+    with the ``_validate_chat_*`` boundary rules in ``server.py``).
+    """
+    if value is None:
+        return True
+    if key in ("tools", "functions"):
+        return isinstance(value, list) and not value
+    if isinstance(value, dict):
+        return not value
+    if isinstance(value, str):
+        stripped = value.strip().casefold()
+        if not stripped:
+            return True
+        return key in ("tool_choice", "function_call") and stripped in ("none", "auto")
+    return False
+
+
+def _is_passthrough_failover_error(exc: BaseException) -> bool:
+    """Recognize failures proving that a passthrough request was not accepted."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and current.code
+            in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+        ):
+            return True
+        if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return False
+        else:
+            current = current.__context__
+    return False
 
 
 class ModelClient:
@@ -1497,6 +1644,23 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
+        return self._proxy_send(agent, endpoint, payload, allow_transient_retries=True)
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Send one passthrough attempt so cross-provider failover cannot amplify load."""
+        return self._proxy_send(agent, endpoint, payload, allow_transient_retries=False)
+
+    def _proxy_send(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        *,
+        allow_transient_retries: bool,
+    ) -> dict[str, Any]:
+        """Apply the shared passthrough contract with a selectable retry policy."""
         normalized_endpoint = endpoint.strip("/")
         if normalized_endpoint.startswith("v1/"):
             normalized_endpoint = normalized_endpoint[3:]
@@ -1527,18 +1691,46 @@ class ModelClient:
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ):
+            if (
+                normalized_endpoint == "chat/completions"
+                and _is_local_provider_url(agent.base_url)
+            ):
+                # Preserve caller ownership while supplying the configured cap
+                # that local OpenAI-compatible servers require when SDKs omit it.
+                payload = dict(payload)
+                payload.setdefault(
+                    "max_tokens",
+                    self.request_settings_snapshot()["max_output_tokens"],
+                )
             if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
                 chat_payload = _responses_to_chat_payload(payload)
+                if "response_format" in chat_payload and not (
+                    "response_format" in agent.tags
+                    or "capability:response_format" in agent.tags
+                ):
+                    raise ValueError(
+                        "selected model does not support the requested response format"
+                    )
                 chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                     chat_response = self._send_raw_with_retry(
-                        agent, "chat/completions", chat_payload, destination
+                        agent,
+                        "chat/completions",
+                        chat_payload,
+                        destination,
+                        allow_transient_retries=allow_transient_retries,
                     )
                 return _chat_to_responses_payload(chat_response, payload)
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-                return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
+                return self._send_raw_with_retry(
+                    agent,
+                    normalized_endpoint,
+                    payload,
+                    destination,
+                    allow_transient_retries=allow_transient_retries,
+                )
 
     def proxy_send_bytes(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -1565,10 +1757,12 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        allow_transient_retries: bool = True,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
-        retry_limit = self._retry_limit(agent)
+        retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
@@ -1581,6 +1775,8 @@ class ModelClient:
             raise _provider_tool_execution_stopped(agent) from None
         if last_error is None:  # pragma: no cover - the loop always attempts once
             raise RuntimeError(f"provider {agent.id} passthrough request failed")
+        if not allow_transient_retries:
+            raise last_error
         raise classify_provider_failure(
             last_error, agent_id=agent.id, model=agent.model, transport="passthrough"
         ) from None
@@ -2142,6 +2338,26 @@ class _AgentPoolStore:
                 "agent_id TEXT PRIMARY KEY REFERENCES agent_pool(agent_id) ON DELETE CASCADE, "
                 "group_name TEXT NOT NULL REFERENCES model_group(group_name) ON DELETE CASCADE)"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS endpoint_equivalence_contract ("
+                "contract_id TEXT PRIMARY KEY, model_revision TEXT NOT NULL, "
+                "reasoning_effort_profile TEXT NOT NULL, structured_output_contract TEXT NOT NULL, "
+                "accuracy_class TEXT NOT NULL, data_residency_policy TEXT NOT NULL, "
+                "retention_policy TEXT NOT NULL, context_limit INTEGER NOT NULL CHECK(context_limit > 0), "
+                "pricing_evidence_id TEXT NOT NULL, hedge_eligible INTEGER NOT NULL CHECK(hedge_eligible IN (0,1)), "
+                "cancellation_supported INTEGER NOT NULL CHECK(cancellation_supported IN (0,1)), "
+                "execution_policy TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS endpoint_equivalence_capability ("
+                "contract_id TEXT NOT NULL REFERENCES endpoint_equivalence_contract(contract_id) ON DELETE CASCADE, "
+                "capability_name TEXT NOT NULL, PRIMARY KEY(contract_id, capability_name))"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS endpoint_equivalence_member ("
+                "agent_id TEXT PRIMARY KEY REFERENCES agent_pool(agent_id) ON DELETE CASCADE, "
+                "contract_id TEXT NOT NULL REFERENCES endpoint_equivalence_contract(contract_id) ON DELETE RESTRICT)"
+            )
             self._migrate_legacy_groups(conn)
             conn.commit()
         except Exception:
@@ -2252,6 +2468,46 @@ class _AgentPoolStore:
                     "SELECT 1 FROM model_group_member "
                     "WHERE model_group_member.group_name = model_group.group_name)"
                 )
+                conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
+                conn.execute(
+                    "DELETE FROM endpoint_equivalence_contract WHERE NOT EXISTS ("
+                    "SELECT 1 FROM endpoint_equivalence_member "
+                    "WHERE endpoint_equivalence_member.contract_id = "
+                    "endpoint_equivalence_contract.contract_id)"
+                )
+                if agent.endpoint_equivalence is not None:
+                    contract = EndpointEquivalenceContract(**agent.endpoint_equivalence)
+                    conn.execute(
+                        "INSERT INTO endpoint_equivalence_contract VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(contract_id) DO UPDATE SET model_revision=excluded.model_revision, "
+                        "reasoning_effort_profile=excluded.reasoning_effort_profile, "
+                        "structured_output_contract=excluded.structured_output_contract, "
+                        "accuracy_class=excluded.accuracy_class, data_residency_policy=excluded.data_residency_policy, "
+                        "retention_policy=excluded.retention_policy, context_limit=excluded.context_limit, "
+                        "pricing_evidence_id=excluded.pricing_evidence_id, hedge_eligible=excluded.hedge_eligible, "
+                        "cancellation_supported=excluded.cancellation_supported, "
+                        "execution_policy=excluded.execution_policy",
+                        (
+                            contract.contract_id, contract.model_revision,
+                            contract.reasoning_effort_profile, contract.structured_output_contract,
+                            contract.accuracy_class, contract.data_residency_policy,
+                            contract.retention_policy, contract.context_limit,
+                            contract.pricing_evidence_id, int(contract.hedge_eligible),
+                            int(contract.cancellation_supported), contract.execution_policy,
+                        ),
+                    )
+                    conn.execute(
+                        "DELETE FROM endpoint_equivalence_capability WHERE contract_id = ?",
+                        (contract.contract_id,),
+                    )
+                    conn.executemany(
+                        "INSERT INTO endpoint_equivalence_capability (contract_id, capability_name) VALUES (?, ?)",
+                        [(contract.contract_id, name) for name in contract.capability_set],
+                    )
+                    conn.execute(
+                        "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
+                        (agent.id, contract.contract_id),
+                    )
                 conn.commit()
             finally:
                 conn.close()
@@ -2280,6 +2536,14 @@ class _AgentPoolStore:
                 groups = conn.execute(
                     "SELECT agent_id, group_name FROM model_group_member ORDER BY agent_id"
                 ).fetchall()
+                contracts = conn.execute(
+                    "SELECT endpoint_equivalence_member.agent_id, endpoint_equivalence_contract.* "
+                    "FROM endpoint_equivalence_member JOIN endpoint_equivalence_contract USING (contract_id)"
+                ).fetchall()
+                contract_capabilities = conn.execute(
+                    "SELECT contract_id, capability_name FROM endpoint_equivalence_capability "
+                    "ORDER BY contract_id, capability_name"
+                ).fetchall()
             finally:
                 conn.close()
         tags_by_agent: dict[str, list[str]] = {}
@@ -2289,6 +2553,22 @@ class _AgentPoolStore:
         for agent_id, _position, provider_name in exclusions:
             exclusions_by_agent.setdefault(agent_id, []).append(provider_name)
         group_by_agent: dict[str, str] = dict(groups)
+        capabilities_by_contract: dict[str, list[str]] = {}
+        for contract_id, capability_name in contract_capabilities:
+            capabilities_by_contract.setdefault(contract_id, []).append(capability_name)
+        contract_by_agent = {
+            row[0]: {
+                "contract_id": row[1], "model_revision": row[2],
+                "reasoning_effort_profile": row[3],
+                "structured_output_contract": row[4], "accuracy_class": row[5],
+                "data_residency_policy": row[6], "retention_policy": row[7],
+                "context_limit": row[8], "pricing_evidence_id": row[9],
+                "hedge_eligible": bool(row[10]), "cancellation_supported": bool(row[11]),
+                "execution_policy": row[12],
+                "capability_set": tuple(capabilities_by_contract.get(row[1], ())),
+            }
+            for row in contracts
+        }
         return [
             ModelAgent(
                 id=row[0],
@@ -2305,6 +2585,7 @@ class _AgentPoolStore:
                 auth_scheme=row[9],
                 reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
                 group_name=group_by_agent.get(row[0], ""),
+                endpoint_equivalence=contract_by_agent.get(row[0]),
             )
             for row in rows
         ]
@@ -2593,6 +2874,9 @@ class TaskOrchestrator:
         # production always uses the exact-schema implementation below.
         self._triage_fn = self._triage_workflow_required
         self.client = client or ModelClient()
+        # The cost coordinator installs this optional sink. Direct orchestrator
+        # callers still retain audit evidence without inventing price or usage.
+        self._race_usage_sink: Callable[[str, Any], None] | None = None
         if (
             isinstance(tool_retry_attempts, bool)
             or not isinstance(tool_retry_attempts, int)
@@ -2746,14 +3030,32 @@ class TaskOrchestrator:
         *,
         endpoint: str = "chat/completions",
         effort_profile: ReasoningEffortProfile | None = None,
+        single_agent: bool = True,
     ) -> dict[str, Any]:
-        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+        """Serve provider-shaped requests through orchestration or explicit passthrough.
 
-        Requests carrying provider features the multi-agent verifier cannot merge
-        (``response_format``, ``tools``, or the Responses API) are handled by a
-        single selected agent so the full provider response shape survives; the
-        orchestration path stays reserved for plain-text routing/verification.
+        Structured and Responses requests conduct the normal evidence workflow
+        when the HTTP boundary opts in. Omit-equivalent controls (JSON nulls,
+        empty objects/arrays, blank strings, and the honest no-op keywords such
+        as ``tool_choice="auto"`` without tools) never opt a request in on their
+        own — they take the plain passthrough path exactly like an absent key.
+        Direct callers retain the established single-provider passthrough
+        contract.
         """
+        normalized_endpoint = endpoint.strip("/")
+        if not single_agent and (
+            normalized_endpoint == "responses"
+            or any(
+                key in body
+                and not _is_omit_equivalent_control(key, body.get(key))
+                for key in _PASSTHROUGH_TRIGGER_KEYS
+            )
+        ):
+            return self._orchestrated_provider_completion(
+                body,
+                endpoint=normalized_endpoint,
+                effort_profile=effort_profile,
+            )
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
@@ -2779,24 +3081,331 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
-        if effort_profile is not None:
-            upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
-        started_at = time.perf_counter()
-        try:
-            result = self.client.proxy_send(agent, endpoint, upstream)
-        except Exception:
+        if requested_model not in (
+            None,
+            "contextual-orchestrator",
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        ):
+            if effort_profile is not None:
+                upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+            measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
+            started_at = time.perf_counter()
+            try:
+                result = self.client.proxy_send(agent, endpoint, upstream)
+            except Exception:
+                if measured:
+                    self._group_router.observe_failure(agent.id)
+                raise
             if measured:
-                self._group_router.observe_failure(agent.id)
-            raise
-        if measured:
-            self._group_router.observe_success(
-                agent.id, time.perf_counter() - started_at
+                self._group_router.observe_success(
+                    agent.id, time.perf_counter() - started_at
+                )
+            return result
+
+        allowed_agent_ids = (
+            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            if requested_model == self.FREE_MODEL
+            else (
+                {candidate.id for candidate in self.agents}
+                if requested_model == self.AUTO_MODEL
+                else None
             )
-        return result
+        )
+        # Cross-provider failover lives ONLY on this plain virtual passthrough
+        # path (and the virtual tools path reached with single_agent=True).
+        # Conducted structured synthesis never replays across providers — see
+        # _orchestrated_provider_completion.
+        ranked_candidates = self._failover_candidates(
+            agent, text, "worker", allowed_agent_ids=allowed_agent_ids
+        )
+        if (
+            effort_profile is not None
+            and effort_profile.unsupported_provider_fallback != "omit"
+        ):
+            supported = [
+                candidate
+                for candidate in ranked_candidates
+                if candidate.reasoning_effort_supported is True
+                or (
+                    candidate.reasoning_effort_supported is None
+                    and candidate.base_url.startswith("mock://")
+                )
+            ]
+            if supported:
+                ranked_candidates = supported
+        candidates: list[ModelAgent] = []
+        seen_providers: set[str] = set()
+        for candidate in ranked_candidates:
+            provider_key = (
+                f"provider:{candidate.provider_name.casefold()}"
+                if candidate.provider_name.strip()
+                else f"endpoint:{candidate.base_url.rstrip('/').casefold()}"
+            )
+            if provider_key in seen_providers:
+                continue
+            seen_providers.add(provider_key)
+            candidates.append(candidate)
+        last_error: Exception | None = None
+        for candidate in candidates:
+            started_at = time.perf_counter()
+            candidate_payload = dict(upstream)
+            candidate_payload["model"] = candidate.model
+            if effort_profile is not None:
+                candidate_payload = self.client.apply_effort_profile(
+                    candidate, candidate_payload, effort_profile
+                )
+            try:
+                send_once = getattr(self.client, "proxy_send_once", None)
+                if not callable(send_once):
+                    send_once = self.client.proxy_send
+                result = send_once(candidate, endpoint, candidate_payload)
+            except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                if not _is_passthrough_failover_error(exc):
+                    raise
+                last_error = exc
+                self._record_failure(candidate.id)
+                if candidate.group_name:
+                    self._group_router.observe_failure(candidate.id)
+                continue
+            self._record_success(candidate.id)
+            if candidate.group_name:
+                self._group_router.observe_success(
+                    candidate.id, time.perf_counter() - started_at
+                )
+            return result
+        raise RuntimeError(
+            f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
+        ) from last_error
+
+    def _orchestrated_provider_completion(
+        self,
+        body: dict[str, Any],
+        *,
+        endpoint: str,
+        effort_profile: ReasoningEffortProfile | None,
+    ) -> dict[str, Any]:
+        """Conduct evidence work, then preserve the caller's provider contract.
+
+        Structured synthesis here is INTENTIONALLY single-provider: the final
+        synthesized response is produced by exactly one selected synthesizer
+        agent with no cross-provider retry loop. Cross-provider failover is a
+        property of the plain virtual passthrough / virtual tools paths only
+        (see ``proxy_completion``), where a raw request can be replayed on a
+        different provider without changing its meaning; replaying a conducted
+        synthesis would mix evidence and attribution across providers, so it
+        stays single-shot and fails closed instead.
+        """
+        response_request = endpoint == "responses"
+        chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
+        messages = chat_body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("structured completion requires non-empty messages")
+        task = self._latest_user_text(messages)
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        requested_model = body.get("model")
+        free_only = requested_model == self.FREE_MODEL
+        final_agent = self._requested_agent(requested_model)
+        if final_agent is None:
+            try:
+                final_agent = self._select_agent(
+                    task,
+                    "synthesizer",
+                    required_tags=required_tags,
+                    free_only=free_only,
+                )
+            except RuntimeError as exc:
+                if not required_tags:
+                    raise
+                raise ValueError("no enabled vision-capable model is available") from exc
+        elif any(tag not in final_agent.tags for tag in required_tags):
+            raise ValueError(
+                f"requested model {requested_model!r} lacks required tags: "
+                + ", ".join(required_tags)
+            )
+        if final_agent.disabled:
+            raise RuntimeError(f"requested model {requested_model!r} is disabled")
+
+        self._raise_if_spend_budget_exceeded()
+        workflow = self.conduct(
+            messages,
+            model_name=self.FREE_MODEL if free_only else "contextual-orchestrator",
+        )
+        in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        in_flight_cost = sum(
+            _step_output_token_count(step)
+            / 1_000_000
+            * self.price_per_million[model]
+            for step in workflow["trace"]
+            if (
+                model := model_by_agent.get(
+                    step.get("served_agent_id") or step.get("agent_id")
+                )
+            )
+            in self.price_per_million
+        )
+        self._raise_if_spend_budget_exceeded(
+            additional_output_tokens=in_flight_tokens,
+            additional_cost_usd=round(in_flight_cost, 6),
+        )
+
+        evidence = "\n\n".join(
+            f"Workflow step {step['id']} ({step['role']}):\n{step['output']}"
+            for step in workflow["trace"]
+        )
+        guidance = (
+            "You are the final synthesizer in a multi-agent workflow. "
+            "Use the original request and verified workflow evidence. Return only "
+            "the requested provider response; do not mention the workflow or invent "
+            f"evidence.\n\nVerified workflow evidence:\n{evidence}"
+        )
+        if response_request:
+            upstream = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
+            }
+            upstream.pop("max_tokens", None)
+            upstream.pop("max_completion_tokens", None)
+            original_instructions = _responses_text(body.get("instructions")).strip()
+            upstream["instructions"] = (
+                f"{original_instructions}\n\n{guidance}"
+                if original_instructions
+                else guidance
+            )
+            upstream["model"] = final_agent.model
+            upstream["stream"] = False
+        else:
+            synthesis_messages = copy.deepcopy(messages)
+            guidance_index = next(
+                (
+                    index
+                    for index in range(len(synthesis_messages) - 1, -1, -1)
+                    if synthesis_messages[index].get("role") == "user"
+                ),
+                None,
+            )
+            if guidance_index is None:
+                synthesis_messages.insert(0, {"role": "system", "content": guidance})
+            else:
+                content = synthesis_messages[guidance_index].get("content")
+                if isinstance(content, list):
+                    synthesis_messages[guidance_index]["content"] = [
+                        *content,
+                        {"type": "text", "text": guidance},
+                    ]
+                else:
+                    synthesis_messages[guidance_index]["content"] = (
+                        f"{content}\n\n{guidance}" if isinstance(content, str) else guidance
+                    )
+            upstream = {
+                key: value
+                for key, value in chat_body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS
+                and key not in {"model", "messages"}
+            }
+            upstream.update(
+                {
+                    "model": final_agent.model,
+                    "messages": synthesis_messages,
+                    "stream": False,
+                }
+            )
+        active_profile = effort_profile or self._role_effort_profile("synthesizer")
+        if active_profile is not None:
+            upstream = self.client.apply_effort_profile(
+                final_agent,
+                upstream,
+                active_profile,
+            )
+        synthesis_started = time.perf_counter()
+        # Single-provider by design: no cross-provider failover on this
+        # conducted synthesis call (see the docstring above) — only the plain
+        # virtual passthrough / virtual tools paths fail over across providers.
+        raw = self.client.proxy_send(final_agent, endpoint, upstream)
+        echo = raw.get("echo")
+        if isinstance(echo, dict):
+            if response_request:
+                original_instructions = body.get("instructions")
+                if isinstance(original_instructions, str) and original_instructions.strip():
+                    echo["instructions"] = original_instructions
+                else:
+                    echo.pop("instructions", None)
+            elif "messages" in echo:
+                echo["messages"] = copy.deepcopy(messages)
+        synthesis_output = ""
+        if response_request:
+            synthesis_output = raw.get("output_text")
+            if not isinstance(synthesis_output, str):
+                synthesis_output = "".join(
+                    _responses_text(item.get("content"))
+                    for item in raw.get("output", [])
+                    if isinstance(item, dict) and item.get("type") == "message"
+                )
+            raw.setdefault("output_text", synthesis_output)
+        else:
+            try:
+                synthesis_output = ModelClient._response_content(final_agent, raw)
+            except RuntimeError:
+                pass
+        synthesis_step: dict[str, Any] = {
+            "id": len(workflow["trace"]),
+            "role": "synthesizer",
+            "agent_id": final_agent.id,
+            "subtask": "Provider-facing structured synthesis",
+            "access": [step["id"] for step in workflow["trace"]],
+            "latency_ms": round((time.perf_counter() - synthesis_started) * 1000, 2),
+            "output": synthesis_output,
+        }
+        if isinstance(raw.get("usage"), dict):
+            synthesis_step["usage"] = _canonical_provider_usage(
+                raw["usage"], responses=response_request
+            )
+        workflow_run_id = f"run_{uuid.uuid4().hex}"
+        trace = [*workflow["trace"], synthesis_step]
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id,
+                "created_at": int(time.time()),
+                "mode": "conduct",
+                "policy_mode": "conduct",
+                "prompt_text": task,
+                "answer": synthesis_output,
+                "cache_status": "bypass",
+                "trace": trace,
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": workflow.get("verification"),
+            }
+        )
+        self._workflow_runs[workflow_run_id] = record
+        self._run_order.appendleft(workflow_run_id)
+        if self._store is not None:
+            self._store.save("workflow_run", workflow_run_id, record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "run_mode": "conduct",
+                "policy_mode": "conduct",
+                "trace_step_count": len(trace),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        raw["orchestration"] = {
+            "workflow_run_id": workflow_run_id,
+            "mode": "conduct",
+            "agent_count": len(trace),
+            "plan_source": workflow.get("plan_source"),
+        }
+        return raw
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
@@ -3092,6 +3701,51 @@ class TaskOrchestrator:
             )
         return record
 
+    def _raise_if_spend_budget_exceeded(
+        self,
+        *,
+        additional_output_tokens: int = 0,
+        additional_cost_usd: float = 0.0,
+    ) -> None:
+        """Fail before another provider call would cross an operator budget."""
+        with self._budget_spend_lock:
+            spent_output_tokens = self._budget_spent_output_tokens
+            spent_cost_decimal = self._budget_spent_cost_usd
+            budget = self._budget_block(
+                spent_output_tokens,
+                float(spent_cost_decimal) if self.price_per_million else None,
+            )
+            spent_tokens = spent_output_tokens + additional_output_tokens
+            spent_cost = budget["spent_cost_usd"]
+            effective_cost = (
+                spent_cost + additional_cost_usd if spent_cost is not None else None
+            )
+            if budget["exceeded"] or (
+                budget["max_output_tokens"] is not None
+                and spent_tokens >= budget["max_output_tokens"]
+            ) or (
+                budget["max_cost_usd"] is not None
+                and effective_cost is not None
+                and effective_cost >= budget["max_cost_usd"]
+            ):
+                raise BudgetExceededError("spend budget exceeded", detail=budget)
+
+    def _trace_budget_spend(self, trace: list[dict[str, Any]]) -> tuple[int, float]:
+        """Return completed provider-call spend for a workflow budget checkpoint."""
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        output_tokens = sum(_step_output_token_count(step) for step in trace)
+        output_cost = sum(
+            _step_output_token_count(step) / 1_000_000 * self.price_per_million[model]
+            for step in trace
+            if (
+                model := model_by_agent.get(
+                    step.get("served_agent_id") or step.get("agent_id")
+                )
+            )
+            in self.price_per_million
+        )
+        return output_tokens, round(output_cost, 6)
+
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
 
@@ -3367,6 +4021,11 @@ class TaskOrchestrator:
         if "group_name" in patch:
             group_name = str(patch["group_name"])
             patched = replace(patched, group_name=canonical_group_name(group_name) if group_name else "")
+        if "endpoint_equivalence" in patch:
+            value = patch["endpoint_equivalence"]
+            if value is not None and not isinstance(value, dict):
+                raise ValueError("endpoint_equivalence must be an object or null")
+            patched = replace(patched, endpoint_equivalence=value)
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -3761,7 +4420,10 @@ class TaskOrchestrator:
         progress: Any = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
+        self._raise_if_spend_budget_exceeded()
         task = self._latest_user_text(messages)
+        source_images = self._source_image_parts(messages)
+        required_tags = ("vision",) if source_images else ()
         caller_instructions = "\n\n".join(
             message["content"]
             for message in messages
@@ -3774,6 +4436,8 @@ class TaskOrchestrator:
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
+            except BudgetExceededError:
+                raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
                 plan_source = "template_fallback"
@@ -3798,10 +4462,38 @@ class TaskOrchestrator:
         )
 
         for step in steps:
+            if plan_source == "generated":
+                in_flight_tokens, in_flight_cost = self._trace_budget_spend(trace)
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
             agent = self._agent(step.agent_id)
+            if any(tag not in agent.tags for tag in required_tags):
+                try:
+                    capable = self._ranked_agents(
+                        step.subtask,
+                        step.role,
+                        required_tags=required_tags,
+                        free_only=model_name == self.FREE_MODEL,
+                    )
+                except RuntimeError:
+                    capable = []
+                if capable:
+                    agent = capable[0]
             if progress is not None:
                 progress(step.role, "started")
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
+            instruction = (
+                f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\n"
+                f"Subtask:\n{step.subtask}"
+            )
+            user_content: str | list[dict[str, Any]] = instruction
+            if source_images:
+                user_content = [
+                    {"type": "text", "text": instruction},
+                    *copy.deepcopy(source_images),
+                ]
             step_messages = [
                 {
                     "role": "system",
@@ -3814,7 +4506,7 @@ class TaskOrchestrator:
                 },
                 {
                     "role": "user",
-                    "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
+                    "content": user_content,
                 },
             ]
             start = time.perf_counter()
@@ -3828,6 +4520,7 @@ class TaskOrchestrator:
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
+            row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
             row["model"] = agent.model
             row["provider"] = agent.provider_name or agent.base_url.split("://", 1)[-1]
@@ -4024,6 +4717,7 @@ class TaskOrchestrator:
         text: str,
         role: str,
         *,
+        required_tags: tuple[str, ...] = (),
         free_only: bool = False,
         chat_only: bool = True,
     ) -> list[ModelAgent]:
@@ -4043,6 +4737,7 @@ class TaskOrchestrator:
             for agent in self.agents
             if (not free_only or self._is_free_agent(agent))
             and (not chat_only or is_general_chat_agent_model_id(agent.model))
+            and all(tag in agent.tags for tag in required_tags)
         ]
         if not candidates:
             if free_only:
@@ -4275,7 +4970,14 @@ class TaskOrchestrator:
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
             return True
 
-    def _select_agent(self, text: str, role: str, *, free_only: bool = False) -> ModelAgent:
+    def _select_agent(
+        self,
+        text: str,
+        role: str,
+        *,
+        free_only: bool = False,
+        required_tags: tuple[str, ...] = (),
+    ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
@@ -4285,8 +4987,11 @@ class TaskOrchestrator:
         """
         ranked = [
             agent
-            for agent in self._ranked_agents(text, role, free_only=free_only)
+            for agent in self._ranked_agents(
+                text, role, free_only=free_only, required_tags=required_tags
+            )
             if is_general_chat_agent_model_id(agent.model)
+            and all(tag in agent.tags for tag in required_tags)
         ]
         if not ranked:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
@@ -4346,6 +5051,133 @@ class TaskOrchestrator:
         """Select a measured member supporting a capability, optionally within one group."""
         return self._capability_agents(capability, model_name)[0]
 
+    @staticmethod
+    def _equivalent_race_members(
+        candidates: list[ModelAgent], *, capability: str
+    ) -> list[ModelAgent]:
+        """Return replicas proven equivalent for the requested capability."""
+        if len(candidates) < 2 or not candidates[0].group_name:
+            return []
+        declared = [agent for agent in candidates if agent.endpoint_equivalence is not None]
+        if len(declared) < 2:
+            return []
+        first = declared[0]
+        contract = EndpointEquivalenceContract(**first.endpoint_equivalence)  # type: ignore[arg-type]
+        if (
+            capability not in contract.capability_set
+            or not contract.hedge_eligible
+            or contract.execution_policy != "immediate_race"
+        ):
+            return []
+        peers = [
+            agent
+            for agent in declared
+            if agent.group_name == first.group_name
+            and EndpointEquivalenceContract(**agent.endpoint_equivalence) == contract  # type: ignore[arg-type]
+        ]
+        return peers if len(peers) >= 2 else []
+
+    def _record_endpoint_race(self, outcome: Any, *, capability: str) -> None:
+        """Persist secret-free winner and cancellation provenance."""
+        self._append_audit_event(
+            "equivalent_endpoint_race_completed",
+            {
+                "capability": capability,
+                "winner_endpoint_id": outcome.winner_endpoint_id,
+                "attempted_endpoint_ids": list(outcome.attempted_endpoint_ids),
+                "cancellation_outcomes": dict(outcome.cancellation_outcomes),
+                "completion_ms": outcome.completion_ms,
+            },
+        )
+
+    def _record_endpoint_attempt(
+        self,
+        endpoint_id: str,
+        value: Any | None,
+        error: BaseException | None,
+        *,
+        capability: str,
+    ) -> None:
+        """Record reported duplicate usage without treating missing usage as free."""
+        usage = None
+        if isinstance(value, tuple) and len(value) == 3 and isinstance(value[2], dict):
+            usage = value[2]
+        elif isinstance(value, dict) and isinstance(value.get("usage"), dict):
+            usage = value["usage"]
+        self._append_audit_event(
+            "equivalent_endpoint_attempt_completed",
+            {
+                "capability": capability,
+                "endpoint_id": endpoint_id,
+                "validation_outcome": "provider_error" if error is not None else "completed",
+                "usage": usage,
+                "duplicate_cost_evidence": (
+                    "provider_reported_usage" if usage is not None
+                    else "unavailable_requires_provider_invoice"
+                ),
+            },
+        )
+
+    def _record_race_attempt(
+        self,
+        endpoint_id: str,
+        value: Any | None,
+        error: BaseException | None,
+        *,
+        capability: str,
+    ) -> None:
+        """Share race completion evidence with normal stability/circuit ledgers."""
+        self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
+        if error is not None:
+            self._group_router.observe_failure(endpoint_id)
+            self._record_failure(endpoint_id)
+
+    def _race_attempt_collector(
+        self, capability: str
+    ) -> tuple[
+        Callable[[str, Any | None, BaseException | None], None],
+        Callable[[str | None], None],
+    ]:
+        """Return callbacks that ledger completed loser usage after winner selection."""
+        state_lock = threading.Lock()
+        pending: list[tuple[str, Any]] = []
+        state: dict[str, Any] = {"finalized": False, "winner": None}
+
+        def emit(endpoint_id: str, value: Any) -> None:
+            sink = self._race_usage_sink
+            if sink is not None:
+                sink(endpoint_id, value)
+
+        def completed(
+            endpoint_id: str,
+            value: Any | None,
+            error: BaseException | None,
+        ) -> None:
+            self._record_race_attempt(
+                endpoint_id, value, error, capability=capability
+            )
+            if error is not None or value is None:
+                return
+            with state_lock:
+                if not state["finalized"]:
+                    pending.append((endpoint_id, value))
+                    return
+                winner = state["winner"]
+            if winner is None or endpoint_id != winner:
+                emit(endpoint_id, value)
+
+        def finalize(winner_endpoint_id: str | None) -> None:
+            with state_lock:
+                state["finalized"] = True
+                state["winner"] = winner_endpoint_id
+                ready = list(pending)
+                pending.clear()
+            for endpoint_id, value in ready:
+                if winner_endpoint_id is None or endpoint_id != winner_endpoint_id:
+                    emit(endpoint_id, value)
+
+        return completed, finalize
+
     def proxy_capability(
         self,
         body: dict[str, Any],
@@ -4357,6 +5189,66 @@ class TaskOrchestrator:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
+        race_members = self._equivalent_race_members(candidates, capability=capability)
+        if race_members:
+            if len(race_members) > MAX_LOCAL_CONCURRENCY:
+                raise ValueError(
+                    "immediate_race endpoint count exceeds the supported concurrency capacity"
+                )
+            def call(agent: ModelAgent) -> dict[str, Any] | tuple[bytes, str]:
+                payload = {
+                    key: value for key, value in body.items()
+                    if key not in self._ORCHESTRATION_ONLY_KEYS
+                }
+                payload["model"] = agent.model
+                provider_endpoint = (
+                    "images"
+                    if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                    else endpoint
+                )
+                return (
+                    self.client.proxy_send_bytes(agent, provider_endpoint, payload)
+                    if binary else self.client.proxy_send(agent, provider_endpoint, payload)
+                )
+
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
+            attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
+            try:
+                outcome = race_first_valid(
+                    [
+                        EndpointAttempt(
+                            agent.id,
+                            contract,
+                            lambda agent=agent: call(agent),
+                            cancellation_supported=False,
+                        )
+                        for agent in race_members
+                    ],
+                    validate=(
+                        (
+                            lambda value: isinstance(value, tuple)
+                            and len(value) == 2
+                            and isinstance(value[0], bytes)
+                            and bool(value[0])
+                        )
+                        if binary
+                        else (lambda value: isinstance(value, dict) and bool(value))
+                    ),
+                    deadline_seconds=self.client.timeout,
+                    max_concurrency=len(race_members),
+                    on_attempt_complete=attempt_completed,
+                )
+            except RuntimeError:
+                outcome = None
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id
+            )
+            if outcome is not None:
+                self._record_endpoint_race(outcome, capability=capability)
+                self._group_router.observe_success(
+                    outcome.winner_endpoint_id, outcome.completion_ms / 1000
+                )
+                return outcome.value
         last_error: Exception | None = None
         for agent in candidates:
             payload = {
@@ -4405,11 +5297,79 @@ class TaskOrchestrator:
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
         """
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
         candidates = self._failover_candidates(
-            primary, text, eligibility_role or role, allowed_agent_ids
+            primary,
+            text,
+            eligibility_role or role,
+            required_tags=required_tags,
+            allowed_agent_ids=allowed_agent_ids,
         )
+        if not candidates and required_tags:
+            candidates = self._failover_candidates(
+                primary,
+                text,
+                eligibility_role or role,
+                allowed_agent_ids=allowed_agent_ids,
+            )
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        race_members = self._equivalent_race_members(candidates, capability="text")
+        if race_members:
+            if len(race_members) > MAX_LOCAL_CONCURRENCY:
+                raise ValueError(
+                    "immediate_race endpoint count exceeds the supported concurrency capacity"
+                )
+            effort_profile = self._role_effort_profile(role)
+            request_settings = self.client.request_settings_snapshot()
+
+            def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
+                with self.client.request_settings(**request_settings):
+                    output = (
+                        self.client.chat(agent, messages, effort_profile=effort_profile)
+                        if effort_profile is not None
+                        else self.client.chat(agent, messages)
+                    )
+                    usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                return output, agent.id, usage
+
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
+            attempt_completed, finalize_attempts = self._race_attempt_collector("text")
+            try:
+                outcome = race_first_valid(
+                [
+                    EndpointAttempt(
+                        agent.id,
+                        contract,
+                        lambda agent=agent: call(agent),
+                    )
+                    for agent in race_members
+                    ],
+                    validate=lambda value: isinstance(value[0], str) and bool(value[0]),
+                    deadline_seconds=self.client.timeout,
+                    max_concurrency=len(race_members),
+                    on_attempt_complete=attempt_completed,
+                )
+            except RuntimeError:
+                outcome = None
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id
+            )
+            if outcome is not None:
+                self._record_endpoint_race(outcome, capability="text")
+                self._record_success(outcome.winner_endpoint_id)
+                usage = outcome.value[2]
+                output_tokens = None
+                if isinstance(usage, dict):
+                    reported = usage.get("completion_tokens", usage.get("output_tokens"))
+                    if type(reported) is int and reported > 0:
+                        output_tokens = reported
+                self._group_router.observe_success(
+                    outcome.winner_endpoint_id,
+                    outcome.completion_ms / 1000,
+                    output_tokens=output_tokens,
+                )
+                return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         # The final classified upstream failure survives the candidate loop so a
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
@@ -4509,9 +5469,16 @@ class TaskOrchestrator:
         primary: ModelAgent,
         text: str,
         role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
         allowed_agent_ids: set[str] | None = None,
     ) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role)
+        try:
+            ranked = self._ranked_agents(text, role, required_tags=required_tags)
+        except RuntimeError:
+            if required_tags:
+                return []
+            raise
         if allowed_agent_ids is not None:
             ranked = [agent for agent in ranked if agent.id in allowed_agent_ids]
         if allowed_agent_ids is None:
@@ -4525,8 +5492,17 @@ class TaskOrchestrator:
                     else not primary.group_name and not agent.group_name
                 )
             ]
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
-        ordered = [agent for agent in ordered if is_general_chat_agent_model_id(agent.model)]
+        ordered = (
+            [primary]
+            if allowed_agent_ids is None or primary.id in allowed_agent_ids
+            else []
+        ) + [agent for agent in ranked if agent.id != primary.id]
+        ordered = [
+            agent
+            for agent in ordered
+            if is_general_chat_agent_model_id(agent.model)
+            and all(tag in agent.tags for tag in required_tags)
+        ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
@@ -4591,6 +5567,17 @@ class TaskOrchestrator:
             if text:
                 return text
         return ""  # pragma: no cover
+
+    @staticmethod
+    def _source_image_parts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        """Copy validated image parts so evidence steps receive source pixels."""
+        return [
+            copy.deepcopy(part)
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+            if isinstance(part, dict) and part.get("type") == "image_url"
+        ]
 
     def _model_judge_verification(
         self,
@@ -5466,13 +6453,13 @@ class TaskOrchestrator:
             "sales_readiness": sales_readiness,
         }
 
-    def buyer_evidence_manifest_report(
+    def commercial_evidence_manifest_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the buyer-facing evidence index for high-value commercial review."""
+        """Return the evidence index for commercial readiness review."""
         commercial = self.commercial_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
@@ -5610,7 +6597,7 @@ class TaskOrchestrator:
                 "buyer_evidence_manifest",
                 "Buyer evidence manifest",
                 "Deal owner",
-                ["docs/commercial_buyer_evidence_manifest.md", "/api/v1/buyer_evidence_manifests/latest"],
+                ["docs/commercial_buyer_evidence_manifest.md", "/api/v1/commercial_evidence_manifests/latest"],
                 "measured_local",
                 "ready" if has_file("docs/commercial_buyer_evidence_manifest.md") else "blocked",
                 "Buyer evidence is indexed by owner, source, evidence type, and completion state.",
@@ -5674,14 +6661,14 @@ class TaskOrchestrator:
             },
         }
 
-    def buyer_handoff_bundle_report(
+    def commercial_handoff_bundle_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return a buyer handoff bundle that packages sale-readiness evidence."""
-        manifest = self.buyer_evidence_manifest_report(
+        """Return the commercial handoff bundle for sale-readiness evidence."""
+        manifest = self.commercial_evidence_manifest_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
@@ -5701,7 +6688,7 @@ class TaskOrchestrator:
                 [
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
                     "/api/v1/analytics_snapshots/latest",
                 ],
                 "measured_local",
@@ -5867,6 +6854,32 @@ class TaskOrchestrator:
             },
         }
 
+    def buyer_evidence_manifest_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the deprecated manifest alias for existing Python consumers."""
+        return self.commercial_evidence_manifest_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+
+    def buyer_handoff_bundle_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the deprecated handoff alias for existing Python consumers."""
+        return self.commercial_handoff_bundle_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+
     def saleability_decision_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
@@ -5874,7 +6887,7 @@ class TaskOrchestrator:
         security_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer-facing saleability decision for high-value review."""
-        handoff = self.buyer_handoff_bundle_report(
+        handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
@@ -5924,12 +6937,12 @@ class TaskOrchestrator:
                 {
                     "basis_name": "buyer_handoff_bundle",
                     "status": handoff["bundle_status"],
-                    "source": "/api/v1/buyer_handoff_bundles/latest",
+                    "source": "/api/v1/commercial_handoff_bundles/latest",
                 },
                 {
                     "basis_name": "buyer_evidence_manifest",
                     "status": handoff["related_runtime_reports"]["buyer_manifest_status"],
-                    "source": "/api/v1/buyer_evidence_manifests/latest",
+                    "source": "/api/v1/commercial_evidence_manifests/latest",
                 },
                 {
                     "basis_name": "commercial_readiness",
@@ -6011,8 +7024,8 @@ class TaskOrchestrator:
                 [
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "/api/v1/saleability_decisions/latest",
                     "/api/v1/analytics_snapshots/latest",
                 ],
@@ -6184,8 +7197,8 @@ class TaskOrchestrator:
                     "/api/v1/analytics_snapshots/latest",
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "/api/v1/saleability_decisions/latest",
                     "/api/v1/commercial_evidence_exports/latest",
                 ],
@@ -6407,8 +7420,8 @@ class TaskOrchestrator:
                     "/api/v1/analytics_snapshots/latest",
                     "/api/v1/sales_readiness/latest",
                     "/api/v1/commercial_readiness/latest",
-                    "/api/v1/buyer_evidence_manifests/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_evidence_manifests/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "/api/v1/saleability_decisions/latest",
                     "/api/v1/commercial_evidence_exports/latest",
                     "/api/v1/commercial_acceptance_checks/latest",
@@ -8320,7 +9333,7 @@ class TaskOrchestrator:
             locale_bundles=locale_bundles,
             security_profile=security_profile,
         )
-        handoff = self.buyer_handoff_bundle_report(
+        handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
@@ -8407,7 +9420,7 @@ class TaskOrchestrator:
                 "owner": "Evidence owner",
                 "sources": [
                     "/api/v1/commercial_evidence_exports/latest",
-                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/commercial_handoff_bundles/latest",
                     "docs/commercial_evidence_export.md",
                     "docs/commercial_buyer_handoff_bundle.md",
                 ],
@@ -9199,7 +10212,7 @@ class TaskOrchestrator:
             locale_bundles=locale_bundles,
             security_profile=security_profile,
         )
-        handoff = self.buyer_handoff_bundle_report(
+        handoff = self.commercial_handoff_bundle_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,

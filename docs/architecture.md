@@ -1,5 +1,20 @@
 # Architecture Notes
 
+## Equivalent endpoint execution
+
+After model-group selection, endpoints may race only when their normalized
+equivalence contracts match completely and `hedge_eligible` is true. Text and
+every media capability use the same bounded executor. The first completed
+response must pass its modality contract; a first token is never a winner.
+Missing usage remains unavailable rather than zero cost, and cancel-or-safe-drain
+outcomes enter the existing audit path.
+
+Contract identity, capabilities, and membership are normalized across
+`endpoint_equivalence_contract`, `endpoint_equivalence_capability`, and
+`endpoint_equivalence_member`. Agent deletion cascades membership; contract
+deletion is restricted while referenced. Configuration writes are operator-paced,
+so race traffic does not create a hot write partition in these relations.
+
 ## Sources Read
 
 APA 7th citations (titles retained for paper-contract search):

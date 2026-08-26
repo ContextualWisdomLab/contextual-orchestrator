@@ -4,6 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read AGENTS.md first
 
+Equivalent model-group endpoints may race only through the normalized, explicit
+endpoint-equivalence contract. Preserve modality validation, bounded concurrency,
+deadline, cancellation/drain provenance, and honest duplicate-cost evidence.
+
 `AGENTS.md` is the canonical, tool-agnostic agent operating guide for this repo. Read it fully and follow its guardrails before making changes. In particular:
 
 - **Security gate**: every PR to `main` runs the required Security workflow. A failing Trivy or pip-audit job is a real finding — remediate by bumping the dependency and regenerating `requirements.lock`; never weaken, `continue-on-error`, or disable the gate.

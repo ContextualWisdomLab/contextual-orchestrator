@@ -46,8 +46,15 @@ without breaking a hard-coded group.
    remain unknown.
 7. No transient provider model identifier or implicit provider-alias equivalence
    appears in production configuration, source, or deterministic tests.
+8. Equivalent endpoints race only when every operator-reviewed endpoint contract
+   field matches; the first modality-valid completed response wins within the
+   configured concurrency and deadline bounds.
 
 ### Non-goals
+
+Optional endpoint racing is a replica policy inside the selected logical group,
+not model selection. Missing or unequal contract fields retain sequential
+failover; see `docs/doctoring/equivalent-endpoint-racing.md`.
 
 - Research papers do not establish that two provider identifiers are the same
   model. Group membership is operator/provider provenance, not statistical
