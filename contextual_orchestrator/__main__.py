@@ -380,13 +380,10 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     if not agents:
         return {"added": [], "updated": []}
     result = orchestrator.sync_discovered_agents(agents)
-    placeholders = {
-        agent.id
-        for agent in orchestrator.candidates
-        if agent.provider_name == "configured_gateway" and not agent.model.strip()
-    }
-    for placeholder_id in placeholders:
-        orchestrator.remove_agent("default", placeholder_id)
+    if any(model.provider_name == "configured_gateway" for model in chat_models):
+        for agent in tuple(orchestrator.candidates):
+            if agent.provider_name == "configured_gateway" and not agent.model.strip():
+                orchestrator.remove_agent("default", agent.id)
     return result
 
 

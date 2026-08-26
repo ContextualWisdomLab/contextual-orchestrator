@@ -92,6 +92,33 @@ def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(m
     assert [agent.id for agent in orchestrator.agents] == ["bootstrap_agent"]
 
 
+def test_unrelated_discovery_keeps_configured_gateway_placeholder(monkeypatch) -> None:
+    """Another healthy provider must not erase a temporarily unavailable gateway."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args: ([discovered], []),
+    )
+    placeholder = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        provider_name="configured_gateway",
+    )
+    orchestrator = TaskOrchestrator([placeholder])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["added"] == ["openai_chat_capable_model"]
+    assert placeholder in orchestrator.agents
+
+
 def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> None:
     """Startup discovery must not replace an operator-managed agent."""
     discovered = DiscoveredModel(
