@@ -1181,7 +1181,11 @@ class ModelClient:
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
-        raise RuntimeError(f"provider {agent.id} request failed") from None
+        # The provider transport exhausted its own retry policy. Surface the
+        # bounded provider-response category so orchestration fails over to the
+        # next measured member instead of multiplying the same call through the
+        # tool-runtime retry loop.
+        raise ProviderResponseError(f"provider {agent.id} request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""

@@ -348,6 +348,26 @@ def test_structural_provider_response_fails_over_to_next_provider() -> None:
     assert client.calls == ["primary_worker", "backup_worker"]
 
 
+def test_exhausted_provider_transport_uses_failover_error_category() -> None:
+    """Transport exhaustion cannot enter the orchestration tool-retry loop."""
+    class TransportFailureClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0, retry_backoff=0.0)
+            self.calls: list[str] = []
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            raise RuntimeError("provider transport failed")
+
+    client = TransportFailureClient()
+    agent = ModelAgent(
+        "primary_worker", "mock", base_url="https://provider.example/v1", tags=("reasoning",)
+    )
+    with pytest.raises(ProviderResponseError):
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.calls == ["primary_worker"]
+
+
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning",)),
