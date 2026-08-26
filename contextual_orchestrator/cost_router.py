@@ -219,8 +219,18 @@ class CostRoutingCoordinator:
                     provider_token_counts.append(chunk_tokens)
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
 
+        def run_provider_embedding_batch(
+            requests: List[EmbeddingBatchRequest],
+        ) -> tuple[List[List[float]], int]:
+            """Run durable work independently of the submitting HTTP deadline."""
+            request_settings = getattr(client, "request_settings", None)
+            if not callable(request_settings):
+                return embed(requests)
+            with request_settings(request_deadline_monotonic=None):
+                return embed(requests)
+
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
-            embed,
+            run_provider_embedding_batch,
             job_registry=registry,
             max_concurrency=getattr(client, "local_concurrency", 1),
             claim_lease_seconds=(

@@ -380,8 +380,8 @@ def test_provider_backend_context_manager_closes_executor() -> None:
     assert executor is not None and executor._shutdown
 
 
-def test_provider_worker_inherits_caller_deadline() -> None:
-    """The copied worker context retains request-scoped provider settings."""
+def test_provider_worker_detaches_caller_deadline() -> None:
+    """Returned async work is independent of the submitting request's patience."""
     agent = ModelAgent(
         "embedding_worker", "remote-embedding", base_url="https://provider.example/v1",
         provider_name="provider", tags=("embedding",),
@@ -402,7 +402,7 @@ def test_provider_worker_inherits_caller_deadline() -> None:
         coordinator.complete_embeddings_batch(
             ["alpha"], model=agent.model, routing_agent_id=agent.id
         )
-    assert observed == [deadline]
+    assert observed == [None]
 
 
 def test_completed_provider_result_wins_post_wait_deadline_race() -> None:

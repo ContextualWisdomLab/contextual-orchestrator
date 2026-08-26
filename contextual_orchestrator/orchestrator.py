@@ -1066,6 +1066,10 @@ class ModelClient:
         """Apply provider settings to only the current server request thread."""
         current = self.request_settings_snapshot()
         current.update({key: value for key, value in overrides.items() if value is not None})
+        if "request_deadline_monotonic" in overrides:
+            # Background work may deliberately detach from the submitting HTTP
+            # request while retaining the remaining request-scoped settings.
+            current["request_deadline_monotonic"] = overrides["request_deadline_monotonic"]
         token = self._request_settings.set(current)
         try:
             yield
@@ -1324,6 +1328,8 @@ class ModelClient:
                         "stream": False,
                     },
                 )
+        except RequestDeadlineExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 - readiness is bounded evidence
             return {
                 "agent_id": agent.id,
@@ -2992,10 +2998,9 @@ class TaskOrchestrator:
                         "status": "ready" if ready else "not_ready",
                         "checked_at": checked_at,
                     }
-                    if ready:
-                        self._record_success(agent.id)
-                    else:
-                        self._record_failure(agent.id)
+                    # Capability readiness is separate from transport health.
+                    # Do not open or clear the shared provider circuit from a
+                    # structured-format probe outcome.
         with self._provider_readiness_lock:
             ready = [
                 agent
