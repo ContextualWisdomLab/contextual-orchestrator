@@ -284,6 +284,14 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Report only models whose structured provider/catalog price metadata is entirely zero; "
         "unknown or name-implied prices remain excluded, while the full report keeps every model.",
     )
+    parser.add_argument(
+        "--analyze-privacy-policies",
+        action="store_true",
+        help=(
+            "Crawl declared policy sources and run a model-backed privacy assessment; "
+            "this opt-in action may incur provider charges."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
@@ -293,7 +301,9 @@ def _discover_models_command(argv: list[str]) -> None:
     except ValueError as exc:
         parser.error(str(exc))
     discovered, errors = discover_all_models(sources)
-    discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
+    privacy_assessments = []
+    if args.analyze_privacy_policies:
+        discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
     free_models = free_discovered_models(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())

@@ -2,6 +2,7 @@
 
 import base64
 import json
+from dataclasses import replace
 from unittest.mock import patch
 
 from contextual_orchestrator.credentials import (
@@ -119,9 +120,12 @@ def test_policy_crawler_delegates_external_fetch_to_wardnet() -> None:
     register_credential("WARDNET_ADMIN_TOKEN", "wardnet-test-token")
     try:
         with patch(
-            "contextual_orchestrator.privacy_policy_analysis.urllib.request.urlopen",
+            "contextual_orchestrator.privacy_policy_analysis.ModelClient._open_provider",
             return_value=_Response(),
-        ) as opened:
+        ) as opened, patch(
+            "contextual_orchestrator.privacy_policy_analysis.ModelClient._resolve_addresses",
+            return_value=[(2, ("127.0.0.1", 8080))],
+        ):
             assert crawl_policy_document("https://provider.example/privacy") == "No training."
     finally:
         set_backend(None)
@@ -144,7 +148,9 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
 
         def read(self, _limit: int) -> bytes:
             return json.dumps({
+                "status": 200,
                 "content_type": "text/html",
+                "final_url": "https://provider.example/privacy",
                 "body_base64": base64.b64encode(b"<html>Static shell</html>").decode(),
             }).encode()
 
@@ -160,8 +166,11 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
         register_credential(name, value)
     try:
         with patch(
-            "contextual_orchestrator.privacy_policy_analysis.urllib.request.urlopen",
+            "contextual_orchestrator.privacy_policy_analysis.ModelClient._open_provider",
             return_value=_Response(),
+        ), patch(
+            "contextual_orchestrator.privacy_policy_analysis.ModelClient._resolve_addresses",
+            return_value=[(2, ("127.0.0.1", 8080))],
         ):
             text = crawl_policy_document(
                 "https://provider.example/privacy",
@@ -178,3 +187,29 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
         "username": "wardnet",
         "password": "wardnet-proxy-test-token",
     }
+
+
+def test_analysis_preserves_provider_truth_and_requires_complete_consensus() -> None:
+    first_url = "https://provider.example/privacy"
+    second_url = "https://provider.example/terms"
+    analyzer_model = _model("openrouter", "zdr-analyzer", zdr=True)
+    declared = _model("declared", "model", policy_urls=(first_url,))
+    declared = replace(declared, supports_no_training=False)
+    incomplete = _model("incomplete", "model", policy_urls=(first_url, second_url))
+
+    enriched, _evidence = analyze_discovered_privacy_policies(
+        [analyzer_model, declared, incomplete],
+        crawler=lambda _url: "Inputs are not used for training.",
+        analyzer=lambda _candidate, _documents: {
+            "assessments": [{
+                "source_url": first_url,
+                "zero_data_retention_available": None,
+                "no_training": True,
+                "no_prompt_retention": None,
+                "evidence_quote": "Inputs are not used for training.",
+            }]
+        },
+    )
+
+    assert enriched[1].supports_no_training is False
+    assert enriched[2].supports_no_training is None

@@ -10,11 +10,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from .credentials import get_credential
 from .model_discovery import DiscoveredModel, agent_from_discovered
-from .orchestrator import ModelClient
+from .orchestrator import ModelAgent, ModelClient
 
 MAX_POLICY_BYTES = 512 * 1024
 MAX_POLICY_CHARACTERS = 24_000
@@ -206,10 +206,42 @@ def crawl_policy_document(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    client = ModelClient(timeout=max(1, int(timeout)), allowed_provider_hosts={wardnet.hostname})
+    if wardnet.scheme == "http":
+        origin = urlunsplit(("local", wardnet.netloc, "", "", ""))
+        agent = ModelAgent(
+            "wardnet_policy_fetch",
+            "wardnet-policy-fetch",
+            base_url=origin,
+            credential_key="",
+        )
+    else:
+        origin = urlunsplit(("https", wardnet.netloc, "", "", ""))
+        agent = ModelAgent(
+            "wardnet_policy_fetch",
+            "wardnet-policy-fetch",
+            base_url=origin,
+            credential_key=WARDNET_ADMIN_TOKEN_CREDENTIAL,
+        )
+    destination = client._validate_provider(agent)
+    with client._open_provider(request, destination, timeout=timeout) as response:
         envelope = json.loads(response.read((MAX_POLICY_BYTES * 2) + 65_536).decode("utf-8"))
     if not isinstance(envelope, dict):
         raise TypeError("Wardnet policy fetch returned an invalid envelope")
+    status = envelope.get("status")
+    if isinstance(status, bool) or not isinstance(status, int) or not 200 <= status < 300:
+        raise ValueError("policy source did not return a successful response")
+    final_url = envelope.get("final_url")
+    final = urlsplit(final_url) if isinstance(final_url, str) else None
+    if (
+        final is None
+        or final.scheme != "https"
+        or not final.hostname
+        or final.username
+        or final.password
+        or final.fragment
+    ):
+        raise ValueError("Wardnet policy fetch omitted a safe final URL")
     content_type = str(envelope.get("content_type", "")).split(";", 1)[0].strip().casefold()
     if content_type not in {"text/html", "text/plain", "application/xhtml+xml"}:
         raise ValueError("policy source did not return supported text")
@@ -405,9 +437,19 @@ def analyze_discovered_privacy_policies(
 
     by_url = {assessment.source_url: assessment for assessment in assessments}
 
-    def consensus(values: list[bool | None], fallback: bool | None) -> bool | None:
-        known = {value for value in values if value is not None}
-        return known.pop() if len(known) == 1 else fallback
+    def inferred_consensus(
+        values: list[bool | None],
+        *,
+        expected_sources: int,
+        provider_value: bool | None,
+    ) -> bool | None:
+        """Preserve provider truth; infer only from complete, unanimous policy evidence."""
+        if provider_value is not None:
+            return provider_value
+        if len(values) != expected_sources or any(value is None for value in values):
+            return None
+        known = set(values)
+        return known.pop() if len(known) == 1 else None
 
     enriched: list[DiscoveredModel] = []
     for model in models:
@@ -417,9 +459,15 @@ def analyze_discovered_privacy_policies(
         enriched.append(
             replace(
                 model,
-                supports_no_training=consensus(no_training, model.supports_no_training),
-                supports_no_prompt_retention=consensus(
-                    no_retention, model.supports_no_prompt_retention
+                supports_no_training=inferred_consensus(
+                    no_training,
+                    expected_sources=len(model.privacy_policy_urls),
+                    provider_value=model.supports_no_training,
+                ),
+                supports_no_prompt_retention=inferred_consensus(
+                    no_retention,
+                    expected_sources=len(model.privacy_policy_urls),
+                    provider_value=model.supports_no_prompt_retention,
                 ),
             )
         )

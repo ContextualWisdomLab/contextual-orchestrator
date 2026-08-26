@@ -75,6 +75,44 @@ def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None
     }
 
 
+def test_privacy_policy_analysis_requires_explicit_cost_opt_in() -> None:
+    """Ordinary discovery never adds an undisclosed model-backed provider call."""
+    set_backend(InMemoryCredentialBackend())
+    stdout = StringIO()
+    try:
+        with (
+            patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.__main__.analyze_discovered_privacy_policies"
+            ) as analyze,
+        ):
+            main()
+        analyze.assert_not_called()
+
+        stdout = StringIO()
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "contextual-orchestrator",
+                    "discover-models",
+                    "--analyze-privacy-policies",
+                ],
+            ),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.__main__.analyze_discovered_privacy_policies",
+                return_value=([], []),
+            ) as analyze,
+        ):
+            main()
+        analyze.assert_called_once_with([])
+    finally:
+        set_backend(None)
+
+
 def test_discover_models_reports_invalid_gateway_configuration_without_traceback() -> None:
     """Invalid gateway configuration exits through argparse's actionable error path."""
     stderr = StringIO()
