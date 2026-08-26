@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-if str(_PROJECT_ROOT) not in sys.path:
+if str(_PROJECT_ROOT) not in sys.path:  # pragma: no cover - direct script bootstrap
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from contextual_orchestrator.credentials import get_credential

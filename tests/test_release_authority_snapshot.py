@@ -223,7 +223,94 @@ def test_pagination_and_ruleset_helpers_flatten_and_fail_closed() -> None:
     ]
     assert collector._required_approval_count(approval_rulesets) == 2
     assert collector._required_approval_count(list(reversed(approval_rulesets))) == 2
+    approval_rulesets[0]["rules"].append(
+        {"type": "pull_request", "parameters": {"required_approving_review_count": 1}}
+    )
+    approval_rulesets[0]["rules"].extend(
+        [
+            {"type": "pull_request", "parameters": {"required_approving_review_count": -1}},
+            {"type": "pull_request", "parameters": {"required_approving_review_count": True}},
+        ]
+    )
+    assert collector._required_approval_count(approval_rulesets) == 2
     assert collector._rulesets_are_verified([{"enforcement": "active", "conditions": {}, "rules": []}]) is False
+
+
+def test_helper_edge_cases_remain_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Malformed pages and partial rulesets cannot manufacture authority."""
+    monkeypatch.setattr(
+        collector.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout='[{"ok": true}]', stderr=""),
+    )
+    assert collector._gh_json("owner/repo", "endpoint") == {"ok": True}
+
+    findings = tmp_path / "findings.json"
+    findings.write_text('{"sources": [], "unresolved_findings": ["bad"]}', encoding="utf-8")
+    with pytest.raises(RuntimeError, match="findings_inventory_invalid"):
+        collector._read_findings(str(findings))
+
+    assert collector._page_items({"rows": {}}, "rows") == []
+    assert collector._page_items([{"rows": {}}, {"rows": [1]}], "rows") == [1]
+    assert collector._page_items([[1], [2]]) == [1, 2]
+    assert collector._page_items([1, {"row": 2}]) == [1, {"row": 2}]
+
+    expanded = {"conditions": {}, "rules": []}
+    calls = iter([RuntimeError("unavailable"), [], expanded])
+
+    def fake_detail(repository: str, endpoint: str):
+        value = next(calls)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(collector, "_gh_json", fake_detail)
+    assert collector._ruleset_details(
+        "owner/repo",
+        ["bad", {"id": 0}, {"id": 1}, {"id": 2}, {"id": 3}],
+    ) == [expanded]
+
+    rulesets = [
+        {
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["main"]}},
+            "rules": [
+                "bad",
+                {"type": "required_status_checks", "parameters": {"required_status_checks": "bad"}},
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": ["bad", {"context": ""}, {"context": "Tests"}]},
+                },
+            ],
+        },
+        {"enforcement": "active", "conditions": {"ref_name": {"include": ["main"]}}, "rules": "bad"},
+    ]
+    assert collector._required_check_names(rulesets) == ["Tests"]
+    assert collector._required_approval_count(rulesets) == 0
+
+
+def test_collect_authority_rejects_invalid_expected_and_final_heads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Expected and final head identities must both be exact Git SHAs."""
+    with pytest.raises(RuntimeError, match="expected_head_sha_required"):
+        collector.collect_authority("owner/repo", 7, [], {}, expected_head_sha=None)
+
+    head = "a" * 40
+    pull_calls = 0
+
+    def fake_api(repository: str, endpoint: str):
+        nonlocal pull_calls
+        if "check-runs" in endpoint:
+            return {"check_runs": []}
+        if "rulesets" in endpoint or endpoint.endswith("/reviews"):
+            return []
+        pull_calls += 1
+        if pull_calls == 1:
+            return {"head": {"sha": head}, "base": {"ref": "main"}, "user": {"login": "author"}}
+        return {"head": {"sha": 1}}
+
+    monkeypatch.setattr(collector, "_gh_json", fake_api)
+    with pytest.raises(RuntimeError, match="pull_request_response_invalid"):
+        collector.collect_authority("owner/repo", 7, [], {}, expected_head_sha=head)
 
 
 def test_collect_authority_handles_missing_ruleset_and_head_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:

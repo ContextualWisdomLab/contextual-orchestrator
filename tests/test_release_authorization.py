@@ -28,6 +28,14 @@ class AlwaysNotEqualString(str):
         return True
 
 
+class FailingCredentialBackend(InMemoryCredentialBackend):
+    """Model a KV outage while release evidence is verified."""
+
+    def get(self, name: str) -> str | None:
+        """Raise the outage reported by an unavailable credential registry."""
+        raise RuntimeError(name)
+
+
 def authority() -> dict[str, object]:
     """Return a complete trusted-snapshot shape for the nominal case."""
     return {
@@ -94,6 +102,27 @@ def test_authority_snapshot_requires_a_kv_backed_signature() -> None:
         assert verify_release_authority_snapshot(signed) == authority()
         signed["head_is_current"] = False
         assert verify_release_authority_snapshot(signed) is None
+    finally:
+        set_backend(None)
+
+
+def test_signature_boundary_rejects_malformed_inputs_and_kv_outage() -> None:
+    """Malformed, unserializable, or unverifiable snapshots fail closed."""
+    with pytest.raises(ValueError, match="signing input"):
+        sign_release_authority_snapshot(authority(), "")
+    with pytest.raises(ValueError, match="keys must be strings"):
+        sign_release_authority_snapshot({1: "invalid"}, "key")
+
+    assert verify_release_authority_snapshot(None) is None
+    backend = InMemoryCredentialBackend()
+    backend.set(RELEASE_AUTHORITY_SIGNING_CREDENTIAL, "key")
+    set_backend(backend)
+    try:
+        assert verify_release_authority_snapshot({"signature": "invalid", "value": float("nan")}) is None
+    finally:
+        set_backend(FailingCredentialBackend())
+    try:
+        assert verify_release_authority_snapshot({"signature": "invalid"}) is None
     finally:
         set_backend(None)
 
@@ -204,7 +233,7 @@ def test_invalid_and_duplicate_evidence_is_not_coerced() -> None:
             "required_check_names": ["Tests", "Tests", 1],
             "checks": [{"name": "Tests"}, {"name": "Tests"}, "bad"],
             "review_policy": {"required_independent_approval_count": True, "head_sha": "wrong"},
-            "reviewers": ["bad"],
+            "reviewers": ["bad", {"login": ""}],
             "findings_inventory": {"complete": True, "sources": None, "unresolved_findings": None},
         }
     )
