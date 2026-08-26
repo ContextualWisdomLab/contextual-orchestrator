@@ -5630,11 +5630,16 @@ def build_server(
                     _validate_capability_request(path, body)
                     capability, endpoint, binary = capability_routes[path]
                     try:
-                        result = self._run(
-                            lambda: orchestrator.proxy_capability(
-                                body, capability=capability, endpoint=endpoint, binary=binary
+                        with orchestrator.client.request_settings(
+                            request_deadline_monotonic=request_deadline
+                        ):
+                            result = self._run(
+                                lambda: orchestrator.proxy_capability(
+                                    body, capability=capability, endpoint=endpoint, binary=binary
+                                )
                             )
-                        )
+                    except RequestDeadlineExceeded:
+                        raise
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
                     except RuntimeError as exc:
@@ -6204,7 +6209,10 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
                     batch_requests = _validate_batch_requests(body, security.expose_trace_by_default)
                     metadata = {"actor_scope": "inference"}
-                    job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
@@ -6227,7 +6235,10 @@ def build_server(
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
                     self._authorize_trace_access("/api/v1/batch_routing_jobs/{job_id}/results")
                     try:
-                        retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                        with orchestrator.client.request_settings(
+                            request_deadline_monotonic=request_deadline
+                        ):
+                            retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
@@ -6496,7 +6507,10 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
                     include_trace = self._trace_requested(body, "/admin/simulate")
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -6506,7 +6520,10 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = self._trace_requested(body, "/api/v1/workflow_runs")
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -6518,7 +6535,10 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = self._trace_requested(body, "/api/v1/evaluation_runs")
-                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode, owner_id=security.principal_id(self.headers)))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")

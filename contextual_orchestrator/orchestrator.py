@@ -1582,10 +1582,18 @@ class ModelClient:
         )
         remaining = self.remaining_request_timeout()  # pragma: no cover
         timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
-        with self._open_provider(  # pragma: no cover
-            request, self._validate_provider(agent), timeout=timeout
-        ) as response:
-            return response.read(), response.headers.get_content_type()
+        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
+        self._local.provider_transport_timeout = timeout
+        try:
+            with self._open_provider(  # pragma: no cover
+                request, self._validate_provider(agent)
+            ) as response:
+                return response.read(), response.headers.get_content_type()
+        except Exception:
+            self.remaining_request_timeout()
+            raise
+        finally:
+            self._local.provider_transport_timeout = previous_timeout
 
     def _send_raw_with_retry(
         self,
@@ -4407,6 +4415,8 @@ class TaskOrchestrator:
                     else self.client.proxy_send(agent, provider_endpoint, payload)
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
+                if isinstance(exc, RequestDeadlineExceeded):
+                    raise
                 last_error = exc
                 self._group_router.observe_failure(agent.id)
                 continue
