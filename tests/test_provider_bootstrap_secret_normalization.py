@@ -67,5 +67,18 @@ def test_catalog_sync_leak_guard_matches_secret_normalization() -> None:
     assert "os.environ[name] and os.environ[name] in report" not in workflow
 
 
+def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() -> None:
+    """Scheduled discovery must run without falsely claiming durable storage."""
+    workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "image: postgres:17.6-alpine" in workflow
+    assert "CATALOG_STORAGE_SCOPE=run-scoped" in workflow
+    assert "KV DSN and passphrase must be configured together" in workflow
+    assert "RUN_SCOPED_KV_DSN=postgresql://" in workflow
+    assert 'export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${RUN_SCOPED_KV_DSN}"' in workflow
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))

@@ -357,6 +357,8 @@ def main(argv: list[str] | None = None) -> None:
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
                         help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
+    parser.add_argument("--max-body-bytes", type=_positive_int, default=64 * 1024,
+                        help="Maximum accepted JSON request body bytes (default: 65536).")
     parser.add_argument("--no-realtime-judge", action="store_true", default=False,
                         help="Disable real-time fast-mlsirm answer judging on direct route paths.")
     parser.add_argument("--chat-template-args", type=_json_object, default={},
@@ -446,6 +448,7 @@ def main(argv: list[str] | None = None) -> None:
                 auth_token=auth_token,
                 admin_token=admin_token,
                 inference_token=inference_token,
+                max_body_bytes=args.max_body_bytes,
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,

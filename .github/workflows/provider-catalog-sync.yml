@@ -14,11 +14,25 @@ concurrency:
 
 jobs:
   sync:
-    name: Bootstrap durable provider KV and model catalog
+    name: Refresh provider catalog with PostgreSQL
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+        env:
+          POSTGRES_DB: contextual_orchestrator
+          POSTGRES_PASSWORD: catalog_sync_ci
+          POSTGRES_USER: contextual_orchestrator
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contextual_orchestrator -d contextual_orchestrator"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout protected default branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -33,12 +47,38 @@ jobs:
       - name: Install hash-pinned runtime dependencies
         run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r requirements.lock
 
+      - name: Select durable or run-scoped PostgreSQL KV
+        shell: bash
+        env:
+          DURABLE_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+          DURABLE_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${DURABLE_KV_DSN}" && -n "${DURABLE_KV_PASSPHRASE}" ]]; then
+            echo "CATALOG_STORAGE_SCOPE=durable" >> "${GITHUB_ENV}"
+          elif [[ -z "${DURABLE_KV_DSN}" && -z "${DURABLE_KV_PASSPHRASE}" ]]; then
+            echo "RUN_SCOPED_KV_DSN=postgresql://contextual_orchestrator:catalog_sync_ci@localhost:5432/contextual_orchestrator" >> "${GITHUB_ENV}"
+            python - <<'PY'
+          import os
+          import secrets
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(
+                  f"RUN_SCOPED_KV_PASSPHRASE={secrets.token_urlsafe(32)}\n"
+              )
+              environment.write("CATALOG_STORAGE_SCOPE=run-scoped\n")
+          PY
+          else
+            echo "KV DSN and passphrase must be configured together" >&2
+            exit 1
+          fi
+
       - name: Register credentials and refresh normalized model catalog
         shell: bash
         env:
           CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
-          CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
-          CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
+          DURABLE_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+          DURABLE_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
@@ -46,8 +86,13 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
-          test -n "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}"
-          test -n "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}"
+          if [[ "${CATALOG_STORAGE_SCOPE}" == "durable" ]]; then
+            export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${DURABLE_KV_DSN}"
+            export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE="${DURABLE_KV_PASSPHRASE}"
+          else
+            export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${RUN_SCOPED_KV_DSN}"
+            export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE="${RUN_SCOPED_KV_PASSPHRASE}"
+          fi
           python -m contextual_orchestrator.provider_catalog_bootstrap --model-limit 24 > provider-bootstrap-report.json
           python - <<'PY'
           import json
@@ -65,7 +110,7 @@ jobs:
           if registered != expected:
               raise SystemExit(f'credential inventory mismatch: {sorted(expected - registered)}')
           if report['catalog_backend'] != 'postgres':
-              raise SystemExit('provider catalog is not durable PostgreSQL')
+              raise SystemExit('provider catalog is not PostgreSQL-backed')
           if report['catalog_model_count'] < 1 or report['eligible_model_count'] < 1:
               raise SystemExit('provider catalog has no compatible serving model')
           if not report['selected_agent_ids']:
