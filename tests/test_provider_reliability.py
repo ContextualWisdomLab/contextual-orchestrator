@@ -535,6 +535,36 @@ def test_raw_passthrough_retries_end_at_shared_request_deadline(
     assert now[0] == 5.0
 
 
+def test_chat_retry_converts_exhausted_caller_budget_to_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class TimedOutChatClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=0)
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination, timeout
+            now[0] += self._local.provider_transport_timeout
+            raise TimeoutError("provider timed out")
+
+    client = TimedOutChatClient()
+    agent = ModelAgent(
+        "worker_agent", "provider-model", base_url="https://provider.example/v1", credential_key=""
+    )
+    with client.request_settings(request_deadline_monotonic=5.0):
+        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
+            client._send_with_retry(
+                agent,
+                {"model": agent.model},
+                timeout=client.remaining_request_timeout(),
+            )
+
+    assert now[0] == 5.0
+
+
 def test_expired_caller_deadline_is_not_a_group_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

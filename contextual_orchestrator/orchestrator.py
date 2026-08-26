@@ -1207,6 +1207,7 @@ class ModelClient:
                 self._sleep(min(self._backoff_delay(attempt), remaining))
             finally:
                 self._local.provider_transport_timeout = None
+        self.remaining_request_timeout()
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
@@ -1815,6 +1816,8 @@ class ModelClient:
                 results = self._batch_run(  # pragma: no cover
                     agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
                 )
+            except RequestDeadlineExceeded:
+                raise
             except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
                 # public gateway boundary; provider bodies and exception text stay
@@ -3811,6 +3814,8 @@ class TaskOrchestrator:
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
+            except RequestDeadlineExceeded:
+                raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
                 plan_source = "template_fallback"
@@ -4191,6 +4196,8 @@ class TaskOrchestrator:
         """First measured embedding-capable member id, or None when unconfigured."""
         try:
             return self.select_capability_agent("embedding").id
+        except RequestDeadlineExceeded:
+            raise
         except (RuntimeError, ValueError):
             return None
 
@@ -4206,6 +4213,8 @@ class TaskOrchestrator:
             return None
         try:
             vectors = self.client.embed(self._agent(embedding_member), [text])
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -4229,6 +4238,8 @@ class TaskOrchestrator:
             vectors = self.client.embed(
                 self._agent(embedding_member), [self._agent_descriptor_text(agent)]
             )
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -4293,6 +4304,8 @@ class TaskOrchestrator:
         """One uncached triage decision for :meth:`_triage_workflow_required`."""
         try:
             candidates = self._ranked_agents(text, "worker", free_only=True)
+        except RequestDeadlineExceeded:
+            raise
         except RuntimeError:
             candidates = []
         if not candidates:
@@ -4307,6 +4320,8 @@ class TaskOrchestrator:
         try:
             reply = self.client.chat(triage_agent, messages, temperature=0.0)
             return _parse_triage_reply(reply)
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
             return True
 
@@ -4747,6 +4762,8 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
+        except RequestDeadlineExceeded:
+            raise
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return {
                 "accepted": False,
