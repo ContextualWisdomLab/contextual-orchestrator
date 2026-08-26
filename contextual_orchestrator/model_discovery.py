@@ -30,6 +30,9 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+_CAPABILITY_NAMES = {"embeddings": "embedding"}
+_MODELS_DEV_URL = "https://models.dev/api.json"
+_MODELS_DEV_OPENCODE_PROVIDER = "opencode"
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -79,8 +82,15 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openrouter",
         credential_name="OPENROUTER_API_KEY",
-        list_url="https://openrouter.ai/api/v1/models?output_modalities=text",
+        list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
+        capabilities=("chat",),
+    ),
+    ProviderModelSource(
+        provider_name="opencode_zen",
+        credential_name="OPENCODE_ZEN_API_KEY",
+        list_url="https://opencode.ai/zen/v1/models",
+        chat_base_url="https://opencode.ai/zen/v1",
         capabilities=("chat",),
     ),
     ProviderModelSource(
@@ -120,9 +130,12 @@ class DiscoveredModel:
     chat_base_url: str
     auth_scheme: str
     capabilities: tuple[str, ...] = ()
+    input_modalities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
+    is_free: bool = False
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -134,18 +147,15 @@ class ProviderDiscoveryError(RuntimeError):
         super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
-def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
+def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
         # constants below, never external input -- but urlopen also honors
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
-    request = urllib.request.Request(
-        url,
-        headers={"authorization": f"{auth_scheme} {api_key}"},
-        method="GET",
-    )
+    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return json.loads(response.read().decode("utf-8"))
@@ -225,6 +235,77 @@ def _deduplicate_discovered_models(
     return list(unique.values())
 
 
+def _pricing_is_free(pricing: dict[str, Any]) -> bool:
+    """Classify only complete provider price vectors that are entirely zero."""
+    if pricing.get("prompt") is None or pricing.get("completion") is None:
+        return False
+    try:
+        values = [float(value) for value in pricing.values() if value is not None]
+    except (TypeError, ValueError):
+        return False
+    if values:
+        return all(value == 0.0 for value in values)
+    return False
+
+
+def _models_dev_cost_is_free(cost: object) -> bool:
+    """Return whether every declared Models.dev monetary component is exactly zero."""
+    if not isinstance(cost, dict) or not cost:
+        return False
+    monetary_values: list[object] = []
+
+    def collect(value: object, key: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                collect(child_value, child_key)
+        elif isinstance(value, list):
+            for child_value in value:
+                collect(child_value, key)
+        elif key not in {"size"}:
+            monetary_values.append(value)
+
+    collect(cost)
+    return bool(monetary_values) and all(
+        _valid_price_component(value) and float(value) == 0.0 for value in monetary_values
+    )
+
+
+def _merge_models_dev_metadata(payload: Any, metadata: Any, provider: str) -> Any:
+    """Join an availability catalog with Models.dev cost and modality evidence."""
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    provider_row = metadata.get(provider) if isinstance(metadata, dict) else None
+    models = provider_row.get("models") if isinstance(provider_row, dict) else None
+    if not isinstance(rows, list) or not isinstance(models, dict):
+        return payload
+    enriched: list[Any] = []
+    for row in rows:
+        model_id = row.get("id") if isinstance(row, dict) else None
+        model = models.get(model_id) if isinstance(model_id, str) else None
+        if not isinstance(row, dict) or not isinstance(model, dict):
+            enriched.append(row)
+            continue
+        cost = model.get("cost")
+        pricing: dict[str, str] = {}
+        if isinstance(cost, dict):
+            for source_key, target_key in (("input", "prompt"), ("output", "completion")):
+                value = cost.get(source_key)
+                if _valid_price_component(value):
+                    pricing[target_key] = str(Decimal(str(value)) / Decimal(1_000_000))
+        modalities = model.get("modalities") if isinstance(model.get("modalities"), dict) else {}
+        enriched.append(
+            {
+                **row,
+                "pricing": pricing,
+                "architecture": {
+                    "input_modalities": modalities.get("input"),
+                    "output_modalities": modalities.get("output"),
+                },
+                "is_free": _models_dev_cost_is_free(cost),
+            }
+        )
+    return {**payload, "data": enriched}
+
+
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
     rows = payload.get("data") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
@@ -232,16 +313,33 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if (
-            type(model_id) is not str
-            or not model_id
-            or (
-                not any(capability != "chat" for capability in source.capabilities)
-                and not is_general_chat_agent_model_id(model_id)
-            )
-        ):
+        if type(model_id) is not str or not model_id:
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
+        architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        raw_inputs = architecture.get("input_modalities")
+        raw_outputs = architecture.get("output_modalities")
+        inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
+        outputs = tuple(value for value in raw_outputs if isinstance(value, str)) if isinstance(raw_outputs, list) else ()
+        if (
+            not outputs
+            and not any(capability != "chat" for capability in source.capabilities)
+            and not is_general_chat_agent_model_id(model_id)
+        ):
+            continue
+        source_capabilities = tuple(
+            capability
+            for capability in source.capabilities
+            if capability != "chat" or not outputs or "text" in outputs
+        )
+        capabilities = tuple(
+            dict.fromkeys(
+                _CAPABILITY_NAMES.get(value, value)
+                for value in (*source_capabilities, *outputs)
+            )
+        )
+        prompt_price = _price_per_1k(pricing.get("prompt"))
+        completion_price = _price_per_1k(pricing.get("completion"))
         discovered.append(
             DiscoveredModel(
                 provider_name=source.provider_name,
@@ -249,9 +347,16 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 credential_name=source.credential_name,
                 chat_base_url=source.chat_base_url,
                 auth_scheme=source.auth_scheme,
-                capabilities=source.capabilities,
-                prompt_price_per_1k=_price_per_1k(pricing.get("prompt")),
-                completion_price_per_1k=_price_per_1k(pricing.get("completion")),
+                capabilities=capabilities,
+                input_modalities=inputs,
+                output_modalities=outputs,
+                prompt_price_per_1k=prompt_price,
+                completion_price_per_1k=completion_price,
+                is_free=(
+                    row["is_free"]
+                    if isinstance(row.get("is_free"), bool)
+                    else _pricing_is_free(pricing)
+                ),
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -264,7 +369,13 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if type(model_id) is not str or not model_id or not is_general_chat_agent_model_id(model_id):
+        if type(model_id) is not str or not model_id:
+            continue
+        declares_non_chat = any(
+            capability not in {"chat", "text"}
+            for capability in source.capabilities
+        )
+        if not declares_non_chat and not is_general_chat_agent_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(
@@ -298,6 +409,12 @@ def discover_provider_models(
         # subclasses, so a raw provider transport failure can never escape the
         # discovery boundary with provider text attached.
         raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
+    if source.provider_name == "opencode_zen":
+        try:
+            metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            metadata = None
+        payload = _merge_models_dev_metadata(payload, metadata, _MODELS_DEV_OPENCODE_PROVIDER)
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)
@@ -349,10 +466,21 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
-        tags=("discovered", *discovered.capabilities),
+        tags=(
+            "discovered",
+            *(("cost:free",) if discovered.is_free else ()),
+            *discovered.capabilities,
+            *(f"input:{value}" for value in discovered.input_modalities),
+            *(f"output:{value}" for value in discovered.output_modalities),
+        ),
         priority=priority,
         disabled=True,
     )
+
+
+def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
+    """Return models whose provider metadata identifies zero-cost inference."""
+    return [model for model in discovered if model.is_free]
 
 
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
@@ -363,7 +491,6 @@ def _currency_is_comparable(currency_code: object, default_currency: object) -> 
         and currency_code.strip().upper() == default_currency.strip().upper()
         and bool(currency_code.strip())
     )
-
 
 def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
     """Write complete, comparable provider pricing into the discovery price book.
@@ -411,7 +538,18 @@ def _discovery_price_key(
     except (TypeError, ValueError, OverflowError):
         return unknown
     if entry is None:
-        return unknown
+        if not (
+            _valid_price_component(model.prompt_price_per_1k)
+            and _valid_price_component(model.completion_price_per_1k)
+            and _currency_is_comparable(model.currency_code, price_book.default_currency)
+        ):
+            return unknown
+        return (
+            0,
+            float(model.prompt_price_per_1k) + float(model.completion_price_per_1k),
+            model.provider_name,
+            model.model_id,
+        )
     if not (
         _valid_price_component(entry.prompt_price_per_1k)
         and _valid_price_component(entry.completion_price_per_1k)

@@ -1,5 +1,94 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 11:46 KST exact-head queue snapshot
+
+Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+The open queue was re-read at #856 `cf4af71e`, #855 `f2e66db7`, #851
+`d42172b3`, #850 `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845
+`24219ace`, and #834 implementation head `b189e108`. Every PR retains normal
+auto-merge. No exact head has an independent approval, so none is eligible for
+protected merge. #855 and #851 have terminal successful required jobs; the
+other heads have queued review or security jobs. Queue delay is not treated as
+success or bypass authority.
+
+#856 adds the operator-configurable request-body ceiling and validates direct
+`SecurityConfig` construction, including rejection of Boolean and non-integer
+limits. Its full exact tree exposed only the stale legacy-table assertion
+already repaired by #855; the stacked repair leaves its replacement Checks
+queued. #834's complete exact tree is `2253 passed`; its seven previously
+undocumented public persistence, cache, and judge-adapter boundaries now have
+explicit docstrings, with `111` focused tests passing. These are branch
+evidence, not protected-main delivery.
+
+## 2026-08-26 10:30 KST review-remediation snapshot
+
+Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+The open queue was re-read at exact heads #855 `f2e66db7`, #851 `d42172b3`,
+#850 `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845 `24219ace`,
+and #834 `e563920a`. Auto-merge is enabled without bypass on every PR.
+The shared stale-table contract is stacked onto #845, #848, #849, and #850;
+#849 also makes the documented k6 traffic compatible with its isolated rate
+limit and validates programmatic request budgets, while #848 now rejects every
+duplicate front-matter or heading identifier declaration. Their replacement
+hosted checks and independent exact-head reviews remain required.
+
+PR #834 no longer presents invented policy rules, recent alerts, deployment
+region, environment, or health as runtime facts. It shows next-action empty
+states until evidence is loaded, and its simulation begins with an empty,
+actionable prompt. The focused admin/model-group contract is `38 passed`; the
+updated desktop render is recorded under `docs/images/ui-audit/`. This snapshot
+is branch evidence only, not protected-main or deployed evidence.
+
+The same head now treats a disconnected Responses reasoning-summary stream as
+cancellation evidence: it stops before the next orchestration stage and always
+releases the bounded execution slot. The disconnect, Responses stream, and
+passthrough slice is `32 passed`; this prevents paid work from continuing after
+the customer can no longer receive it. The complete exact tree passes `2253`
+tests after aligning four stale boundary assertions with the model-aware batch
+runner, normalized persistence table, measured routing policy, and public agent
+selection contract.
+
+## 2026-08-26 10:00 KST customer-copy and responsive evidence
+
+Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+PR #834 implementation head `a5f8d8424e7eb5c4aa1281ae4de02b5f7647b290`
+removes customer-visible internal configuration, authentication, research-role,
+worker/planner, agent-ID, and endpoint terminology. English and Korean empty and
+warning states now identify the next action. Headless Chromium renders at
+`1440 × 1200` and `390 × 844` are recorded in
+[`docs/ui-audit-2026-08-26.md`](ui-audit-2026-08-26.md); the mobile page has no
+document-level horizontal overflow and the focused admin/integration contract
+is `10 passed`.
+
+This remains local exact-head UI evidence rather than protected-main or deployed
+authenticated evidence. The next acceptance action is to complete #834's hosted
+checks and independent review, merge normally, then repeat the screenshots and
+interactions against the deployed console.
+
+## 2026-08-26 08:55 KST protected-main and open-queue baseline
+
+Protected `main` is `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+Its latest full Tests run reached `2148 passed` before the remaining persistence
+assertion queried the removed legacy `records` table. PR #855 fixes only that
+post-merge test regression at exact head `f2e66db7acc05d8077e58f735b640af23906b336`;
+it is not protected-main evidence until its exact-head checks and independent
+review complete.
+
+| PR | Exact head | Current evidence and next acceptance action |
+| --- | --- | --- |
+| [#834](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/834) | `62015641ed3afe979a24fcafcfa2d0d17cfef6ef` | Current-main integration resolves model-judge and model-list conflicts while preserving arbitrary operator groups, explicit cost evidence, all eight model capabilities, `orchestrator/auto` and `orchestrator/free`, Responses reasoning-summary streaming, Compose, and the hourly loop. The exact integrated focused suite is `96 passed`; protected checks and independent review remain required. |
+| [#845](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/845) | `3cd57d46ddc3cb3ad2786e548922e501b18f0dca` | Current-main integration retains the PostgreSQL service fallback when both durable KV secrets are absent and fails closed on partial KV configuration. The focused contract is `4 passed` and `actionlint` is clean; a successful scheduled run after protected merge remains required runtime evidence. |
+| [#848](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/848) | `359ab9a9a08a59edc749f6ffa2268d5c8f4baf6d` | Current-main integration preserves unique planning ADR identifiers; the exact focused contract is `1 passed`. |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `fecc7b017fc822077811a76e0c4b34291054c046` | The stacked k6 work is incorporated; HTTP/1.1 keep-alive now reuses connections, bounds idle reads, uses the native listen backlog, closes unread request bodies, and clears trace/session state after every persistent request. The latest focused server slice is `35 passed`; production TLS/provider/soak capacity remains unproven. |
+| [#850](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/850) | `d230c00279fcce1bbd2c8d77cd7220bc2aeb0e9f` | Constant-time budget gating remains reconciled after current-main integration; the exact focused budget suite is `9 passed`. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `d42172b3b784d8fa7700d1b3792925a052f294c9` | Structured requests no longer conduct on empty `response_format`, empty `tools`, or omit-equivalent `tool_choice`. Provider-reported and token-counter fallback usage now persist `measured` versus `estimated` provenance in normalized `usage_measurements`, cost responses expose it, and conducted structured Chat has a distinct analytics event. The first full run exposed three integration regressions; their root fixes passed `46` focused tests and the resulting exact tree passes all `2175` tests. Protected checks and independent review remain required. |
+| [#855](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/855) | `f2e66db7acc05d8077e58f735b640af23906b336` | Repairs the sole observed protected-main test failure by asserting the production `orchestration_records` table; `29 passed` locally. Merge this root repair before treating a later green main run as release evidence. |
+
+Every open PR above has normal auto-merge enabled. At this snapshot their
+required hosted jobs are queued and no failed exact-head result is present;
+queued jobs and absent independent approval are not success evidence and must
+not be bypassed.
+
 ## 2026-08-26 00:33 KST exact-head continuation
 
 Protected `main` remains `838b3de160c341a6f36bf588ae9fcc09989c040c`;

@@ -1,0 +1,70 @@
+name: contextual-orchestrator
+
+services:
+  postgres:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    environment:
+      POSTGRES_DB: contextual_orchestrator
+      POSTGRES_USER: contextual_orchestrator
+      POSTGRES_PASSWORD: ${CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD:?set the Postgres password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contextual_orchestrator -d contextual_orchestrator"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    shm_size: 256mb
+
+  credential_bootstrap:
+    build: .
+    environment: &kv_environment
+      CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
+      CONTEXTUAL_ORCHESTRATOR_KV_DSN: postgresql://contextual_orchestrator@postgres/contextual_orchestrator
+      PGPASSWORD: ${CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD:?set the Postgres password}
+      CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE:?set the KV encryption passphrase}
+    command: ["sh", "-c", "python -m contextual_orchestrator register-credential --name CONTEXTUAL_ORCHESTRATOR_TOKEN --value-stdin < /run/secrets/server_token"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    secrets:
+      - server_token
+    restart: "no"
+
+  gateway:
+    build: .
+    environment: *kv_environment
+    command:
+      - python
+      - -m
+      - contextual_orchestrator
+      - --serve
+      - --agents
+      - /app/examples/agents.mock.json
+      - --state-db
+      - /var/lib/contextual-orchestrator/state.db
+      - --agents-db
+      - /var/lib/contextual-orchestrator/agents.db
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --allow-public-bind
+      - --auth-token-key
+      - CONTEXTUAL_ORCHESTRATOR_TOKEN
+    depends_on:
+      credential_bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${CONTEXTUAL_ORCHESTRATOR_PORT:-8000}:8000"
+    volumes:
+      - gateway_data:/var/lib/contextual-orchestrator
+    restart: unless-stopped
+
+secrets:
+  server_token:
+    file: ${CONTEXTUAL_ORCHESTRATOR_SERVER_TOKEN_FILE:-./.secrets/server-token}
+
+volumes:
+  postgres_data:
+  gateway_data:

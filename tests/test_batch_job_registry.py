@@ -126,7 +126,7 @@ def test_jobs_submitted_before_a_restart_are_retrievable_after_it() -> None:
     """Two backends sharing one Valkey client model a process restart."""
     client = FakeValkeyClient()
 
-    def runner(messages, mode):
+    def runner(messages, mode, model):
         return {"answer": messages[-1]["content"].upper(), "mode": mode}
 
     first = LocalBatchBackend(runner=runner, job_registry=JobRegistryFactory(client))

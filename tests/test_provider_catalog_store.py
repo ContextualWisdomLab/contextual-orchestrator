@@ -170,12 +170,48 @@ def test_success_replaces_current_rows_and_failure_keeps_last_known_good() -> No
     ]
 
 
+def test_last_known_good_restores_free_and_modality_evidence() -> None:
+    """A catalog round trip cannot silently turn a free multimodal model unknown."""
+    source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
+    model = replace(
+        _model(source, "free-multimodal-model", 0),
+        capabilities=("chat", "text"),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        currency_code="USD",
+        is_free=True,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={
+            model.model_id: (
+                "discovered",
+                "chat",
+                "text",
+                "capability:chat",
+                "capability:text",
+                "cost:free",
+                "input:text",
+                "input:image",
+                "output:text",
+            )
+        },
+    )
+
+    assert store.serving_models(source) == [model]
+
+
 class _FakeCursor:
     """Minimal DB-API cursor recording parameterized catalog statements."""
 
-    def __init__(self, rows=None) -> None:
+    def __init__(self, rows=None, tag_rows=None) -> None:
         self.calls: list[tuple[str, object]] = []
         self.rows = list(rows or [])
+        self.tag_rows = list(tag_rows or [])
+        self._current_rows = self.rows
 
     def __enter__(self):
         return self
@@ -185,16 +221,17 @@ class _FakeCursor:
 
     def execute(self, statement: str, params=None) -> None:
         self.calls.append((statement, params))
+        self._current_rows = self.tag_rows if "FROM model_serving_tag AS mst" in statement else self.rows
 
     def fetchall(self):
-        return list(self.rows)
+        return list(self._current_rows)
 
 
 class _FakeConnection:
     """Minimal transaction object exercising the PostgreSQL adapter."""
 
-    def __init__(self, rows=None) -> None:
-        self.cursor_object = _FakeCursor(rows)
+    def __init__(self, rows=None, tag_rows=None) -> None:
+        self.cursor_object = _FakeCursor(rows, tag_rows)
         self.commits = 0
 
     def __enter__(self):
@@ -288,7 +325,13 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
                 Decimal("0.50"),
                 "usd",
             )
-        ]
+        ],
+        [
+            ("model-b", "chat"),
+            ("model-b", "capability:chat"),
+            ("model-b", "cost:free"),
+            ("model-b", "input:text"),
+        ],
     )
     store = PostgresProviderCatalogStore(
         "postgresql://catalog.example/db",
@@ -304,12 +347,17 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
             prompt_price_per_1k=0.25,
             completion_price_per_1k=0.5,
             currency_code="USD",
+            capabilities=("chat",),
+            input_modalities=("text",),
+            is_free=True,
         )
     ]
-    query, params = connection.cursor_object.calls[-1]
-    assert "JOIN provider_account AS pa" in query
-    assert "serving_eligible_flag = true" in query
-    assert params == (provider_account_id(source),)
+    model_query, model_params = connection.cursor_object.calls[-2]
+    tag_query, tag_params = connection.cursor_object.calls[-1]
+    assert "JOIN provider_account AS pa" in model_query
+    assert "FROM model_serving_tag AS mst" in tag_query
+    assert "serving_eligible_flag = true" in model_query
+    assert model_params == tag_params == (provider_account_id(source),)
 
 
 if __name__ == "__main__":  # pragma: no cover
