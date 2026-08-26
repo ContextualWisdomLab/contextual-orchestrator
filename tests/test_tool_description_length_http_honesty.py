@@ -24,9 +24,9 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, payload: dict) -> tuple[int, dict]:
+def _post(port: int, payload: dict, endpoint: str = "/v1/chat/completions") -> tuple[int, dict]:
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/chat/completions",
+        f"http://127.0.0.1:{port}{endpoint}",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -65,7 +65,7 @@ def test_http_chat_accepts_tool_description_at_1024_chars() -> None:
                     {
                         "type": "function",
                         "function": {
-                            "name": "lookup",
+                            "name": "  lookup  ",
                             "description": "d" * 1024,
                             "parameters": {"type": "object", "properties": {}},
                         },
@@ -130,6 +130,61 @@ def test_http_chat_preserves_tool_description_over_1024_chars() -> None:
             "type": "contextual_orchestrator_tool_descriptions_v1",
             "tools": [{"name": "lookup", "description": description}],
         }
+        assert forwarded["tools"][0]["function"]["name"] == "lookup"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_preserves_tool_description_over_1024_chars() -> None:
+    class CapturingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.payload: dict = {}
+
+        def proxy_send(self, agent, endpoint, payload):  # noqa: ANN001, ARG002
+            self.payload = payload
+            return {"id": "resp_test", "model": agent.model, "output": []}
+
+    client = CapturingClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))],
+        client=client,
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN, rate_limit_requests=10_000),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    description = "responses semantic tool documentation " * 40
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "mock-planner",
+                "input": "use the tool",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "description": description,
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            "/v1/responses",
+        )
+        assert status == 200, body
+        forwarded = client.payload
+        assert len(forwarded["tools"][0]["description"]) <= 1024
+        preserved = json.loads(forwarded["input"][0]["content"])
+        assert preserved == {
+            "type": "contextual_orchestrator_tool_descriptions_v1",
+            "tools": [{"name": "lookup", "description": description}],
+        }
+        assert forwarded["input"][1] == {"role": "user", "content": "use the tool"}
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -138,4 +193,5 @@ def test_http_chat_preserves_tool_description_over_1024_chars() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_tool_description_at_1024_chars()
     test_http_chat_preserves_tool_description_over_1024_chars()
+    test_http_responses_preserves_tool_description_over_1024_chars()
     print("ok")

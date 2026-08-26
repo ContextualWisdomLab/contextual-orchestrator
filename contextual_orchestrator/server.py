@@ -4164,10 +4164,13 @@ def _validate_tool_function_fields(
 
 
 def _preserve_long_tool_descriptions(body: dict[str, Any]) -> None:
-    """Move overlong tool documentation into a system message without data loss."""
+    """Move overlong tool documentation into model input without data loss."""
     tools = body.get("tools")
     messages = body.get("messages")
-    if not isinstance(tools, list) or not isinstance(messages, list):
+    responses_input = body.get("input")
+    if not isinstance(tools, list) or not (
+        isinstance(messages, list) or isinstance(responses_input, (str, list))
+    ):
         return
     preserved: list[dict[str, str]] = []
     for tool in tools:
@@ -4178,26 +4181,38 @@ def _preserve_long_tool_descriptions(body: dict[str, Any]) -> None:
         name = function.get("name")
         if not isinstance(description, str) or len(description) <= 1024 or not isinstance(name, str):
             continue
-        preserved.append({"name": name, "description": description})
+        normalized_name = name.strip()
+        preserved.append({"name": normalized_name, "description": description})
         function["description"] = (
-            f"Full documentation for {name} is preserved in the "
+            f"Full documentation for {normalized_name} is preserved in the "
             "contextual_orchestrator_tool_descriptions_v1 system message."
         )
     if preserved:
-        messages.insert(
-            0,
-            {
-                "role": "system",
-                "content": json.dumps(
-                    {
-                        "type": "contextual_orchestrator_tool_descriptions_v1",
-                        "tools": preserved,
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            },
-        )
+        documentation_message = {
+            "role": "system",
+            "content": json.dumps(
+                {
+                    "type": "contextual_orchestrator_tool_descriptions_v1",
+                    "tools": preserved,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        }
+        generated_body = {"messages": [documentation_message]}
+        _validate_chat_message_known_fields(generated_body)
+        _validate_chat_tool_message_ids(generated_body)
+        _validate_chat_assistant_tool_calls(generated_body)
+        _validate_chat_message_audio_function_call(generated_body)
+        if isinstance(messages, list):
+            messages.insert(0, documentation_message)
+        elif isinstance(responses_input, list):
+            responses_input.insert(0, documentation_message)
+        else:
+            body["input"] = [
+                documentation_message,
+                {"role": "user", "content": responses_input},
+            ]
 
 
 def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -6342,6 +6357,7 @@ def build_server(
                                 "tool_choice requires tools on /v1/responses",
                             )
                     if "tools" in body:
+                        _preserve_long_tool_descriptions(body)
                         _validate_chat_tools(body)
                     if "tool_choice" in body:
                         _validate_chat_tool_choice(body)

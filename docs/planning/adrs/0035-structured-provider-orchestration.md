@@ -54,7 +54,7 @@ the conducted path where it is safe.
 
 When a tool description exceeds the provider-compatible 1024-character field
 limit, the gateway preserves the exact description in a versioned system
-message and replaces only the constrained field with a short reference to that
+message for both Chat Completions and Responses and replaces only the constrained field with a short reference to that
 message. This is a lossless wire adaptation: silently truncating documentation
 or guessing a summary is prohibited.
 
