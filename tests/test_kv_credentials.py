@@ -5,6 +5,7 @@ These run entirely on the in-memory backend — no Postgres or KV service needed
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -155,3 +156,45 @@ def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
 def test_auth_scheme_rejects_empty_value() -> None:
     with pytest.raises(ValueError):
         ModelAgent("bad_agent", "gpt-example", "https://api.openai.com/v1", auth_scheme="")
+
+
+def test_model_client_embedding_uses_provider_endpoint_and_usage() -> None:
+    """Provider embeddings preserve auth, vector values, and reported usage."""
+    from unittest.mock import patch
+
+    agent = ModelAgent(
+        "embedding_agent", "embedding-model",
+        base_url="https://provider.example/v1",
+        credential_key="EMBEDDING_API_KEY", tags=("embedding",),
+    )
+    register_credential("EMBEDDING_API_KEY", "embedding-secret")
+    client = ModelClient(max_retries=0)
+    seen = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({
+                "data": [{"embedding": [0.125, 0.875]}],
+                "usage": {"prompt_tokens": 4},
+            }).encode()
+
+    def open_provider(request, _destination=None):
+        seen.append(request)
+        return _Response()
+
+    with (
+        patch.object(client, "_validate_provider", return_value=(2, ("127.0.0.1", 443))),
+        patch.object(client, "_open_provider", side_effect=open_provider),
+    ):
+        vector, token_count = client.embed(agent, "evidence")
+
+    assert vector == [0.125, 0.875]
+    assert token_count == 4
+    assert seen[0].full_url == "https://provider.example/v1/embeddings"
+    assert seen[0].get_header("Authorization") == "Bearer embedding-secret"

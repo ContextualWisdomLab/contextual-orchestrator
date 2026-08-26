@@ -849,6 +849,45 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    def embed(self, agent: ModelAgent, text: str) -> tuple[list[float], int]:
+        """Return one provider-backed embedding and its reported token count."""
+        if agent.base_url.startswith("mock://"):
+            raise NotConfigured("mock agents do not provide production embeddings")
+        destination = self._validate_provider(agent)
+        api_key = _provider_credential(agent)
+        credential_name = _provider_credential_name(agent)
+        if credential_name and not api_key:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
+        request = urllib.request.Request(
+            self._provider_url(agent, "/embeddings"),
+            data=json.dumps({"model": agent.model, "input": text}).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with self._open_provider(request, destination) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        data = payload.get("data")
+        vector = data[0].get("embedding") if isinstance(data, list) and data else None
+        if not isinstance(vector, list) or not vector:
+            raise ProviderResponseError(
+                f"provider {agent.id} response did not contain an embedding"
+            )
+        try:
+            values = [float(value) for value in vector]
+        except (TypeError, ValueError) as exc:
+            raise ProviderResponseError(
+                f"provider {agent.id} returned an invalid embedding"
+            ) from exc
+        usage = payload.get("usage") or {}
+        token_count = usage.get("prompt_tokens", usage.get("total_tokens", 0))
+        return values, int(token_count or 0)
+
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
         scoped = getattr(self._local, "request_settings", {})

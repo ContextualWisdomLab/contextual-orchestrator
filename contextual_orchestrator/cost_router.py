@@ -31,6 +31,7 @@ from .batch_routing import (
     EmbeddingBatchResultItem,
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
+    ProviderEmbeddingBatchBackend,
     RoutingHints,
     RoutingPolicy,
 )
@@ -87,12 +88,25 @@ class CostRoutingCoordinator:
             )
         else:
             self.batch_backend = batch_backend
-        self.embedding_batch_backend: EmbeddingBatchBackend = (
-            embedding_batch_backend
-            or LocalEmbeddingBatchBackend(
+        if embedding_batch_backend is not None:
+            self.embedding_batch_backend = embedding_batch_backend
+        elif any(
+            "embedding" in agent.tags and not agent.base_url.startswith("mock://")
+            for agent in getattr(orchestrator, "agents", ())
+        ):
+            def embed(request: EmbeddingBatchRequest) -> tuple[List[float], int]:
+                agent = orchestrator._requested_agent(request.model)
+                if agent is None or "embedding" not in agent.tags:
+                    raise RuntimeError("embedding model is unavailable")
+                return orchestrator.client.embed(agent, request.input_text)
+
+            self.embedding_batch_backend = ProviderEmbeddingBatchBackend(
+                embed, job_registry=registry
+            )
+        else:
+            self.embedding_batch_backend = LocalEmbeddingBatchBackend(
                 token_counter=self.token_counter, job_registry=registry
             )
-        )
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
         # embeddings batch state: job handle + submitted requests + cached doc,

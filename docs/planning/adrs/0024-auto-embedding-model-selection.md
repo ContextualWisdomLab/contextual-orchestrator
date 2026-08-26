@@ -1,7 +1,7 @@
 ---
 id: "0024"
 title: "Orchestrator-owned automatic embedding model selection"
-status: proposed
+status: accepted
 proposed_date: "2026-08-20"
 deciders:
   - "repository maintainer"
@@ -62,8 +62,11 @@ guess, or consumer-side fallback.
 5. The resolved model is carried into internal batch requests, provider JSONL,
    pending and completed response metadata, and cost attribution so the selected
    deployment remains deterministic and auditable. The standalone in-process backend remains a
-   local test/development path; a configured provider path uses its injected
-   embeddings backend and the resolved model.
+   local test/development path. When the active pool contains a remote
+   embedding-capable agent, the default coordinator calls that agent's
+   OpenAI-compatible `/embeddings` endpoint and records the provider-reported
+   token count. It never substitutes the standalone SHA-256 vector for a
+   configured remote agent.
 
 ## Contract and acceptance evidence
 

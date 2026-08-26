@@ -568,6 +568,55 @@ class LocalEmbeddingBatchBackend:
         return self._results.get(job.job_id, [])
 
 
+class ProviderEmbeddingBatchBackend:
+    """Run embedding batches through the selected provider-backed model agent."""
+
+    name = "provider"
+
+    def __init__(
+        self,
+        runner: Callable[[EmbeddingBatchRequest], tuple[List[float], int]],
+        *,
+        job_registry: Any = None,
+    ) -> None:
+        self._runner = runner
+        self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
+            job_registry.mapping(
+                "provider_embedding_results", decode=lambda raw: EmbeddingBatchResultItem(**raw)
+            )
+            if job_registry is not None
+            else {}
+        )
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Resolve and embed every request through its provider model."""
+        job_id = f"providerembed_{uuid.uuid4().hex}"
+        items = []
+        for index, request in enumerate(requests):
+            vector, prompt_tokens = self._runner(request)
+            items.append(
+                EmbeddingBatchResultItem(
+                    custom_id=request.custom_id,
+                    index=index,
+                    embedding=vector,
+                    prompt_tokens=prompt_tokens,
+                    model=request.model,
+                )
+            )
+        self._results[job_id] = items
+        return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Provider calls complete during submission."""
+        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Return provider embeddings computed during submission."""
+        return self._results.get(job.job_id, [])
+
+
 class PgLlmBatchEmbeddingBackend:
     """Embeddings batch backend that submits to **pg-llm-batch** and retrieves.
 

@@ -26,6 +26,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Route embedding batches through configured remote embedding agents instead
+  of returning the standalone deterministic vector.
+
 - Reject missing profiles, blank `profile_version`, and fractional seeds.
   Snapshot hashing now fails closed on extra or missing roles. The
   production-default gate returns false on junk reports and on

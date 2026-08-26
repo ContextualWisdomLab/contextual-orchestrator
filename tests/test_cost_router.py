@@ -128,6 +128,39 @@ def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
     assert coordinator.batch_backend.max_concurrency == 3
 
 
+def test_remote_embedding_agent_uses_provider_backend() -> None:
+    """A configured remote embedding agent must never receive heuristic vectors."""
+    agent = type("Agent", (), {
+        "model": "embedding-model", "tags": ("embedding",),
+        "base_url": "https://provider.example/v1",
+    })()
+
+    class _Client:
+        local_concurrency = 1
+
+        def embed(self, selected_agent, text):
+            assert selected_agent is agent
+            assert text == "evidence"
+            return [0.25, 0.75], 3
+
+    class _Orchestrator:
+        agents = [agent]
+        client = _Client()
+
+        def _requested_agent(self, model):
+            return agent if model == agent.model else None
+
+        def complete(self, messages, *, mode):
+            return {"answer": "", "mode": mode}
+
+    document = CostRoutingCoordinator(_Orchestrator()).complete_embeddings_batch(
+        ["evidence"], model="embedding-model"
+    )
+    assert document["backend"] == "provider"
+    assert document["embeddings"][0]["embedding"] == [0.25, 0.75]
+    assert document["token_counts"] == [3]
+
+
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     coordinator = _coordinator()
     coordinator.complete([{"role": "user", "content": "sync one"}], attribution={"company": "acme"})

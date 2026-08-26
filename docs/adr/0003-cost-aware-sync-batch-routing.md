@@ -50,6 +50,11 @@ only.
    optional `pg-llm-batch` client. A local in-process backend keeps the
    standalone path working. Composition details are in
    [ADR 0004](0004-msa-leaf-composition.md).
+5. **Remote embedding agents use their provider.** The default coordinator
+   may retain deterministic local vectors only when the pool has no configured
+   remote embedding agent. Once a remote agent carries the explicit
+   `embedding` capability, sync and batch embedding requests call that agent's
+   provider endpoint and preserve the resolved model and provider token usage.
 
 ## Consequences
 
