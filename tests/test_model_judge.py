@@ -706,6 +706,58 @@ def test_expired_request_deadline_does_not_mark_provider_not_ready(
     assert orchestrator._circuit == {}
 
 
+def test_direct_conduct_entrypoint_has_request_scoped_exclusion() -> None:
+    """Streaming callers that invoke conduct directly retain the same boundary."""
+
+    class FailingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.calls: list[str] = []
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            self.calls.append(agent.id)
+            raise ProviderResponseError("provider response unavailable")
+
+    tags = ("reasoning", "writing", "planning", "research", "verification")
+    agents = [
+        ModelAgent("first_agent", "first-model", tags=tags, group_name="declared_group"),
+        ModelAgent("second_agent", "second-model", tags=tags, group_name="declared_group"),
+    ]
+    client = FailingClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.conduct(
+            [{"role": "user", "content": "produce a verified structured report"}]
+        )
+
+    assert client.calls == ["first_agent", "second_agent"]
+
+
+def test_route_provider_failure_does_not_poison_structured_readiness() -> None:
+    """Ordinary chat failure remains separate from structured probe evidence."""
+
+    class FailingClient(ModelClient):
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            raise ProviderResponseError("provider response unavailable")
+
+    agent = ModelAgent(
+        "route_agent",
+        "route-model",
+        tags=("reasoning", "writing", "planning", "research", "verification"),
+    )
+    orchestrator = TaskOrchestrator([agent], client=FailingClient(max_retries=0))
+
+    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+        orchestrator.complete(
+            [{"role": "user", "content": "answer directly"}], mode="route"
+        )
+
+    assert orchestrator._structured_readiness == {}
+
+
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:

@@ -144,7 +144,7 @@ class NoViableAgentError(RuntimeError):
     code = "no_viable_agent"
 
     def __init__(self, *, retry_after_seconds: int) -> None:
-        super().__init__("no ready structured-capable agent")
+        super().__init__("no viable agent is currently ready")
         self.retry_after_seconds = retry_after_seconds
 
 
@@ -3133,17 +3133,13 @@ class TaskOrchestrator:
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
-        token = self._request_failed_agents.set(set())
-        try:
-            return self._complete_request(
-                messages,
-                mode,
-                bypass_cache=bypass_cache,
-                model_name=model_name,
-                cache_partition=cache_partition,
-            )
-        finally:
-            self._request_failed_agents.reset(token)
+        return self._complete_request(
+            messages,
+            mode,
+            bypass_cache=bypass_cache,
+            model_name=model_name,
+            cache_partition=cache_partition,
+        )
 
     def _complete_request(
         self,
@@ -4071,6 +4067,27 @@ class TaskOrchestrator:
         progress: Any = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
+        active_scope = self._request_failed_agents.get()
+        if active_scope is not None:
+            return self._conduct_request(
+                messages, model_name=model_name, progress=progress
+            )
+        token = self._request_failed_agents.set(set())
+        try:
+            return self._conduct_request(
+                messages, model_name=model_name, progress=progress
+            )
+        finally:
+            self._request_failed_agents.reset(token)
+
+    def _conduct_request(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model_name: str = "contextual-orchestrator",
+        progress: Any = None,
+    ) -> dict[str, Any]:
+        """Conduct one workflow inside its request-scoped exclusion boundary."""
         task = self._latest_user_text(messages)
         caller_instructions = "\n\n".join(
             message["content"]
@@ -4765,9 +4782,9 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderResponseError):
                         self._record_failure(agent.id)
-                        self._record_structured_not_ready(agent.id)
                         failed_agents = self._request_failed_agents.get()
                         if failed_agents is not None:
+                            self._record_structured_not_ready(agent.id)
                             failed_agents.add(agent.id)
                         break
                     decision = classify_tool_failure(exc)
