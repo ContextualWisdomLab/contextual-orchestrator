@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-27 03:16 KST live queue evidence
+## 2026-08-27 03:27 KST live queue evidence
 
 Protected `main` remains exact commit
 `5a01759165be20ab38c05c2321d8a9f00ec331ea`. This refresh is limited to
@@ -12,37 +12,36 @@ The current queue heads are #888
 `ffadebefd118a6c02b93d3a97d0d5e61129c74e7`, #889
 `a310ce09e523b5d42899f6091fc93391ad5152ac`, #890
 `a23e330c00c11a3599568593dd416b02a96dd5f3`, #880
-`f614410a8264bb40a4e433cb641e41f01eba46b8`, #879
+`fbf8707790e861dc3a9ef48f03dad240022a0c1b`, #879
 `be6972c43cbf6506121633f9a3880c2c9567137c`, #857
 `ca60f554de7e098cc63c9a2ea7424b722410afae`, #876
 `73a5510f099742003f7242b6f2c55e10f8ff9dab`, and #849
 `ede33b5d4c23070f2d5ee961acf7bd7ee03fabf0`. No current head has an
 independent approval.
 
-#888 has focused exact-head evidence of `40 passed`, official full-suite
+`#888` has focused exact-head evidence of `40 passed`, official full-suite
 evidence of `2363 passed in 754.32s`, and zero unresolved review threads. Its
-hosted required jobs and independent approval remain authoritative delivery
-gates. #889 has exact-head local evidence of `2385 passed in 806.69s`,
+Strix job failed, OpenCode remains pending, and independent approval is absent.
+`#889` has exact-head local evidence of `2385 passed in 806.69s`,
 100% statement/branch coverage for its release-authority evaluator and
 collector (`28 passed`), `21` focused downstream-chain tests, and all eight
-review threads resolved. Its required hosted jobs and qualifying independent
-approval remain pending, so this is regression evidence rather than protected
-merge authority. #890 has exact-head focused evidence of `14 passed`, official
+review threads resolved. Its Strix job failed and qualifying independent
+approval is absent, so the successful jobs are regression evidence rather than
+protected merge authority. #890 has exact-head focused evidence of `14 passed`, official
 full-suite evidence of `2367 passed in 818.81s`, and zero unresolved review
 threads. Its hosted required jobs remain queued and independent approval is
 absent. That local result is regression evidence only, not a successful hosted
-Check or merge authority. #880 has a
-successful hosted full suite, but several required-workflow jobs were cancelled
-and approval is absent; normal auto-merge remains enabled.
+Check or merge authority. #880 has only successful third-party review statuses;
+its required hosted jobs remain queued and approval is absent. Normal
+auto-merge remains enabled.
 
-#879 now carries the review-driven telemetry and bounded finish-reason repair at
+`#879` now carries the review-driven telemetry and bounded finish-reason repair at
 `be6972c4`; its `139` focused tests and official exact-head full suite (`2383
 passed in 826.26s`) passed, and all 31 review threads are resolved. Remaining
 hosted jobs and independent approval are still authoritative delivery gates.
-#857 remains remotely at `ca60f554`; another agent's HTTP response flush repair
-is local at `536fc` with its full suite pending. Until that repair is pushed and
-verified at the remote exact head, earlier failed full/fuzz jobs are not
-superseded. #849 and #876 retain successful exact-head
+`#857` remains remotely at `ca60f554`; its newly attached required jobs are still
+queued, so no newer local work is treated as remote exact-head evidence. #849
+and #876 retain successful exact-head
 full/security evidence but a failed Strix result. Their exact-head retries also
 failed closed after NVIDIA NIM returned `429`/`410` and the OpenAI fallback
 reported exhausted credit; zero findings before provider exhaustion are not a
@@ -95,8 +94,8 @@ provider diagnostics. It does not infer a freshness threshold, provider/model
 equivalence, or zero cost from missing price evidence.
 
 The open queue was re-read at exact heads #888 `6a67e5e7`, #887 `5e07bc6e`,
-#883 `0175df2e`, #880 `0d716b93`, #879 `f2c444aa`, #876 `73a5510f`,
-#868 `fd0cd254`, #858
+`#883` `0175df2e`, #880 `0d716b93`, #879 `f2c444aa`, #876 `73a5510f`,
+`#868` `fd0cd254`, #858
 `09f5f194`, #857 `4da93814`, and #849 `ede33b5d`. PR #869 was closed unmerged because #868
 preserves its OpenCode Zen workflow transport and unique-passphrase validation;
 no check or review evidence transfers between those heads. The queue covers
@@ -114,11 +113,11 @@ third-party review statuses so far; absent required hosted jobs are not success
 evidence. #883's unchanged exact head completed the official local suite with
 `2372 passed in 685.59s`, has zero unresolved threads, and has normal
 auto-merge re-enabled; its hosted jobs and independent approval remain required.
-#868 has focused `actionlint` and fuzz evidence while replacement review and
+`#868` has focused `actionlint` and fuzz evidence while replacement review and
 hosted jobs attach. No local, queued, running, or absent job is promoted to
 protected delivery evidence.
 
-#888 centralizes strict orchestration-trace flag validation before structured
+`#888` centralizes strict orchestration-trace flag validation before structured
 Chat early returns and requires trace-purpose authority for access reports. Its
 exact head passes the official local suite (`2355 passed in 675.35s`) and has
 zero unresolved threads, but hosted checks and independent review remain
@@ -152,7 +151,7 @@ protected merge. #855 and #851 have terminal successful required jobs; the
 other heads have queued review or security jobs. Queue delay is not treated as
 success or bypass authority.
 
-#856 adds the operator-configurable request-body ceiling and validates direct
+`#856` adds the operator-configurable request-body ceiling and validates direct
 `SecurityConfig` construction, including rejection of Boolean and non-integer
 limits. Its full exact tree exposed only the stale legacy-table assertion
 already repaired by #855; the stacked repair leaves its replacement Checks
@@ -165,10 +164,10 @@ evidence, not protected-main delivery.
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
 The open queue was re-read at exact heads #855 `f2e66db7`, #851 `d42172b3`,
-#850 `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845 `24219ace`,
+`#850` `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845 `24219ace`,
 and #834 `e563920a`. Auto-merge is enabled without bypass on every PR.
 The shared stale-table contract is stacked onto #845, #848, #849, and #850;
-#849 also makes the documented k6 traffic compatible with its isolated rate
+`#849` also makes the documented k6 traffic compatible with its isolated rate
 limit and validates programmatic request budgets, while #848 now rejects every
 duplicate front-matter or heading identifier declaration. Their replacement
 hosted checks and independent exact-head reviews remain required.
@@ -625,7 +624,7 @@ current heads. Hosted terminal success does not replace the required approval.
 ### Protected auto-merge continuation — 2026-08-22 01:50 KST
 
 Normal squash auto-merge is enabled for #804, #803, #765, #807, #806, and
-#809 at their exact heads. GitHub reports each as `blocked` until required
+`#809` at their exact heads. GitHub reports each as `blocked` until required
 reviews and hosted gates are satisfied; this does not bypass any protection.
 Downstream #817 remains unqueued for merge until root #804 advances.
 
@@ -726,11 +725,11 @@ including reviews, unresolved threads, and required checks.
 governance-audit durability repair is `5c6670cb`, with 6 active workflows out
 of 29 and no failure; #804's ADR reconciliation is `d8a34558`, with 31
 terminal exact-head check runs and no failure in this refresh.
-#818 is `083316fc`, with one active replacement check out of 29 after the
+`#818` is `083316fc`, with one active replacement check out of 29 after the
 session-correlation repair. New #824 is `a4219151`, with six active checks out
 of 28 for the locked local-test entrypoint. #820 (`9cae444a`) has 30 terminal
 exact-head runs with no failure. Those results are only partial gate evidence:
-#803, #818, and #824 are explicitly `REVIEW_REQUIRED`, and every PR needs its
+`#803`, #818, and #824 are explicitly `REVIEW_REQUIRED`, and every PR needs its
 own fresh independent approvals, resolved-thread evidence, and required
 terminal workflows before a normal protected merge. No PR is described here as
 merge-ready while any of those facts are missing or unverified.
@@ -1093,7 +1092,7 @@ the risk of publishing version `0.2.0` before its implementation. It also
 restores the pre-existing tool-fallback changelog entries and synchronizes the
 lockfile package version.
 
-#834 is now exact head `6f494131774f38b78bdc3b104451e2133edb5318`,
+`#834` is now exact head `6f494131774f38b78bdc3b104451e2133edb5318`,
 tree `52fdbdcb96bbe0a7617a4573e9c01cd5355db350`. That exact release-candidate
 tree passed the complete local suite (`1612 passed in 724.94s`) and produced
 both the `0.2.0` sdist and wheel. Protected-main publication remains unproven:
