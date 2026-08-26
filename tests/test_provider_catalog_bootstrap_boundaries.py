@@ -228,6 +228,11 @@ def test_runtime_skips_sources_without_registered_credential() -> None:
         assert report.selected_agent_ids == ("openai_gpt_live",)
         assert report.providers_with_errors == ()
         assert report.catalog_refresh_failure_count == 0
+        refreshes = report.as_dict()["catalog_refreshes"]
+        assert isinstance(refreshes, list)
+        assert len(refreshes) == 1
+        assert refreshes[0]["provider_account_id"] == "openai_openai_api_key"
+        assert refreshes[0]["refresh_status"] == "succeeded"
         assert len(store.refresh_evidence()) == 1  # only the registered account
         assert get_credential("TOGETHER_API_KEY") is None
     finally:

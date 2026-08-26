@@ -427,6 +427,7 @@ class PostgresProviderCatalogStore:
         self._schema_ready = False
         self._schema_lock = threading.Lock()
         self._evidence: list[CatalogRefreshEvidence] = []
+        self._evidence_lock = threading.Lock()
 
     @property
     def backend_name(self) -> str:
@@ -574,17 +575,18 @@ class PostgresProviderCatalogStore:
                     ),
                 )
             connection.commit()
-        self._evidence.append(
-            CatalogRefreshEvidence(
-                provider_account_id(source),
-                "succeeded",
-                len(normalized),
-                len(eligible),
-                None,
-                started_at,
-                finished_at,
+        with self._evidence_lock:
+            self._evidence.append(
+                CatalogRefreshEvidence(
+                    provider_account_id(source),
+                    "succeeded",
+                    len(normalized),
+                    len(eligible),
+                    None,
+                    started_at,
+                    finished_at,
+                )
             )
-        )
 
     def record_failure(
         self,
@@ -618,17 +620,18 @@ class PostgresProviderCatalogStore:
                     ),
                 )
             connection.commit()
-        self._evidence.append(
-            CatalogRefreshEvidence(
-                provider_account_id(source),
-                "failed",
-                0,
-                0,
-                stable_code,
-                started_at,
-                finished_at,
+        with self._evidence_lock:
+            self._evidence.append(
+                CatalogRefreshEvidence(
+                    provider_account_id(source),
+                    "failed",
+                    0,
+                    0,
+                    stable_code,
+                    started_at,
+                    finished_at,
+                )
             )
-        )
 
     def serving_models(
         self,
@@ -676,4 +679,5 @@ class PostgresProviderCatalogStore:
 
     def refresh_evidence(self) -> tuple[CatalogRefreshEvidence, ...]:
         """Return evidence emitted by this store instance."""
-        return tuple(self._evidence)
+        with self._evidence_lock:
+            return tuple(self._evidence)
