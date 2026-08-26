@@ -634,6 +634,11 @@ class ProviderEmbeddingBatchBackend:
             if job_registry is not None
             else {}
         )
+        self._deadlines = (
+            job_registry.mapping("provider_embedding_deadlines")
+            if job_registry is not None
+            else {}
+        )
         self._cancellations = (
             job_registry.mapping("provider_embedding_cancellations")
             if job_registry is not None
@@ -675,6 +680,7 @@ class ProviderEmbeddingBatchBackend:
         """Persist a queued job and return immediately with a pollable handle."""
         job_id = f"providerembed_{uuid.uuid4().hex}"
         self._requests[job_id] = list(requests)
+        self._deadlines[job_id] = time.time() + self._registry.retention_seconds
         self._states[job_id] = "queued"
         self._terminal_events[job_id] = threading.Event()
         with self._executor_lock:
@@ -687,9 +693,16 @@ class ProviderEmbeddingBatchBackend:
     def _run_job(self, job_id: str) -> None:
         """Execute one persisted job inside the bounded provider worker pool."""
         try:
+            deadline_epoch = float(
+                self._deadlines.get(
+                    job_id, time.time() + self._registry.retention_seconds
+                )
+            )
+            self._deadlines[job_id] = deadline_epoch
             with self._registry.lock(
                 "provider_embedding_job_execution", job_id,
                 lease_seconds=self._claim_lease_seconds,
+                renew_until_epoch=deadline_epoch,
             ):
                 with self._registry.lock(
                     "provider_embedding_job_states", job_id,
@@ -734,7 +747,7 @@ class ProviderEmbeddingBatchBackend:
                 "provider_embedding_job_states", job_id,
                 lease_seconds=self._claim_lease_seconds,
             ):
-                if self._states.get(job_id) != "cancelled":
+                if self._states.get(job_id) not in {"cancelled", "completed"}:
                     self._errors[job_id] = {
                         "error_type": type(exc).__name__,
                         "http_status": getattr(exc, "status_code", None),

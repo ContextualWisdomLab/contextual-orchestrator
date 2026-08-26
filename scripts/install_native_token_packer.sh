@@ -19,4 +19,4 @@ test "$#" -eq 1 && test -f "$1" || {
   echo "pinned Rust token-packer build must produce exactly one wheel" >&2
   exit 1
 }
-python -m pip install "$1"
+python -m pip install --no-deps "$1"

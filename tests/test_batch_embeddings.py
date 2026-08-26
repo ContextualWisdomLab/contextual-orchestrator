@@ -1481,3 +1481,45 @@ def test_recovered_provider_job_has_one_execution_claim_and_terminal_event() -> 
     finally:
         first._executor.shutdown(wait=True)
         second._executor.shutdown(wait=True)
+
+
+def test_provider_job_renews_execution_claim_until_retention_deadline() -> None:
+    """Durable provider work keeps ownership through its persisted lifetime."""
+
+    class RecordingRegistry(JobRegistryFactory):
+        def __init__(self) -> None:
+            super().__init__()
+            self.claims: list[tuple[str, dict[str, object]]] = []
+            self.values: dict[str, dict] = {}
+
+        @property
+        def durable(self) -> bool:
+            return True
+
+        def lock(self, name, key, **kwargs):
+            if name == "provider_embedding_job_execution":
+                self.claims.append((key, kwargs))
+            return super().lock(name, key, **kwargs)
+
+        def mapping(self, name, *, decode=None):
+            del decode
+            return self.values.setdefault(name, {})
+
+    registry = RecordingRegistry()
+    backend = ProviderEmbeddingBatchBackend(
+        lambda requests: ([[1.0] for _request in requests], len(requests)),
+        job_registry=registry,
+        claim_lease_seconds=1.0,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="evidence", model="embed")])
+    try:
+        assert backend.wait(job, timeout=1)["status"] == "completed"
+        deadline = registry.mapping("provider_embedding_deadlines")[job.job_id]
+        assert registry.claims == [
+            (
+                job.job_id,
+                {"lease_seconds": 1.0, "renew_until_epoch": deadline},
+            )
+        ]
+    finally:
+        backend.close()
