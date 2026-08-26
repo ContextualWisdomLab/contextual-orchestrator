@@ -84,8 +84,8 @@ class CostRoutingCoordinator:
         registry = job_registry if job_registry is not None else build_job_registry(self.config)
         self.job_registry = registry
         embedding_shards = registry.mapping("embedding_provider_shards")
+        client = getattr(orchestrator, "client", None)
         if batch_backend is None:
-            client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
             self.batch_backend = LocalBatchBackend(
                 runner=lambda messages, mode, model: orchestrator.complete(
@@ -230,7 +230,7 @@ class CostRoutingCoordinator:
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
             embed,
             job_registry=registry,
-            max_concurrency=getattr(orchestrator.client, "local_concurrency", 1),
+            max_concurrency=getattr(client, "local_concurrency", 1),
         )
         self.embedding_batch_backend = embedding_batch_backend or self._local_embedding_backend
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
