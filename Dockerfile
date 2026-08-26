@@ -18,6 +18,11 @@ COPY contextual_orchestrator/ /build/contextual_orchestrator/
 WORKDIR /build/rust/token_counter
 RUN maturin build --locked --release --out /build/wheels
 
+# Export only the native wheel for host-based fuzz jobs. BuildKit writes this
+# scratch stage to a temporary directory without a bind mount into the builder.
+FROM scratch AS token-wheel
+COPY --from=token-builder /build/wheels /
+
 # python:3.12-slim
 FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf AS runtime-base
 WORKDIR /app

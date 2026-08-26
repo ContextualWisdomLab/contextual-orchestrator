@@ -3,6 +3,6 @@
 # interpreters must skip this optional native fuzz dependency until a compatible
 # wheel is available.
 pip
-atheris==3.1.0; python_full_version == "3.12.*"
+atheris==3.1.0; python_version == "3.12"
 cryptography>=43.0
 jsonschema>=4.23,<5
