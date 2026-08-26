@@ -19,7 +19,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, _parse_model_judge_reply  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    _parse_model_judge_reply,
+    _structured_output_error,
+)
 
 
 RISKY_VERIFIER_REPORT = "The plan is sound overall but discusses downtime risks and error handling."
@@ -452,6 +456,48 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
     assert completion["mode"] == "conduct"
     assert completion["trace"][0]["usage"]["total_tokens"] == 5
+
+
+def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None:
+    """An invalid synthesis is repaired once and both provider calls stay visible."""
+    orchestrator, _ = _orch("unused")
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    invalid = {"choices": [{"message": {"content": '{"input_count":6}'}}]}
+    valid = {"choices": [{"message": {"content": '{"input_count":10}'}}]}
+
+    with patch.object(
+        orchestrator.client, "proxy_send", side_effect=[invalid, valid]
+    ) as proxy:
+        result = orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert proxy.call_count == 2
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    run = orchestrator.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    assert [step["role"] for step in run["trace"][-2:]] == [
+        "synthesizer",
+        "repair",
+    ]
+    assert _structured_output_error('{"input_count":10}', response_format) is None
+    assert _structured_output_error('{"input_count":6}', response_format) == "schema_violation"
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:

@@ -25,6 +25,7 @@ from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
+    ProviderResponseError,
     TaskOrchestrator,
     _coerce_input_text,
     _new_chat_completion_id,
@@ -6573,6 +6574,12 @@ def build_server(
                 )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
+            except ProviderResponseError:
+                self._send_error(
+                    502,
+                    "invalid_structured_output",
+                    "The selected model could not satisfy the requested response schema.",
+                )
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:

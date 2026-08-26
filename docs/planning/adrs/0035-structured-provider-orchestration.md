@@ -22,6 +22,9 @@ success_criteria:
   - metric: "provider usage provenance"
     target: "every workflow call is recorded under one workflow_run_id, using provider counts when valid and the existing token counter otherwise"
     source: "tests/test_cost_router.py"
+  - metric: "strict schema enforcement"
+    target: "JSON Schema output validates locally; one governed repair is traced and a second violation fails closed"
+    source: "tests/test_model_judge.py"
 ---
 
 # Keep structured provider responses inside orchestration
@@ -56,6 +59,14 @@ Capability tags are positive declarations. A known vision-capable candidate is
 preferred for image evidence; absence of any such declaration does not rewrite
 an existing provider contract into a false claim of incompatibility.
 
+For `json_schema`, provider acceptance of `response_format` is not proof that
+the returned content conforms. The gateway selects the schema's declared JSON
+Schema dialect, parses the final content, and validates the instance locally.
+One invalid synthesis receives one same-provider repair call with the original
+schema; both synthesis and repair remain distinct workflow trace and cost-ledger
+steps. A second violation fails closed as `invalid_structured_output`. There is
+no cross-provider replay, schema weakening, item dropping, or untraced repair.
+
 ## Consequences
 
 - Structured outputs and Responses no longer bypass orchestration or cost
@@ -63,6 +74,7 @@ an existing provider contract into a false claim of incompatibility.
 - Responses remain native at the final provider boundary, with explicit local
   transport translation where already supported.
 - Structured requests consume additional test-time compute.
+- A schema-violating synthesis may consume one additional, auditable repair call.
 - Tool execution cannot gain multi-agent verification until an OpenAI-compatible
   stateful tool-loop contract is implemented.
 
