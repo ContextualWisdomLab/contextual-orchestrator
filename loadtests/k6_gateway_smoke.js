@@ -72,7 +72,6 @@ function authHeaders() {
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${TOKEN}`,
-      connection: "close",
     },
   };
 }
