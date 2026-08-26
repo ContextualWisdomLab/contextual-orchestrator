@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-27 00:50 KST protected-main and exact-head queue evidence
+## 2026-08-27 01:15 KST protected-main and exact-head queue evidence
 
 Protected `main` is exact commit
 `5a01759165be20ab38c05c2321d8a9f00ec331ea`. It contains the normal protected
@@ -11,10 +11,10 @@ at `5a01759165be20ab38c05c2321d8a9f00ec331ea`. Their source heads are
 `d49846d5c8deca55c60315a8fbb461ecdebf67eb` and
 `4acfe477014d56fbe76a2cd9db9ebd91552d0079`, respectively. The #851 source
 head now has terminal successful full-suite and security jobs, but its Strix
-job failed. The #881 source head has terminal successful full-suite and
-security jobs, while OpenCode remains queued and Strix failed. These facts
+job failed. The #881 source head has terminal successful full-suite, security,
+and OpenCode jobs, while Strix failed. These facts
 prove protected delivery of the bounded code changes; they do not convert
-failed or queued review automation into successful review evidence.
+failed review automation into successful review evidence.
 
 [PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
 closed [issue #102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102)
@@ -35,9 +35,9 @@ allowlisted error code, and UTC start/finish instants without secrets or raw
 provider diagnostics. It does not infer a freshness threshold, provider/model
 equivalence, or zero cost from missing price evidence.
 
-The open queue was re-read at exact heads #883 `2dba7a8f`, #880 `b545fdc0`,
-#879 `032ad415`, #876 `c9405e71`, #868 `057d3acd`, #858 `09f5f194`, #857
-`d68d117b`, and #849 `7abf1b89`. PR #869 was closed unmerged because #868
+The open queue was re-read at exact heads #883 `3075985d`, #880 `bc1cdb88`,
+#879 `b6ba2560`, #876 `73a5510f`, #868 `b8cde232`, #858 `09f5f194`, #857
+`4da93814`, and #849 `7abf1b89`. PR #869 was closed unmerged because #868
 preserves its OpenCode Zen workflow transport and unique-passphrase validation;
 no check or review evidence transfers between those heads. The queue covers
 video job ownership, this baseline, provider errors, pinned OpenCode runtime,
