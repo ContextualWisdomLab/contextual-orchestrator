@@ -171,6 +171,17 @@ def test_http_legacy_completions_defaults_missing_model() -> None:
         status, body = _post(port, "/v1/completions", {"prompt": "implicit default"})
         assert status == 200, body
         assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
+        status, body = _post(
+            port,
+            "/v1/completions",
+            {
+                "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                "prompt": "explicit default",
+            },
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     finally:
         server.shutdown()
         thread.join(timeout=5)
