@@ -6328,7 +6328,10 @@ class TaskOrchestrator:
             blockers.append("required_check_evidence_invalid")
             check_rows = []
         check_names = [row.get("name") for row in check_rows]
-        if len(check_names) != len(set(check_names)):
+        valid_check_names = [name for name in check_names if isinstance(name, str)]
+        if len(valid_check_names) != len(check_names):
+            blockers.append("required_check_name_invalid")
+        elif len(valid_check_names) != len(set(valid_check_names)):
             blockers.append("required_check_evidence_duplicated")
         checks_by_name = {
             row.get("name"): row

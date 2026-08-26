@@ -180,6 +180,10 @@ def test_release_authorization_can_pass_only_on_complete_exact_head_evidence() -
             "required_check_evidence_duplicated",
         ),
         (
+            lambda row: row["required_checks"][0].update(name=[]),
+            "required_check_name_invalid",
+        ),
+        (
             lambda row: row["independent_approvals"][0].update(is_author=True),
             "independent_approval_requirement_unsatisfied",
         ),
