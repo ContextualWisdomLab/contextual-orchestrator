@@ -140,6 +140,38 @@ def test_virtual_structured_passthrough_defers_after_each_ready_candidate_fails_
     assert len(set(calls)) == 2
 
 
+def test_structured_passthrough_does_not_call_unadmitted_primary() -> None:
+    """A virtual request must start with a capability-admitted candidate."""
+
+    calls: list[str] = []
+
+    class Recorder(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del endpoint
+            calls.append(agent.id)
+            return {"model": agent.model, "echo": body}
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("unready_primary", "mock-unready"),
+            ModelAgent("ready_fallback", "mock-ready"),
+        ],
+        client=Recorder(),
+    )
+    orchestrator._structured_admitted_agent_ids = lambda: {"ready_fallback"}  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": orchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "synthetic evidence"}],
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    assert calls == ["ready_fallback"]
+    assert result["model"] == "mock-ready"
+
+
 def test_proxy_completion_forwards_tools() -> None:
     orch = _build()
     tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]

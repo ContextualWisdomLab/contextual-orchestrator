@@ -4972,7 +4972,11 @@ class TaskOrchestrator:
                     else not primary.group_name and not agent.group_name
                 )
             ]
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+        ordered = (
+            [primary]
+            if allowed_agent_ids is None or primary.id in allowed_agent_ids
+            else []
+        ) + [agent for agent in ranked if agent.id != primary.id]
         ordered = [agent for agent in ordered if is_general_chat_agent_model_id(agent.model)]
         request_failed_agents = self._request_failed_agents.get() or set()
         ordered = [agent for agent in ordered if agent.id not in request_failed_agents]
