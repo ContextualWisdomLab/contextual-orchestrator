@@ -100,7 +100,7 @@ class CostRoutingCoordinator:
                 agent = orchestrator._requested_agent(request.model)
                 if agent is None or "embedding" not in agent.tags:
                     raise RuntimeError("embedding model is unavailable")
-                return orchestrator.client.embed(agent, request.input_text)
+                return orchestrator.client.embed_one(agent, request.input_text)
 
             self.embedding_batch_backend = ProviderEmbeddingBatchBackend(
                 embed, job_registry=registry

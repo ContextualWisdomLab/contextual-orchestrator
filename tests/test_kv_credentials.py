@@ -192,7 +192,7 @@ def test_model_client_embedding_uses_provider_endpoint_and_usage() -> None:
         patch.object(client, "_validate_provider", return_value=(2, ("127.0.0.1", 443))),
         patch.object(client, "_open_provider", side_effect=open_provider),
     ):
-        vector, token_count = client.embed(agent, "evidence")
+        vector, token_count = client.embed_one(agent, "evidence")
 
     assert vector == [0.125, 0.875]
     assert token_count == 4

@@ -905,7 +905,7 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def embed(self, agent: ModelAgent, text: str) -> tuple[list[float], int]:
+    def embed_one(self, agent: ModelAgent, text: str) -> tuple[list[float], int]:
         """Return one provider-backed embedding and its reported token count."""
         if agent.base_url.startswith("mock://"):
             raise NotConfigured("mock agents do not provide production embeddings")

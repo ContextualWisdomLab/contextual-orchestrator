@@ -138,7 +138,7 @@ def test_remote_embedding_agent_uses_provider_backend() -> None:
     class _Client:
         local_concurrency = 1
 
-        def embed(self, selected_agent, text):
+        def embed_one(self, selected_agent, text):
             assert selected_agent is agent
             assert text == "evidence"
             return [0.25, 0.75], 3
