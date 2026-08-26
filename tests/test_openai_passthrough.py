@@ -205,6 +205,7 @@ def test_http_responses_applies_deadline_to_passthrough_and_orchestration() -> N
     original_complete = orchestrator.complete
     original_stream_route = orchestrator.stream_route
     original_conduct = orchestrator.conduct
+    original_would_route = orchestrator.would_route
 
     def proxy(*args, **kwargs):
         observed.append(("proxy", orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]))
@@ -219,13 +220,19 @@ def test_http_responses_applies_deadline_to_passthrough_and_orchestration() -> N
         return original_stream_route(*args, **kwargs)
 
     def conduct(*args, **kwargs):
-        observed.append(("stream", orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]))
+        observed.append(("conduct", orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]))
         return original_conduct(*args, **kwargs)
+
+    def would_route(messages, mode, model_name):
+        if messages[-1]["content"] in {"direct stream", "conduct stream"}:
+            return messages[-1]["content"] == "direct stream"
+        return original_would_route(messages, mode, model_name)
 
     orchestrator.proxy_completion = proxy  # type: ignore[method-assign]
     orchestrator.complete = complete  # type: ignore[method-assign]
     orchestrator.stream_route = stream_route  # type: ignore[method-assign]
     orchestrator.conduct = conduct  # type: ignore[method-assign]
+    orchestrator.would_route = would_route  # type: ignore[method-assign]
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_address[1]}/v1/responses"
@@ -249,11 +256,12 @@ def test_http_responses_applies_deadline_to_passthrough_and_orchestration() -> N
     try:
         post({"model": "mock-planner", "input": "hello"})
         post({"model": "orchestrator/auto", "input": "hello"})
-        post({"model": "orchestrator/auto", "input": "hello", "stream": True})
+        post({"model": "orchestrator/auto", "input": "direct stream", "stream": True})
+        post({"model": "orchestrator/auto", "input": "conduct stream", "stream": True})
     finally:
         server.shutdown()
 
-    assert {kind for kind, _deadline in observed} == {"proxy", "complete", "stream"}
+    assert {kind for kind, _deadline in observed} == {"proxy", "complete", "stream", "conduct"}
     assert all(deadline is not None for _kind, deadline in observed)
 
 

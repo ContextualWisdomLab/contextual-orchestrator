@@ -6441,11 +6441,12 @@ def build_server(
                             with orchestrator.client.request_settings(
                                 request_deadline_monotonic=request_deadline
                             ):
-                                stream_succeeded = self._stream_orchestrated_response(
+                                stream_succeeded, stream_status_code = self._stream_orchestrated_response(
                                     orchestrator, security, messages, model_name
                                 )
                         else:
                             stream_succeeded = True
+                            stream_status_code = 200
                             with orchestrator.client.request_settings(
                                 request_deadline_monotonic=request_deadline
                             ):
@@ -6472,7 +6473,7 @@ def build_server(
                             {
                                 "endpoint_path": "/v1/responses",
                                 "actor_scope": "inference",
-                                "status_code": 200 if stream_succeeded else 500,
+                                "status_code": stream_status_code,
                                 "transport_status_code": 200,
                                 "response_status": "completed" if stream_succeeded else "failed",
                                 "model_name": model_name,
@@ -6851,7 +6852,7 @@ def build_server(
             security: Any,
             messages: Any,
             model_name: str,
-        ) -> bool:
+        ) -> tuple[bool, int]:
             """Stream orchestration as native Responses reasoning-summary events."""
             response_id = f"resp_{uuid.uuid4().hex}"
             reasoning_id = f"rs_{uuid.uuid4().hex}"
@@ -6912,7 +6913,7 @@ def build_server(
             security.acquire_run_slot()
             try:
                 if not self._begin_sse():
-                    return False
+                    return False, 500
                 created_response = _orchestrated_response(
                     model_name,
                     {"answer": ""},
@@ -6946,6 +6947,18 @@ def build_server(
                         )
                 except ConnectionAbortedError:
                     raise
+                except RequestDeadlineExceeded:
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": {
+                            "code": "request_deadline_exceeded",
+                            "message": "request deadline exceeded",
+                        },
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False, 504
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     failed = {
                         **created_response,
@@ -6957,7 +6970,7 @@ def build_server(
                     }
                     emit("response.failed", response=failed)
                     self._write_sse("data: [DONE]\n\n")
-                    return False
+                    return False, 500
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",
@@ -7019,9 +7032,9 @@ def build_server(
                 )
                 emit("response.completed", response=completed)
                 self._write_sse("data: [DONE]\n\n")
-                return True
+                return True, 200
             except ConnectionAbortedError:
-                return False
+                return False, 500
             finally:
                 security.release_run_slot()
 
