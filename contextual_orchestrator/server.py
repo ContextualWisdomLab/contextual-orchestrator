@@ -542,7 +542,14 @@ def _request_deadline_header(value: str | None) -> float | None:
             "invalid_request_timeout",
             "X-Request-Timeout-Ms must be a positive integer",
         )
-    timeout_seconds = timeout_ms / 1000.0
+    try:
+        timeout_seconds = timeout_ms / 1000.0
+    except OverflowError as exc:
+        raise RequestError(
+            400,
+            "invalid_request_timeout",
+            "X-Request-Timeout-Ms exceeds the supported numeric range",
+        ) from exc
     if not math.isfinite(timeout_seconds):
         raise RequestError(
             400,
@@ -6406,16 +6413,22 @@ def build_server(
                         messages.append({"role": "user", "content": _coerce_input_text(input_value)})
                         started_at = time.perf_counter()
                         if stream:
-                            stream_succeeded = self._stream_orchestrated_response(
-                                orchestrator, security, messages, model_name
-                            )
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                stream_succeeded = self._stream_orchestrated_response(
+                                    orchestrator, security, messages, model_name
+                                )
                         else:
                             stream_succeeded = True
-                            result = self._run(
-                                lambda: orchestrator.complete(
-                                    messages, mode="auto", model_name=model_name
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                result = self._run(
+                                    lambda: orchestrator.complete(
+                                        messages, mode="auto", model_name=model_name
+                                    )
                                 )
-                            )
                             summaries = [
                                 _REASONING_STAGE_SUMMARIES.get(step.get("role"), "Processing the request.")
                                 for step in result.get("trace", [])
@@ -6444,9 +6457,12 @@ def build_server(
                         )
                         return
                     started_at = time.perf_counter()
-                    proxied = self._run(
-                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
-                    )
+                    with orchestrator.client.request_settings(
+                        request_deadline_monotonic=request_deadline
+                    ):
+                        proxied = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                        )
                     orchestrator.record_analytics_event(
                         "responses_passthrough",
                         {

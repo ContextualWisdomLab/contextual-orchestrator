@@ -502,6 +502,87 @@ def test_all_provider_failures_end_at_shared_request_deadline(
     assert now[0] == 180.0
 
 
+def test_raw_passthrough_retries_end_at_shared_request_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class TimedOutRawClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=3, retry_backoff=10)
+            self.calls = 0
+
+        def _send_raw(self, agent, endpoint, payload, destination=None):  # type: ignore[override]
+            del agent, endpoint, payload, destination
+            self.calls += 1
+            now[0] += self._local.provider_transport_timeout
+            raise TimeoutError("provider timed out")
+
+        def _validate_provider(self, agent):  # type: ignore[override]
+            del agent
+            return None
+
+    client = TimedOutRawClient()
+    agent = ModelAgent(
+        "worker_agent", "provider-model", base_url="https://provider.example/v1", credential_key=""
+    )
+    with client.request_settings(request_deadline_monotonic=5.0):
+        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
+            client.proxy_send(agent, "responses", {})
+
+    assert client.calls == 1
+    assert now[0] == 5.0
+
+
+def test_expired_caller_deadline_is_not_a_group_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: 10.0)
+    agent = ModelAgent(
+        "worker_agent", "provider-model", group_name="provider_group", tags=("reasoning",)
+    )
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([agent], client=client)
+
+    with client.request_settings(request_deadline_monotonic=9.0):
+        with pytest.raises(RequestDeadlineExceeded):
+            orchestrator._invoke(
+                agent, [{"role": "user", "content": "route"}], text="route", role="worker"
+            )
+
+    assert orchestrator._group_router.member_observation_count(agent.id) == 0
+
+
+def test_expired_passthrough_deadline_is_not_a_group_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: 10.0)
+
+    class RemoteClient(ModelClient):
+        def _validate_provider(self, agent):  # type: ignore[override]
+            del agent
+            return None
+
+    agent = ModelAgent(
+        "worker_agent",
+        "provider-model",
+        base_url="https://provider.example/v1",
+        credential_key="",
+        group_name="provider_group",
+    )
+    client = RemoteClient()
+    orchestrator = TaskOrchestrator([agent], client=client)
+
+    with client.request_settings(request_deadline_monotonic=9.0):
+        with pytest.raises(RequestDeadlineExceeded):
+            orchestrator.proxy_completion(
+                {"model": agent.model, "input": "hello"}, endpoint="responses"
+            )
+
+    assert orchestrator._group_router.member_observation_count(agent.id) == 0
+
+
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning",)),

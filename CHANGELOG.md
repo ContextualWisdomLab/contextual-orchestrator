@@ -1,7 +1,5 @@
 # Changelog
 
-- Bound decoded and structured-passthrough provider retries and failover by an explicit request-scoped monotonic deadline while preserving structured workflow and cost lineage.
-
 All notable changes to `contextual-orchestrator` are documented here. The
 project follows Semantic Versioning; a version is released only after the
 protected `main` branch, required Checks, independent review, and release
@@ -14,6 +12,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Bound decoded and structured-passthrough provider retries and failover by an explicit request-scoped monotonic deadline while preserving structured workflow and cost lineage.
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and

@@ -141,14 +141,13 @@ class CostRoutingCoordinator:
         """Resolve the current pool at submission time so discovery changes take effect."""
         if self._embedding_backend_override is not None:
             return self._embedding_backend_override
-        try:
-            agent = (
-                self.orchestrator._agent(routing_agent_id)
-                if routing_agent_id is not None
-                else self._embedding_agent_for_model(model)
-            )
-        except (AttributeError, KeyError, RuntimeError, ValueError):
-            return self._local_embedding_backend
+        if routing_agent_id is not None:
+            agent = self.orchestrator._agent(routing_agent_id)
+        else:
+            try:
+                agent = self._embedding_agent_for_model(model)
+            except (AttributeError, KeyError, RuntimeError, ValueError):
+                return self._local_embedding_backend
         return (
             self._local_embedding_backend
             if agent.base_url.startswith("mock://")
@@ -380,6 +379,13 @@ class CostRoutingCoordinator:
         and recorded cost are produced by :meth:`embeddings_batch_document`.
         """
         shared_attribution = dict(attribution or {})
+        if routing_agent_id is not None:
+            agent = self.orchestrator._agent(routing_agent_id)
+            shared_attribution["provider"] = (
+                getattr(agent, "provider_name", None)
+                or _provider_from_base_url(agent.base_url)
+                or "unknown"
+            )
         requests, part_counts, part_limits = self._build_embedding_requests(
             inputs,
             model=model,

@@ -236,7 +236,7 @@ def test_request_deadline_header_uses_explicit_millisecond_duration(
     assert _request_deadline_header(" 180000 ") == 192.5
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "1.5", "forever", "١"])
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "forever", "١", "9" * 400])
 def test_request_deadline_header_rejects_non_positive_or_ambiguous_values(value: str) -> None:
     """Malformed deadline controls fail before orchestration starts."""
     with pytest.raises(RequestError) as raised:

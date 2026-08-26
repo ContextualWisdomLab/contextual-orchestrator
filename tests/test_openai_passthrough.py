@@ -197,6 +197,66 @@ def test_http_responses_endpoint_passes_through() -> None:
     assert body["object"] == "response"
 
 
+def test_http_responses_applies_deadline_to_passthrough_and_orchestration() -> None:
+    token = "responses_deadline_token"
+    orchestrator = _build()
+    observed: list[tuple[str, float | None]] = []
+    original_proxy = orchestrator.proxy_completion
+    original_complete = orchestrator.complete
+    original_stream_route = orchestrator.stream_route
+    original_conduct = orchestrator.conduct
+
+    def proxy(*args, **kwargs):
+        observed.append(("proxy", orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]))
+        return original_proxy(*args, **kwargs)
+
+    def complete(*args, **kwargs):
+        observed.append(("complete", orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]))
+        return original_complete(*args, **kwargs)
+
+    def stream_route(*args, **kwargs):
+        observed.append(("stream", orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]))
+        return original_stream_route(*args, **kwargs)
+
+    def conduct(*args, **kwargs):
+        observed.append(("stream", orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]))
+        return original_conduct(*args, **kwargs)
+
+    orchestrator.proxy_completion = proxy  # type: ignore[method-assign]
+    orchestrator.complete = complete  # type: ignore[method-assign]
+    orchestrator.stream_route = stream_route  # type: ignore[method-assign]
+    orchestrator.conduct = conduct  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/v1/responses"
+
+    def post(payload: dict) -> None:
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers={
+                "content-type": "application/json",
+                "authorization": f"Bearer {token}",
+                "x-request-timeout-ms": "180000",
+                "connection": "close",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+            response.read()
+
+    try:
+        post({"model": "mock-planner", "input": "hello"})
+        post({"model": "orchestrator/auto", "input": "hello"})
+        post({"model": "orchestrator/auto", "input": "hello", "stream": True})
+    finally:
+        server.shutdown()
+
+    assert {kind for kind, _deadline in observed} == {"proxy", "complete", "stream"}
+    assert all(deadline is not None for _kind, deadline in observed)
+
+
 def test_http_models_endpoint_lists_configured_models() -> None:
     server, port, token = _serve()
     request = urllib.request.Request(

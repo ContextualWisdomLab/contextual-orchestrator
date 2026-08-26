@@ -1589,6 +1589,7 @@ class ModelClient:
                 self._sleep(min(self._backoff_delay(attempt), remaining))
             finally:
                 self._local.provider_transport_timeout = None
+        self.remaining_request_timeout()
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
@@ -2794,7 +2795,9 @@ class TaskOrchestrator:
         started_at = time.perf_counter()
         try:
             result = self.client.proxy_send(agent, endpoint, upstream)
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, RequestDeadlineExceeded):
+                raise
             if measured:
                 self._group_router.observe_failure(agent.id)
             raise
@@ -4414,11 +4417,11 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                 except Exception as exc:
+                    if isinstance(exc, RequestDeadlineExceeded):
+                        raise
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
-                        raise
-                    if isinstance(exc, RequestDeadlineExceeded):
                         raise
                     if isinstance(exc, ProviderResponseError):
                         self._record_failure(agent.id)

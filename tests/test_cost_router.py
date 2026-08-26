@@ -228,10 +228,30 @@ def test_embedding_batch_binds_the_selected_agent_when_models_match() -> None:
             return first
 
     document = CostRoutingCoordinator(_Orchestrator()).complete_embeddings_batch(
-        ["evidence"], model="shared-model", routing_agent_id=second.id
+        ["evidence"],
+        model="shared-model",
+        routing_agent_id=second.id,
+        attribution={"provider": "caller-guess"},
     )
 
     assert document["embeddings"][0]["embedding"] == [0.2, 0.8]
+    assert document["embeddings"][0]["attribution"]["provider"] == "second.example"
+
+
+def test_embedding_batch_does_not_fabricate_local_vectors_for_a_removed_agent() -> None:
+    """An explicitly selected member disappearing must reach the caller's failover."""
+    orchestrator = TaskOrchestrator([ModelAgent("removed_agent", "shared-model")])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    orchestrator.candidates.clear()
+
+    try:
+        coordinator.complete_embeddings_batch(
+            ["evidence"], model="shared-model", routing_agent_id="removed-agent"
+        )
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("a removed selected agent must not use local embeddings")
 
 
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:
