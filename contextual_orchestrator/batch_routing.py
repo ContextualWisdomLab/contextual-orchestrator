@@ -591,7 +591,9 @@ class ProviderEmbeddingBatchBackend:
         if type(max_concurrency) is not int or max_concurrency < 1:
             raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
-        self._executor = ThreadPoolExecutor(max_workers=max_concurrency)
+        self._max_concurrency = max_concurrency
+        self._executor: ThreadPoolExecutor | None = None
+        self._executor_lock = threading.Lock()
         self._registry = job_registry or JobRegistryFactory()
         self._terminal_events: Dict[str, threading.Event] = {}
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
@@ -637,7 +639,10 @@ class ProviderEmbeddingBatchBackend:
 
     def close(self) -> None:
         """Release the bounded worker pool owned by this backend."""
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        with self._executor_lock:
+            executor, self._executor = self._executor, None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def __enter__(self) -> "ProviderEmbeddingBatchBackend":
         return self
@@ -659,7 +664,11 @@ class ProviderEmbeddingBatchBackend:
         self._requests[job_id] = list(requests)
         self._states[job_id] = "queued"
         self._terminal_events[job_id] = threading.Event()
-        self._executor.submit(copy_context().run, self._run_job, job_id)
+        with self._executor_lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+            executor = self._executor
+        executor.submit(copy_context().run, self._run_job, job_id)
         return BatchJob(job_id=job_id, backend=self.name, status="queued", request_count=len(requests))
 
     def _run_job(self, job_id: str) -> None:

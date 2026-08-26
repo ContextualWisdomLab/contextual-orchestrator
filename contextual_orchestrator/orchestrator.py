@@ -942,6 +942,9 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
+        self._request_settings: ContextVar[dict[str, Any] | None] = ContextVar(
+            f"model_client_request_settings_{id(self)}", default=None
+        )
         if not verify_tls:
             raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
         # TLS trust for provider egress. The system trust store is the default;
@@ -988,7 +991,7 @@ class ModelClient:
 
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
-        scoped = getattr(self._local, "request_settings", {})
+        scoped = self._request_settings.get() or {}
         return {
             "temperature": scoped.get("temperature", self.default_temperature),
             "top_p": scoped.get("top_p", self.default_top_p),
@@ -1011,17 +1014,13 @@ class ModelClient:
     @contextmanager
     def request_settings(self, **overrides: Any):
         """Apply provider settings to only the current server request thread."""
-        previous = getattr(self._local, "request_settings", None)
         current = self.request_settings_snapshot()
         current.update({key: value for key, value in overrides.items() if value is not None})
-        self._local.request_settings = current
+        token = self._request_settings.set(current)
         try:
             yield
         finally:
-            if previous is None:
-                del self._local.request_settings
-            else:
-                self._local.request_settings = previous
+            self._request_settings.reset(token)
 
     #: Deterministic vector dimension for mock-provider embeddings (test fixture
     #: only; production providers always return their own dimensionality).

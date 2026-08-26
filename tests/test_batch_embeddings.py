@@ -332,9 +332,69 @@ def test_provider_batch_cancelled_while_queued_never_starts() -> None:
 
 def test_provider_backend_context_manager_closes_executor() -> None:
     backend = ProviderEmbeddingBatchBackend(lambda requests: ([], 0))
+    assert backend._executor is None
+    job = backend.submit([EmbeddingBatchRequest("synthetic")])
+    backend.wait(job, timeout=1.0)
+    executor = backend._executor
     with backend:
         pass
-    assert backend._executor._shutdown
+    assert backend._executor is None
+    assert executor is not None and executor._shutdown
+
+
+def test_provider_worker_inherits_caller_deadline() -> None:
+    """The copied worker context retains request-scoped provider settings."""
+    agent = ModelAgent(
+        "embedding_worker", "remote-embedding", base_url="https://provider.example/v1",
+        provider_name="provider", tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+    observed: list[float | None] = []
+
+    def embed_with_usage(_agent, texts):
+        observed.append(
+            orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]
+        )
+        return [[1.0] for _text in texts], len(texts)
+
+    orchestrator.client.embed_with_usage = embed_with_usage  # type: ignore[method-assign]
+    coordinator = CostRoutingCoordinator(orchestrator)
+    deadline = time.monotonic() + 1.0
+    with orchestrator.client.request_settings(request_deadline_monotonic=deadline):
+        coordinator.complete_embeddings_batch(
+            ["alpha"], model=agent.model, routing_agent_id=agent.id
+        )
+    assert observed == [deadline]
+
+
+def test_completed_provider_result_wins_post_wait_deadline_race() -> None:
+    """A cached terminal result is returned even if the deadline expires after wait."""
+    class Client:
+        local_concurrency = 1
+        timeout = 1.0
+
+        def __init__(self):
+            self.deadline_checks = 0
+
+        def remaining_request_timeout(self):
+            self.deadline_checks += 1
+            if self.deadline_checks > 1:
+                raise RequestDeadlineExceeded("request deadline exceeded")
+            return 1.0
+
+        def embed_with_usage(self, _agent, texts):
+            return [[1.0] for _text in texts], len(texts)
+
+    client = Client()
+    agent = ModelAgent(
+        "embedding_agent", "synthetic", base_url="https://provider.example/v1",
+        tags=("embedding",),
+    )
+    document = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client)
+    ).complete_embeddings_batch(["alpha"], routing_agent_id=agent.id)
+    assert document["status"] == "completed"
+    assert client.deadline_checks == 1
 
 
 def test_cancel_finished_batch_preserves_terminal_vectors() -> None:
@@ -624,6 +684,33 @@ def test_concurrent_identical_shards_have_one_provider_receipt(monkeypatch) -> N
     assert all(document["status"] == "completed" for document in documents)
     assert client.calls == 1
     assert documents[0]["embeddings"] == documents[1]["embeddings"]
+
+
+def test_provider_limit_fallback_respects_input_and_total_token_caps() -> None:
+    """A discovered provider limit re-shards by both returned ceilings."""
+    calls: list[list[str]] = []
+    agent = ModelAgent(
+        "embedding_worker", "remote-embedding", base_url="https://provider.example/v1",
+        provider_name="provider", tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+
+    def embed_with_usage(_agent, texts):
+        calls.append(list(texts))
+        if len(calls) == 1:
+            raise ProviderResponseError(
+                "provider limit", max_inputs=2, max_tokens=3
+            )
+        return [[1.0] for _text in texts], len(texts)
+
+    orchestrator.client.embed_with_usage = embed_with_usage  # type: ignore[method-assign]
+    document = CostRoutingCoordinator(orchestrator).complete_embeddings_batch(
+        ["one two", "three four", "five six"],
+        model=agent.model,
+        routing_agent_id=agent.id,
+    )
+    assert document["status"] == "completed"
+    assert [len(call) for call in calls] == [3, 1, 1, 1]
 
 
 def test_concurrent_terminal_polls_materialize_cost_once() -> None:

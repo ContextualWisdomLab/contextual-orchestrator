@@ -182,17 +182,35 @@ class CostRoutingCoordinator:
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
             except Exception as exc:
                 max_inputs = getattr(exc, "max_inputs", None)
-                if type(max_inputs) is not int or max_inputs < 1 or len(texts) <= max_inputs:
+                max_total_tokens = getattr(exc, "max_tokens", None)
+                has_input_limit = type(max_inputs) is int and max_inputs > 0
+                has_token_limit = type(max_total_tokens) is int and max_total_tokens > 0
+                if not has_input_limit and not has_token_limit:
                     raise
-                self.config.set(
-                    _EMBEDDING_CONFIG_CATEGORY,
-                    "embedding_max_inputs_per_batch",
-                    max_inputs,
-                )
+                if has_input_limit:
+                    self.config.set(
+                        _EMBEDDING_CONFIG_CATEGORY,
+                        "embedding_max_inputs_per_batch",
+                        max_inputs,
+                    )
                 vectors: List[List[float]] = []
                 provider_token_counts = []
-                for offset in range(0, len(requests), max_inputs):
-                    chunk = requests[offset : offset + max_inputs]
+                chunks: List[List[EmbeddingBatchRequest]] = []
+                for request in requests:
+                    if has_token_limit and request.token_count > max_total_tokens:
+                        raise
+                    current = chunks[-1] if chunks else []
+                    exceeds_inputs = has_input_limit and len(current) >= max_inputs
+                    exceeds_tokens = has_token_limit and current and (
+                        self._rust_embedding_core().sum_token_counts(
+                            [item.token_count for item in current] + [request.token_count]
+                        )
+                        > max_total_tokens
+                    )
+                    if not current or exceeds_inputs or exceeds_tokens:
+                        chunks.append([])
+                    chunks[-1].append(request)
+                for chunk in chunks:
                     chunk_texts = [request.input_text for request in chunk]
                     chunk_sessions = [
                         request.attribution.get("session_id") for request in chunk
@@ -1085,7 +1103,7 @@ class CostRoutingCoordinator:
                     if hasattr(client, "remaining_request_timeout")
                     else None
                 )
-                wait(
+                status = wait(
                     job,
                     timeout=(
                         remaining
@@ -1093,7 +1111,10 @@ class CostRoutingCoordinator:
                         else float(getattr(client, "timeout", 30.0))
                     ),
                 )
-                if hasattr(client, "remaining_request_timeout"):
+                if (
+                    not status.get("is_complete", False)
+                    and hasattr(client, "remaining_request_timeout")
+                ):
                     client.remaining_request_timeout()
         return self.embeddings_batch_document(job.job_id)
 
