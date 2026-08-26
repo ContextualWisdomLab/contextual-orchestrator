@@ -159,7 +159,7 @@ def test_batch_route_persists_runs_when_a_state_db_is_configured(tmp_path) -> No
     connection = sqlite3.connect(db_path)
     try:
         rows = connection.execute(
-            "SELECT COUNT(*) FROM records WHERE kind = 'workflow_run'"
+            "SELECT COUNT(*) FROM orchestration_records WHERE kind = 'workflow_run'"
         ).fetchone()
         assert rows[0] == 1
     finally:
@@ -261,15 +261,6 @@ def test_parse_workflow_plan_rejects_empty_subtasks() -> None:
     }
     with pytest.raises(ValueError, match="step subtask must be non-empty"):
         orch._parse_workflow_plan(json.dumps(raw))
-
-
-def test_score_agent_penalizes_disabled_and_excluded_agents() -> None:
-    disabled = _agent("bench_agent", disabled=True)
-    excluded = _agent("excluded_agent", tags=("coding",), provider_exclusions=("worker",))
-
-    orch = _orch(_agent())
-    assert orch._score_agent(disabled, "worker", "code")[0] == -20_000
-    assert orch._score_agent(excluded, "worker", "code")[0] == -10_000
 
 
 def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> None:

@@ -94,7 +94,7 @@ def test_cheapest_upstream_picks_lowest_priced_candidate() -> None:
 
 
 def test_local_backend_runs_requests_in_process() -> None:
-    def runner(messages, mode):
+    def runner(messages, mode, model):
         return {"answer": f"echo:{messages[-1]['content']}", "mode": "route"}
 
     backend = LocalBatchBackend(runner)
@@ -113,7 +113,7 @@ def test_local_backend_runs_requests_in_process() -> None:
 def test_local_backend_honors_bounded_concurrency() -> None:
     barrier = threading.Barrier(2, timeout=1.0)
 
-    def runner(messages, mode):
+    def runner(messages, mode, model):
         barrier.wait()
         return {"answer": messages[-1]["content"], "mode": mode}
 
@@ -131,7 +131,7 @@ def test_local_backend_workers_inherit_session_id() -> None:
     """Batch workers retain the caller session for provider telemetry."""
     observed: list[str | None] = []
 
-    def runner(messages, mode):
+    def runner(messages, mode, model):
         observed.append(current_session_id())
         return {"answer": messages[-1]["content"], "mode": mode}
 

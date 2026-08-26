@@ -31,7 +31,14 @@ def build(client: RecordingClient | None = None) -> TaskOrchestrator:
 
 
 def test_fugu_contract_fuses_fast_route_and_deep_workflow() -> None:
+    """Auto mode fuses a fast direct route with deep orchestrated workflows.
+
+    The split decision is the structured triage verdict (one exact-schema
+    model call), not keyword matching; mock transports cannot emit that JSON,
+    so the verdicts are pinned here to exercise both arms of the fusion.
+    """
     orchestrator = build()
+    orchestrator._triage_fn = lambda text: "architecture" in text
 
     fast = orchestrator.complete([{"role": "user", "content": "Write one sentence."}], mode="auto")
     deep = orchestrator.complete(
