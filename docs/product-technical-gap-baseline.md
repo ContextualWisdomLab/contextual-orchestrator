@@ -1,5 +1,39 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 12:44 KST exact-head review-remediation snapshot
+
+Protected `main` remains normal merge `9c299fa4669139dbe246638e0c44b62051ec8830`.
+Its Tests, Security, Fuzz, Dependency Graph, and scheduled provider-catalog
+canaries remain queued; this is not release evidence. The complete open queue
+was re-read as follows:
+
+| PR | Exact head | Current evidence and next acceptance action |
+| --- | --- | --- |
+| [#845](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/845) | `eecdb11398200b6574ef7cfb4212c4f3688cab11` | Provider-catalog KV fallback repair; no unresolved review thread or failed exact-head Check. Require terminal Checks, independent approval, normal merge, and one successful scheduled run. |
+| [#848](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/848) | `e5433911db3827b1d6a7eb48b9d72d392c9ed8db` | Unique planning ADR enforcement; no unresolved review thread or failed exact-head Check. Require terminal Checks and independent approval. |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `d88e3218f093c7d4b77bd78a1d2b54445595ecb5` | Async web path and k6 evidence: 229/229 checks, 25.062 inference requests/s, 14.77 ms health p99, and about 1.12 s inference p95. Production TLS, provider quota, multiprocess, and soak evidence remain open. |
+| [#850](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/850) | `83018885ec45110c9a900da3978109e506a468e7` | Constant-time budget accounting retains exact model-group ledger parity; `34` focused tests pass and the informational review thread is resolved. Require terminal Checks and independent approval. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `2e8a5527255d74b89d5897fcc0d450eba36d6e8c` | Virtual `auto` and `free` selectors now retain provider failover, the free selector cannot cross into paid members, and missing image capability returns a client error. The exact complete tree passes `2285` tests with no failure; all review threads are resolved. |
+| [#856](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/856) | `b9db99971f5f335a02719ed088988340647b3869` | Strict configurable request-body ceiling; `40` focused tests pass with no unresolved review thread or failed exact-head Check. Require terminal Checks and independent approval. |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | this baseline commit supersedes `10ece639bdee4110983a6324a25923d222b6b57a` | Provider-backed embedding batches bind each measured failover attempt to the selected provider member even when aliases share a model name; the embedding/cost slice passes `86` tests. All review threads are resolved; full-suite and hosted exact-head evidence remain pending. |
+
+Every open PR retains normal auto-merge. None has an independent exact-head
+approval; hosted jobs remain queued rather than failed. Queue delay is neither
+success evidence nor authority to bypass protected review.
+
+Issue [#117](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/117)
+remains the highest security acceptance gap. A current-main audit found that
+chat passthrough can return before trace validation, access reports do not
+always require trace authority, trace-free batch answers are over-gated, the
+legacy bearer can implicitly disclose trace, and the verifier lacks
+tenant/resource/purpose/lifetime context. The OpenAPI and customer-facing error
+contract also remain incomplete. Keep machine authorization details in the API
+and audit plane; the administration UI must instead state the next recovery
+action. Do not close #117 until route/conduct and stream/non-stream parity,
+access-report ownership, trace-free batch access, explicit trace authority,
+expiry/revocation/tenant isolation, fail-closed audit, sanitized denial, OpenAPI,
+and actionable UI tests pass on protected main.
+
 ## 2026-08-26 12:28 KST protected-main and open-queue snapshot
 
 PR #834 merged normally as protected `main`
