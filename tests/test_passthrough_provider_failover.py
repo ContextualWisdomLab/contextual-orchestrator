@@ -473,3 +473,27 @@ def test_effort_support_filter_precedes_same_provider_deduplication() -> None:
 
     assert result["model"] == "supported-model"
     assert [agent_id for agent_id, _ in client.calls] == ["supported_alias"]
+
+
+def test_default_mock_endpoint_represents_one_fixture_provider() -> None:
+    """Default mock agents deduplicate as aliases of one local fixture provider."""
+    client = SequencedProxyClient(
+        {
+            "first_mock": _http_error(503),
+            "second_mock": {"model": "second-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("first_mock", "first-model", priority=10),
+            ModelAgent("second_mock", "second-model", priority=1),
+        ],
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+        orchestrator.proxy_completion(
+            {"model": orchestrator.AUTO_MODEL, "messages": [{"role": "user", "content": "x"}]}
+        )
+
+    assert [agent_id for agent_id, _ in client.calls] == ["first_mock"]

@@ -163,7 +163,7 @@ class CostRoutingCoordinator:
         ``usage_record_id``. Batch requests are dispatched to the batch backend
         and return a job envelope; their cost is recorded on retrieval.
 
-        For structured provider workflows, each trace step records one ledger
+        For multi-step workflows, each trace step records one ledger
         row. Rows backed by provider-reported token counts are labeled
         ``measurement_status="measured"``; rows that fall back to heuristic
         estimates are labeled ``"estimated"``. The original request prompt is
@@ -308,39 +308,101 @@ class CostRoutingCoordinator:
             run_kwargs["cache_partition"] = cache_partition
         result = self.orchestrator.run(messages, **run_kwargs)
         cache_hit = result.get("cache_status") == "hit"
-        reported_counts = None
-        if not cache_hit:
-            for step in reversed(result.get("trace") or []):
+        records = []
+        if cache_hit:
+            records.append(
+                self._record_completion(
+                    messages=messages,
+                    answer=result.get("answer", ""),
+                    route_mode=result.get("mode"),
+                    request_channel="cache",
+                    attribution=attribution,
+                    model_name=model_name,
+                    provider_model=("cache", "response"),
+                    workflow_run_id=result.get("workflow_run_id"),
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                )
+            )
+        else:
+            request_prompt_attributed = False
+            for step in result.get("trace") or []:
                 if not isinstance(step, dict):
                     continue
-                reported_counts = self._provider_usage(step.get("usage"))
-                if reported_counts is not None:
-                    break
-        record = self._record_completion(
-            messages=messages,
-            answer=result.get("answer", ""),
-            route_mode=result.get("mode"),
-            request_channel="cache" if cache_hit else "sync",
-            attribution=attribution,
-            model_name=model_name,
-            provider_model=("cache", "response") if cache_hit else self._served_provider_model(result, model_name),
-            workflow_run_id=result.get("workflow_run_id"),
-            prompt_tokens=0 if cache_hit else reported_counts[0] if reported_counts else None,
-            completion_tokens=0 if cache_hit else reported_counts[1] if reported_counts else None,
-        )
+                counts = self._provider_usage(step.get("usage"))
+                attribute_request_prompt = counts is None and not request_prompt_attributed
+                if attribute_request_prompt:
+                    request_prompt_attributed = True
+                records.append(
+                    self._record_completion(
+                        messages=messages if attribute_request_prompt else [],
+                        answer=step.get("output", "") if counts is None else "",
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model({"trace": [step]}, model_name),
+                        workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
+                    )
+                )
+            if not records:
+                records.append(
+                    self._record_completion(
+                        messages=messages,
+                        answer=result.get("answer", ""),
+                        route_mode=result.get("mode"),
+                        request_channel="sync",
+                        attribution=attribution,
+                        model_name=model_name,
+                        provider_model=self._served_provider_model(result, model_name),
+                        workflow_run_id=result.get("workflow_run_id"),
+                    )
+                )
+        record = records[-1]
         result["channel"] = "sync"
         result["routing_reason"] = decision.reason
         result["usage_record_id"] = record.usage_record_id
+        result["usage_record_ids"] = [item.usage_record_id for item in records]
         result["usage"] = {
-            "prompt_tokens": record.prompt_tokens,
-            "completion_tokens": record.completion_tokens,
-            "total_tokens": record.total_tokens,
+            "prompt_tokens": sum(item.prompt_tokens for item in records),
+            "completion_tokens": sum(item.completion_tokens for item in records),
+            "total_tokens": sum(item.total_tokens for item in records),
         }
+        currencies = {item.currency_code for item in records}
         result["cost"] = {
-            "cost_amount": record.cost_amount,
-            "currency_code": record.currency_code,
-            "measurement_status": record.measurement_status,
+            "cost_amount": (
+                round(sum(item.cost_amount for item in records), 6)
+                if len(currencies) == 1
+                else None
+            ),
+            "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+            "measurement_status": (
+                "estimated"
+                if any(item.measurement_status == "estimated" for item in records)
+                else "measured"
+            ),
+            "currency_components": [
+                {
+                    "currency_code": currency,
+                    "cost_amount": round(
+                        sum(
+                            item.cost_amount
+                            for item in records
+                            if item.currency_code == currency
+                        ),
+                        6,
+                    ),
+                }
+                for currency in sorted(currencies)
+            ],
         }
+        if len(currencies) > 1:
+            result["cost"]["customer_action"] = (
+                "Review each currency component separately. Apply an approved "
+                "exchange-rate source before calculating a combined total."
+            )
         return result
 
     def _record_completion(

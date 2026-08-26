@@ -201,4 +201,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_analytics_snapshot_measures_runtime_kpis_and_guardrails()
     test_analytics_endpoint_and_admin_console_use_source_backed_snapshot()
     test_conducted_structured_chat_emits_distinct_analytics_label()
+    test_conducted_responses_emits_distinct_analytics_label()
     print("ok")

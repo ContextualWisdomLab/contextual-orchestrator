@@ -51,12 +51,12 @@ def test_sync_completion_records_usage_and_returns_costs() -> None:
     assert result["usage"]["total_tokens"] > 0
     assert result["usage_record_id"].startswith("usage_")
     records = coordinator.ledger.records()
-    assert len(records) == 1
-    assert records[0]["team_name"] == "alpha"
-    assert records[0]["provider_name"] == "mock"
-    assert records[0]["model_name"] == "mock-a"
-    assert records[0]["request_channel"] == "sync"
-    assert records[0]["measurement_status"] == "estimated"
+    assert len(records) == len(result["usage_record_ids"])
+    assert all(record["team_name"] == "alpha" for record in records)
+    assert all(record["provider_name"] == "mock" for record in records)
+    assert all(record["model_name"] == "mock-a" for record in records)
+    assert all(record["request_channel"] == "sync" for record in records)
+    assert all(record["measurement_status"] == "estimated" for record in records)
 
 
 def test_sync_completion_preserves_provider_reported_usage() -> None:
@@ -79,6 +79,44 @@ def test_sync_completion_preserves_provider_reported_usage() -> None:
     }
     assert result["cost"]["measurement_status"] == "measured"
     assert record["measurement_status"] == "measured"
+
+
+def test_conducted_plain_completion_records_every_step_usage() -> None:
+    """A conducted run preserves measured and estimated evidence per provider call."""
+    coordinator = _coordinator()
+    coordinator.orchestrator.run = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_plain_conducted",
+        "mode": "conduct",
+        "answer": "final answer",
+        "trace": [
+            {
+                "agent_id": "mock_worker",
+                "output": "reported evidence",
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            },
+            {"agent_id": "mock_worker", "output": "unreported synthesis"},
+        ],
+    }
+    messages = [{"role": "user", "content": "conduct this request"}]
+
+    result = coordinator.complete(messages, mode="conduct")
+
+    records = coordinator.ledger.records()
+    assert len(records) == 2
+    assert result["usage_record_ids"] == [row["usage_record_id"] for row in records]
+    assert result["usage_record_id"] == records[-1]["usage_record_id"]
+    assert [row["measurement_status"] for row in records] == ["measured", "estimated"]
+    assert result["cost"]["measurement_status"] == "estimated"
+    assert result["usage"] == {
+        "prompt_tokens": sum(row["prompt_tokens"] for row in records),
+        "completion_tokens": sum(row["completion_tokens"] for row in records),
+        "total_tokens": sum(row["total_tokens"] for row in records),
+    }
+    assert records[0]["prompt_tokens"] == 7
+    assert records[0]["completion_tokens"] == 3
+    assert records[1]["prompt_tokens"] == coordinator.token_counter.count_messages(
+        messages, "mock-a"
+    )
 
 
 def test_sync_records_derive_provider_and_model_from_served_agent() -> None:
@@ -260,7 +298,7 @@ def test_sync_completion_survives_usage_persistence_failure() -> None:
     assert result["usage"]["total_tokens"] > 0
 
     assert ledger.flush(timeout=1.0)
-    assert ledger.telemetry_health()["store_failures"] == 1
+    assert ledger.telemetry_health()["store_failures"] == len(result["usage_record_ids"])
     assert any(
         event.attributes["contextual_orchestrator.usage.export_state"] == "export_error"
         for event in sink.events()
@@ -303,13 +341,15 @@ def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
 
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     coordinator = _coordinator()
-    coordinator.complete([{"role": "user", "content": "sync one"}], attribution={"company": "acme"})
+    sync = coordinator.complete(
+        [{"role": "user", "content": "sync one"}], attribution={"company": "acme"}
+    )
     job = coordinator.complete([{"role": "user", "content": "batch one"}],
                                hints={"channel": "batch"}, attribution={"company": "acme"})
     coordinator.retrieve_batch(job["job_id"])
 
     report = coordinator.cost_report("company")
-    assert report["grand_total"]["record_count"] == 2
+    assert report["grand_total"]["record_count"] == len(sync["usage_record_ids"]) + 1
     assert report["items"][0]["dimension_value"] == "acme"
 
 
