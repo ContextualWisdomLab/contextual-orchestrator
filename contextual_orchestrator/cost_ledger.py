@@ -532,13 +532,15 @@ class InMemoryLedgerStore:
     def __init__(self) -> None:
         self._rows: List[Dict[str, Any]] = []
         self._usage_record_ids: set[str] = set()
+        self._lock = threading.Lock()
 
     def append(self, record: UsageRecord) -> None:
         """Append a flattened record row."""
-        if record.usage_record_id in self._usage_record_ids:
-            return
-        self._rows.append(record.as_dict())
-        self._usage_record_ids.add(record.usage_record_id)
+        with self._lock:
+            if record.usage_record_id in self._usage_record_ids:
+                return
+            self._rows.append(record.as_dict())
+            self._usage_record_ids.add(record.usage_record_id)
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return rows within the optional half-open time window."""

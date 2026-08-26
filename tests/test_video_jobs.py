@@ -49,6 +49,16 @@ def test_register_replaces_provider_id_and_preserves_owner() -> None:
     assert owner.gateway_job_id == response["id"]
 
 
+def test_followup_with_a_different_provider_id_fails_closed() -> None:
+    registry = VideoJobRegistry(_SharedRegistryFactory())
+    response = registry.register(
+        {"id": "provider-job"}, "declared_video_agent", "principal_one"
+    )
+    owner = registry.owner(response["id"], "principal_one")
+    with pytest.raises(VideoJobContractError, match="different job id"):
+        registry.public_response({"id": "other-provider-job"}, owner)
+
+
 def test_public_response_replaces_nested_provider_job_identity() -> None:
     """Provider job ids never escape through nested metadata or URL strings."""
     factory = _SharedRegistryFactory()

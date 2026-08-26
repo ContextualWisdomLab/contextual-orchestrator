@@ -71,6 +71,10 @@ class VideoJobRegistry:
         provider document crosses the public boundary.
         """
 
+        reported_id = provider_result.get("id")
+        if isinstance(reported_id, str) and reported_id != owner.provider_job_id:
+            raise VideoJobContractError("video provider returned a different job id")
+
         def replace(value: Any) -> Any:
             if isinstance(value, str):
                 return value.replace(owner.provider_job_id, owner.gateway_job_id)
