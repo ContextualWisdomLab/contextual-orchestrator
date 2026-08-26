@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-27 01:51 KST protected-main and exact-head queue evidence
+## 2026-08-27 02:03 KST protected-main and exact-head queue evidence
 
 Protected `main` is exact commit
 `5a01759165be20ab38c05c2321d8a9f00ec331ea`. It contains the normal protected
@@ -35,16 +35,17 @@ allowlisted error code, and UTC start/finish instants without secrets or raw
 provider diagnostics. It does not infer a freshness threshold, provider/model
 equivalence, or zero cost from missing price evidence.
 
-The open queue was re-read at exact heads #887 `5e07bc6e`, #883 `0175df2e`,
-#880 `062090d4`, #879 `f2c444aa`, #876 `73a5510f`, #868 `fd0cd254`, #858
+The open queue was re-read at exact heads #888 `6a67e5e7`, #887 `5e07bc6e`,
+#883 `0175df2e`, #880 `0d716b93`, #879 `f2c444aa`, #876 `73a5510f`,
+#868 `fd0cd254`, #858
 `09f5f194`, #857 `4da93814`, and #849 `ede33b5d`. PR #869 was closed unmerged because #868
 preserves its OpenCode Zen workflow transport and unique-passphrase validation;
 no check or review evidence transfers between those heads. The queue covers
 the unsupported local tool-description cap, video job ownership, this baseline,
 provider errors, pinned OpenCode runtime,
 gateway aliases and discovery, customer copy, provider-backed embeddings, and
-asynchronous HTTP capacity. Each requires its current exact-head review and
-required checks before normal protected merge.
+asynchronous HTTP capacity, and trace-authority parity. Each requires its
+current exact-head review and required checks before normal protected merge.
 
 At this snapshot, #876 has terminal successful full-suite, security, Noema,
 and focused OpenCode bootstrap evidence; its coverage-evidence job remains
@@ -57,6 +58,14 @@ auto-merge re-enabled; its hosted jobs and independent approval remain required.
 #868 has focused `actionlint` and fuzz evidence while replacement review and
 hosted jobs attach. No local, queued, running, or absent job is promoted to
 protected delivery evidence.
+
+#888 centralizes strict orchestration-trace flag validation before structured
+Chat early returns and requires trace-purpose authority for access reports. Its
+exact head passes the official local suite (`2355 passed in 675.35s`) and has
+zero unresolved threads, but hosted checks and independent review remain
+required. Issue #117 intentionally remains open for batch ownership,
+context-rich token authorization, and single-token migration; this bounded
+slice does not overstate closure.
 
 PR #886 was closed unmerged after exact comparison with #887 and the current
 official OpenAI schemas. Those schemas define function descriptions as strings
