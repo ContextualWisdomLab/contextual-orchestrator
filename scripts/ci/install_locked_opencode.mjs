@@ -18,10 +18,12 @@ const prefix = `opencode-${platform}-${arch}`
 const candidates = Object.entries(cliPackage.optionalDependencies ?? {})
   .filter(([name]) => name === prefix || name.startsWith(`${prefix}-`))
   .sort(([left], [right]) => left.localeCompare(right))
+let installedCandidate = false
 
 for (const [name, expectedVersion] of candidates) {
   try {
     const packagePath = require.resolve(`${name}/package.json`)
+    installedCandidate = true
     const installed = JSON.parse(fs.readFileSync(packagePath, "utf8"))
     if (installed.version !== expectedVersion) {
       throw new Error(`${name} version does not match opencode-ai's locked dependency`)
@@ -39,4 +41,6 @@ for (const [name, expectedVersion] of candidates) {
   }
 }
 
-throw new Error("npm ci did not install a lockfile-authorized OpenCode binary package")
+throw new Error(installedCandidate
+  ? "no lockfile-authorized OpenCode binary passed its version check"
+  : "npm ci did not install a lockfile-authorized OpenCode binary package")

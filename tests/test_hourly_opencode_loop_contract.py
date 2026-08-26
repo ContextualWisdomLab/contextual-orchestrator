@@ -25,6 +25,7 @@ def test_hourly_loop_uses_the_local_auto_orchestrator_without_copilot_token() ->
     assert "installed.version !== expectedVersion" in installer
     assert "npm install" not in installer
     assert 'spawnSync(target, ["--version"]' in installer
+    assert "no lockfile-authorized OpenCode binary passed its version check" in installer
     assert "fetch(" not in installer
     assert "postinstall.mjs" not in workflow
     assert "pull-requests: write" in workflow
