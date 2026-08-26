@@ -8,6 +8,7 @@ happy-path tests cannot reach.
 
 from __future__ import annotations
 
+import ssl
 import urllib.error
 from unittest.mock import patch
 
@@ -118,6 +119,29 @@ def test_configured_gateway_uses_pinned_bounded_provider_transport() -> None:
     request = opened.call_args.args[0]
     assert request.headers["Authorization"] == "Bearer secret"
     assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_fixed_provider_ca_failure_retries_with_certifi_verification() -> None:
+    calls = []
+
+    def urlopen(request, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise urllib.error.URLError(
+                ssl.SSLCertVerificationError(1, "unable to get local issuer")
+            )
+        return _Response({"data": []})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        assert _fetch_json("https://provider.example/v1/models", timeout=1) == {
+            "data": []
+        }
+    assert "context" not in calls[0]
+    assert calls[1]["context"].verify_mode == ssl.CERT_REQUIRED
+    assert calls[1]["context"].check_hostname is True
 
 
 def test_malformed_json_maps_to_invalid_response_code() -> None:

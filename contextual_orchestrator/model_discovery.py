@@ -17,6 +17,7 @@ from decimal import Decimal
 import json
 import math
 import re
+import ssl
 import urllib.error
 import urllib.request
 import certifi
@@ -212,7 +213,16 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
     headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    try:
+        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    except urllib.error.URLError as exc:
+        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
+            raise
+        context = ssl.create_default_context(cafile=certifi.where())
+        response = urllib.request.urlopen(  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+            request, timeout=timeout, context=context
+        )
+    with response:
         return json.loads(response.read().decode("utf-8"))
 
 
