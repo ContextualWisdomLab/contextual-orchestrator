@@ -358,7 +358,10 @@ class CostRoutingCoordinator:
         )
         try:
             with self.job_registry.lock(
-                "provider_readiness_job_execution", job_id, lease_seconds=lease
+                "provider_readiness_job_execution",
+                job_id,
+                lease_seconds=lease,
+                renew_until_epoch=deadline_epoch,
             ):
                 with self.job_registry.lock(
                     "provider_readiness_job_state", job_id, lease_seconds=max(lease, 1.0)
@@ -442,7 +445,9 @@ class CostRoutingCoordinator:
                 "provider_readiness_job_state", job_id, lease_seconds=max(lease, 1.0)
             ):
                 job = dict(self._readiness_jobs.get(job_id, {"job_id": job_id}))
-                if job.get("status") != "cancelled":
+                if job.get("status") not in {
+                    "completed", "failed", "cancelled", "expired"
+                }:
                     job["status"] = "failed"
                     job["failure"] = {"error_type": type(exc).__name__}
                     self._readiness_jobs[job_id] = job

@@ -36,6 +36,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import threading
+import time
 import weakref
 from collections.abc import MutableMapping
 from contextlib import contextmanager
@@ -135,7 +136,14 @@ class JobRegistryFactory:
         )
         self._local_locks_guard = threading.Lock()
 
-    def lock(self, name: str, key: str, *, lease_seconds: float | None = None):
+    def lock(
+        self,
+        name: str,
+        key: str,
+        *,
+        lease_seconds: float | None = None,
+        renew_until_epoch: float | None = None,
+    ):
         """Return an atomic shard claim with bounded lease and acquisition wait."""
         lock_name = f"batch_job_registry:{name}:claim:{key}"
         if self._client is not None:
@@ -152,10 +160,45 @@ class JobRegistryFactory:
             def acquired_claim():
                 if not claim.acquire():
                     raise ClaimNotAcquired(lock_name)
+                stop_renewal = threading.Event()
+                renewal_thread = None
+                if renew_until_epoch is not None:
+
+                    def renew_claim() -> None:
+                        interval = max(0.05, min(lease_seconds / 3, 1.0))
+                        while not stop_renewal.wait(interval):
+                            remaining = renew_until_epoch - time.time()
+                            if remaining <= 0:
+                                return
+                            try:
+                                # redis-py's Lock.extend script checks the
+                                # claim token before replacing the TTL (CAS).
+                                renewed = claim.extend(
+                                    max(0.05, min(lease_seconds, remaining)),
+                                    replace_ttl=True,
+                                )
+                                if not renewed:
+                                    return
+                            except Exception:  # noqa: BLE001 - terminal state remains authoritative.
+                                return
+
+                    renewal_thread = threading.Thread(
+                        target=renew_claim,
+                        name="job-claim-renewal",
+                        daemon=True,
+                    )
+                    renewal_thread.start()
                 try:
                     yield claim
                 finally:
-                    claim.release()
+                    stop_renewal.set()
+                    if renewal_thread is not None:
+                        renewal_thread.join()
+                    try:
+                        claim.release()
+                    except Exception as exc:  # noqa: BLE001 - redis is optional.
+                        if type(exc).__name__ != "LockNotOwnedError":
+                            raise
 
             return acquired_claim()
         with self._local_locks_guard:
