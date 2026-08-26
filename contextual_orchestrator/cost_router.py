@@ -261,20 +261,6 @@ class CostRoutingCoordinator:
                     )
                 )
             currencies = {record.currency_code for record in records}
-            currency_components = [
-                {
-                    "currency_code": currency,
-                    "cost_amount": round(
-                        sum(
-                            record.cost_amount
-                            for record in records
-                            if record.currency_code == currency
-                        ),
-                        6,
-                    ),
-                }
-                for currency in sorted(currencies)
-            ]
             provider_response["usage_record_ids"] = [
                 record.usage_record_id for record in records
             ]
@@ -285,7 +271,6 @@ class CostRoutingCoordinator:
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
-                "currency_components": currency_components,
                 "measurement_status": (
                     "estimated"
                     if any(record.measurement_status == "estimated" for record in records)
@@ -293,6 +278,20 @@ class CostRoutingCoordinator:
                 ),
             }
             if len(currencies) > 1:
+                provider_response["cost"]["currency_components"] = [
+                    {
+                        "currency_code": currency,
+                        "cost_amount": round(
+                            sum(
+                                record.cost_amount
+                                for record in records
+                                if record.currency_code == currency
+                            ),
+                            6,
+                        ),
+                    }
+                    for currency in sorted(currencies)
+                ]
                 provider_response["cost"]["customer_action"] = (
                     "Review each currency component separately. Apply an approved "
                     "exchange-rate source before calculating a combined total."
@@ -383,7 +382,9 @@ class CostRoutingCoordinator:
                 if any(item.measurement_status == "estimated" for item in records)
                 else "measured"
             ),
-            "currency_components": [
+        }
+        if len(currencies) > 1:
+            result["cost"]["currency_components"] = [
                 {
                     "currency_code": currency,
                     "cost_amount": round(
@@ -396,9 +397,7 @@ class CostRoutingCoordinator:
                     ),
                 }
                 for currency in sorted(currencies)
-            ],
-        }
-        if len(currencies) > 1:
+            ]
             result["cost"]["customer_action"] = (
                 "Review each currency component separately. Apply an approved "
                 "exchange-rate source before calculating a combined total."

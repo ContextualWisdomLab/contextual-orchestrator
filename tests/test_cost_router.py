@@ -78,6 +78,7 @@ def test_sync_completion_preserves_provider_reported_usage() -> None:
         "total_tokens": 10,
     }
     assert result["cost"]["measurement_status"] == "measured"
+    assert "currency_components" not in result["cost"]
     assert record["measurement_status"] == "measured"
 
 
