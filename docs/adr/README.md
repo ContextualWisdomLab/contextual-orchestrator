@@ -13,6 +13,7 @@ They do not share numbering with `docs/planning/adrs/`.
 | [0003](0003-cost-aware-sync-batch-routing.md) | Cost-aware sync-versus-batch routing | Accepted | Chen et al. (2023) FrugalGPT arXiv:2305.05176; Ong et al. (2024) RouteLLM arXiv:2406.18665; Ding et al. (2024) Hybrid LLM arXiv:2404.14618 |
 | [0004](0004-msa-leaf-composition.md) | MSA leaf — standalone and callable | Accepted | NIST SP 800-204 independent deployability; planning ADR 0001 fail-closed judge composition |
 | [0005](0005-request-scoped-provider-deadline.md) | Request-scoped provider deadline | Accepted | RFC 9110; NIST SP 800-53 Rev. 5 SI-11, SC-24 |
+| [0006](0006-native-accelerator-runtime-boundaries.md) | Native accelerator runtime boundaries | Accepted | Apple MLX; Docker Compose; NVIDIA Container Toolkit; Kubernetes GPU, Pod, and sidecar contracts; Khronos OpenCL 3.0 |
 
 Each record uses Context / Decision / Consequences plus an APA 7th
 **References** section. Cite only verified DOI or official URLs. arXiv

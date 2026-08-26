@@ -261,6 +261,7 @@ class UsageRecord:
     cost_amount: float
     currency_code: str
     attribution: AttributionDimensions = field(default_factory=AttributionDimensions)
+    input_attributions: tuple[AttributionDimensions, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         """Flatten the record for JSON and backward-compatible report output."""
@@ -290,6 +291,7 @@ class UsageRecord:
                 "company_name": self.attribution.company,
             }
         )
+        row["input_attributions"] = [item.as_dict() for item in self.input_attributions]
         return row
 
 
@@ -599,6 +601,21 @@ CREATE TABLE IF NOT EXISTS usage_record_attributions (
         FOREIGN KEY (dimension_name, dimension_value)
         REFERENCES cost_attribution_values(dimension_name, dimension_value)
 );
+
+CREATE TABLE IF NOT EXISTS usage_record_input_attributions (
+    usage_record_id TEXT NOT NULL,
+    input_index     INTEGER NOT NULL,
+    dimension_name TEXT NOT NULL,
+    dimension_value TEXT NOT NULL,
+    CONSTRAINT usage_record_input_attributions_primary_key
+        PRIMARY KEY (usage_record_id, input_index, dimension_name),
+    CONSTRAINT usage_record_input_attributions_record_foreign_key
+        FOREIGN KEY (usage_record_id) REFERENCES llm_usage_records(usage_record_id)
+        ON DELETE CASCADE,
+    CONSTRAINT usage_record_input_attributions_value_foreign_key
+        FOREIGN KEY (dimension_name, dimension_value)
+        REFERENCES cost_attribution_values(dimension_name, dimension_value)
+);
 """
 
 _CORE_USAGE_COLUMNS = (
@@ -716,6 +733,26 @@ _RECORD_ATTRIBUTION_INSERT_SQL = {
     )
     for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
 }
+_INPUT_ATTRIBUTION_INSERT_SQL = {
+    style: (
+        "INSERT INTO usage_record_input_attributions "
+        "(usage_record_id, input_index, dimension_name, dimension_value) "
+        f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})"
+    )
+    for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
+}
+_INPUT_ATTRIBUTION_SELECT_SQL = {
+    "qmark": (
+        "SELECT input_index, dimension_name, dimension_value "
+        "FROM usage_record_input_attributions WHERE usage_record_id = ? "
+        "ORDER BY input_index, dimension_name"
+    ),
+    "pyformat": (
+        "SELECT input_index, dimension_name, dimension_value "
+        "FROM usage_record_input_attributions WHERE usage_record_id = %s "
+        "ORDER BY input_index, dimension_name"
+    ),
+}
 _USAGE_SELECT_SQL = (
     "SELECT u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
     "u.route_mode, u.provider_name, u.model_name, "
@@ -823,6 +860,20 @@ class SqlLedgerStore:
                 (row["usage_record_id"], dimension_name, dimension_value),
             )
 
+    def _insert_input_attributions(self, cur: Any, row: Dict[str, Any]) -> None:
+        """Persist each input's canonical dimensions without allocating aggregate cost."""
+        for input_index, attribution in enumerate(row.get("input_attributions", [])):
+            for dimension_name in ATTRIBUTION_DIMENSIONS:
+                dimension_value = attribution.get(dimension_name) or UNATTRIBUTED
+                cur.execute(
+                    _ATTRIBUTION_VALUE_INSERT_SQL[self._paramstyle],
+                    (dimension_name, dimension_value),
+                )
+                cur.execute(
+                    _INPUT_ATTRIBUTION_INSERT_SQL[self._paramstyle],
+                    (row["usage_record_id"], input_index, dimension_name, dimension_value),
+                )
+
     def _migrate_legacy_usage_table(self) -> None:
         """Rename the flattened generation, rebuild normalized, copy, drop legacy."""
         cur = self._conn.cursor()
@@ -853,6 +904,7 @@ class SqlLedgerStore:
                 tuple(row[column] for column in _CORE_USAGE_COLUMNS),
             )
             self._insert_normalized_attribution(cur, row)
+            self._insert_input_attributions(cur, row)
 
     def _create_schema(self) -> None:
         """Create or migrate the ledger and roll back any partial DDL."""
@@ -963,6 +1015,7 @@ class SqlLedgerStore:
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
             )
             self._insert_normalized_attribution(cur, row)
+            self._insert_input_attributions(cur, row)
             if outer_transaction:
                 cur.execute("RELEASE SAVEPOINT usage_record_append")
             else:
@@ -996,7 +1049,19 @@ class SqlLedgerStore:
             _USAGE_QUERY_SQL[(self._paramstyle, start is not None, end is not None)],
             tuple(params),
         )
-        return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
+        rows = [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
+        for row in rows:
+            cur.execute(
+                _INPUT_ATTRIBUTION_SELECT_SQL[self._paramstyle],
+                (row["usage_record_id"],),
+            )
+            inputs: List[Dict[str, str]] = []
+            for input_index, dimension_name, dimension_value in cur.fetchall():
+                while len(inputs) <= input_index:
+                    inputs.append({})
+                inputs[input_index][dimension_name] = dimension_value
+            row["input_attributions"] = inputs
+        return rows
 
 
 def _within_window(created_at: int, start: Optional[int], end: Optional[int]) -> bool:
@@ -1050,6 +1115,7 @@ class CostLedger:
         route_mode: Optional[str] = None,
         workflow_run_id: Optional[str] = None,
         attribution: Optional[AttributionDimensions | Dict[str, Any]] = None,
+        input_attributions: Optional[List[AttributionDimensions | Dict[str, Any]]] = None,
         created_at: Optional[int] = None,
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
@@ -1081,6 +1147,29 @@ class CostLedger:
         if provider:
             dims.upstream_api = provider
 
+        per_input: List[AttributionDimensions] = []
+        for item in input_attributions or []:
+            input_dims = (
+                AttributionDimensions.from_mapping(
+                    {
+                        key: value
+                        for key, value in item.items()
+                        if key not in {"model_name", "provider", "upstream_api"}
+                    }
+                )
+                if isinstance(item, dict)
+                else AttributionDimensions(
+                    account=item.account,
+                    service=item.service,
+                    team=item.team,
+                    group=item.group,
+                    company=item.company,
+                )
+            )
+            input_dims.model_name = model or UNATTRIBUTED
+            input_dims.upstream_api = provider or UNATTRIBUTED
+            per_input.append(input_dims)
+
         cost_amount, currency = self.price_book.compute_cost(
             provider, model, prompt_tokens, completion_tokens
         )
@@ -1098,6 +1187,7 @@ class CostLedger:
             cost_amount=cost_amount,
             currency_code=currency,
             attribution=dims,
+            input_attributions=tuple(per_input),
         )
         try:
             self.store.append(record)

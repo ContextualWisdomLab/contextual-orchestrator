@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
@@ -198,6 +200,26 @@ def test_embedding_backend_observes_agents_added_after_construction() -> None:
     )
     assert document["backend"] == "provider"
     assert document["embeddings"][0]["embedding"] == [0.5, 0.5]
+
+
+def test_disabled_embedding_agent_fails_closed_without_local_substitution() -> None:
+    """A configured but unavailable provider never becomes a synthetic vector."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("bootstrap_agent", "mock-chat", base_url="mock://chat"),
+            ModelAgent(
+                "disabled_embedding",
+                "embedding-model",
+                base_url="https://provider.example/v1",
+                tags=("embedding",),
+                disabled=True,
+            )
+        ]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    with pytest.raises(RuntimeError, match="embedding"):
+        coordinator.submit_embeddings_batch(["evidence"], model="embedding-model")
 
 
 def test_embedding_batch_binds_the_selected_agent_when_models_match() -> None:

@@ -152,6 +152,34 @@ def test_embedding_endpoints_apply_the_caller_deadline() -> None:
     assert all(deadline is not None for deadline in observed)
 
 
+def test_http_poll_fields_do_not_mutate_cached_embedding_document() -> None:
+    server, port, token, coordinator = _serve()
+    try:
+        status, created = _request(
+            "POST",
+            f"http://127.0.0.1:{port}/v1/batch/embeddings",
+            token,
+            {"model": "text-embedding-test", "inputs": ["evidence"]},
+        )
+        assert status == 200
+        assert created["poll_after_ms"] == 1_000
+
+        cached = coordinator.embeddings_batch_document(created["batch_id"])
+        assert "poll_after_ms" not in cached
+        assert "job_retention_ms" not in cached
+
+        status, _polled = _request(
+            "GET",
+            f"http://127.0.0.1:{port}/v1/batch/embeddings/{created['batch_id']}",
+            token,
+        )
+        assert status == 200
+        assert "poll_after_ms" not in cached
+        assert "job_retention_ms" not in cached
+    finally:
+        server.shutdown()
+
+
 def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> None:
     server, port, token, _coordinator = _serve()
     try:
@@ -573,6 +601,62 @@ def test_provider_declared_maximum_drives_server_side_batch_split() -> None:
     assert coordinator.embedding_batch_capabilities(
         max_request_body_bytes=65_536, poll_after_ms=1_000
     )["max_inputs"] == 40
+
+
+def test_provider_limit_fallback_keeps_completed_shard_checkpoint(monkeypatch) -> None:
+    """A learned provider limit must retry only the unpaid suffix of the request."""
+    capability = EmbeddingModelCapability(
+        "openai", "text-embedding-3-large", 10, 10, 2,
+        "cl100k_base", "https://example.test",
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router.embedding_model_capability",
+        lambda provider, model: capability if provider == "openai" else None,
+    )
+
+    class LimitAdvertisingClient:
+        local_concurrency = 1
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def embed_with_usage(self, _agent, texts):
+            self.calls.append(list(texts))
+            if texts == ["gamma", "delta"]:
+                raise ProviderResponseError(
+                    "synthetic explicit limit",
+                    status_code=413,
+                    provider_code="too_many_inputs",
+                    max_inputs=1,
+                )
+            return [[float(index)] for index, _text in enumerate(texts)], len(texts)
+
+    client = LimitAdvertisingClient()
+    agent = ModelAgent(
+        id="embedding_worker",
+        model="text-embedding-3-large",
+        base_url="https://provider.example/v1",
+        provider_name="openai",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client),
+        InMemoryConfigStore(),
+    )
+    created = coordinator.complete_embeddings_batch(
+        ["alpha", "beta", "gamma", "delta"],
+        model=agent.model,
+        routing_agent_id=agent.id,
+    )
+    for _attempt in range(100):
+        document = coordinator.embeddings_batch_document(created["batch_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+
+    assert document["status"] == "completed"
+    assert client.calls == [["alpha", "beta"], ["gamma", "delta"], ["gamma"], ["delta"]]
+    assert document["batch_token_count"] == 4
 
 
 def test_provider_shard_resume_reuses_completed_shards_in_original_order(monkeypatch) -> None:
@@ -1198,7 +1282,7 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning",),
+            tags=("embedding",),
             priority=1,
         )
     ]
@@ -1287,7 +1371,7 @@ def test_batch_embeddings_preserves_per_input_provenance_and_cost_attribution() 
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning",),
+            tags=("embedding",),
             priority=1,
         )
     ]
@@ -1312,3 +1396,52 @@ def test_batch_embeddings_preserves_per_input_provenance_and_cost_attribution() 
         "alpha",
         "beta",
     ]
+
+
+def test_recovered_provider_job_has_one_execution_claim_and_terminal_event() -> None:
+    """Two recovering workers execute once and both can await the durable job."""
+
+    class SharedRegistry(JobRegistryFactory):
+        def __init__(self, values, locks) -> None:
+            super().__init__()
+            self.values = values
+            self.locks = locks
+
+        def mapping(self, name, *, decode=None):
+            return self.values.setdefault(name, {})
+
+        def lock(self, name, key, **_kwargs):
+            return self.locks.setdefault((name, key), threading.Lock())
+
+    shared_values: dict[str, dict] = {}
+    shared_locks: dict[tuple[str, str], threading.Lock] = {}
+    first_registry = SharedRegistry(shared_values, shared_locks)
+    second_registry = SharedRegistry(shared_values, shared_locks)
+    job_id = "providerembed_recovered"
+    request = EmbeddingBatchRequest(input_text="evidence", model="embedding-model")
+    first_registry.mapping("provider_embedding_requests")[job_id] = [request]
+    first_registry.mapping("provider_embedding_states")[job_id] = "running"
+    runner_started = threading.Event()
+    runner_release = threading.Event()
+    calls: list[list[EmbeddingBatchRequest]] = []
+
+    def runner(requests):
+        calls.append(requests)
+        runner_started.set()
+        assert runner_release.wait(timeout=1)
+        return [[1.0]], 1
+
+    first = ProviderEmbeddingBatchBackend(runner, job_registry=first_registry)
+    assert runner_started.wait(timeout=1)
+    second = ProviderEmbeddingBatchBackend(runner, job_registry=second_registry)
+    job = BatchJob(job_id=job_id, backend="provider", status="running", request_count=1)
+    assert not second._terminal_events[job_id].is_set()
+
+    runner_release.set()
+    try:
+        assert first.wait(job, timeout=1)["status"] == "completed"
+        assert second.wait(job, timeout=1)["status"] == "completed"
+        assert len(calls) == 1
+    finally:
+        first._executor.shutdown(wait=True)
+        second._executor.shutdown(wait=True)

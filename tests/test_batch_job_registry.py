@@ -10,7 +10,10 @@ their results.
 
 from __future__ import annotations
 
+import gc
 import sys
+import time
+import weakref
 from pathlib import Path
 from typing import Any, Dict
 
@@ -29,7 +32,9 @@ from contextual_orchestrator.batch_routing import (
     LocalBatchBackend,
     ProviderEmbeddingBatchBackend,
 )
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.kv_config import InMemoryConfigStore
+from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
 
 
 class FakeValkeyClient:
@@ -38,6 +43,11 @@ class FakeValkeyClient:
     def __init__(self) -> None:
         self.hashes: Dict[str, Dict[str, str]] = {}
         self.expirations: Dict[str, int] = {}
+        self.locks: list[tuple[str, dict[str, int]]] = []
+
+    def lock(self, name: str, **kwargs: int) -> object:
+        self.locks.append((name, kwargs))
+        return object()
 
     def hget(self, key: str, field: str) -> Any:
         return self.hashes.get(key, {}).get(field)
@@ -152,6 +162,58 @@ def test_jobs_submitted_before_a_restart_are_retrievable_after_it() -> None:
 def test_default_retention_is_a_week() -> None:
     """Documented default: abandoned jobs expire after seven days."""
     assert DEFAULT_RETENTION_SECONDS == 7 * 24 * 3600
+
+
+def test_valkey_claim_uses_bounded_lease_and_wait_not_result_retention() -> None:
+    """A crashed claimant cannot stall a request for the result lifetime."""
+    client = FakeValkeyClient()
+    claim = JobRegistryFactory(client).lock("shards", "one", lease_seconds=90.0)
+    assert claim is not None
+    assert client.locks == [
+        (
+            "batch_job_registry:shards:claim:one",
+            {
+                "timeout": 90.0,
+                "blocking": False,
+            },
+        )
+    ]
+
+
+def test_valkey_claim_requires_an_explicit_positive_lease() -> None:
+    """Durable claims cannot silently invent a lease duration."""
+    factory = JobRegistryFactory(FakeValkeyClient())
+    for lease in (None, 0, -1):
+        try:
+            factory.lock("shards", "one", lease_seconds=lease)
+            raised = False
+        except ValueError:
+            raised = True
+        assert raised
+
+
+def test_embedding_claim_lease_uses_request_or_provider_timeout() -> None:
+    """The caller deadline narrows, but never extends, the provider timeout."""
+    client = ModelClient(timeout=90)
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("mock_worker", "mock-model")], client=client)
+    )
+    assert coordinator._embedding_claim_lease_seconds() == 90
+    with client.request_settings(request_deadline_monotonic=time.monotonic() + 10):
+        lease = coordinator._embedding_claim_lease_seconds()
+    assert lease is not None and 0 < lease <= 10
+
+
+def test_idle_local_claim_locks_are_reclaimed() -> None:
+    """Unique job and shard keys do not accumulate for the process lifetime."""
+    factory = JobRegistryFactory()
+    first = factory.lock("shards", "one")
+    assert factory.lock("shards", "one") is first
+    reference = weakref.ref(first)
+    del first
+    gc.collect()
+    assert reference() is None
+    assert len(factory._local_locks) == 0
 
 
 if __name__ == "__main__":

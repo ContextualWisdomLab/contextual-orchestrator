@@ -36,6 +36,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import threading
+import weakref
 from collections.abc import MutableMapping
 from typing import Any, Callable, Iterator, Optional
 
@@ -124,18 +125,28 @@ class JobRegistryFactory:
     def __init__(self, client: Any = None, *, retention_seconds: int = DEFAULT_RETENTION_SECONDS) -> None:
         self._client = client
         self._retention_seconds = retention_seconds
-        self._local_locks: dict[str, threading.Lock] = {}
+        self._local_locks: weakref.WeakValueDictionary[str, threading.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._local_locks_guard = threading.Lock()
 
-    def lock(self, name: str, key: str):
-        """Return an atomic shard claim with the registry retention as its lease."""
+    def lock(self, name: str, key: str, *, lease_seconds: float | None = None):
+        """Return an atomic shard claim with bounded lease and acquisition wait."""
         lock_name = f"batch_job_registry:{name}:claim:{key}"
         if self._client is not None:
+            if lease_seconds is None or lease_seconds <= 0:
+                raise ValueError("durable claim lease_seconds must be positive")
             return self._client.lock(
                 lock_name,
-                timeout=self._retention_seconds,
-                blocking_timeout=self._retention_seconds,
+                timeout=lease_seconds,
+                blocking=False,
             )
-        return self._local_locks.setdefault(lock_name, threading.Lock())
+        with self._local_locks_guard:
+            lock = self._local_locks.get(lock_name)
+            if lock is None:
+                lock = threading.Lock()
+                self._local_locks[lock_name] = lock
+            return lock
 
     @property
     def durable(self) -> bool:
