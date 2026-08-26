@@ -60,8 +60,9 @@ replaced by the gateway id before crossing the public boundary.
 Status and media reads reuse the operator-configured HTTP body ceiling and
 enforce it against both declared and actually read bytes. Async usage remains
 explicitly unavailable until the provider returns complete non-negative token
-counts. Concrete counts are ledgered under a deterministic job-derived identity
-so repeated polling cannot duplicate cost; absent counts never become zero.
+counts. Concrete counts are ledgered under a deterministic job-derived identity;
+the first complete provider report wins, so repeated polling cannot duplicate
+or revise cost and absent counts never become zero.
 
 The registry inherits the existing operator-configured lifecycle. With Valkey
 configured, ownership survives process restart and is shared across replicas;

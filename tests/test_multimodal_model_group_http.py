@@ -11,6 +11,7 @@ import urllib.request
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.video_jobs import VideoJobContractError
 
@@ -260,6 +261,34 @@ def test_video_job_is_scoped_to_authenticated_principal() -> None:
         status, body = _get_error(port, f"/v1/videos/{job_id}", token="tenant-two")
         assert status == 404 and body["error"]["code"] == "video_job_not_found"
         assert _get(port, f"/v1/videos/{job_id}", token="tenant-one")[0] == 200
+    finally:
+        server.shutdown()
+
+
+def test_video_submission_ledgers_only_concrete_provider_usage() -> None:
+    agent = ModelAgent("video_owner", "provider/video", tags=("video",))
+    orchestrator = TaskOrchestrator([agent])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    orchestrator.client.proxy_send = lambda *_args: {  # type: ignore[method-assign]
+        "id": "provider-job",
+        "status": "completed",
+        "usage": {"input_tokens": 7, "output_tokens": 2},
+    }
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=TOKEN),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, _, _ = _post(
+            server.server_address[1], "/v1/videos", {"prompt": "demo"}
+        )
+        assert status == 200
+        row = coordinator.ledger.records()[0]
+        assert (row["prompt_tokens"], row["completion_tokens"]) == (7, 2)
+        assert row["measurement_status"] == "measured"
     finally:
         server.shutdown()
 

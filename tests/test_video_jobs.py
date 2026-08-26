@@ -109,3 +109,7 @@ def test_async_usage_stays_unknown_until_provider_reports_counts() -> None:
     assert owner.usage_measurement_status == "unavailable" and owner.provider_usage is None
     owner = registry.observe_provider_result(owner, {"usage": {"input_tokens": 7, "output_tokens": 2}})
     assert owner.provider_usage == {"prompt_tokens": 7, "completion_tokens": 2}
+    revised = registry.observe_provider_result(
+        owner, {"usage": {"input_tokens": 9, "output_tokens": 3}}
+    )
+    assert revised.provider_usage == {"prompt_tokens": 7, "completion_tokens": 2}

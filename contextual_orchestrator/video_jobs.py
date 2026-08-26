@@ -96,7 +96,7 @@ class VideoJobRegistry:
     ) -> VideoJobOwner:
         """Persist provider-reported counts while retaining honest unknown state."""
         usage = self._provider_usage(provider_result)
-        if usage is None or owner.provider_usage == usage:
+        if usage is None or owner.provider_usage is not None:
             return owner
         updated = VideoJobOwner(
             gateway_job_id=owner.gateway_job_id,

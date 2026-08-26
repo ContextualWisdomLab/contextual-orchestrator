@@ -5656,6 +5656,16 @@ def build_server(
                     _validate_capability_request(path, body)
                     capability, endpoint, binary = capability_routes[path]
                     principal_id = security.principal_id(self.headers)
+
+                    def register_video_job(agent: ModelAgent, provider_result: dict[str, Any]) -> dict[str, Any]:
+                        response = video_jobs.register(provider_result, agent.id, principal_id)
+                        coordinator.record_async_video_usage(
+                            agent=agent,
+                            usage=provider_result.get("usage"),
+                            gateway_job_id=response["id"],
+                        )
+                        return response
+
                     try:
                         result = self._run(
                             lambda: orchestrator.proxy_capability(
@@ -5664,11 +5674,7 @@ def build_server(
                                 endpoint=endpoint,
                                 binary=binary,
                                 selection_sink=(
-                                    (
-                                        lambda agent, provider_result: video_jobs.register(
-                                            provider_result, agent.id, principal_id
-                                        )
-                                    )
+                                    register_video_job
                                     if capability == "video"
                                     else None
                                 ),
