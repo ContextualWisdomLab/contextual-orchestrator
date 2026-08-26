@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import urllib.error
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -111,6 +112,59 @@ def test_explicit_model_never_fails_over(status: int) -> None:
 
     assert caught.value is failure
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+def test_virtual_model_names_use_provider_failover(model: str) -> None:
+    """Virtual selectors retain cross-provider failover instead of becoming sticky."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(429),
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    if model == TaskOrchestrator.FREE_MODEL:
+        orchestrator.agents = [
+            replace(agent, tags=(*agent.tags, "cost:free"))
+            for agent in orchestrator.agents
+        ]
+
+    result = orchestrator.proxy_completion(
+        {"model": model, "messages": [{"role": "user", "content": "x"}]}
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+def test_free_virtual_model_never_fails_over_to_a_paid_agent() -> None:
+    """The free selector exhausts only explicitly zero-cost providers."""
+    client = SequencedProxyClient(
+        {
+            "free_agent": _http_error(429),
+            "paid_agent": {"model": "paid-model"},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "free_agent", "free-model", tags=("cost:free",), provider_name="free"
+            ),
+            ModelAgent("paid_agent", "paid-model", provider_name="paid"),
+        ],
+        client=client,
+    )
+
+    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        )
+
+    assert [agent_id for agent_id, _ in client.calls] == ["free_agent"]
 
 
 def test_non_transient_error_is_not_replayed() -> None:

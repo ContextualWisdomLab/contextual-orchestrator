@@ -2864,7 +2864,12 @@ class TaskOrchestrator:
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        if requested_model not in (None, "contextual-orchestrator"):
+        if requested_model not in (
+            None,
+            "contextual-orchestrator",
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        ):
             if effort_profile is not None:
                 upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
@@ -2881,7 +2886,14 @@ class TaskOrchestrator:
                 )
             return result
 
-        ranked_candidates = self._failover_candidates(agent, text, "worker")
+        allowed_agent_ids = (
+            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            if requested_model == self.FREE_MODEL
+            else None
+        )
+        ranked_candidates = self._failover_candidates(
+            agent, text, "worker", allowed_agent_ids=allowed_agent_ids
+        )
         if (
             effort_profile is not None
             and effort_profile.unsupported_provider_fallback != "omit"
@@ -2959,11 +2971,16 @@ class TaskOrchestrator:
         requested_model = body.get("model")
         final_agent = self._requested_agent(requested_model)
         if final_agent is None:
-            final_agent = self._select_agent(
-                task,
-                "synthesizer",
-                required_tags=required_tags,
-            )
+            try:
+                final_agent = self._select_agent(
+                    task,
+                    "synthesizer",
+                    required_tags=required_tags,
+                )
+            except RuntimeError as exc:
+                if not required_tags:
+                    raise
+                raise ValueError("no enabled vision-capable model is available") from exc
         elif any(tag not in final_agent.tags for tag in required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
@@ -4154,11 +4171,14 @@ class TaskOrchestrator:
         for step in steps:
             agent = self._agent(step.agent_id)
             if any(tag not in agent.tags for tag in required_tags):
-                capable = self._ranked_agents(
-                    step.subtask,
-                    step.role,
-                    required_tags=required_tags,
-                )
+                try:
+                    capable = self._ranked_agents(
+                        step.subtask,
+                        step.role,
+                        required_tags=required_tags,
+                    )
+                except RuntimeError:
+                    capable = []
                 if capable:
                     agent = capable[0]
             if progress is not None:
