@@ -1,5 +1,36 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 protected-main catalog evidence slice
+
+Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`
+after the normal #851 merge. The exact open queue was re-read at #880
+`da9f4ab0`, #879 `ed0690e3`, #876 `4da38a05`, #869 `fe7b248e`, #868
+`28e0fdbd`, #858 `b0b67286`, #857 `77fd4369`, and #849 `7abf1b89`.
+Those branches cover provider errors and telemetry, CI runtime installation,
+this baseline's broader refresh, Zen bootstrap, gateway aliases, customer copy,
+provider-backed embeddings, and asynchronous HTTP capacity. None delivers the
+operator-visible refresh timestamps and stable success/failure evidence required
+by accepted ADR 0015.
+
+The highest-leverage independently implementable customer gap is therefore
+provider-catalog freshness evidence. The durable catalog already records exact
+per-account refresh status, bounded error code, counts, and UTC instants, but
+the bootstrap JSON omitted those fields. Operators consequently could not tell
+a live catalog from last-known-good recovery without querying the database.
+This slice exposes only the current bootstrap's secret-free refresh evidence;
+it does not infer provider/model policy, calculate a freshness threshold, or
+claim that an unknown price is zero. The acceptance contract is: each attempted
+registered account emits its stable account id, status, observed/eligible
+counts, allowlisted error code, and UTC start/finish instants; previous runs in
+a reused store are not duplicated in the current report; secrets and raw
+provider diagnostics remain absent.
+
+Remaining larger gaps stay unchanged: durable multi-replica routing observations
+need an accepted retention/decay decision; video jobs need a normalized durable
+ownership/lifecycle contract; and verified answer-token streaming needs a
+cancellable asynchronous dependency graph. Implementing any of those without
+their missing decisions would invent policy rather than close a bounded gap.
+
 ## 2026-08-26 18:05 KST error-surface and telemetry-gap snapshot
 
 Customer-visible gap: every upstream model failure surfaced as one opaque
