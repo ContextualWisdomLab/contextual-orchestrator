@@ -100,7 +100,11 @@ def test_cache_hit_records_zero_provider_usage_instead_of_rebilling_inference() 
         "completion_tokens": 0,
         "total_tokens": 0,
     }
-    assert second["cost"] == {"cost_amount": 0.0, "currency_code": "USD"}
+    assert second["cost"] == {
+        "cost_amount": 0.0,
+        "currency_code": "USD",
+        "measurement_status": "measured",
+    }
 
     records = coordinator.ledger.records()
     assert len(records) == 2

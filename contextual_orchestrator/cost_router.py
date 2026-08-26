@@ -282,9 +282,12 @@ class CostRoutingCoordinator:
             "prompt_tokens": record.prompt_tokens,
             "completion_tokens": record.completion_tokens,
             "total_tokens": record.total_tokens,
+        }
+        result["cost"] = {
+            "cost_amount": record.cost_amount,
+            "currency_code": record.currency_code,
             "measurement_status": record.measurement_status,
         }
-        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
         return result
 
     def _record_completion(
