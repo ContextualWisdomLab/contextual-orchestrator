@@ -393,6 +393,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         model_details = by_name.get(row["id"], [])
         modes: set[str] = set()
         prices: set[tuple[object, object]] = set()
+        pricing_complete = bool(model_details)
         supports_vision = False
         for detail in model_details:
             info = detail.get("model_info") if isinstance(detail.get("model_info"), dict) else {}
@@ -401,12 +402,14 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             if isinstance(mode, str):
                 modes.add(mode.casefold())
             supports_vision = supports_vision or info.get("supports_vision") is True
-            prices.add(
-                (
-                    info.get("input_cost_per_token", params.get("input_cost_per_token")),
-                    info.get("output_cost_per_token", params.get("output_cost_per_token")),
-                )
+            prompt = info.get("input_cost_per_token", params.get("input_cost_per_token"))
+            completion = info.get(
+                "output_cost_per_token", params.get("output_cost_per_token")
             )
+            if _valid_price_component(prompt) and _valid_price_component(completion):
+                prices.add((prompt, completion))
+            else:
+                pricing_complete = False
         outputs = tuple(
             capability
             for capability, matching_modes in (
@@ -420,7 +423,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 "input_modalities": ["text", *(("image",) if supports_vision else ())],
                 "output_modalities": list(outputs),
             }
-        if len(prices) == 1:
+        if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:
                 row["pricing"] = {"prompt": prompt, "completion": completion}
