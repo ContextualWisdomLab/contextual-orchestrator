@@ -39,6 +39,7 @@ from .chat_capability import (
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .model_group import ModelGroupRouter, canonical_group_name
+from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .telemetry import inject_trace_context, traced
 from .pii_protection import (
     DEFAULT_PII_KEY_NAME,
@@ -373,6 +374,8 @@ class ModelAgent:
     # ``None`` means provider support is unproven. Opt-in effort profiles then
     # fail closed unless the profile explicitly requests the safe ``omit`` fallback.
     reasoning_effort_supported: bool | None = None
+    # Explicit reviewed replica contract. A group never races when this is absent.
+    endpoint_equivalence: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -386,6 +389,9 @@ class ModelAgent:
             raise ValueError("auth_scheme must be a non-empty string")
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
+        if self.endpoint_equivalence is not None:
+            contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
+            object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -404,6 +410,7 @@ class ModelAgent:
             "auth_scheme": self.auth_scheme,
             "group_name": self.group_name,
             "reasoning_effort_supported": self.reasoning_effort_supported,
+            "endpoint_equivalence": self.endpoint_equivalence,
         }
 
     @property
@@ -435,6 +442,7 @@ class ModelAgent:
             auth_scheme=value.get("auth_scheme", "Bearer"),
             group_name=value.get("group_name", ""),
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
+            endpoint_equivalence=value.get("endpoint_equivalence"),
         )
 
 
@@ -2261,6 +2269,26 @@ class _AgentPoolStore:
                 "agent_id TEXT PRIMARY KEY REFERENCES agent_pool(agent_id) ON DELETE CASCADE, "
                 "group_name TEXT NOT NULL REFERENCES model_group(group_name) ON DELETE CASCADE)"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS endpoint_equivalence_contract ("
+                "contract_id TEXT PRIMARY KEY, model_revision TEXT NOT NULL, "
+                "reasoning_effort_profile TEXT NOT NULL, structured_output_contract TEXT NOT NULL, "
+                "accuracy_class TEXT NOT NULL, data_residency_policy TEXT NOT NULL, "
+                "retention_policy TEXT NOT NULL, context_limit INTEGER NOT NULL CHECK(context_limit > 0), "
+                "pricing_evidence_id TEXT NOT NULL, hedge_eligible INTEGER NOT NULL CHECK(hedge_eligible IN (0,1)), "
+                "cancellation_supported INTEGER NOT NULL CHECK(cancellation_supported IN (0,1)), "
+                "execution_policy TEXT NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS endpoint_equivalence_capability ("
+                "contract_id TEXT NOT NULL REFERENCES endpoint_equivalence_contract(contract_id) ON DELETE CASCADE, "
+                "capability_name TEXT NOT NULL, PRIMARY KEY(contract_id, capability_name))"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS endpoint_equivalence_member ("
+                "agent_id TEXT PRIMARY KEY REFERENCES agent_pool(agent_id) ON DELETE CASCADE, "
+                "contract_id TEXT NOT NULL REFERENCES endpoint_equivalence_contract(contract_id) ON DELETE RESTRICT)"
+            )
             self._migrate_legacy_groups(conn)
             conn.commit()
         except Exception:
@@ -2371,6 +2399,40 @@ class _AgentPoolStore:
                     "SELECT 1 FROM model_group_member "
                     "WHERE model_group_member.group_name = model_group.group_name)"
                 )
+                conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
+                if agent.endpoint_equivalence is not None:
+                    contract = EndpointEquivalenceContract(**agent.endpoint_equivalence)
+                    conn.execute(
+                        "INSERT INTO endpoint_equivalence_contract VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(contract_id) DO UPDATE SET model_revision=excluded.model_revision, "
+                        "reasoning_effort_profile=excluded.reasoning_effort_profile, "
+                        "structured_output_contract=excluded.structured_output_contract, "
+                        "accuracy_class=excluded.accuracy_class, data_residency_policy=excluded.data_residency_policy, "
+                        "retention_policy=excluded.retention_policy, context_limit=excluded.context_limit, "
+                        "pricing_evidence_id=excluded.pricing_evidence_id, hedge_eligible=excluded.hedge_eligible, "
+                        "cancellation_supported=excluded.cancellation_supported, "
+                        "execution_policy=excluded.execution_policy",
+                        (
+                            contract.contract_id, contract.model_revision,
+                            contract.reasoning_effort_profile, contract.structured_output_contract,
+                            contract.accuracy_class, contract.data_residency_policy,
+                            contract.retention_policy, contract.context_limit,
+                            contract.pricing_evidence_id, int(contract.hedge_eligible),
+                            int(contract.cancellation_supported), contract.execution_policy,
+                        ),
+                    )
+                    conn.execute(
+                        "DELETE FROM endpoint_equivalence_capability WHERE contract_id = ?",
+                        (contract.contract_id,),
+                    )
+                    conn.executemany(
+                        "INSERT INTO endpoint_equivalence_capability (contract_id, capability_name) VALUES (?, ?)",
+                        [(contract.contract_id, name) for name in contract.capability_set],
+                    )
+                    conn.execute(
+                        "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
+                        (agent.id, contract.contract_id),
+                    )
                 conn.commit()
             finally:
                 conn.close()
@@ -2399,6 +2461,14 @@ class _AgentPoolStore:
                 groups = conn.execute(
                     "SELECT agent_id, group_name FROM model_group_member ORDER BY agent_id"
                 ).fetchall()
+                contracts = conn.execute(
+                    "SELECT endpoint_equivalence_member.agent_id, endpoint_equivalence_contract.* "
+                    "FROM endpoint_equivalence_member JOIN endpoint_equivalence_contract USING (contract_id)"
+                ).fetchall()
+                contract_capabilities = conn.execute(
+                    "SELECT contract_id, capability_name FROM endpoint_equivalence_capability "
+                    "ORDER BY contract_id, capability_name"
+                ).fetchall()
             finally:
                 conn.close()
         tags_by_agent: dict[str, list[str]] = {}
@@ -2408,6 +2478,22 @@ class _AgentPoolStore:
         for agent_id, _position, provider_name in exclusions:
             exclusions_by_agent.setdefault(agent_id, []).append(provider_name)
         group_by_agent: dict[str, str] = dict(groups)
+        capabilities_by_contract: dict[str, list[str]] = {}
+        for contract_id, capability_name in contract_capabilities:
+            capabilities_by_contract.setdefault(contract_id, []).append(capability_name)
+        contract_by_agent = {
+            row[0]: {
+                "contract_id": row[1], "model_revision": row[2],
+                "reasoning_effort_profile": row[3],
+                "structured_output_contract": row[4], "accuracy_class": row[5],
+                "data_residency_policy": row[6], "retention_policy": row[7],
+                "context_limit": row[8], "pricing_evidence_id": row[9],
+                "hedge_eligible": bool(row[10]), "cancellation_supported": bool(row[11]),
+                "execution_policy": row[12],
+                "capability_set": tuple(capabilities_by_contract.get(row[1], ())),
+            }
+            for row in contracts
+        }
         return [
             ModelAgent(
                 id=row[0],
@@ -2424,6 +2510,7 @@ class _AgentPoolStore:
                 auth_scheme=row[9],
                 reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
                 group_name=group_by_agent.get(row[0], ""),
+                endpoint_equivalence=contract_by_agent.get(row[0]),
             )
             for row in rows
         ]
@@ -3823,6 +3910,11 @@ class TaskOrchestrator:
         if "group_name" in patch:
             group_name = str(patch["group_name"])
             patched = replace(patched, group_name=canonical_group_name(group_name) if group_name else "")
+        if "endpoint_equivalence" in patch:
+            value = patch["endpoint_equivalence"]
+            if value is not None and not isinstance(value, dict):
+                raise ValueError("endpoint_equivalence must be an object or null")
+            patched = replace(patched, endpoint_equivalence=value)
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -4835,6 +4927,67 @@ class TaskOrchestrator:
         """Select a measured member supporting a capability, optionally within one group."""
         return self._capability_agents(capability, model_name)[0]
 
+    @staticmethod
+    def _equivalent_race_members(candidates: list[ModelAgent]) -> list[ModelAgent]:
+        """Return a proven replica set, or an empty list for sequential failover."""
+        if len(candidates) < 2 or not candidates[0].group_name:
+            return []
+        declared = [agent for agent in candidates if agent.endpoint_equivalence is not None]
+        if len(declared) < 2:
+            return []
+        first = declared[0]
+        contract = EndpointEquivalenceContract(**first.endpoint_equivalence)  # type: ignore[arg-type]
+        if not contract.hedge_eligible or contract.execution_policy != "immediate_race":
+            return []
+        peers = [
+            agent
+            for agent in declared
+            if agent.group_name == first.group_name
+            and EndpointEquivalenceContract(**agent.endpoint_equivalence) == contract  # type: ignore[arg-type]
+        ]
+        return peers if len(peers) >= 2 else []
+
+    def _record_endpoint_race(self, outcome: Any, *, capability: str) -> None:
+        """Persist secret-free winner and cancellation provenance."""
+        self._append_audit_event(
+            "equivalent_endpoint_race_completed",
+            {
+                "capability": capability,
+                "winner_endpoint_id": outcome.winner_endpoint_id,
+                "attempted_endpoint_ids": list(outcome.attempted_endpoint_ids),
+                "cancellation_outcomes": dict(outcome.cancellation_outcomes),
+                "completion_ms": outcome.completion_ms,
+            },
+        )
+
+    def _record_endpoint_attempt(
+        self,
+        endpoint_id: str,
+        value: Any | None,
+        error: BaseException | None,
+        *,
+        capability: str,
+    ) -> None:
+        """Record reported duplicate usage without treating missing usage as free."""
+        usage = None
+        if isinstance(value, tuple) and len(value) == 3 and isinstance(value[2], dict):
+            usage = value[2]
+        elif isinstance(value, dict) and isinstance(value.get("usage"), dict):
+            usage = value["usage"]
+        self._append_audit_event(
+            "equivalent_endpoint_attempt_completed",
+            {
+                "capability": capability,
+                "endpoint_id": endpoint_id,
+                "validation_outcome": "provider_error" if error is not None else "completed",
+                "usage": usage,
+                "duplicate_cost_evidence": (
+                    "provider_reported_usage" if usage is not None
+                    else "unavailable_requires_provider_invoice"
+                ),
+            },
+        )
+
     def proxy_capability(
         self,
         body: dict[str, Any],
@@ -4846,6 +4999,54 @@ class TaskOrchestrator:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
+        race_members = self._equivalent_race_members(candidates)
+        if race_members:
+            def call(agent: ModelAgent) -> dict[str, Any] | tuple[bytes, str]:
+                payload = {
+                    key: value for key, value in body.items()
+                    if key not in self._ORCHESTRATION_ONLY_KEYS
+                }
+                payload["model"] = agent.model
+                provider_endpoint = (
+                    "images"
+                    if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                    else endpoint
+                )
+                return (
+                    self.client.proxy_send_bytes(agent, provider_endpoint, payload)
+                    if binary else self.client.proxy_send(agent, provider_endpoint, payload)
+                )
+
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
+            outcome = race_first_valid(
+                [
+                    EndpointAttempt(
+                        agent.id,
+                        contract,
+                        lambda agent=agent: call(agent),
+                        cancellation_supported=False,
+                    )
+                    for agent in race_members
+                ],
+                validate=(
+                    lambda value: isinstance(value, tuple)
+                    and len(value) == 2
+                    and isinstance(value[0], bytes)
+                    and bool(value[0])
+                    if binary
+                    else lambda value: isinstance(value, dict) and bool(value)
+                ),
+                deadline_seconds=self.client.timeout,
+                max_concurrency=self.client.local_concurrency,
+                on_attempt_complete=lambda endpoint_id, value, error: self._record_endpoint_attempt(
+                    endpoint_id, value, error, capability=capability
+                ),
+            )
+            self._record_endpoint_race(outcome, capability=capability)
+            self._group_router.observe_success(
+                outcome.winner_endpoint_id, outcome.completion_ms / 1000
+            )
+            return outcome.value
         last_error: Exception | None = None
         for agent in candidates:
             payload = {
@@ -4911,6 +5112,41 @@ class TaskOrchestrator:
             )
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        race_members = self._equivalent_race_members(candidates)
+        if race_members:
+            effort_profile = self._role_effort_profile(role)
+
+            def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
+                output = (
+                    self.client.chat(agent, messages, effort_profile=effort_profile)
+                    if effort_profile is not None
+                    else self.client.chat(agent, messages)
+                )
+                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                return output, agent.id, usage
+
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
+            outcome = race_first_valid(
+                [
+                    EndpointAttempt(
+                        agent.id,
+                        contract,
+                        lambda agent=agent: call(agent),
+                    )
+                    for agent in race_members
+                ],
+                validate=lambda value: isinstance(value[0], str) and bool(value[0]),
+                deadline_seconds=self.client.timeout,
+                max_concurrency=self.client.local_concurrency,
+                on_attempt_complete=lambda endpoint_id, value, error: self._record_endpoint_attempt(
+                    endpoint_id, value, error, capability="text"
+                ),
+            )
+            self._record_endpoint_race(outcome, capability="text")
+            self._group_router.observe_success(
+                outcome.winner_endpoint_id, outcome.completion_ms / 1000
+            )
+            return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
             retry_attempt = 0
