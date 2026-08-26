@@ -167,6 +167,36 @@ def test_conducted_structured_chat_emits_distinct_analytics_label() -> None:
     assert "chat_completion_orchestrated" not in event_counts
 
 
+def test_conducted_responses_emits_distinct_analytics_label() -> None:
+    """Conducted Responses requests are not reported as plain passthrough."""
+    server = build_server(
+        build(), port=0, security=SecurityConfig(auth_token="secret_token")
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        response_status, _ = post_json(
+            f"http://127.0.0.1:{port}/v1/responses",
+            {"model": "mock-planner", "input": "summarize this"},
+            "secret_token",
+        )
+        snapshot_status, snapshot = get_json(
+            f"http://127.0.0.1:{port}/api/v1/analytics_snapshots/latest",
+            "secret_token",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    event_counts = snapshot["event_counts"]
+    assert response_status == 200
+    assert snapshot_status == 200
+    assert event_counts.get("responses_conducted") == 1
+    assert "responses_passthrough" not in event_counts
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_analytics_snapshot_measures_runtime_kpis_and_guardrails()
     test_analytics_endpoint_and_admin_console_use_source_backed_snapshot()

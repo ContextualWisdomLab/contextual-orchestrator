@@ -3027,6 +3027,7 @@ class TaskOrchestrator:
         task = self._latest_user_text(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         requested_model = body.get("model")
+        free_only = requested_model == self.FREE_MODEL
         final_agent = self._requested_agent(requested_model)
         if final_agent is None:
             try:
@@ -3034,6 +3035,7 @@ class TaskOrchestrator:
                     task,
                     "synthesizer",
                     required_tags=required_tags,
+                    free_only=free_only,
                 )
             except RuntimeError as exc:
                 if not required_tags:
@@ -3048,7 +3050,10 @@ class TaskOrchestrator:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
 
         self._raise_if_spend_budget_exceeded()
-        workflow = self.conduct(messages)
+        workflow = self.conduct(
+            messages,
+            model_name=self.FREE_MODEL if free_only else "contextual-orchestrator",
+        )
         in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
         in_flight_cost = sum(
@@ -4237,6 +4242,7 @@ class TaskOrchestrator:
                         step.subtask,
                         step.role,
                         required_tags=required_tags,
+                        free_only=model_name == self.FREE_MODEL,
                     )
                 except RuntimeError:
                     capable = []
@@ -5000,7 +5006,11 @@ class TaskOrchestrator:
                     else not primary.group_name and not agent.group_name
                 )
             ]
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+        ordered = (
+            [primary]
+            if allowed_agent_ids is None or primary.id in allowed_agent_ids
+            else []
+        ) + [agent for agent in ranked if agent.id != primary.id]
         ordered = [
             agent
             for agent in ordered

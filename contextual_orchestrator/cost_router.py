@@ -261,6 +261,20 @@ class CostRoutingCoordinator:
                     )
                 )
             currencies = {record.currency_code for record in records}
+            currency_components = [
+                {
+                    "currency_code": currency,
+                    "cost_amount": round(
+                        sum(
+                            record.cost_amount
+                            for record in records
+                            if record.currency_code == currency
+                        ),
+                        6,
+                    ),
+                }
+                for currency in sorted(currencies)
+            ]
             provider_response["usage_record_ids"] = [
                 record.usage_record_id for record in records
             ]
@@ -271,12 +285,18 @@ class CostRoutingCoordinator:
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "currency_components": currency_components,
                 "measurement_status": (
                     "estimated"
                     if any(record.measurement_status == "estimated" for record in records)
                     else "measured"
                 ),
             }
+            if len(currencies) > 1:
+                provider_response["cost"]["customer_action"] = (
+                    "Review each currency component separately. Apply an approved "
+                    "exchange-rate source before calculating a combined total."
+                )
             return provider_response
 
         run_kwargs = {"mode": mode, "workflow_run_id": workflow_run_id, "owner_id": owner_id}
@@ -288,6 +308,14 @@ class CostRoutingCoordinator:
             run_kwargs["cache_partition"] = cache_partition
         result = self.orchestrator.run(messages, **run_kwargs)
         cache_hit = result.get("cache_status") == "hit"
+        reported_counts = None
+        if not cache_hit:
+            for step in reversed(result.get("trace") or []):
+                if not isinstance(step, dict):
+                    continue
+                reported_counts = self._provider_usage(step.get("usage"))
+                if reported_counts is not None:
+                    break
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),
@@ -297,8 +325,8 @@ class CostRoutingCoordinator:
             model_name=model_name,
             provider_model=("cache", "response") if cache_hit else self._served_provider_model(result, model_name),
             workflow_run_id=result.get("workflow_run_id"),
-            prompt_tokens=0 if cache_hit else None,
-            completion_tokens=0 if cache_hit else None,
+            prompt_tokens=0 if cache_hit else reported_counts[0] if reported_counts else None,
+            completion_tokens=0 if cache_hit else reported_counts[1] if reported_counts else None,
         )
         result["channel"] = "sync"
         result["routing_reason"] = decision.reason

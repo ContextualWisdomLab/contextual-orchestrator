@@ -6451,7 +6451,11 @@ def build_server(
                                 )
                             )
                     orchestrator.record_analytics_event(
-                        "responses_passthrough",
+                        (
+                            "responses_passthrough"
+                            if tool_loop
+                            else "responses_conducted"
+                        ),
                         {
                             "endpoint_path": "/v1/responses",
                             "actor_scope": "inference",

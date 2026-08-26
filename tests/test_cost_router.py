@@ -56,6 +56,29 @@ def test_sync_completion_records_usage_and_returns_costs() -> None:
     assert records[0]["provider_name"] == "mock"
     assert records[0]["model_name"] == "mock-a"
     assert records[0]["request_channel"] == "sync"
+    assert records[0]["measurement_status"] == "estimated"
+
+
+def test_sync_completion_preserves_provider_reported_usage() -> None:
+    """A plain provider call records measured tokens when the trace reports them."""
+    coordinator = _coordinator()
+    coordinator.orchestrator.client.take_usage = lambda: {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+    }
+
+    result = coordinator.complete(
+        [{"role": "user", "content": "measure this call"}], mode="route"
+    )
+
+    record = coordinator.ledger.records()[0]
+    assert result["usage"] == {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+        "total_tokens": 10,
+    }
+    assert result["cost"]["measurement_status"] == "measured"
+    assert record["measurement_status"] == "measured"
 
 
 def test_sync_records_derive_provider_and_model_from_served_agent() -> None:
@@ -165,6 +188,56 @@ def test_unreported_provider_calls_bill_request_prompt_once() -> None:
     assert sum(record["prompt_tokens"] for record in unreported) == request_prompt
     assert unreported[0]["prompt_tokens"] == request_prompt
     assert all(record["prompt_tokens"] == 0 for record in unreported[1:])
+
+
+def test_structured_mixed_currency_costs_are_never_implicitly_converted() -> None:
+    """Mixed currencies expose components and require an approved conversion."""
+    agents = [
+        ModelAgent("usd_agent", "usd-model", provider_name="usd_provider"),
+        ModelAgent("eur_agent", "eur-model", provider_name="eur_provider"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    orchestrator.proxy_completion = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "orchestration": {"workflow_run_id": "run_mixed_currency"}
+    }
+    orchestrator.get_workflow_run = lambda unused_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_mixed_currency",
+        "mode": "conduct",
+        "trace": [
+            {
+                "agent_id": "usd_agent",
+                "output": "usd",
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 0},
+            },
+            {
+                "agent_id": "eur_agent",
+                "output": "eur",
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 0},
+            },
+        ],
+    }
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("usd_provider", "usd-model", 1.0, 1.0, "USD"))
+    price_book.set_price(PriceEntry("eur_provider", "eur-model", 2.0, 2.0, "EUR"))
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    result = coordinator.complete(
+        [{"role": "user", "content": "mixed currencies"}],
+        provider_request={
+            "model": "contextual-orchestrator",
+            "messages": [{"role": "user", "content": "mixed currencies"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    assert result["cost"]["cost_amount"] is None
+    assert result["cost"]["currency_code"] == "MIXED"
+    assert result["cost"]["currency_components"] == [
+        {"currency_code": "EUR", "cost_amount": 2.0},
+        {"currency_code": "USD", "cost_amount": 1.0},
+    ]
+    assert "approved exchange-rate source" in result["cost"]["customer_action"]
 
 
 def test_sync_completion_survives_usage_persistence_failure() -> None:

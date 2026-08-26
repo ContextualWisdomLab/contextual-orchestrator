@@ -146,6 +146,59 @@ def test_proxy_completion_free_model_fails_closed_without_a_free_agent() -> None
         })
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "body"),
+    [
+        (
+            "chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+        ),
+        (
+            "responses",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "input": "return JSON",
+                "text": {"format": {"type": "json_object"}},
+            },
+        ),
+    ],
+)
+def test_structured_free_model_uses_free_agents_for_evidence_and_synthesis(
+    endpoint: str, body: dict,
+) -> None:
+    """Every conducted call stays inside the explicitly zero-cost pool."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_agent", "paid-model", priority=100),
+            ModelAgent("free_agent", "free-model", tags=("cost:free",)),
+        ]
+    )
+    called_agents: list[str] = []
+    original_chat = orchestrator.client.chat
+    original_proxy = orchestrator.client.proxy_send
+
+    def recording_chat(agent, *args, **kwargs):
+        called_agents.append(agent.id)
+        return original_chat(agent, *args, **kwargs)
+
+    def recording_proxy(agent, *args, **kwargs):
+        called_agents.append(agent.id)
+        return original_proxy(agent, *args, **kwargs)
+
+    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
+    orchestrator.client.proxy_send = recording_proxy  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(body, endpoint=endpoint, single_agent=False)
+
+    assert result["orchestration"]["mode"] == "conduct"
+    assert called_agents
+    assert set(called_agents) == {"free_agent"}
+
+
 def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
     try:
         _build().proxy_completion({
