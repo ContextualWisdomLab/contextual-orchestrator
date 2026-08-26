@@ -5209,13 +5209,6 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     outcome.winner_endpoint_id, outcome.completion_ms / 1000
                 )
-                if selection_sink is not None:
-                    winner = next(
-                        agent
-                        for agent in race_members
-                        if agent.id == outcome.winner_endpoint_id
-                    )
-                    return selection_sink(winner, outcome.value)
                 return outcome.value
         last_error: Exception | None = None
         for agent in candidates:
