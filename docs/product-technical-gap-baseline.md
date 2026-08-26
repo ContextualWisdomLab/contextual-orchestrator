@@ -2,9 +2,9 @@
 
 ## 2026-08-26 configured-gateway and privacy discovery continuation
 
-Protected `main` is `56a898b805864e13020a1b0a35379f65032eeaa9`.
+Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`.
 PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
-is integrated with that base at implementation merge head `67cb6334`. A
+is integrated with that base at exact head `3497d8fc`. A
 configured OpenAI-compatible gateway now joins `/v1/models` with deployment
 metadata so chat, Responses, and embedding capabilities remain individually
 discoverable; conflicting or incomplete capability, price, or privacy evidence
@@ -19,18 +19,24 @@ evidence additionally records no-training, no-prompt-retention, and policy/TOS
 sources. OpenAI discovery attaches its official data-controls source but keeps
 effective ZDR unknown because the Models API does not expose organization or
 project enablement. Configured gateways preserve the same fields only with complete
-deployment consensus. The post-main focused discovery, Chat, Responses,
-passthrough, and failover slice is `129 passed`; the prior full branch suite was
-`2283 passed`. Replacement exact-head hosted checks, independent reviews, and
-normal protected merge remain required before this is release evidence.
+deployment consensus. The current exact-head discovery, privacy, boundary, and
+docstring slice is `76 passed`; the latest complete branch suite before the
+final review repair was `2383 passed`. Replacement exact-head hosted checks,
+independent reviews, and normal protected merge remain required before this is
+release evidence.
 
 The next integrated head adds a Wardnet-owned crawl boundary and
 contextual-orchestrator-owned structured analysis: only explicitly ZDR-capable
 discovered models may analyze provider policies, every accepted verdict carries
 the source URL, analyzer identity, and a quote verified against the fetched
-document, and absence/failure remains unknown. Wardnet's outbound-fetch API is a
-stacked ecosystem dependency until its protected PR merges; no direct duplicate
-DNS/SSRF implementation is accepted in this repository.
+document, and absence/failure remains unknown. Client-rendered sources may use
+Camoufox MCP only through Wardnet's dedicated-token egress proxy; deployment
+also assigns Wardnet as the browser container's UDP/TCP DNS resolver, disables
+Firefox trusted recursive resolution, and denies direct web or external-DNS
+egress. Wardnet destination policy #96, bounded fetch #113, and DNS/proxy #116
+are stacked protected dependencies; official Spamhaus DROP, URLhaus, and
+ThreatFox feed refresh is isolated in #115. No duplicate DNS/SSRF
+implementation is accepted in this repository.
 
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
