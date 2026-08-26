@@ -477,9 +477,16 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
     invalid = {"choices": [{"message": {"content": '{"input_count":6}'}}]}
     valid = {"choices": [{"message": {"content": '{"input_count":10}'}}]}
 
-    with patch.object(
-        orchestrator.client, "proxy_send", side_effect=[invalid, valid]
-    ) as proxy:
+    with (
+        patch.object(
+            orchestrator.client, "proxy_send", side_effect=[invalid, valid]
+        ) as proxy,
+        patch.object(
+            orchestrator,
+            "_raise_if_spend_budget_exceeded",
+            wraps=orchestrator._raise_if_spend_budget_exceeded,
+        ) as budget_gate,
+    ):
         result = orchestrator.proxy_completion(
             {
                 "model": "model-x",
@@ -490,6 +497,7 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
         )
 
     assert proxy.call_count == 2
+    assert budget_gate.call_count == 4
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
     run = orchestrator.get_workflow_run(result["orchestration"]["workflow_run_id"])
     assert [step["role"] for step in run["trace"][-2:]] == [

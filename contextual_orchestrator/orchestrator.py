@@ -3343,6 +3343,13 @@ class TaskOrchestrator:
         response_format = chat_body.get("response_format")
         contract_error = _structured_output_error(synthesis_output, response_format)
         if contract_error is not None:
+            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                [*workflow["trace"], synthesis_step]
+            )
+            self._raise_if_spend_budget_exceeded(
+                additional_output_tokens=in_flight_tokens,
+                additional_cost_usd=in_flight_cost,
+            )
             repair_upstream = copy.deepcopy(upstream)
             repair_instruction = (
                 "The prior synthesis violated the caller's strict JSON Schema "
