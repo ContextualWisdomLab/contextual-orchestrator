@@ -134,12 +134,19 @@ class CostRoutingCoordinator:
                     shards[-1].append(request)
                 for shard in shards:
                     shard_texts = [request.input_text for request in shard]
+                    shard_sessions = {
+                        request.attribution.get("session_id") for request in shard
+                    }
+                    if len(shard_sessions) != 1:
+                        raise ValueError("embedding shard must preserve one session")
+                    shard_session_id = next(iter(shard_sessions))
                     shard_key = hashlib.sha256(
                         json.dumps(
                             {
                                 "provider": agent.provider_name,
                                 "model": agent.model,
                                 "inputs": shard_texts,
+                                "session_id": shard_session_id,
                             },
                             ensure_ascii=False,
                             sort_keys=True,
@@ -161,6 +168,7 @@ class CostRoutingCoordinator:
                                 raise RuntimeError("provider embedding shard length mismatch")
                             embedding_shards[shard_key] = {
                                 "state": "completed",
+                                "session_id": shard_session_id,
                                 "vectors": chunk_vectors,
                                 "provider_tokens": used,
                             }
