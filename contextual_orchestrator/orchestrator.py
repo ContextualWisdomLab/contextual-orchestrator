@@ -1700,6 +1700,35 @@ class ModelClient:
         with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
             return response.read(), response.headers.get_content_type()
 
+    def proxy_get_json(self, agent: ModelAgent, endpoint: str) -> dict[str, Any]:
+        """Retrieve provider JSON from the exact agent that owns an async job."""
+        if agent.base_url.startswith("mock://"):
+            return {"id": endpoint.rsplit("/", 1)[-1], "status": "completed"}
+        return self._batch_json(  # pragma: no cover - real provider integration
+            agent,
+            "GET",
+            f"/{endpoint.lstrip('/')}",
+            destination=self._validate_provider(agent),
+        )
+
+    def proxy_get_bytes(self, agent: ModelAgent, endpoint: str) -> tuple[bytes, str]:
+        """Retrieve provider media from the exact agent that owns an async job."""
+        if agent.base_url.startswith("mock://"):
+            return b"mock video", "video/mp4"
+        api_key = _provider_credential(agent)  # pragma: no cover
+        headers = {}  # pragma: no cover
+        if api_key:  # pragma: no cover
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(  # pragma: no cover
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            headers=headers,
+            method="GET",
+        )
+        with self._open_provider(  # pragma: no cover
+            request, self._validate_provider(agent)
+        ) as response:
+            return response.read(), response.headers.get_content_type()
+
     def _send_raw_with_retry(
         self,
         agent: ModelAgent,
@@ -5112,6 +5141,7 @@ class TaskOrchestrator:
         capability: str,
         endpoint: str,
         binary: bool = False,
+        selection_sink: Callable[[ModelAgent, Any], Any] | None = None,
     ) -> dict[str, Any] | tuple[bytes, str]:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
@@ -5175,6 +5205,13 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     outcome.winner_endpoint_id, outcome.completion_ms / 1000
                 )
+                if selection_sink is not None:
+                    winner = next(
+                        agent
+                        for agent in race_members
+                        if agent.id == outcome.winner_endpoint_id
+                    )
+                    return selection_sink(winner, outcome.value)
                 return outcome.value
         last_error: Exception | None = None
         for agent in candidates:
@@ -5201,6 +5238,8 @@ class TaskOrchestrator:
                 self._group_router.observe_failure(agent.id)
                 continue
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            if selection_sink is not None:
+                return selection_sink(agent, result)
             return result
         raise RuntimeError(f"all {capability} providers failed") from last_error
 

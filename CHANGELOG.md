@@ -12,6 +12,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Provider-affine asynchronous video jobs now return an opaque gateway id and
+  keep status polling and content download bound to the exact provider agent
+  that accepted the submission (ADR 0036).
 - Bounded first-valid-completion racing for operator-declared equivalent model
   group endpoints across text and media capabilities, with fail-closed contract
   comparison and winner/cancellation provenance.

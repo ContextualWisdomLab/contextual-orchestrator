@@ -53,6 +53,17 @@ def _post_error(port: int, path: str, payload: dict) -> tuple[int, dict]:
     raise AssertionError("request unexpectedly succeeded")
 
 
+def _get(port: int, path: str) -> tuple[int, bytes, str]:
+    """Issue one authenticated inference GET request."""
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        headers={"authorization": f"Bearer {TOKEN}"},
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status, response.read(), response.headers.get_content_type()
+
+
 @pytest.mark.parametrize(
     ("path", "capability", "payload"),
     [
@@ -102,6 +113,67 @@ def test_speech_endpoint_preserves_binary_media_response() -> None:
             {"model": "speech-group", "input": "hello", "voice": "alloy"},
         )
         assert status == 200 and content_type == "audio/mpeg" and raw == b"mock audio"
+    finally:
+        server.shutdown()
+
+
+def test_video_poll_and_content_use_the_submission_provider() -> None:
+    """Async video follow-ups stay bound to the measured submission winner."""
+    first = ModelAgent(
+        "first_video", "provider/first", tags=("video",), group_name="video_group"
+    )
+    second = ModelAgent(
+        "second_video", "provider/second", tags=("video",), group_name="video_group"
+    )
+    orchestrator = TaskOrchestrator([first, second])
+    orchestrator._group_router.observe_failure(first.id)
+    orchestrator._group_router.observe_success(second.id, 0.1)
+    followups: list[tuple[str, str]] = []
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda agent, _endpoint, payload: {
+            "id": "provider-video-123",
+            "model": payload["model"],
+            "status": "queued",
+        }
+    )
+    orchestrator.client.proxy_get_json = (  # type: ignore[method-assign]
+        lambda agent, endpoint: (
+            followups.append((agent.id, endpoint))
+            or {"id": "provider-video-123", "status": "completed"}
+        )
+    )
+    orchestrator.client.proxy_get_bytes = (  # type: ignore[method-assign]
+        lambda agent, endpoint: (
+            followups.append((agent.id, endpoint)) or (b"video", "video/mp4")
+        )
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        status, raw, _ = _post(
+            port,
+            "/v1/videos",
+            {"model": "video-group", "prompt": "product walkthrough"},
+        )
+        gateway_job_id = json.loads(raw)["id"]
+        assert status == 200
+        assert gateway_job_id.startswith("videojob_")
+
+        status, raw, content_type = _get(port, f"/v1/videos/{gateway_job_id}")
+        assert status == 200 and content_type == "application/json"
+        assert json.loads(raw) == {"id": gateway_job_id, "status": "completed"}
+
+        status, raw, content_type = _get(
+            port, f"/v1/videos/{gateway_job_id}/content"
+        )
+        assert status == 200 and content_type == "video/mp4" and raw == b"video"
+        assert followups == [
+            ("second_video", "videos/provider-video-123"),
+            ("second_video", "videos/provider-video-123/content"),
+        ]
     finally:
         server.shutdown()
 

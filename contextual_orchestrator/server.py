@@ -48,6 +48,7 @@ from .telemetry import (
     session_id_from_request,
     set_session_id,
 )
+from .video_jobs import VideoJobContractError, VideoJobRegistry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -4970,6 +4971,7 @@ def build_server(
     security = security or SecurityConfig()
     security.check_bind(host)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
+    video_jobs = VideoJobRegistry(coordinator.job_registry)
     configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
@@ -5070,6 +5072,55 @@ def build_server(
                         self._send(coordinator.embeddings_batch_document(batch_id))
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
+                    return
+                if path.startswith("/v1/videos/"):
+                    self._authorize("inference")
+                    suffix = path[len("/v1/videos/") :]
+                    content_request = suffix.endswith("/content")
+                    gateway_job_id = (
+                        suffix[: -len("/content")] if content_request else suffix
+                    )
+                    if not gateway_job_id or "/" in gateway_job_id:
+                        raise RequestError(
+                            400, "invalid_video_job", "video job id must be one path segment"
+                        )
+                    try:
+                        owner = video_jobs.owner(gateway_job_id)
+                    except KeyError:
+                        self._send_error(
+                            404, "video_job_not_found", "video job was not found"
+                        )
+                        return
+                    agent = next(
+                        (
+                            candidate
+                            for candidate in orchestrator.candidates
+                            if candidate.id == owner.agent_id
+                        ),
+                        None,
+                    )
+                    if agent is None:
+                        self._send_error(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        )
+                        return
+                    provider_path = f"videos/{urllib.parse.quote(owner.provider_job_id, safe='')}"
+                    if content_request:
+                        raw, content_type = self._run(
+                            lambda: orchestrator.client.proxy_get_bytes(
+                                agent, f"{provider_path}/content"
+                            )
+                        )
+                        self._send_bytes(raw, content_type)
+                    else:
+                        result = self._run(
+                            lambda: orchestrator.client.proxy_get_json(agent, provider_path)
+                        )
+                        result = dict(result)
+                        result["id"] = gateway_job_id
+                        self._send(result)
                     return
                 self._authorize("admin", purpose=self._admin_purpose(path))
                 if path == "/api/v1/cost_attribution_dimensions":
@@ -5579,9 +5630,27 @@ def build_server(
                     try:
                         result = self._run(
                             lambda: orchestrator.proxy_capability(
-                                body, capability=capability, endpoint=endpoint, binary=binary
+                                body,
+                                capability=capability,
+                                endpoint=endpoint,
+                                binary=binary,
+                                selection_sink=(
+                                    (
+                                        lambda agent, provider_result: video_jobs.register(
+                                            provider_result, agent.id
+                                        )
+                                    )
+                                    if capability == "video"
+                                    else None
+                                ),
                             )
                         )
+                    except VideoJobContractError as exc:
+                        raise RequestError(
+                            502,
+                            "invalid_video_job_response",
+                            "The video provider did not return a trackable job; retry after checking provider status.",
+                        ) from exc
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
                     except RuntimeError as exc:

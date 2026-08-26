@@ -867,9 +867,13 @@ product policy, not a reproduced paper result.
 
 Buyer-visible gaps now prioritized:
 
-1. Video submission is routed, but provider-affine polling/content download and
-   durable job ownership are not yet represented; add a normalized async job
-   resource before calling video orchestration production-complete.
+1. **Implemented on `feat/provider-affine-video-jobs`, pending protected
+   delivery:** video submission now returns an opaque gateway job resource;
+   polling and content download resolve the recorded provider job and exact
+   accepting agent without rerouting (ADR 0036). The existing Valkey-backed job
+   registry provides restart/multi-replica continuity when configured; the
+   standalone process-local fallback makes no durability claim. Exact-head
+   Checks and independent review remain required before this is shipped.
 2. **Closed on the #838 stack:** Admin exposes group capability coverage and a
    keyboard/native-form REST editor; DB membership is normalized and legacy JSON
    membership migrates without data loss. Authenticated deployed-browser runtime
