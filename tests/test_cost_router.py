@@ -82,6 +82,28 @@ def test_sync_completion_preserves_provider_reported_usage() -> None:
     assert record["measurement_status"] == "measured"
 
 
+def test_sync_empty_trace_preserves_top_level_provider_usage() -> None:
+    """An empty trace still records measured usage returned by the provider run."""
+    coordinator = _coordinator()
+    coordinator.orchestrator.run = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_empty",
+        "mode": "route",
+        "answer": "measured answer",
+        "trace": [],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 4},
+    }
+
+    result = coordinator.complete([{"role": "user", "content": "measure empty trace"}])
+
+    record = coordinator.ledger.records()[0]
+    assert result["usage"] == {
+        "prompt_tokens": 11,
+        "completion_tokens": 4,
+        "total_tokens": 15,
+    }
+    assert record["measurement_status"] == "measured"
+
+
 def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> None:
     coordinator = _coordinator()
     context = {

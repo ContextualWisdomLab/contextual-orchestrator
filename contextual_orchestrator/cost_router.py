@@ -443,16 +443,19 @@ class CostRoutingCoordinator:
                     )
                 )
             if len(records) == len(race_records):
+                counts = self._provider_usage(result.get("usage"))
                 records.append(
                     self._record_completion(
                         messages=messages,
-                        answer=result.get("answer", ""),
+                        answer=result.get("answer", "") if counts is None else "",
                         route_mode=result.get("mode"),
                         request_channel="sync",
                         attribution=attribution,
                         model_name=model_name,
                         provider_model=self._served_provider_model(result, model_name),
                         workflow_run_id=result.get("workflow_run_id"),
+                        prompt_tokens=counts[0] if counts else None,
+                        completion_tokens=counts[1] if counts else None,
                     )
                 )
         record = records[-1]
