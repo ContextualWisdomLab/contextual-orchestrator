@@ -1081,7 +1081,7 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning",),
+            tags=("embedding",),
             priority=1,
         )
     ]
@@ -1170,7 +1170,7 @@ def test_batch_embeddings_preserves_per_input_provenance_and_cost_attribution() 
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning",),
+            tags=("embedding",),
             priority=1,
         )
     ]

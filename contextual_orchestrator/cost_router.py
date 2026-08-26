@@ -474,6 +474,8 @@ class CostRoutingCoordinator:
         """
         shared_attribution = dict(attribution or {})
         backend: EmbeddingBatchBackend | None = self._embedding_backend_override
+        if not inputs and backend is None and routing_agent_id is None:
+            backend = self._local_embedding_backend
         if routing_agent_id is None and backend is None:
             selected_agent = self._embedding_agent_for_model(model)
             routing_agent_id = getattr(selected_agent, "id", None)
