@@ -20,8 +20,18 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, NoViableAgentError  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    NoViableAgentError,
+    validate_json_schema_contract,
+)
+from contextual_orchestrator.server import (  # noqa: E402
+    RequestError,
+    SecurityConfig,
+    _validate_chat_response_format,
+    build_server,
+    responses_sse_body,
+)
 
 
 def _build() -> TaskOrchestrator:
@@ -60,29 +70,25 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
 
 
-def test_virtual_structured_passthrough_excludes_failed_candidate_for_request() -> None:
-    """A provider failure must move the same schema request to another ready agent."""
+def test_virtual_json_schema_uses_conduct_and_plain_chat_repair() -> None:
+    """Virtual schema work must never use provider-native passthrough."""
 
     calls: list[str] = []
 
-    class FirstDown(ModelClient):
+    class PlainChatRepair(ModelClient):
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            raise AssertionError("virtual json_schema must not use native passthrough")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
             calls.append(agent.id)
-            if len(calls) == 1:
-                raise RuntimeError("provider transport unavailable")
-            return {
-                "id": "chatcmpl-test",
-                "object": "chat.completion",
-                "model": agent.model,
-                "choices": [],
-                "echo": body,
-            }
+            return '{"cases":[]}' if len(calls) >= 5 else "synthesized evidence"
 
     agents = [
         ModelAgent("ready_a", "mock-a", tags=("reasoning",)),
         ModelAgent("ready_b", "mock-b", tags=("reasoning",)),
     ]
-    orchestrator = TaskOrchestrator(agents, client=FirstDown())
+    orchestrator = TaskOrchestrator(agents, client=PlainChatRepair())
     schema = {
         "type": "json_schema",
         "json_schema": {
@@ -97,47 +103,94 @@ def test_virtual_structured_passthrough_excludes_failed_candidate_for_request() 
         },
     }
 
-    result = orchestrator.proxy_completion(
-        {
-            "model": orchestrator.AUTO_MODEL,
-            "messages": [{"role": "user", "content": "synthetic evidence"}],
-            "response_format": schema,
-        }
+    result = orchestrator.run_structured(
+        [{"role": "user", "content": "synthetic evidence"}],
+        response_format=schema,
+        model_name=orchestrator.AUTO_MODEL,
     )
 
-    assert len(calls) == 2
-    assert len(set(calls)) == 2
-    assert result["echo"]["response_format"] == schema
+    assert len(calls) >= 5
+    assert json.loads(result["answer"]) == {"cases": []}
+    assert result["trace"][-1]["role"] == "structured_repair"
 
 
-def test_virtual_structured_passthrough_defers_after_each_ready_candidate_fails_once() -> None:
-    """All ready failures return typed admission deferral without repeated calls."""
+def test_virtual_structured_repair_defers_when_all_candidates_return_invalid_json() -> None:
+    """All invalid repairs return typed admission deferral."""
 
     calls: list[str] = []
 
-    class AllDown(ModelClient):
+    class InvalidRepair(ModelClient):
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
-            del endpoint, body
+            raise AssertionError("virtual json_schema must not use native passthrough")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
             calls.append(agent.id)
-            raise RuntimeError("provider transport unavailable")
+            return "not json"
 
     agents = [ModelAgent(f"ready_{index}", "mock", tags=("reasoning",)) for index in range(2)]
-    orchestrator = TaskOrchestrator(agents, client=AllDown())
+    orchestrator = TaskOrchestrator(agents, client=InvalidRepair())
 
     with pytest.raises(NoViableAgentError):
-        orchestrator.proxy_completion(
-            {
-                "model": orchestrator.AUTO_MODEL,
-                "messages": [{"role": "user", "content": "synthetic evidence"}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "operations_case_evidence", "schema": {}},
-                },
-            }
+        orchestrator.run_structured(
+            [{"role": "user", "content": "synthetic evidence"}],
+            model_name=orchestrator.AUTO_MODEL,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "operations_case_evidence", "schema": {"type": "object"}},
+            },
         )
 
-    assert len(calls) == 2
-    assert len(set(calls)) == 2
+    assert len(calls) >= 2
+
+
+def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() -> None:
+    calls: list[str] = []
+
+    class PlainOnly(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            raise AssertionError("readiness must not use native response_format")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            calls.append(agent.id)
+            return '{"ok":true}'
+
+    agent = ModelAgent("plain_only", "mock")
+    result = TaskOrchestrator([agent], client=PlainOnly()).probe_structured_workflow(agent)
+
+    assert result["status"] == "ready"
+    assert len(calls) > 1
+
+
+def test_json_schema_contract_accepts_nullable_enum_and_rejects_unknown_keyword() -> None:
+    validate_json_schema_contract(
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"type": ["string", "null"], "enum": ["fact", None]},
+                "items": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["kind", "items"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(ValueError, match="unsupported keyword"):
+        validate_json_schema_contract({"type": "object", "madeUpKeyword": True})
+
+    with pytest.raises(RequestError) as error:
+        _validate_chat_response_format(
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "invalid_schema",
+                        "schema": {"type": "object", "madeUpKeyword": True},
+                    },
+                }
+            }
+        )
+    assert error.value.code == "invalid_response_format"
 
 
 def test_structured_passthrough_does_not_call_unadmitted_primary() -> None:
@@ -386,6 +439,55 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert status == 200  # previously rejected 400 'unknown_fields'
     assert body["object"] == "chat.completion"
     assert body["echo"]["response_format"] == {"type": "json_object"}
+
+
+def test_http_virtual_json_schema_preserves_openai_shape_and_orchestration_lineage() -> None:
+    class PlainStructured(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            raise AssertionError("virtual json_schema must not use native passthrough")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            return '{"cases":[]}'
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("plain_agent", "mock", tags=("reasoning",))],
+        client=PlainStructured(),
+    )
+    token = "structured_token"
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": orchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic evidence"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "operations_case_evidence",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {"cases": {"type": "array"}},
+                            "required": ["cases"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 200
+    assert body["object"] == "chat.completion"
+    assert json.loads(body["choices"][0]["message"]["content"]) == {"cases": []}
+    assert body["orchestration"]["mode"] == "conduct"
+    assert body["orchestration"]["usage_record_id"]
 
 
 def test_http_responses_endpoint_passes_through() -> None:

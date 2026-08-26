@@ -32,6 +32,8 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+from jsonschema import Draft202012Validator, SchemaError, ValidationError
+
 from .chat_capability import (
     is_chat_compatible_model_id,
     is_general_chat_agent_model_id,
@@ -147,6 +149,38 @@ class NoViableAgentError(RuntimeError):
     def __init__(self, *, retry_after_seconds: int) -> None:
         super().__init__("no viable agent is currently ready")
         self.retry_after_seconds = retry_after_seconds
+
+
+_JSON_SCHEMA_ANNOTATION_KEYWORDS = frozenset(
+    {"$comment", "$defs", "$id", "$schema", "$ref", "default", "deprecated", "description", "examples", "readOnly", "title", "writeOnly"}
+)
+
+
+def validate_json_schema_contract(schema: dict[str, Any]) -> None:
+    """Validate the supported Draft 2020-12 schema vocabulary before execution."""
+    supported = frozenset(Draft202012Validator.VALIDATORS) | _JSON_SCHEMA_ANNOTATION_KEYWORDS
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            unknown = set(value) - supported
+            if unknown:
+                raise ValueError("json_schema contains an unsupported keyword")
+            for key, child in value.items():
+                if key in {"properties", "$defs"} and isinstance(child, dict):
+                    for subschema in child.values():
+                        visit(subschema)
+                elif key not in {"enum", "const", "default", "examples", "required"}:
+                    if isinstance(child, dict):
+                        visit(child)
+                    elif isinstance(child, list) and key in {"allOf", "anyOf", "oneOf", "prefixItems"}:
+                        for subschema in child:
+                            visit(subschema)
+
+    visit(schema)
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise ValueError("json_schema is not a valid Draft 2020-12 schema") from exc
 
 
 def estimate_tokens(text: str) -> int:
@@ -3182,6 +3216,184 @@ class TaskOrchestrator:
         raise NoViableAgentError(
             retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
         )
+
+    @staticmethod
+    def _validated_structured_text(text: str, schema: dict[str, Any]) -> str | None:
+        """Return canonical JSON for the first schema-valid value in model text."""
+        validator = Draft202012Validator(schema)
+        decoder = json.JSONDecoder()
+        for offset, character in enumerate(text):
+            if character not in "[{":
+                continue
+            try:
+                value, _ = decoder.raw_decode(text[offset:])
+                validator.validate(value)
+            except (json.JSONDecodeError, ValidationError):
+                continue
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return None
+
+    def _repair_structured_answer(
+        self,
+        messages: list[ChatMessage],
+        synthesized: str,
+        schema: dict[str, Any],
+        admitted: frozenset[str],
+    ) -> tuple[str, dict[str, Any]]:
+        """Translate one synthesis into schema-valid JSON using admitted plain-chat agents."""
+        direct = self._validated_structured_text(synthesized, schema)
+        if direct is not None:
+            return direct, {"id": -1, "role": "structured_validator", "access": [], "output": direct}
+        task = self._latest_user_text(messages)
+        repair_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Return only one JSON value satisfying the supplied Draft 2020-12 schema. "
+                    "Preserve supported facts from the synthesis; do not invent missing facts."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Original task:\n{task}\n\nSynthesis:\n{synthesized}\n\n"
+                    f"JSON Schema:\n{json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}"
+                ),
+            },
+        ]
+        primary = self._select_agent(task, "synthesizer")
+        candidates = self._failover_candidates(primary, task, "synthesizer", set(admitted))
+        for candidate in candidates:
+            try:
+                self.client.remaining_request_timeout()
+                started_at = time.perf_counter()
+                output = self.client.chat(candidate, repair_messages)
+                usage = self.client.take_usage()
+            except RequestDeadlineExceeded:
+                raise
+            except Exception:  # noqa: BLE001 - request-scoped repair failover
+                self._record_failure(candidate.id)
+                failed = self._request_failed_agents.get()
+                if failed is not None:
+                    failed.add(candidate.id)
+                continue
+            valid = self._validated_structured_text(output, schema)
+            if valid is None:
+                failed = self._request_failed_agents.get()
+                if failed is not None:
+                    failed.add(candidate.id)
+                continue
+            self._record_success(candidate.id)
+            return valid, {
+                "id": -1,
+                "role": "structured_repair",
+                "agent_id": candidate.id,
+                "access": [],
+                "output": valid,
+                "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                **({"usage": usage} if usage is not None else {}),
+            }
+        self.client.remaining_request_timeout()
+        raise NoViableAgentError(
+            retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+        )
+
+    def run_structured(
+        self,
+        messages: list[ChatMessage],
+        *,
+        response_format: dict[str, Any],
+        workflow_run_id: str | None = None,
+        owner_id: str | None = None,
+        model_name: str = "contextual-orchestrator",
+    ) -> dict[str, Any]:
+        """Persist a multi-agent synthesis and schema-validated repair result."""
+        schema = response_format["json_schema"]["schema"]
+        validate_json_schema_contract(schema)
+        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+            budget = self.budget_status()
+            if budget["exceeded"]:
+                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        admitted = self._structured_admitted_agent_ids()
+        if not admitted:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
+        failed_token = self._request_failed_agents.set(set())
+        admitted_token = self._request_admitted_agents.set(admitted)
+        try:
+            result = self.complete(
+                messages,
+                mode="conduct",
+                bypass_cache=True,
+                model_name=model_name,
+            )
+            answer, repair_trace = self._repair_structured_answer(
+                messages, result["answer"], schema, admitted
+            )
+        finally:
+            self._request_admitted_agents.reset(admitted_token)
+            self._request_failed_agents.reset(failed_token)
+        result["answer"] = answer
+        repair_trace["id"] = len(result["trace"])
+        repair_trace["access"] = [len(result["trace"]) - 1]
+        result["trace"].append(repair_trace)
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": result["mode"],
+                "policy_mode": "conduct",
+                "prompt_text": self._latest_user_text(messages),
+                "answer": answer,
+                "cache_status": result.get("cache_status", "bypass"),
+                "trace": list(result["trace"]),
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": result.get("verification"),
+            }
+        )
+        if owner_id is not None:
+            record["owner_id"] = owner_id
+        self._replace_workflow_run(record)
+        self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "mode": record["mode"], "agent_count": len(record["trace"])},
+        )
+        result["workflow_run_id"] = record["workflow_run_id"]
+        return result
+
+    def probe_structured_workflow(
+        self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT
+    ) -> dict[str, Any]:
+        """Exercise the same multi-step structured workflow with a minimal valid schema."""
+        probe_timeout = _validate_provider_probe_timeout(timeout)
+        deadline = time.monotonic() + probe_timeout
+        schema = {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        }
+        failed_token = self._request_failed_agents.set(set())
+        admitted_token = self._request_admitted_agents.set(frozenset({agent.id}))
+        try:
+            with self.client.request_settings(request_deadline_monotonic=deadline):
+                synthesis = self._conduct_request(
+                    [{"role": "user", "content": "Return whether this request is valid."}],
+                    model_name=self.AUTO_MODEL,
+                )
+                self._repair_structured_answer([], synthesis["answer"], schema, frozenset({agent.id}))
+        except RequestDeadlineExceeded:
+            raise
+        except Exception as exc:  # noqa: BLE001 - readiness exposes bounded evidence only
+            return {"agent_id": agent.id, "status": "not_ready", "error_type": _safe_provider_probe_error_type(exc)}
+        finally:
+            self._request_admitted_agents.reset(admitted_token)
+            self._request_failed_agents.reset(failed_token)
+        return {"agent_id": agent.id, "status": "ready"}
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""

@@ -365,7 +365,7 @@ class CostRoutingCoordinator:
                     self._readiness_jobs[job_id] = job
                 agents = {agent.id: agent for agent in self.orchestrator.candidates}
                 probe = (
-                    self.orchestrator.client.probe_structured
+                    self.orchestrator.probe_structured_workflow
                     if job["capability_code"] == "structured"
                     else self.orchestrator.client.probe
                 )
@@ -590,6 +590,45 @@ class CostRoutingCoordinator:
         )
         result["channel"] = "sync"
         result["routing_reason"] = decision.reason
+        result["usage_record_id"] = record.usage_record_id
+        result["usage"] = {
+            "prompt_tokens": record.prompt_tokens,
+            "completion_tokens": record.completion_tokens,
+            "total_tokens": record.total_tokens,
+        }
+        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        return result
+
+    def complete_structured(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        response_format: Dict[str, Any],
+        attribution: Optional[Dict[str, Any]] = None,
+        model_name: str = "contextual-orchestrator",
+        workflow_run_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run the structured multi-agent workflow and record its usage and cost."""
+        result = self.orchestrator.run_structured(
+            messages,
+            response_format=response_format,
+            workflow_run_id=workflow_run_id,
+            owner_id=owner_id,
+            model_name=model_name,
+        )
+        record = self._record_completion(
+            messages=messages,
+            answer=result["answer"],
+            route_mode=result["mode"],
+            request_channel="sync",
+            attribution=attribution,
+            model_name=model_name,
+            provider_model=self._served_provider_model(result, model_name),
+            workflow_run_id=result.get("workflow_run_id"),
+        )
+        result["channel"] = "sync"
+        result["routing_reason"] = "structured_multi_agent"
         result["usage_record_id"] = record.usage_record_id
         result["usage"] = {
             "prompt_tokens": record.prompt_tokens,

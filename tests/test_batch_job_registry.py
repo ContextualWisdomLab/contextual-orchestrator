@@ -106,6 +106,7 @@ def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
 
     agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
     orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
     first = CostRoutingCoordinator(orchestrator, job_registry=registry)
     submitted = first.submit_provider_readiness_refresh(
         agent_ids=[agent.id],
@@ -159,6 +160,7 @@ def test_cancelled_readiness_refresh_cannot_publish_late_probe_results() -> None
 
     agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
     orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
+    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
     coordinator = CostRoutingCoordinator(orchestrator)
     submitted = coordinator.submit_provider_readiness_refresh(
         agent_ids=[agent.id],
@@ -231,9 +233,9 @@ def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> N
             return {"status": "ready", "agent_id": agent.id, "model": agent.model}
 
     agents = [ModelAgent(f"declared_{index}", "mock") for index in range(65)]
-    coordinator = CostRoutingCoordinator(
-        TaskOrchestrator(agents, client=BoundedProbeClient())
-    )
+    orchestrator = TaskOrchestrator(agents, client=BoundedProbeClient())
+    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
+    coordinator = CostRoutingCoordinator(orchestrator)
     job = coordinator.submit_provider_readiness_refresh(
         agent_ids=[agent.id for agent in agents],
         capability_code="structured",
