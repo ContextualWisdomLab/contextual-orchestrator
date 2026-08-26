@@ -203,6 +203,14 @@ def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
         else:  # pragma: no cover
             raise AssertionError("implicit or unknown readiness scope must fail closed")
 
+    with pytest.raises(ValueError, match="deadline_epoch is required"):
+        coordinator.submit_provider_readiness_refresh(
+            agent_ids=[agent.id],
+            capability_code="structured",
+            timeout_seconds=1.0,
+            deadline_epoch=None,
+        )
+
 
 def test_readiness_coordinator_close_releases_executor() -> None:
     """Coordinator lifecycle closes every owned worker without waiting for work."""
@@ -266,6 +274,7 @@ def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success()
         def __init__(self) -> None:
             super().__init__()
             self.extensions = 0
+            self.extension_attempts = 0
 
         class RenewalClaim:
             def __init__(self, owner: "RenewalClient") -> None:
@@ -277,6 +286,9 @@ def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success()
             def extend(self, seconds: float, *, replace_ttl: bool) -> bool:
                 assert seconds > 0
                 assert replace_ttl is True
+                self.owner.extension_attempts += 1
+                if self.owner.extension_attempts == 1:
+                    raise ConnectionError("transient valkey failure")
                 self.owner.extensions += 1
                 return True
 
@@ -295,7 +307,7 @@ def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success()
 
         def probe_structured(self, agent, *, timeout):  # type: ignore[override]
             del timeout
-            time.sleep(0.1)
+            time.sleep(0.12)
             return {"status": "ready", "agent_id": agent.id, "model": agent.model}
 
     client = RenewalClient()
@@ -319,6 +331,7 @@ def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success()
 
     assert document["status"] == "completed"
     assert document["ready_count"] == 7
+    assert client.extension_attempts >= 2
     assert client.extensions >= 1
     execution_claim = next(
         kwargs

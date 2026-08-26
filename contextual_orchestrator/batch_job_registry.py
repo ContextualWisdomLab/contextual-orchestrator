@@ -180,8 +180,9 @@ class JobRegistryFactory:
                                 )
                                 if not renewed:
                                     return
-                            except Exception:  # noqa: BLE001 - terminal state remains authoritative.
-                                return
+                            except Exception as exc:  # noqa: BLE001 - redis is optional.
+                                if type(exc).__name__ in {"LockError", "LockNotOwnedError"}:
+                                    return
 
                     renewal_thread = threading.Thread(
                         target=renew_claim,

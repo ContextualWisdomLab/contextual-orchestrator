@@ -304,6 +304,8 @@ class CostRoutingCoordinator:
         deadline_epoch: float | None,
     ) -> Dict[str, Any]:
         """Submit one explicit, durable, single-flight provider-readiness refresh."""
+        if deadline_epoch is None:
+            raise ValueError("deadline_epoch is required for provider-readiness refresh")
         if not agent_ids or any(not isinstance(value, str) or not value for value in agent_ids):
             raise ValueError("agent_ids must be a non-empty list of agent identifiers")
         if len(set(agent_ids)) != len(agent_ids):
