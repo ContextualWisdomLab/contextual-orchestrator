@@ -95,7 +95,6 @@ class CostRoutingCoordinator:
         # One coordinator job owns the provider-concurrency budget at a time;
         # its probe pool below uses the provider-owned local_concurrency value.
         self._readiness_executor = ThreadPoolExecutor(max_workers=1)
-        self._readiness_executor_lock = threading.Lock()
         embedding_shards = registry.mapping("embedding_provider_shards")
         client = getattr(orchestrator, "client", None)
         if batch_backend is None:
@@ -281,6 +280,10 @@ class CostRoutingCoordinator:
                 self._readiness_executor.submit(
                     copy_context().run, self._run_provider_readiness_job, readiness_job_id
                 )
+
+    def close(self) -> None:
+        """Release readiness-refresh worker resources owned by this coordinator."""
+        self._readiness_executor.shutdown(wait=False, cancel_futures=True)
 
     def submit_provider_readiness_refresh(
         self,

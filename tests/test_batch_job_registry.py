@@ -200,6 +200,16 @@ def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
             raise AssertionError("implicit or unknown readiness scope must fail closed")
 
 
+def test_readiness_coordinator_close_releases_executor() -> None:
+    """Coordinator lifecycle closes its readiness worker without waiting for work."""
+    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
+
+    coordinator.close()
+
+    assert coordinator._readiness_executor._shutdown is True
+
+
 def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> None:
     """Access-list size is body-bounded; provider calls obey configured concurrency."""
 

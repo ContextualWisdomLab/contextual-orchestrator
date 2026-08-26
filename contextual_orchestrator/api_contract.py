@@ -379,6 +379,12 @@ OPENAPI_SPEC = {
                 "operationId": "get_provider_readiness_refresh",
                 "summary": "Poll readiness refresh progress",
                 "security": [{"admin_bearer_auth": []}],
+                "parameters": [{
+                    "name": "job_id",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }],
                 "responses": {"200": {"description": "Readiness refresh progress"}},
             }
         },
@@ -387,6 +393,12 @@ OPENAPI_SPEC = {
                 "operationId": "cancel_provider_readiness_refresh",
                 "summary": "Cancel readiness refresh work",
                 "security": [{"admin_bearer_auth": []}],
+                "parameters": [{
+                    "name": "job_id",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }],
                 "responses": {"200": {"description": "Readiness refresh cancelled"}},
             }
         },
