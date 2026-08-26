@@ -93,8 +93,8 @@ ADMIN_TRANSLATIONS = {
         "sales_readiness_title": "Sales Readiness",
         "commercial_readiness": "Commercial readiness",
         "commercial_readiness_title": "Commercial Readiness",
-        "buyer_evidence_manifest_title": "Buyer Evidence Manifest",
-        "buyer_handoff_bundle_title": "Buyer Handoff Bundle",
+        "buyer_evidence_manifest_title": "Commercial Evidence Manifest",
+        "buyer_handoff_bundle_title": "Commercial Handoff Bundle",
         "saleability_decision_title": "Saleability Decision",
         "commercial_evidence_export_title": "Commercial Evidence Export",
         "commercial_acceptance_check_title": "Commercial Acceptance Check",
@@ -352,8 +352,8 @@ ADMIN_TRANSLATIONS = {
         "sales_readiness_title": "판매 준비도",
         "commercial_readiness": "상용 준비도",
         "commercial_readiness_title": "상용 준비도",
-        "buyer_evidence_manifest_title": "구매자 증거 매니페스트",
-        "buyer_handoff_bundle_title": "구매자 인수인계 번들",
+        "buyer_evidence_manifest_title": "상용화 증거 매니페스트",
+        "buyer_handoff_bundle_title": "상용화 인수인계 번들",
         "saleability_decision_title": "판매 가능성 판단",
         "commercial_evidence_export_title": "상용 증거 Export",
         "commercial_acceptance_check_title": "상용 인수 검증",
@@ -1046,7 +1046,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
-          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest" data-commercial-acceptance-source="/api/v1/commercial_acceptance_checks/latest" data-commercial-release-source="/api/v1/commercial_release_candidates/latest" data-commercial-gap-source="/api/v1/commercial_gap_registers/latest" data-commercial-procurement-source="/api/v1/commercial_procurement_readiness/latest" data-commercial-contract-source="/api/v1/commercial_contract_readiness/latest" data-commercial-onboarding-source="/api/v1/commercial_onboarding_readiness/latest" data-commercial-operations-source="/api/v1/commercial_operations_readiness/latest" data-commercial-security-attestation-source="/api/v1/commercial_security_attestations/latest" data-commercial-value-source="/api/v1/commercial_value_readiness/latest" data-commercial-close-source="/api/v1/commercial_close_readiness/latest" data-commercial-gtm-source="/api/v1/commercial_go_to_market_readiness/latest" data-commercial-launch-source="/api/v1/commercial_launch_readiness/latest" data-commercial-completion-source="/api/v1/commercial_completion_scorecards/latest" data-commercial-buyer-acceptance-workflow-source="/api/v1/commercial_buyer_acceptance_workflows/latest" data-commercial-demo-source="/api/v1/commercial_demo_scenarios/latest" data-commercial-proposal-source="/api/v1/commercial_proposal_packets/latest" data-commercial-purchase-approval-source="/api/v1/commercial_purchase_approval_packets/latest" data-commercial-due-diligence-source="/api/v1/commercial_due_diligence_rooms/latest" data-commercial-investment-committee-source="/api/v1/commercial_investment_committee_memos/latest"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-commercial-manifest-source="/api/v1/commercial_evidence_manifests/latest" data-commercial-handoff-source="/api/v1/commercial_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest" data-commercial-acceptance-source="/api/v1/commercial_acceptance_checks/latest" data-commercial-release-source="/api/v1/commercial_release_candidates/latest" data-commercial-gap-source="/api/v1/commercial_gap_registers/latest" data-commercial-procurement-source="/api/v1/commercial_procurement_readiness/latest" data-commercial-contract-source="/api/v1/commercial_contract_readiness/latest" data-commercial-onboarding-source="/api/v1/commercial_onboarding_readiness/latest" data-commercial-operations-source="/api/v1/commercial_operations_readiness/latest" data-commercial-security-attestation-source="/api/v1/commercial_security_attestations/latest" data-commercial-value-source="/api/v1/commercial_value_readiness/latest" data-commercial-close-source="/api/v1/commercial_close_readiness/latest" data-commercial-gtm-source="/api/v1/commercial_go_to_market_readiness/latest" data-commercial-launch-source="/api/v1/commercial_launch_readiness/latest" data-commercial-completion-source="/api/v1/commercial_completion_scorecards/latest" data-commercial-buyer-acceptance-workflow-source="/api/v1/commercial_buyer_acceptance_workflows/latest" data-commercial-demo-source="/api/v1/commercial_demo_scenarios/latest" data-commercial-proposal-source="/api/v1/commercial_proposal_packets/latest" data-commercial-purchase-approval-source="/api/v1/commercial_purchase_approval_packets/latest" data-commercial-due-diligence-source="/api/v1/commercial_due_diligence_rooms/latest" data-commercial-investment-committee-source="/api/v1/commercial_investment_committee_memos/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
         <section class="panel wide">
@@ -1634,9 +1634,9 @@ Summarize this research thread and verify claims.</textarea>
       state.readiness = await readinessRes.json();
       const commercialRes = await apiFetch("/api/v1/commercial_readiness/latest");
       state.commercialReadiness = await commercialRes.json();
-      const buyerManifestRes = await apiFetch("/api/v1/buyer_evidence_manifests/latest");
+      const buyerManifestRes = await apiFetch("/api/v1/commercial_evidence_manifests/latest");
       state.buyerEvidenceManifest = await buyerManifestRes.json();
-      const handoffBundleRes = await apiFetch("/api/v1/buyer_handoff_bundles/latest");
+      const handoffBundleRes = await apiFetch("/api/v1/commercial_handoff_bundles/latest");
       state.buyerHandoffBundle = await handoffBundleRes.json();
       const saleabilityRes = await apiFetch("/api/v1/saleability_decisions/latest");
       state.saleabilityDecision = await saleabilityRes.json();

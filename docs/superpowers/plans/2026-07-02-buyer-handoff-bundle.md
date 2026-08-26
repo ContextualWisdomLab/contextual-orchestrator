@@ -4,7 +4,7 @@
 
 **Goal:** Expose a KRW 2,000,000,000 buyer handoff bundle that packages runtime readiness, evidence manifest, docs, Figma artifacts, verification commands, and explicit caveats into one reviewable API surface.
 
-**Architecture:** Keep Contextual Orchestrator as one repository and one deployable control plane. Add a thin `TaskOrchestrator.buyer_handoff_bundle_report()` wrapper over existing readiness, analytics, and manifest reports, then wire it to `/api/v1/buyer_handoff_bundles/latest`, OpenAPI, admin observability, docs, and tests without a library split, submodule, new framework, or Figma Code Connect.
+**Architecture:** Keep Contextual Orchestrator as one repository and one deployable control plane. Add a thin `TaskOrchestrator.buyer_handoff_bundle_report()` wrapper over existing readiness, analytics, and manifest reports, then wire it to `/api/v1/commercial_handoff_bundles/latest`, OpenAPI, admin observability, docs, and tests without a library split, submodule, new framework, or Figma Code Connect.
 
 **Tech Stack:** Python stdlib runtime, stdlib HTTP server, embedded admin HTML, Markdown docs, existing FigJam board, assert-based Python tests, pytest.
 
@@ -60,7 +60,7 @@ assert report["included_artifacts"][0]["item_name"] == "runtime_reports"
 assert report["included_artifacts"][0]["sources"] == [
     "/api/v1/sales_readiness/latest",
     "/api/v1/commercial_readiness/latest",
-    "/api/v1/buyer_evidence_manifests/latest",
+    "/api/v1/commercial_evidence_manifests/latest",
     "/api/v1/analytics_snapshots/latest",
 ]
 assert report["follow_up_items"][0]["evidence_type"] == "proposed_until_production"
@@ -108,21 +108,21 @@ Expected: `ok`.
 **Interfaces:**
 
 - Consumes: `TaskOrchestrator.buyer_handoff_bundle_report(...)`.
-- Produces: `GET /api/v1/buyer_handoff_bundles/latest`, operationId `get_latest_buyer_handoff_bundle`, and admin observability display of handoff status.
+- Produces: `GET /api/v1/commercial_handoff_bundles/latest`, operationId `get_latest_buyer_handoff_bundle`, and admin observability display of handoff status.
 
 - [ ] **Step 1: Add API/admin/docs assertions**
 
 Assert:
 
 ```python
-assert "/api/v1/buyer_handoff_bundles/latest" in OPENAPI_SPEC["paths"]
-assert OPENAPI_SPEC["paths"]["/api/v1/buyer_handoff_bundles/latest"]["get"]["operationId"] == "get_latest_buyer_handoff_bundle"
-assert "/api/v1/buyer_handoff_bundles/latest" in ADMIN_HTML
+assert "/api/v1/commercial_handoff_bundles/latest" in OPENAPI_SPEC["paths"]
+assert OPENAPI_SPEC["paths"]["/api/v1/commercial_handoff_bundles/latest"]["get"]["operationId"] == "get_latest_buyer_handoff_bundle"
+assert "/api/v1/commercial_handoff_bundles/latest" in ADMIN_HTML
 assert "buyer_handoff_bundle_title" in ADMIN_TRANSLATIONS["en"]
 assert "buyer_handoff_bundle_title" in ADMIN_TRANSLATIONS["ko"]
 ```
 
-Also assert the new Markdown document contains `Commercial Buyer Handoff Bundle`, `Figma Code Connect is not used`, `Review process is not a blocker`, `Do not create a separate library, Git submodule, or extracted package now`, `KRW 2B Buyer Handoff Bundle Workflow`, and `/api/v1/buyer_handoff_bundles/latest`.
+Also assert the new Markdown document contains `Commercial Buyer Handoff Bundle`, `Figma Code Connect is not used`, `Review process is not a blocker`, `Do not create a separate library, Git submodule, or extracted package now`, `KRW 2B Buyer Handoff Bundle Workflow`, and `/api/v1/commercial_handoff_bundles/latest`.
 
 - [ ] **Step 2: Implement endpoint and admin fetch**
 
