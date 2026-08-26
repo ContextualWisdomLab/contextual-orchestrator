@@ -27,9 +27,14 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, payload: dict) -> tuple[int, dict]:
+def _post(
+    port: int,
+    payload: dict,
+    *,
+    endpoint: str = "/v1/chat/completions",
+) -> tuple[int, dict]:
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/chat/completions",
+        f"http://127.0.0.1:{port}{endpoint}",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -111,6 +116,29 @@ def test_http_chat_conduct_accepts_advertised_deployment_alias() -> None:
         thread.join(timeout=5)
 
 
+def test_http_legacy_completions_accepts_advertised_deployment_alias() -> None:
+    """The provider-neutral deployment alias also serves legacy text completions."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "contextual-orchestrator",
+                "prompt": "summarize this synthetic task",
+            },
+            endpoint="/v1/completions",
+        )
+        assert status == 200, body
+        assert body["object"] == "text_completion"
+        assert body["model"] == "contextual-orchestrator"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_invalid_mode() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -157,6 +185,7 @@ if __name__ == "__main__":
     test_http_chat_accepts_mode_route()
     test_http_chat_accepts_orchestration_mode_auto()
     test_http_chat_conduct_accepts_advertised_deployment_alias()
+    test_http_legacy_completions_accepts_advertised_deployment_alias()
     test_http_chat_rejects_invalid_mode()
     test_http_chat_rejects_mode_non_string()
     print("ok")
