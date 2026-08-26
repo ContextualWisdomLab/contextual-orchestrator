@@ -1,11 +1,11 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-26 12:44 KST exact-head review-remediation snapshot
+## 2026-08-26 13:26 KST exact-head review-remediation snapshot
 
 Protected `main` remains normal merge `9c299fa4669139dbe246638e0c44b62051ec8830`.
-Its Tests, Security, Fuzz, Dependency Graph, and scheduled provider-catalog
-canaries remain queued; this is not release evidence. The complete open queue
-was re-read as follows:
+Its Tests, Security, Fuzz, and Dependency Graph canaries are successful; the
+scheduled provider-catalog canary remains queued, so release evidence is still
+incomplete. The complete open queue was re-read as follows:
 
 | PR | Exact head | Current evidence and next acceptance action |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ was re-read as follows:
 | [#850](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/850) | `83018885ec45110c9a900da3978109e506a468e7` | Constant-time budget accounting retains exact model-group ledger parity; `34` focused tests pass and the informational review thread is resolved. Require terminal Checks and independent approval. |
 | [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `2e8a5527255d74b89d5897fcc0d450eba36d6e8c` | Virtual `auto` and `free` selectors now retain provider failover, the free selector cannot cross into paid members, and missing image capability returns a client error. The exact complete tree passes `2285` tests with no failure; all review threads are resolved. |
 | [#856](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/856) | `b9db99971f5f335a02719ed088988340647b3869` | Strict configurable request-body ceiling; `40` focused tests pass with no unresolved review thread or failed exact-head Check. Require terminal Checks and independent approval. |
-| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | this baseline commit supersedes `10ece639bdee4110983a6324a25923d222b6b57a` | Provider-backed embedding batches bind each measured failover attempt to the selected provider member even when aliases share a model name; the embedding/cost slice passes `86` tests. All review threads are resolved; full-suite and hosted exact-head evidence remain pending. |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | this baseline commit supersedes `d9c62be9feea24fdaeb8453f3c72f2c2b0237143` | Provider-backed embedding batches bind each measured failover attempt to the selected provider member even when aliases share a model name, preserve index-aligned provenance, reject empty provider inputs, and fail over exhausted transports. The documented local suite now installs both hash-locked runtime and property dependencies. The exact implementation tree passes `2267` tests with no failure; all review threads are resolved. Hosted exact-head Checks and independent approval remain required. |
 
 Every open PR retains normal auto-merge. None has an independent exact-head
 approval; hosted jobs remain queued rather than failed. Queue delay is neither
