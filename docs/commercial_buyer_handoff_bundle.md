@@ -5,7 +5,7 @@ commercial review of Contextual Orchestrator. It packages runtime reports,
 repository documents, Figma artifacts, verification commands, and explicit
 follow-up caveats into one API response and one review checklist.
 
-Runtime endpoint: `/api/v1/buyer_handoff_bundles/latest`.
+Runtime endpoint: `/api/v1/commercial_handoff_bundles/latest`.
 
 The target is buyer due-diligence readiness. It is not a valuation guarantee,
 purchase commitment, revenue claim, or production compliance certificate.
@@ -25,7 +25,7 @@ evidence control plane.
 
 | Bundle item | Reviewer | Source path or endpoint | Evidence type | Completion state |
 |---|---|---|---|---|
-| Runtime reports | Deal owner | `/api/v1/sales_readiness/latest`, `/api/v1/commercial_readiness/latest`, `/api/v1/buyer_evidence_manifests/latest`, `/api/v1/analytics_snapshots/latest` | `measured_local` | Ready when the buyer manifest has no blocked items. |
+| Runtime reports | Deal owner | `/api/v1/sales_readiness/latest`, `/api/v1/commercial_readiness/latest`, `/api/v1/commercial_evidence_manifests/latest`, `/api/v1/analytics_snapshots/latest` | `measured_local` | Ready when the commercial manifest has no blocked items. |
 | Repository packet | Procurement reviewer | `README.md`, `docs/commercial_buyer_diligence_packet.md`, `docs/commercial_buyer_acceptance_runbook.md`, `docs/commercial_buyer_evidence_manifest.md`, `docs/commercial_buyer_handoff_bundle.md` | `repository_artifact` | Ready when buyer-facing packet documents are present. |
 | Figma stakeholder artifacts | Stakeholder reviewer | `docs/figma_artifacts.md`, Figma design file, FigJam board, Figma Slides deck | `figma_artifact` | Ready when editable artifacts are recorded and Code Connect remains unused. |
 | Verification commands | Technical reviewer | `tests/test_buyer_handoff_bundle.py`, `tests/test_buyer_evidence_manifest.py`, `tests/test_plugin_driven_artifacts.py`, `tests/test_api_contract.py`, `pytest -q` | `measured_local` | Ready when focused and full verification commands pass. |
@@ -35,7 +35,7 @@ evidence control plane.
 
 ## Runtime Shape
 
-`/api/v1/buyer_handoff_bundles/latest` returns:
+`/api/v1/commercial_handoff_bundles/latest` returns:
 
 - `bundle_status`: `buyer_handoff_ready`, `buyer_handoff_ready_with_warnings`,
   or `buyer_handoff_blocked`;
@@ -57,7 +57,7 @@ Ready:
 - every included artifact is ready;
 - focused tests and full verification pass;
 - the Figma artifact record includes `KRW 2B Buyer Handoff Bundle Workflow`;
-- `/api/v1/buyer_handoff_bundles/latest` returns
+- `/api/v1/commercial_handoff_bundles/latest` returns
   `local_buyer_handoff_bundle`;
 - production and buyer-specific evidence remains explicitly caveated.
 
