@@ -9,7 +9,7 @@ repair is recorded as work in progress and is not promoted to hosted or
 protected-main evidence.
 
 The current queue heads are #888
-`ceb5d38f4e8891de04074676e2befcb580cf5f39`, #889
+`ffadebefd118a6c02b93d3a97d0d5e61129c74e7`, #889
 `a310ce09e523b5d42899f6091fc93391ad5152ac`, #890
 `3fef47b74700f1fdc2401e39491e0077f3423ec4`, #880
 `380958dadee0bb3bdbfa9f94a3303bb8135e5c44`, #857
@@ -18,8 +18,13 @@ The current queue heads are #888
 `ede33b5d4c23070f2d5ee961acf7bd7ee03fabf0`. No current head has an
 independent approval.
 
-#888 and #889 still have their full suites and required hosted jobs queued;
-neither has full-suite success evidence. #890 has exact-tree local evidence of
+#888 has focused exact-head evidence of `40 passed`; its official full suite is
+still pending. #889 has exact-head local evidence of `2385 passed in 806.69s`,
+100% statement/branch coverage for its release-authority evaluator and
+collector (`28 passed`), `21` focused downstream-chain tests, and all eight
+review threads resolved. Its required hosted jobs and qualifying independent
+approval remain pending, so this is regression evidence rather than protected
+merge authority. #890 has exact-tree local evidence of
 `2366 passed`, while its hosted full suite and other required jobs remain
 pending and independent approval is absent. That local result is regression
 evidence only, not a successful hosted Check or merge authority. #880 has a
@@ -37,10 +42,13 @@ Auto-merge remains enabled for #849 and #876 without bypass.
 The buyer gaps behind [issue #86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86)
 and [issue #103](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/103)
 remain open. #86 still requires KV-backed live NVIDIA NIM capability,
-cost-provenance, failure-class, and quality evidence. #103 still requires a
-release-readiness path that fails closed on stale head, absent independent
-review, or incomplete exact-head Checks. Queue activity and local test results
-do not close either acceptance gap.
+cost-provenance, failure-class, and quality evidence. #889 implements #103's
+signed fail-closed exact-head authority validation, active-ruleset required
+checks/reviews/last-push exclusion, complete findings inventory, and consistent
+authority propagation through the commercial readiness chain. #103 remains
+open for the central `.github` immutable authority-artifact producer and GRC
+archive/control mapping. Queue activity and local test results do not close
+either acceptance gap.
 
 ## 2026-08-27 02:03 KST protected-main and exact-head queue evidence
 
