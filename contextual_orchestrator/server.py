@@ -2116,12 +2116,18 @@ def _require_pool_model(
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
     """
-    agents = getattr(orchestrator, "agents", None) or []
+    agents = [
+        agent
+        for agent in (getattr(orchestrator, "agents", None) or [])
+        if not getattr(agent, "disabled", False)
+    ]
     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
         if required_capability is None:
-            if model_name == TaskOrchestrator.AUTO_MODEL or any(
-                orchestrator._is_free_agent(agent) for agent in agents
-            ):
+            if model_name == TaskOrchestrator.AUTO_MODEL:
+                if agents:
+                    return model_name
+                raise RequestError(400, "invalid_model", "no enabled model is available")
+            if any(orchestrator._is_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
         try:
@@ -5768,7 +5774,8 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    _validate_completions_model(body)
+                    model_name = _validate_completions_model(body)
+                    _require_pool_model(orchestrator, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -5870,8 +5877,8 @@ def build_server(
                     routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid
                     # which deployment the buyer selected on the chat Completions path.
-                    model_name = _validate_completions_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    # The pool was validated before the structured/passthrough
+                    # branch so every chat shape shares the same client-error contract.
                     attribution = dict(attribution or {})
                     # OpenAI chat ``user`` → account when unset.
                     # Same fail-closed rules as Completions: present key must be a

@@ -223,6 +223,20 @@ def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
         )
 
 
+def test_virtual_text_models_require_an_enabled_eligible_pool() -> None:
+    """AUTO and FREE fail as client errors before an empty pool reaches routing."""
+    empty = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")])
+    empty.agents = []
+    paid_only = TaskOrchestrator([ModelAgent("paid_worker", "paid-model")])
+
+    with pytest.raises(RequestError, match="no enabled model") as auto_error:
+        _require_pool_model(empty, TaskOrchestrator.AUTO_MODEL)
+    assert auto_error.value.status == 400
+    with pytest.raises(RequestError, match="no enabled zero-cost model") as free_error:
+        _require_pool_model(paid_only, TaskOrchestrator.FREE_MODEL)
+    assert free_error.value.status == 400
+
+
 def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
     token = "responses_stream_token"
     orchestrator = TaskOrchestrator([ModelAgent("paid_worker", "paid-model")])

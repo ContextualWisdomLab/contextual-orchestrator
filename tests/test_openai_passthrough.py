@@ -282,6 +282,77 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert body["echo"]["response_format"] == {"type": "json_object"}
 
 
+@pytest.mark.parametrize(
+    ("agents", "model", "expected_message"),
+    [
+        (None, TaskOrchestrator.AUTO_MODEL, "no enabled model"),
+        ([ModelAgent("paid_agent", "paid-model")], TaskOrchestrator.FREE_MODEL,
+         "no enabled zero-cost model"),
+    ],
+)
+def test_http_structured_virtual_models_reject_ineligible_pools(
+    agents: list[ModelAgent] | None, model: str, expected_message: str
+) -> None:
+    """Structured chat shares the normal virtual-model 400 eligibility boundary."""
+    token = "structured_pool_token"
+    orchestrator = TaskOrchestrator(
+        agents or [ModelAgent("seed_agent", "seed-model")]
+    )
+    if agents is None:
+        orchestrator.agents = []
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 400
+    assert expected_message in body["error"]["message"]
+
+
+def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
+    """Pool validation does not weaken the existing vision capability boundary."""
+    token = "structured_vision_token"
+    server = build_server(
+        TaskOrchestrator([ModelAgent("text_agent", "text-model")]),
+        port=0,
+        security=SecurityConfig(auth_token=token),
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "inspect"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                    ],
+                }],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 400
+    assert "vision-capable" in body["error"]["message"]
+
+
 def test_http_responses_endpoint_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/responses"
