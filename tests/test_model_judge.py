@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
+    NoViableAgentError,
     ProviderResponseError,
     RequestDeadlineExceeded,
     _parse_model_judge_reply,
@@ -190,6 +191,10 @@ def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -
         def proxy_send(self, agent: ModelAgent, endpoint: str, body: dict) -> dict:  # type: ignore[override]
             self.agent_ids.append(agent.id)
             return {"choices": [{"message": {"content": '{"decision":"ACCEPT","reason":"free"}'}}]}
+
+        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
+            del timeout
+            return {"agent_id": agent.id, "status": "ready"}
 
     class _StructuredJudge(_ScriptedFastJudge):
         def judge(self, **_: object) -> object:
@@ -418,6 +423,10 @@ def test_fast_mlsirm_judge_failover_honors_verifier_exclusions() -> None:
 
 def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
     orchestrator, _ = _orch("unused")
+    orchestrator._structured_readiness["general_agent"] = {
+        "status": "ready",
+        "checked_at": orchestrator_module.time.monotonic(),
+    }
     adapter = orchestrator_module._FastMLSIJudgeAdapter(
         orchestrator,
         "task",
@@ -484,6 +493,10 @@ def test_fast_mlsirm_structured_judge_fails_over_with_shared_deadline(
                 "usage": {"total_tokens": 7},
             }
 
+        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
+            del timeout
+            return {"agent_id": agent.id, "status": "ready"}
+
     agents = [
         ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
         ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
@@ -525,6 +538,10 @@ def test_fast_mlsirm_structured_judge_all_fail_at_request_deadline(
             now[0] += budget
             raise ProviderResponseError("structured response failed")
 
+        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
+            del timeout
+            return {"agent_id": agent.id, "status": "ready"}
+
     agents = [
         ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
         ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
@@ -543,6 +560,86 @@ def test_fast_mlsirm_structured_judge_all_fail_at_request_deadline(
                 response_format={"type": "json_object"},
             )
     assert client.calls == [("primary_judge", 90.0), ("backup_judge", 90.0)]
+
+
+def test_structured_readiness_excludes_failed_probe_and_uses_ready_backup() -> None:
+    """Only a recently structured-ready declared candidate receives the request."""
+
+    class ProbeClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.probes: list[str] = []
+            self.calls: list[str] = []
+
+        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
+            del timeout
+            self.probes.append(agent.id)
+            return {
+                "agent_id": agent.id,
+                "status": "ready" if agent.id == "backup_judge" else "not_ready",
+            }
+
+        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
+            del endpoint, payload
+            self.calls.append(agent.id)
+            return {
+                "choices": [{"message": {"content": '{"accepted":true}'}}],
+                "usage": {"total_tokens": 7},
+            }
+
+    agents = [
+        ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
+        ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
+    ]
+    client = ProbeClient()
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        TaskOrchestrator(agents, client=client),
+        "task",
+        "primary_judge",
+        allowed_agent_ids={"primary_judge", "backup_judge"},
+    )
+
+    completion = adapter.complete_structured(
+        [{"role": "user", "content": "judge"}],
+        response_format={"type": "json_object"},
+    )
+
+    assert set(client.probes) == {"primary_judge", "backup_judge"}
+    assert client.calls == ["backup_judge"]
+    assert completion["trace"][0]["agent_id"] == "backup_judge"
+
+
+def test_structured_readiness_without_ready_candidate_avoids_provider_call() -> None:
+    """No recent ready evidence returns a typed retry contract before execution."""
+
+    class NoReadyClient(ModelClient):
+        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
+            del timeout
+            return {"agent_id": agent.id, "status": "not_ready"}
+
+        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
+            raise AssertionError((agent, endpoint, payload))
+
+    agents = [
+        ModelAgent("primary_judge", "primary-model", tags=("verification",)),
+        ModelAgent("backup_judge", "backup-model", tags=("verification",)),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=NoReadyClient())
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator,
+        "task",
+        "primary_judge",
+        allowed_agent_ids={"primary_judge", "backup_judge"},
+    )
+
+    with pytest.raises(NoViableAgentError) as exc_info:
+        adapter.complete_structured(
+            [{"role": "user", "content": "judge"}],
+            response_format={"type": "json_object"},
+        )
+
+    assert exc_info.value.code == "no_viable_agent"
+    assert exc_info.value.retry_after_seconds == 30
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:

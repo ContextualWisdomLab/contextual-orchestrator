@@ -13,12 +13,14 @@ import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import NoViableAgentError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
 
 
@@ -159,11 +161,68 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def _post_error_with_headers(
+    url: str, payload: dict, token: str
+) -> tuple[int, dict, dict[str, str]]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {token}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(request, timeout=5)
+    exc = exc_info.value
+    return (
+        exc.code,
+        json.loads(exc.read().decode("utf-8")),
+        dict(exc.headers.items()),
+    )
+
+
 def _serve() -> tuple[object, int, str]:
     token = "passthrough_token"
     server = build_server(_build(), port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1], token
+
+
+def test_http_structured_no_viable_agent_exposes_retry_contract() -> None:
+    """A structured readiness miss is retryable without hiding as a 504."""
+    orchestrator = _build()
+    token = "passthrough_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+    try:
+        with patch.object(
+            orchestrator,
+            "proxy_completion",
+            side_effect=NoViableAgentError(retry_after_seconds=30),
+        ):
+            status, body, headers = _post_error_with_headers(
+                url,
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "give me JSON"}],
+                    "response_format": {"type": "json_object"},
+                },
+                token,
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 503
+    assert body["error"]["code"] == "no_viable_agent"
+    assert body["error"]["detail"]["retry_after_seconds"] == 30
+    assert headers["Retry-After"] == "30"
 
 
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:

@@ -26,6 +26,7 @@ from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
+    NoViableAgentError,
     RequestDeadlineExceeded,
     TaskOrchestrator,
     _coerce_input_text,
@@ -6619,6 +6620,14 @@ def build_server(
                 )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
+            except NoViableAgentError as exc:
+                self._send_error(
+                    503,
+                    exc.code,
+                    str(exc),
+                    {"retry_after_seconds": exc.retry_after_seconds},
+                    extra_headers={"Retry-After": str(exc.retry_after_seconds)},
+                )
             except RequestDeadlineExceeded:
                 self._send_error(504, "request_deadline_exceeded", "request deadline exceeded")
             except RequestError as exc:
@@ -6808,9 +6817,19 @@ def build_server(
             code: str,
             message: str,
             detail: dict[str, Any] | None = None,
+            *,
+            extra_headers: dict[str, str] | None = None,
         ) -> None:
             _LOGGER.warning("request_failed status=%s code=%s", status, code)
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            self._send(
+                _error_payload(
+                    code,
+                    message,
+                    {"request_id": uuid.uuid4().hex, **(detail or {})},
+                ),
+                status,
+                extra_headers=extra_headers,
+            )
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.
