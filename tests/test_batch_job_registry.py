@@ -40,14 +40,25 @@ from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOr
 class FakeValkeyClient:
     """In-memory stand-in for redis.Redis limited to the hash surface used."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, claim_available: bool = True) -> None:
         self.hashes: Dict[str, Dict[str, str]] = {}
         self.expirations: Dict[str, int] = {}
         self.locks: list[tuple[str, dict[str, int]]] = []
+        self.claim_available = claim_available
+
+    class Claim:
+        def __init__(self, available: bool) -> None:
+            self.available = available
+
+        def acquire(self) -> bool:
+            return self.available
+
+        def release(self) -> None:
+            return None
 
     def lock(self, name: str, **kwargs: int) -> object:
         self.locks.append((name, kwargs))
-        return object()
+        return self.Claim(self.claim_available)
 
     def hget(self, key: str, field: str) -> Any:
         return self.hashes.get(key, {}).get(field)
@@ -94,13 +105,18 @@ def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
     assert "batch_1" in counts and len(counts) == 1
 
 
-def test_provider_backend_does_not_claim_durable_inflight_rows_on_construction() -> None:
-    """A shared registry is state storage, not a multi-process atomic work queue."""
-    client = FakeValkeyClient()
+def test_provider_backend_does_not_duplicate_a_claimed_durable_job() -> None:
+    """A second process leaves an in-flight job to the current claim owner."""
+    client = FakeValkeyClient(claim_available=False)
     factory = JobRegistryFactory(client)
     factory.mapping("provider_embedding_states")["inflight"] = "queued"
     calls = []
-    ProviderEmbeddingBatchBackend(lambda requests: (calls.append(requests) or [], 0), job_registry=factory)
+    backend = ProviderEmbeddingBatchBackend(
+        lambda requests: (calls.append(requests) or [], 0),
+        job_registry=factory,
+        claim_lease_seconds=90,
+    )
+    backend._executor.shutdown(wait=True)
     assert calls == []
     assert factory.mapping("provider_embedding_states")["inflight"] == "queued"
 
