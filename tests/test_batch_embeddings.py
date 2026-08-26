@@ -46,6 +46,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ProviderResponseError,
     RequestDeadlineExceeded,
     _provider_limit_contract,
+    is_transient_error,
 )
 from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
 from contextual_orchestrator.batch_job_registry import JobRegistryFactory  # noqa: E402
@@ -336,6 +337,34 @@ def test_provider_backend_context_manager_closes_executor() -> None:
     assert backend._executor._shutdown
 
 
+def test_cancel_finished_batch_preserves_terminal_vectors() -> None:
+    """Cancelling after completion returns the immutable completed document."""
+    class Client:
+        local_concurrency = 1
+
+        def embed_with_usage(self, _agent, texts):
+            return [[1.0] for _text in texts], len(texts)
+
+    agent = ModelAgent(
+        "embedding_agent", "synthetic", base_url="https://provider.example/v1",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent], client=Client()))
+    created = coordinator.complete_embeddings_batch(
+        ["alpha"], model=agent.model, routing_agent_id=agent.id
+    )
+    job = coordinator._require_embedding_job(created["batch_id"])
+    backend = coordinator._embedding_backend_for_job(created["batch_id"])
+    assert backend.wait(job, timeout=1.0)["status"] == "completed"
+    completed = coordinator.embeddings_batch_document(created["batch_id"])
+    cancelled = coordinator.cancel_embeddings_batch(
+        completed["batch_id"], reason="too late"
+    )
+    assert cancelled == completed
+    assert cancelled["status"] == "completed"
+    assert cancelled["embeddings"]
+
+
 def test_sync_provider_embeddings_wait_for_remote_completion() -> None:
     release = threading.Event()
     agent = ModelAgent(
@@ -597,6 +626,42 @@ def test_concurrent_identical_shards_have_one_provider_receipt(monkeypatch) -> N
     assert documents[0]["embeddings"] == documents[1]["embeddings"]
 
 
+def test_concurrent_terminal_polls_materialize_cost_once() -> None:
+    """Concurrent first terminal polls share one cost/materialization claim."""
+    agent = ModelAgent(
+        "embedding_agent", "synthetic", base_url="https://provider.example/v1",
+        tags=("embedding",),
+    )
+
+    class Client:
+        local_concurrency = 1
+
+        def embed_with_usage(self, _agent, texts):
+            return [[1.0] for _text in texts], len(texts)
+
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent], client=Client()))
+    created = coordinator.complete_embeddings_batch(
+        ["alpha"], model=agent.model, routing_agent_id=agent.id
+    )
+    job = coordinator._require_embedding_job(created["batch_id"])
+    backend = coordinator._embedding_backend_for_job(created["batch_id"])
+    assert backend.wait(job, timeout=1.0)["status"] == "completed"
+    documents = []
+    barrier = threading.Barrier(2)
+
+    def poll() -> None:
+        barrier.wait()
+        documents.append(coordinator.embeddings_batch_document(created["batch_id"]))
+
+    threads = [threading.Thread(target=poll) for _index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert documents[0] == documents[1]
+    assert len(coordinator.ledger.records()) == 1
+
+
 def test_sync_embedding_waits_for_remote_provider_terminal_state(monkeypatch) -> None:
     """The synchronous compatibility endpoint waits within its request budget."""
     capability = EmbeddingModelCapability(
@@ -720,6 +785,18 @@ def test_provider_limit_parser_keeps_only_machine_readable_limits() -> None:
         ),
     )
     assert _provider_limit_contract(error) == ("too_many_inputs", 64, 8192)
+
+
+def test_provider_limit_survives_prior_transient_classification() -> None:
+    """Limit parsing reuses a cached error body after retry classification."""
+    body = json.dumps(
+        {"error": {"code": "too_many_inputs", "max_inputs": 64}}
+    ).encode()
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/embeddings", 413, "too large", {}, io.BytesIO(body)
+    )
+    assert not is_transient_error(error)
+    assert _provider_limit_contract(error) == ("too_many_inputs", 64, None)
 
 class _RecordingEmbeddingBackend:
     """Embedding backend that records the exact mapped requests it receives."""

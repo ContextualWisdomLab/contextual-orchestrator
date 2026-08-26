@@ -6147,7 +6147,7 @@ def build_server(
                             break
                         if document.get("status") == "failed":
                             last_embedding_error = RuntimeError(
-                                f"embedding backend failed: {document.get('failure') or {}}"
+                                "embedding-capable model group member failed"
                             )
                             orchestrator._group_router.observe_failure(embedding_agent.id)
                             document = None

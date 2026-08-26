@@ -664,52 +664,53 @@ class ProviderEmbeddingBatchBackend:
 
     def _run_job(self, job_id: str) -> None:
         """Execute one persisted job inside the bounded provider worker pool."""
-        with self._registry.lock("provider_embedding_job_states", job_id):
-            if self._states.get(job_id) == "cancelled":
-                return
-            self._states[job_id] = "running"
-        try:
-            requests = list(self._requests[job_id])
-            vectors, prompt_tokens = self._runner(requests)
-            if self._states.get(job_id) == "cancelled":
-                return
-            if len(vectors) != len(requests):
-                raise ValueError("provider embedding batch result count did not match inputs")
-            dimensions = {len(vector) for vector in vectors}
-            if not vectors or dimensions == {0} or len(dimensions) != 1:
-                raise ValueError("provider embedding batch dimensions were inconsistent")
-            items = []
-            for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
-                items.append(
-                    EmbeddingBatchResultItem(
-                        custom_id=request.custom_id,
-                        index=index,
-                        embedding=vector,
-                        prompt_tokens=0,
-                        model=request.model,
-                    )
-                )
+        with self._registry.lock("provider_embedding_job_executions", job_id):
             with self._registry.lock("provider_embedding_job_states", job_id):
+                if self._states.get(job_id) not in {"queued", "running"}:
+                    return
+                self._states[job_id] = "running"
+            try:
+                requests = list(self._requests[job_id])
+                vectors, prompt_tokens = self._runner(requests)
                 if self._states.get(job_id) == "cancelled":
                     return
-                self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
-                self._results[job_id] = items
-                self._states[job_id] = "completed"
-        except Exception as exc:  # noqa: BLE001 - polling exposes a bounded terminal state
-            with self._registry.lock("provider_embedding_job_states", job_id):
-                if self._states.get(job_id) != "cancelled":
-                    self._errors[job_id] = {
-                        "error_type": type(exc).__name__,
-                        "http_status": getattr(exc, "status_code", None),
-                        "provider_code": getattr(exc, "provider_code", None),
-                        "retryable": bool(getattr(exc, "retryable", False)),
-                        "failed_shard_index": getattr(exc, "failed_shard_index", None),
-                    }
-                    self._states[job_id] = "failed"
-        finally:
-            event = self._terminal_events.get(job_id)
-            if event is not None:
-                event.set()
+                if len(vectors) != len(requests):
+                    raise ValueError("provider embedding batch result count did not match inputs")
+                dimensions = {len(vector) for vector in vectors}
+                if not vectors or dimensions == {0} or len(dimensions) != 1:
+                    raise ValueError("provider embedding batch dimensions were inconsistent")
+                items = []
+                for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
+                    items.append(
+                        EmbeddingBatchResultItem(
+                            custom_id=request.custom_id,
+                            index=index,
+                            embedding=vector,
+                            prompt_tokens=0,
+                            model=request.model,
+                        )
+                    )
+                with self._registry.lock("provider_embedding_job_states", job_id):
+                    if self._states.get(job_id) == "cancelled":
+                        return
+                    self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
+                    self._results[job_id] = items
+                    self._states[job_id] = "completed"
+            except Exception as exc:  # noqa: BLE001 - polling exposes a bounded terminal state
+                with self._registry.lock("provider_embedding_job_states", job_id):
+                    if self._states.get(job_id) != "cancelled":
+                        self._errors[job_id] = {
+                            "error_type": type(exc).__name__,
+                            "http_status": getattr(exc, "status_code", None),
+                            "provider_code": getattr(exc, "provider_code", None),
+                            "retryable": bool(getattr(exc, "retryable", False)),
+                            "failed_shard_index": getattr(exc, "failed_shard_index", None),
+                        }
+                        self._states[job_id] = "failed"
+            finally:
+                event = self._terminal_events.get(job_id)
+                if event is not None:
+                    event.set()
 
     def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
         """Wait within the caller's explicit deadline for a terminal state."""
@@ -759,7 +760,6 @@ class ProviderEmbeddingBatchBackend:
     def usage(self, job: BatchJob) -> Dict[str, int]:
         """Return provider-reported batch usage without per-input allocation."""
         return dict(self._usage.get(job.job_id, {}))
-
 
 class PgLlmBatchEmbeddingBackend:
     """Embeddings batch backend that submits to **pg-llm-batch** and retrieves.
