@@ -55,6 +55,13 @@ only.
    remote embedding agent. Once a remote agent carries the explicit
    `embedding` capability, sync and batch embedding requests call that agent's
    provider endpoint and preserve the resolved model and provider token usage.
+6. **Published limits are exact-model contracts.** For OpenAI
+   `text-embedding-3-large`, request packing uses the provider-published limits:
+   2,048 array inputs, 8,192 tokens per input, and 300,000 tokens per request.
+   Token counts use the model's `cl100k_base` tokenizer; character or word-count
+   estimates cannot authorize a request. The capability record carries its
+   authority URL and is not inherited by another provider or model (OpenAI,
+   2026).
 
 ## Consequences
 
@@ -76,6 +83,9 @@ only.
   table-driven. It is not RouteLLM's preference model.
 
 ## References
+
+OpenAI. (2026). *Create embeddings*. OpenAI API reference.
+https://developers.openai.com/api/reference/ruby/resources/embeddings/methods/create
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
 language models while reducing cost and improving performance* [Preprint].

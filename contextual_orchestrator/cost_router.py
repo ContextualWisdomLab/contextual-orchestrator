@@ -42,6 +42,7 @@ from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import HeuristicTokenCounter, build_token_counter
+from .embedding_capabilities import embedding_model_capability
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
@@ -116,8 +117,33 @@ class CostRoutingCoordinator:
             ):
                 raise ValueError("provider embedding batch must use one resolved route")
             texts = [request.input_text for request in requests]
+            capability = embedding_model_capability(agent.provider_name, agent.model)
             try:
-                return orchestrator.client.embed_with_usage(agent, texts)
+                if capability is None:
+                    return orchestrator.client.embed_with_usage(agent, texts)
+                vectors: List[List[float]] = []
+                total_tokens = 0
+                chunk: List[str] = []
+                chunk_tokens = 0
+                for request in requests:
+                    if request.token_count > capability.max_tokens_per_input:
+                        raise ValueError("embedding input exceeds provider token limit")
+                    if chunk and (
+                        len(chunk) >= capability.max_inputs
+                        or chunk_tokens + request.token_count > capability.max_total_tokens
+                    ):
+                        chunk_vectors, used = orchestrator.client.embed_with_usage(agent, chunk)
+                        vectors.extend(chunk_vectors)
+                        total_tokens += used
+                        chunk = []
+                        chunk_tokens = 0
+                    chunk.append(request.input_text)
+                    chunk_tokens += request.token_count
+                if chunk:
+                    chunk_vectors, used = orchestrator.client.embed_with_usage(agent, chunk)
+                    vectors.extend(chunk_vectors)
+                    total_tokens += used
+                return vectors, total_tokens
             except Exception as exc:
                 max_inputs = getattr(exc, "max_inputs", None)
                 if type(max_inputs) is not int or max_inputs < 1 or len(texts) <= max_inputs:
@@ -464,6 +490,12 @@ class CostRoutingCoordinator:
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
+        capability = None
+        if routing_agent_id is not None:
+            agent = self.orchestrator._agent(routing_agent_id)
+            capability = embedding_model_capability(agent.provider_name, agent.model)
+            if capability is not None:
+                max_tokens = capability.max_tokens_per_input
         requests: List[EmbeddingBatchRequest] = []
         part_counts: List[int] = []
         for source_index, text in enumerate(inputs):
@@ -527,10 +559,10 @@ class CostRoutingCoordinator:
 
     def embedding_batch_capabilities(
         self, *, max_request_body_bytes: int, poll_after_ms: int
-    ) -> Dict[str, int]:
+    ) -> Dict[str, Any]:
         """Publish the enforced bulk-request and provider-part ceilings."""
         max_tokens, max_chars = self._embedding_request_limits()
-        return {
+        document: Dict[str, Any] = {
             "max_request_body_bytes": max_request_body_bytes,
             "max_tokens_per_part": max_tokens,
             "max_chars_per_part": max_chars,
@@ -547,6 +579,23 @@ class CostRoutingCoordinator:
                 else {}
             ),
         }
+        try:
+            agent = self._embedding_agent_for_model("contextual-orchestrator")
+            capability = embedding_model_capability(agent.provider_name, agent.model)
+        except (AttributeError, KeyError, RuntimeError, ValueError):
+            capability = None
+        if capability is not None:
+            document.update(
+                {
+                    "model": capability.model_name,
+                    "max_inputs": capability.max_inputs,
+                    "max_tokens_per_part": capability.max_tokens_per_input,
+                    "max_total_tokens": capability.max_total_tokens,
+                    "tokenizer": capability.tokenizer,
+                    "capability_authority_url": capability.authority_url,
+                }
+            )
+        return document
 
     @property
     def embedding_batch_retention_ms(self) -> int:
@@ -649,6 +698,10 @@ class CostRoutingCoordinator:
 
     def _count_embedding_tokens(self, text: str, model: str) -> int:
         """Count tokens for embedding split decisions, tolerating adapters."""
+        if model == "text-embedding-3-large":
+            import tiktoken
+
+            return len(tiktoken.get_encoding("cl100k_base").encode(text))
         try:
             value = int(self.token_counter.count_text(text, model))
         except Exception:

@@ -129,6 +129,50 @@ def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> N
         server.shutdown()
 
 
+def test_openai_large_embedding_capability_is_exact_and_authority_tagged() -> None:
+    """Publish OpenAI's limits only for the exact provider/model pair."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "openai_embedding",
+                "text-embedding-3-large",
+                provider_name="openai",
+                tags=("embedding",),
+            )
+        ]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator)
+    document = coordinator.embedding_batch_capabilities(
+        max_request_body_bytes=64 * 1024, poll_after_ms=1_000
+    )
+    assert document["model"] == "text-embedding-3-large"
+    assert document["max_inputs"] == 2048
+    assert document["max_tokens_per_part"] == 8192
+    assert document["max_total_tokens"] == 300_000
+    assert document["tokenizer"] == "cl100k_base"
+    assert document["capability_authority_url"].startswith("https://developers.openai.com/")
+
+
+def test_openai_large_embedding_input_uses_exact_tokenizer_and_8192_limit() -> None:
+    """Split an oversized OpenAI input using exact cl100k token counts."""
+    agent = ModelAgent(
+        "openai_embedding",
+        "text-embedding-3-large",
+        provider_name="openai",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
+    requests, part_counts, limits = coordinator._build_embedding_requests(
+        ["token " * 9_000],
+        model=agent.model,
+        attribution={},
+        routing_agent_id=agent.id,
+    )
+    assert part_counts[0] > 1
+    assert limits["max_tokens_per_part"] == 8192
+    assert all(0 < request.token_count <= 8192 for request in requests)
+
+
 def test_provider_batch_returns_immediately_then_polls_terminal_result() -> None:
     release = threading.Event()
     calls = []
