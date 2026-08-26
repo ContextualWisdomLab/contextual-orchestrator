@@ -203,7 +203,7 @@ def test_embedding_batch_binds_the_selected_agent_when_models_match() -> None:
     """Measured failover invokes the selected provider member, not its model alias."""
     first = type("Agent", (), {
         "id": "first_agent", "model": "shared-model", "tags": ("embedding",),
-        "base_url": "https://first.example/v1",
+        "base_url": "mock://first",
     })()
     second = type("Agent", (), {
         "id": "second_agent", "model": "shared-model", "tags": ("embedding",),
