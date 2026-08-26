@@ -255,6 +255,79 @@ def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> N
     assert document["ready_count"] == len(agents)
     assert counters["maximum"] == 2
 
+
+def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success() -> None:
+    """A long access list renews its CAS claim and release loss cannot erase success."""
+
+    class LockNotOwnedError(RuntimeError):
+        pass
+
+    class RenewalClient(FakeValkeyClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.extensions = 0
+
+        class RenewalClaim:
+            def __init__(self, owner: "RenewalClient") -> None:
+                self.owner = owner
+
+            def acquire(self) -> bool:
+                return True
+
+            def extend(self, seconds: float, *, replace_ttl: bool) -> bool:
+                assert seconds > 0
+                assert replace_ttl is True
+                self.owner.extensions += 1
+                return True
+
+            def release(self) -> None:
+                raise LockNotOwnedError("lease expired after terminal persistence")
+
+        def lock(self, name: str, **kwargs: Any) -> object:
+            self.locks.append((name, kwargs))
+            if "provider_readiness_job_execution" in name:
+                return self.RenewalClaim(self)
+            return self.Claim(True)
+
+    class SlowProbeClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=0.01, local_concurrency=1)
+
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            time.sleep(0.1)
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    client = RenewalClient()
+    agents = [ModelAgent(f"declared_{index}", "mock") for index in range(7)]
+    orchestrator = TaskOrchestrator(agents, client=SlowProbeClient())
+    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
+    coordinator = CostRoutingCoordinator(
+        orchestrator, job_registry=JobRegistryFactory(client)
+    )
+    job = coordinator.submit_provider_readiness_refresh(
+        agent_ids=[agent.id for agent in agents],
+        capability_code="structured",
+        timeout_seconds=0.1,
+        deadline_epoch=time.time() + 1.2,
+    )
+    for _ in range(100):
+        document = coordinator.provider_readiness_refresh_document(job["job_id"])
+        if document["status"] in {"completed", "failed", "expired"}:
+            break
+        time.sleep(0.01)
+
+    assert document["status"] == "completed"
+    assert document["ready_count"] == 7
+    assert client.extensions >= 1
+    execution_claim = next(
+        kwargs
+        for name, kwargs in client.locks
+        if "provider_readiness_job_execution" in name
+    )
+    assert execution_claim["timeout"] < 1.2
+
+
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
     """Dataclasses, dataclass lists, and JSON scalars all survive the trip."""
     client = FakeValkeyClient()
