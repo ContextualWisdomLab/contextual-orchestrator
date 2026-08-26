@@ -68,7 +68,7 @@ ADMIN_TRANSLATIONS = {
         "session_end": "End session",
         "session_status_ready": "Session established",
         "session_status_missing": "Session required",
-        "session_action": "Session required — open Access Control to sign in",
+        "session_action": "Session required — open Integrations to sign in",
         "compatible_api_adoption": "Compatible API adoption",
         "trace_complete_workflow_rate": "Trace-complete workflow rate",
         "policy_safe_routing_rate": "Policy-safe routing rate",
@@ -327,7 +327,7 @@ ADMIN_TRANSLATIONS = {
         "session_end": "세션 종료",
         "session_status_ready": "세션이 설정되었습니다",
         "session_status_missing": "세션이 필요합니다",
-        "session_action": "세션 필요 — 접근 제어에서 로그인",
+        "session_action": "세션 필요 — 연동 관리에서 로그인",
         "compatible_api_adoption": "호환 API 사용량",
         "trace_complete_workflow_rate": "트레이스 완성 워크플로 비율",
         "policy_safe_routing_rate": "정책 안전 라우팅 비율",
@@ -893,7 +893,7 @@ ADMIN_HTML = r"""<!doctype html>
     </aside>
     <main class="main">
       <header class="topbar">
-        <button class="btn session-action" id="sessionAction" type="button" hidden data-i18n="session_action">Session required — open Access Control to sign in</button>
+        <button class="btn session-action" id="sessionAction" type="button" hidden data-i18n="session_action">Session required — open Integrations to sign in</button>
         <div class="field language-switch"><span data-i18n="language_label">Language</span><select id="language"><option value="en">English</option><option value="ko">한국어</option></select></div>
       </header>
       <div class="mobile-nav">
@@ -1757,7 +1757,7 @@ Summarize this research thread and verify claims.</textarea>
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     els.sessionForm?.addEventListener("submit", startSession);
     els.endSession?.addEventListener("click", endSession);
-    els.sessionAction?.addEventListener("click", () => showView("access"));
+    els.sessionAction?.addEventListener("click", () => showView("integrations"));
     document.querySelector("#copyJson").addEventListener("click", () => {
       renderTraceTab("json");
       navigator.clipboard?.writeText(els.traceJson.textContent);

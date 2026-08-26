@@ -119,11 +119,11 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'headers: {"origin": window.location.origin}' not in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
     assert ADMIN_TRANSLATIONS["en"]["session_action"] == (
-        "Session required — open Access Control to sign in"
+        "Session required — open Integrations to sign in"
     )
     assert 'id="sessionAction"' in ADMIN_HTML
     assert "els.sessionAction.hidden = false" in ADMIN_HTML
-    assert 'els.sessionAction?.addEventListener("click", () => showView("access"))' in ADMIN_HTML
+    assert 'els.sessionAction?.addEventListener("click", () => showView("integrations"))' in ADMIN_HTML
     explanatory_keys = (
         "doc_viewer_desc",
         "doc_viewer_hint",
