@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-27 02:48 KST live queue evidence
+## 2026-08-27 03:16 KST live queue evidence
 
 Protected `main` remains exact commit
 `5a01759165be20ab38c05c2321d8a9f00ec331ea`. This refresh is limited to
@@ -12,14 +12,17 @@ The current queue heads are #888
 `ffadebefd118a6c02b93d3a97d0d5e61129c74e7`, #889
 `a310ce09e523b5d42899f6091fc93391ad5152ac`, #890
 `3fef47b74700f1fdc2401e39491e0077f3423ec4`, #880
-`380958dadee0bb3bdbfa9f94a3303bb8135e5c44`, #857
-`f61b58e68d3f7a0a07cd9384e664ee9873505001`, #876
+`f614410a8264bb40a4e433cb641e41f01eba46b8`, #879
+`be6972c43cbf6506121633f9a3880c2c9567137c`, #857
+`ca60f554de7e098cc63c9a2ea7424b722410afae`, #876
 `73a5510f099742003f7242b6f2c55e10f8ff9dab`, and #849
 `ede33b5d4c23070f2d5ee961acf7bd7ee03fabf0`. No current head has an
 independent approval.
 
-#888 has focused exact-head evidence of `40 passed`; its official full suite is
-still pending. #889 has exact-head local evidence of `2385 passed in 806.69s`,
+#888 has focused exact-head evidence of `40 passed`, official full-suite
+evidence of `2363 passed in 754.32s`, and zero unresolved review threads. Its
+hosted required jobs and independent approval remain authoritative delivery
+gates. #889 has exact-head local evidence of `2385 passed in 806.69s`,
 100% statement/branch coverage for its release-authority evaluator and
 collector (`28 passed`), `21` focused downstream-chain tests, and all eight
 review threads resolved. Its required hosted jobs and qualifying independent
@@ -31,13 +34,16 @@ evidence only, not a successful hosted Check or merge authority. #880 has a
 successful hosted full suite, but several required-workflow jobs were cancelled
 and approval is absent; normal auto-merge remains enabled.
 
-#857's remote exact head still shows failed full/fuzz jobs. Another agent's
-root-cause repairs after `f61b58e6` remain local and pending push, so their
-intent and any local verification do not change the remote evidence recorded
-here. #849 and #876 retain successful exact-head full/security evidence but a
-failed Strix result. Exact-head Strix retries are pending; until a retry
-finishes successfully, the failure remains the authoritative hosted result.
-Auto-merge remains enabled for #849 and #876 without bypass.
+#879 now carries the review-driven telemetry and bounded finish-reason repair at
+`be6972c4`; its `139` focused tests passed while its official exact-head full
+suite remains in progress. #857 moved to `ca60f554` with a shared pinned native
+token-packer installer for both fuzz jobs; the HTTP response flush repair and a
+new exact-head full suite remain work in progress, so earlier failed full/fuzz
+jobs are not superseded yet. #849 and #876 retain successful exact-head
+full/security evidence but a failed Strix result. Their exact-head retries also
+failed closed after NVIDIA NIM returned `429`/`410` and the OpenAI fallback
+reported exhausted credit; zero findings before provider exhaustion are not a
+clean scan. Auto-merge remains enabled for #849 and #876 without bypass.
 
 The buyer gaps behind [issue #86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86)
 and [issue #103](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/103)
