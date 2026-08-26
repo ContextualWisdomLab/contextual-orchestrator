@@ -1237,7 +1237,7 @@ def test_recovered_provider_job_has_one_execution_claim_and_terminal_event() -> 
         def mapping(self, name, *, decode=None):
             return self.values.setdefault(name, {})
 
-        def lock(self, name, key):
+        def lock(self, name, key, **_kwargs):
             return self.locks.setdefault((name, key), threading.Lock())
 
     shared_values: dict[str, dict] = {}

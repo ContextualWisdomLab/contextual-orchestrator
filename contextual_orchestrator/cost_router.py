@@ -143,7 +143,10 @@ class CostRoutingCoordinator:
                         separators=(",", ":"),
                     ).encode("utf-8")
                 ).hexdigest()
-                with registry.lock("embedding_provider_shards", shard_key):
+                with registry.lock(
+                    "embedding_provider_shards", shard_key,
+                    lease_seconds=self._embedding_claim_lease_seconds(),
+                ):
                     cached = embedding_shards.get(shard_key)
                     if isinstance(cached, dict):
                         chunk_vectors = cached.get("vectors")
@@ -203,6 +206,9 @@ class CostRoutingCoordinator:
             embed,
             job_registry=registry,
             max_concurrency=getattr(client, "local_concurrency", 1),
+            claim_lease_seconds=(
+                float(client.timeout) if float(getattr(client, "timeout", 0)) > 0 else None
+            ),
         )
         self.embedding_batch_backend = embedding_batch_backend or self._local_embedding_backend
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
@@ -827,8 +833,21 @@ class CostRoutingCoordinator:
 
     def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
         """Serialize terminal materialization so cost is recorded exactly once."""
-        with self.job_registry.lock("embedding_document_materialization", batch_id):
+        with self.job_registry.lock(
+            "embedding_document_materialization", batch_id,
+            lease_seconds=self._embedding_claim_lease_seconds(),
+        ):
             return self._embeddings_batch_document_locked(batch_id)
+
+    def _embedding_claim_lease_seconds(self) -> float | None:
+        """Bound a claim by the current request and configured provider timeout."""
+        client = self.orchestrator.client
+        remaining_timeout = getattr(client, "remaining_request_timeout", None)
+        remaining = remaining_timeout() if callable(remaining_timeout) else None
+        configured = float(getattr(client, "timeout", 0))
+        if configured <= 0:
+            return remaining
+        return configured if remaining is None else min(configured, remaining)
 
     def _embeddings_batch_document_locked(self, batch_id: str) -> Dict[str, Any]:
         """Return the naruon-shaped batch document for ``batch_id``.
