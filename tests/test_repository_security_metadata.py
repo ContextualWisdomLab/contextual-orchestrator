@@ -176,6 +176,14 @@ def test_unit_workflow_installs_runtime_and_test_lockfiles():
     assert install_step.index(runtime_command) < install_step.index(property_command)
 
 
+def test_local_full_suite_installs_runtime_and_test_lockfiles():
+    """The documented local command must exercise optional runtime integrations."""
+    makefile_text = read_text("Makefile")
+
+    assert "--with-requirements requirements.lock" in makefile_text
+    assert "--with-requirements fuzz/requirements-property.txt" in makefile_text
+
+
 def test_security_tool_lockfile_uses_hash_pinning():
     lock_text = read_text("requirements-security-ci.txt")
 
