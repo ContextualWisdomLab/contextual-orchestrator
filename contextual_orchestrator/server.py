@@ -6112,6 +6112,7 @@ def build_server(
                                 attribution=attribution,
                                 metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                 routing_agent_id=agent.id,
+                                wait_for_terminal=True,
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc

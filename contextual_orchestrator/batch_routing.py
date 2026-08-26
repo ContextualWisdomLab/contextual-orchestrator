@@ -24,12 +24,15 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
+
+from .batch_job_registry import JobRegistryFactory
 
 _ROUTING_CATEGORY = "routing"
 
@@ -589,6 +592,8 @@ class ProviderEmbeddingBatchBackend:
             raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
         self._executor = ThreadPoolExecutor(max_workers=max_concurrency)
+        self._registry = job_registry or JobRegistryFactory()
+        self._terminal_events: Dict[str, threading.Event] = {}
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
             job_registry.mapping(
                 "provider_embedding_results", decode=lambda raw: EmbeddingBatchResultItem(**raw)
@@ -636,12 +641,16 @@ class ProviderEmbeddingBatchBackend:
         job_id = f"providerembed_{uuid.uuid4().hex}"
         self._requests[job_id] = list(requests)
         self._states[job_id] = "queued"
+        self._terminal_events[job_id] = threading.Event()
         self._executor.submit(self._run_job, job_id)
         return BatchJob(job_id=job_id, backend=self.name, status="queued", request_count=len(requests))
 
     def _run_job(self, job_id: str) -> None:
         """Execute one persisted job inside the bounded provider worker pool."""
-        self._states[job_id] = "running"
+        with self._registry.lock("provider_embedding_job_states", job_id):
+            if self._states.get(job_id) == "cancelled":
+                return
+            self._states[job_id] = "running"
         try:
             requests = list(self._requests[job_id])
             vectors, prompt_tokens = self._runner(requests)
@@ -663,18 +672,34 @@ class ProviderEmbeddingBatchBackend:
                         model=request.model,
                     )
                 )
-            self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
-            self._results[job_id] = items
-            self._states[job_id] = "completed"
+            with self._registry.lock("provider_embedding_job_states", job_id):
+                if self._states.get(job_id) == "cancelled":
+                    return
+                self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
+                self._results[job_id] = items
+                self._states[job_id] = "completed"
         except Exception as exc:  # noqa: BLE001 - polling exposes a bounded terminal state
-            self._errors[job_id] = {
-                "error_type": type(exc).__name__,
-                "status_code": getattr(exc, "status_code", None),
-                "provider_code": getattr(exc, "provider_code", None),
-                "max_inputs": getattr(exc, "max_inputs", None),
-                "max_tokens": getattr(exc, "max_tokens", None),
-            }
-            self._states[job_id] = "failed"
+            with self._registry.lock("provider_embedding_job_states", job_id):
+                if self._states.get(job_id) != "cancelled":
+                    self._errors[job_id] = {
+                        "error_type": type(exc).__name__,
+                        "http_status": getattr(exc, "status_code", None),
+                        "provider_code": getattr(exc, "provider_code", None),
+                        "retryable": bool(getattr(exc, "retryable", False)),
+                        "failed_shard_index": getattr(exc, "failed_shard_index", None),
+                    }
+                    self._states[job_id] = "failed"
+        finally:
+            event = self._terminal_events.get(job_id)
+            if event is not None:
+                event.set()
+
+    def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
+        """Wait within the caller's explicit deadline for a terminal state."""
+        event = self._terminal_events.get(job.job_id)
+        if event is not None:
+            event.wait(timeout=timeout)
+        return self.poll(job)
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Return queued, running, completed, or failed without blocking."""
@@ -690,11 +715,12 @@ class ProviderEmbeddingBatchBackend:
 
     def cancel(self, job: BatchJob, *, reason: str) -> Dict[str, Any]:
         """Mark queued/running work cancelled and discard any late provider result."""
-        status = str(self._states.get(job.job_id, "failed"))
-        if status not in {"completed", "failed", "cancelled"}:
-            self._cancellations[job.job_id] = {"reason": reason}
-            self._states[job.job_id] = "cancelled"
-            status = "cancelled"
+        with self._registry.lock("provider_embedding_job_states", job.job_id):
+            status = str(self._states.get(job.job_id, "failed"))
+            if status not in {"completed", "failed", "cancelled"}:
+                self._cancellations[job.job_id] = {"reason": reason}
+                self._states[job.job_id] = "cancelled"
+                status = "cancelled"
         return {
             "job_id": job.job_id,
             "status": status,

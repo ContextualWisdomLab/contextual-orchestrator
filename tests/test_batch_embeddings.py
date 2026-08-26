@@ -439,6 +439,109 @@ def test_concurrent_identical_shards_have_one_provider_receipt(monkeypatch) -> N
     assert documents[0]["embeddings"] == documents[1]["embeddings"]
 
 
+def test_sync_embedding_waits_for_remote_provider_terminal_state(monkeypatch) -> None:
+    """The synchronous compatibility endpoint waits within its request budget."""
+    capability = EmbeddingModelCapability(
+        "openai", "text-embedding-3-large", 2048, 8192, 300_000,
+        "cl100k_base", "https://example.test",
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router.embedding_model_capability",
+        lambda provider, model: capability if provider == "openai" else None,
+    )
+
+    class Client:
+        local_concurrency = 1
+        timeout = 1.0
+
+        def remaining_request_timeout(self):
+            return 1.0
+
+        def embed_with_usage(self, _agent, texts):
+            time.sleep(0.03)
+            return [[1.0] for _text in texts], len(texts)
+
+    agent = ModelAgent(
+        "openai_embedding", "text-embedding-3-large",
+        base_url="https://provider.example/v1", provider_name="openai",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent], client=Client()))
+    document = coordinator.complete_embeddings_batch(
+        ["alpha"], model=agent.model, routing_agent_id=agent.id,
+        wait_for_terminal=True,
+    )
+    assert document["status"] == "completed"
+    assert document["embeddings"][0]["embedding"] == [1.0]
+
+
+def test_cancelled_queued_job_cannot_be_restarted() -> None:
+    """A queued cancellation wins atomically over the worker start transition."""
+    release = threading.Event()
+    calls: list[str] = []
+
+    def runner(requests):
+        calls.append(requests[0].input_text)
+        release.wait(timeout=1)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(runner, max_concurrency=1)
+    first = backend.submit([EmbeddingBatchRequest("first")])
+    second = backend.submit([EmbeddingBatchRequest("second")])
+    assert backend.cancel(second, reason="superseded")["status"] == "cancelled"
+    release.set()
+    for _attempt in range(100):
+        if backend.poll(first)["is_complete"]:
+            break
+        time.sleep(0.01)
+    time.sleep(0.03)
+    assert backend.poll(second)["status"] == "cancelled"
+    assert calls == ["first"]
+
+
+def test_failed_deduplicated_job_is_replaced_by_retry(monkeypatch) -> None:
+    """Dedup consults durable backend state before returning a prior job."""
+    capability = EmbeddingModelCapability(
+        "openai", "text-embedding-3-large", 2048, 8192, 300_000,
+        "cl100k_base", "https://example.test",
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router.embedding_model_capability",
+        lambda provider, model: capability if provider == "openai" else None,
+    )
+
+    class Client:
+        local_concurrency = 1
+
+        def __init__(self):
+            self.fail = True
+
+        def embed_with_usage(self, _agent, texts):
+            if self.fail:
+                raise ProviderResponseError("synthetic terminal")
+            return [[1.0] for _text in texts], len(texts)
+
+    client = Client()
+    agent = ModelAgent(
+        "openai_embedding", "text-embedding-3-large",
+        base_url="https://provider.example/v1", provider_name="openai",
+        tags=("embedding",),
+    )
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent], client=client))
+    first = coordinator.submit_embeddings_batch(
+        ["alpha"], model=agent.model, routing_agent_id=agent.id,
+    )
+    for _attempt in range(100):
+        if coordinator.embeddings_batch_document(first.job_id)["status"] == "failed":
+            break
+        time.sleep(0.01)
+    client.fail = False
+    second = coordinator.submit_embeddings_batch(
+        ["alpha"], model=agent.model, routing_agent_id=agent.id,
+    )
+    assert second.job_id != first.job_id
+
+
 def test_provider_limit_parser_keeps_only_machine_readable_limits() -> None:
     error = urllib.error.HTTPError(
         "https://provider.example/v1/embeddings",

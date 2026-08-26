@@ -487,12 +487,11 @@ class CostRoutingCoordinator:
         existing_job_id = self._embedding_request_keys.get(request_key)
         if existing_job_id:
             existing_job = self._embedding_jobs.get(str(existing_job_id))
-            if existing_job is not None and existing_job.status not in {
-                "failed",
-                "cancelled",
-                "rejected",
-            }:
-                return existing_job
+            if existing_job is not None:
+                existing_backend = self._embedding_backend_for_job(existing_job.job_id)
+                existing_status = existing_backend.poll(existing_job).get("status")
+                if existing_status not in {"failed", "cancelled", "rejected"}:
+                    return existing_job
         backend = self._embedding_backend_for_model(model, routing_agent_id)
         job = backend.submit(requests, metadata=metadata)
         self._embedding_job_backends[job.job_id] = backend.name
@@ -951,6 +950,7 @@ class CostRoutingCoordinator:
         routing_agent_id: str | None = None,
         input_attributions: Optional[List[Dict[str, Any]]] = None,
         input_metadata: Optional[List[Dict[str, Any]]] = None,
+        wait_for_terminal: bool = False,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -968,6 +968,13 @@ class CostRoutingCoordinator:
             input_attributions=input_attributions,
             input_metadata=input_metadata,
         )
+        if wait_for_terminal:
+            backend = self._embedding_backend_for_job(job.job_id)
+            wait = getattr(backend, "wait", None)
+            if callable(wait):
+                client = self.orchestrator.client
+                remaining = client.remaining_request_timeout()
+                wait(job, timeout=remaining if remaining is not None else client.timeout)
         return self.embeddings_batch_document(job.job_id)
 
     def cancel_embeddings_batch(self, batch_id: str, *, reason: str) -> Dict[str, Any]:

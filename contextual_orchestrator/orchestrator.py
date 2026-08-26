@@ -1387,8 +1387,8 @@ class ModelClient:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
         connection_timeout = timeout
         if connection_timeout is None:
-            connection_timeout = getattr(
-                self._local, "provider_transport_timeout", self.timeout
+            connection_timeout = (
+                getattr(self._local, "provider_transport_timeout", None) or self.timeout
             )
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
@@ -4488,7 +4488,10 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                 except Exception as exc:
-                    if agent.group_name or allowed_agent_ids is not None:
+                    if (
+                        not isinstance(exc, RequestDeadlineExceeded)
+                        and (agent.group_name or allowed_agent_ids is not None)
+                    ):
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
                         raise
