@@ -726,8 +726,7 @@ _RECORD_ATTRIBUTION_INSERT_SQL = {
         "INSERT INTO usage_record_attributions "
         "(usage_record_id, dimension_name, dimension_value) "
         f"VALUES ({placeholder}, {placeholder}, {placeholder}) "
-        "ON CONFLICT (usage_record_id, dimension_name) DO UPDATE SET "
-        "dimension_value = excluded.dimension_value"
+        "ON CONFLICT (usage_record_id, dimension_name) DO NOTHING"
     )
     for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
 }

@@ -5125,11 +5125,13 @@ def build_server(
                                     max_response_bytes=security.max_body_bytes,
                                 )
                             )
+                            previous_usage = owner.provider_usage
                             owner = video_jobs.observe_provider_result(owner, result)
-                            coordinator.record_async_video_usage(
-                                agent=agent, usage=result.get("usage"),
-                                gateway_job_id=owner.gateway_job_id,
-                            )
+                            if previous_usage is None and owner.provider_usage is not None:
+                                coordinator.record_async_video_usage(
+                                    agent=agent, usage=owner.provider_usage,
+                                    gateway_job_id=owner.gateway_job_id,
+                                )
                             self._send(video_jobs.public_response(result, owner))
                     except urllib.error.HTTPError as exc:
                         if exc.code == 404:

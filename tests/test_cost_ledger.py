@@ -127,8 +127,10 @@ def test_sql_stable_usage_identity_is_idempotent() -> None:
         ledger.record_usage(
             provider="openai", model="gpt-x", prompt_tokens=7,
             completion_tokens=2, usage_record_id="usage_video_stable",
+            attribution={"team": "first" if _ == 0 else "revised"},
         )
     assert len(ledger.records()) == 1
+    assert ledger.records()[0]["team_name"] == "first"
 
 
 def test_unpriced_model_costs_zero_and_still_records() -> None:

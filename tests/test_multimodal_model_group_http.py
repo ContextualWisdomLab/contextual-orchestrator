@@ -274,6 +274,11 @@ def test_video_submission_ledgers_only_concrete_provider_usage() -> None:
         "status": "completed",
         "usage": {"input_tokens": 7, "output_tokens": 2},
     }
+    orchestrator.client.proxy_get_json = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+        "id": "provider-job",
+        "status": "completed",
+        "usage": {"input_tokens": 9, "output_tokens": 3},
+    }
     server = build_server(
         orchestrator,
         port=0,
@@ -282,10 +287,13 @@ def test_video_submission_ledgers_only_concrete_provider_usage() -> None:
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        status, _, _ = _post(
+        status, raw, _ = _post(
             server.server_address[1], "/v1/videos", {"prompt": "demo"}
         )
         assert status == 200
+        assert _get(
+            server.server_address[1], f"/v1/videos/{json.loads(raw)['id']}"
+        )[0] == 200
         row = coordinator.ledger.records()[0]
         assert (row["prompt_tokens"], row["completion_tokens"]) == (7, 2)
         assert row["measurement_status"] == "measured"
