@@ -96,7 +96,11 @@ class CostRoutingCoordinator:
         )
 
         def embed(request: EmbeddingBatchRequest) -> tuple[List[float], int]:
-            agent = self._embedding_agent_for_model(request.model)
+            agent = (
+                orchestrator._agent(request.routing_agent_id)
+                if request.routing_agent_id is not None
+                else self._embedding_agent_for_model(request.model)
+            )
             vectors, token_count = orchestrator.client.embed_with_usage(
                 agent, [request.input_text]
             )
@@ -358,6 +362,7 @@ class CostRoutingCoordinator:
         model: str = "contextual-orchestrator",
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        routing_agent_id: str | None = None,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -368,10 +373,12 @@ class CostRoutingCoordinator:
         """
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
-            inputs, model=model, attribution=shared_attribution
+            inputs,
+            model=model,
+            attribution=shared_attribution,
+            routing_agent_id=routing_agent_id,
         )
         backend = self._embedding_backend_for_model(model)
-        self.embedding_batch_backend = backend
         job = backend.submit(requests, metadata=metadata)
         self._embedding_job_backends[job.job_id] = backend.name
         self._embedding_jobs[job.job_id] = job
@@ -388,6 +395,7 @@ class CostRoutingCoordinator:
         *,
         model: str,
         attribution: Dict[str, Any],
+        routing_agent_id: str | None = None,
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
@@ -410,6 +418,7 @@ class CostRoutingCoordinator:
                         part_index=part_index,
                         part_count=part_count,
                         token_count=token_count,
+                        routing_agent_id=routing_agent_id,
                     )
                 )
         return requests, part_counts, {
@@ -665,6 +674,7 @@ class CostRoutingCoordinator:
         model: str = "contextual-orchestrator",
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        routing_agent_id: str | None = None,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -674,7 +684,11 @@ class CostRoutingCoordinator:
         envelope the caller then polls via :meth:`embeddings_batch_document`.
         """
         job = self.submit_embeddings_batch(
-            inputs, model=model, attribution=attribution, metadata=metadata
+            inputs,
+            model=model,
+            attribution=attribution,
+            metadata=metadata,
+            routing_agent_id=routing_agent_id,
         )
         return self.embeddings_batch_document(job.job_id)
 

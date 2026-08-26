@@ -442,6 +442,7 @@ class EmbeddingBatchRequest:
     part_index: int = 0
     part_count: int = 1
     token_count: int = 0
+    routing_agent_id: str | None = None
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""

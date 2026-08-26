@@ -199,6 +199,41 @@ def test_embedding_backend_observes_agents_added_after_construction() -> None:
     assert document["embeddings"][0]["embedding"] == [0.5, 0.5]
 
 
+def test_embedding_batch_binds_the_selected_agent_when_models_match() -> None:
+    """Measured failover invokes the selected provider member, not its model alias."""
+    first = type("Agent", (), {
+        "id": "first_agent", "model": "shared-model", "tags": ("embedding",),
+        "base_url": "https://first.example/v1",
+    })()
+    second = type("Agent", (), {
+        "id": "second_agent", "model": "shared-model", "tags": ("embedding",),
+        "base_url": "https://second.example/v1",
+    })()
+
+    class _Client:
+        local_concurrency = 1
+
+        def embed_with_usage(self, selected_agent, texts):
+            assert selected_agent is second
+            return [[0.2, 0.8]], 2
+
+    class _Orchestrator:
+        agents = [first, second]
+        client = _Client()
+
+        def _agent(self, agent_id):
+            return {first.id: first, second.id: second}[agent_id]
+
+        def select_capability_agent(self, _capability, _model):
+            return first
+
+    document = CostRoutingCoordinator(_Orchestrator()).complete_embeddings_batch(
+        ["evidence"], model="shared-model", routing_agent_id=second.id
+    )
+
+    assert document["embeddings"][0]["embedding"] == [0.2, 0.8]
+
+
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     coordinator = _coordinator()
     coordinator.complete([{"role": "user", "content": "sync one"}], attribution={"company": "acme"})
