@@ -5160,17 +5160,41 @@ def build_server(
                         security_profile=security.readiness_profile(),
                     ))
                     return
-                if path == "/api/v1/buyer_evidence_manifests/latest":
-                    self._send(orchestrator.buyer_evidence_manifest_report(
+                if path == "/api/v1/commercial_evidence_manifests/latest":
+                    self._send(orchestrator.commercial_evidence_manifest_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
                     ))
                     return
-                if path == "/api/v1/buyer_handoff_bundles/latest":
-                    self._send(orchestrator.buyer_handoff_bundle_report(
+                if path == "/api/v1/commercial_handoff_bundles/latest":
+                    self._send(orchestrator.commercial_handoff_bundle_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
                     ))
+                    return
+                if path == "/api/v1/buyer_evidence_manifests/latest":
+                    self._send(
+                        orchestrator.commercial_evidence_manifest_report(
+                            locale_bundles=ADMIN_TRANSLATIONS,
+                            security_profile=security.readiness_profile(),
+                        ),
+                        extra_headers={
+                            "deprecation": "true",
+                            "link": '</api/v1/commercial_evidence_manifests/latest>; rel="successor-version"',
+                        },
+                    )
+                    return
+                if path == "/api/v1/buyer_handoff_bundles/latest":
+                    self._send(
+                        orchestrator.commercial_handoff_bundle_report(
+                            locale_bundles=ADMIN_TRANSLATIONS,
+                            security_profile=security.readiness_profile(),
+                        ),
+                        extra_headers={
+                            "deprecation": "true",
+                            "link": '</api/v1/commercial_handoff_bundles/latest>; rel="successor-version"',
+                        },
+                    )
                     return
                 if path == "/api/v1/saleability_decisions/latest":
                     self._send(orchestrator.saleability_decision_report(
