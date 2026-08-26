@@ -166,6 +166,10 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
     assert status == 503
     assert body["error"]["code"] == "trace_audit_unavailable"
     assert "orchestration" not in body
+    assert not any(
+        event["event_name"] == "chat_completion_requested"
+        for event in orchestrator._analytics_events
+    )
 
 
 def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
@@ -278,6 +282,59 @@ def test_structured_chat_ignores_server_trace_default_when_flag_is_omitted() -> 
         event["event_type"] == "orchestration_trace_access_granted"
         for event in orchestrator._audit_events
     )
+
+
+def test_fast_route_stream_rejects_explicit_trace_before_provider_work() -> None:
+    """Direct Chat streaming cannot silently discard an explicit trace request."""
+    server, thread, port, _orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400, body
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
+
+
+def test_fast_route_stream_ignores_server_trace_default_when_flag_is_omitted() -> None:
+    """An ordinary direct stream remains available to an inference-only caller."""
+    server, thread, port, _orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_INFERENCE_TOKEN and scope == "inference"
+    )
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            }
+        ).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_INFERENCE_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+            assert b"data:" in response.read()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_tool_chat_rejects_trace_disclosure_it_cannot_return() -> None:

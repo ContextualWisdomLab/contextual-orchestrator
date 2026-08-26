@@ -5839,6 +5839,7 @@ def build_server(
                         stream = False if coerced_stream is None else coerced_stream
                     body["stream"] = stream
                     include_trace = self._validate_trace_request(body)
+                    explicit_trace = body.get("include_orchestration_trace") is True
                     # Sampling + unsupported controls before passthrough (honesty parity
                     # with the multi-agent route path).
                     sampling = _validate_chat_sampling_and_control_fields(
@@ -5852,7 +5853,7 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
-                        if body.get("include_orchestration_trace") is True:
+                        if explicit_trace:
                             raise RequestError(
                                 400,
                                 "unsupported_trace_disclosure",
@@ -5925,10 +5926,21 @@ def build_server(
                         )
                         self._send(proxied)
                         return
-                    if include_trace:
-                        self._authorize_trace_access()
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    route_stream = bool(
+                        stream and orchestrator.would_route(messages, mode, model_name)
+                    )
+                    if route_stream:
+                        if explicit_trace:
+                            raise RequestError(
+                                400,
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use Responses streaming",
+                            )
+                        include_trace = False
+                    elif include_trace:
+                        self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
@@ -5959,9 +5971,7 @@ def build_server(
                         presence_penalty=presence_penalty,
                         frequency_penalty=frequency_penalty,
                     ):
-                        if stream and orchestrator.would_route(messages, mode, model_name):
-                            if include_trace:
-                                self._audit_trace_disclosure("/v1/chat/completions")
+                        if route_stream:
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
@@ -5999,6 +6009,8 @@ def build_server(
                         )
                         self._send(result, 202)
                         return
+                    if include_trace:
+                        self._audit_trace_disclosure("/v1/chat/completions")
                     orchestrator.record_analytics_event(
                         "chat_completion_requested",
                         {
@@ -6012,13 +6024,9 @@ def build_server(
                         },
                     )
                     if stream:
-                        if include_trace:
-                            self._audit_trace_disclosure("/v1/chat/completions")
                         chunks = chat_completion_chunks(result, model=model_name, include_trace=include_trace)
                         self._send_sse(sse_stream_body(chunks))
                         return
-                    if include_trace:
-                        self._audit_trace_disclosure("/v1/chat/completions")
                     self._send(chat_completion_response(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
