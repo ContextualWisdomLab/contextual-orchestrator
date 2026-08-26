@@ -286,6 +286,28 @@ def test_empty_batch_preserves_resolved_model_identity() -> None:
     assert document["model"] == "resolved-embedding"
 
 
+def test_blank_embedding_input_fails_before_backend_selection() -> None:
+    """Direct coordinator callers cannot send an empty part to any provider."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "embedding_worker",
+                "resolved-embedding",
+                base_url="https://provider.example/v1",
+                tags=("embedding",),
+            )
+        ]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+
+    try:
+        coordinator.complete_embeddings_batch([""], model="resolved-embedding")
+    except ValueError as exc:
+        assert str(exc) == "embedding inputs must be non-empty strings"
+    else:
+        raise AssertionError("empty embedding input must fail closed")
+
+
 def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
     """Large embedding inputs are mapped into provider-safe parts, then reduced."""
     agents = [
