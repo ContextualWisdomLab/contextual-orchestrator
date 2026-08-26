@@ -5029,12 +5029,14 @@ class TaskOrchestrator:
                     for agent in race_members
                 ],
                 validate=(
-                    lambda value: isinstance(value, tuple)
-                    and len(value) == 2
-                    and isinstance(value[0], bytes)
-                    and bool(value[0])
+                    (
+                        lambda value: isinstance(value, tuple)
+                        and len(value) == 2
+                        and isinstance(value[0], bytes)
+                        and bool(value[0])
+                    )
                     if binary
-                    else lambda value: isinstance(value, dict) and bool(value)
+                    else (lambda value: isinstance(value, dict) and bool(value))
                 ),
                 deadline_seconds=self.client.timeout,
                 max_concurrency=self.client.local_concurrency,
@@ -5143,8 +5145,17 @@ class TaskOrchestrator:
                 ),
             )
             self._record_endpoint_race(outcome, capability="text")
+            self._record_success(outcome.winner_endpoint_id)
+            usage = outcome.value[2]
+            output_tokens = None
+            if isinstance(usage, dict):
+                reported = usage.get("completion_tokens", usage.get("output_tokens"))
+                if type(reported) is int and reported > 0:
+                    output_tokens = reported
             self._group_router.observe_success(
-                outcome.winner_endpoint_id, outcome.completion_ms / 1000
+                outcome.winner_endpoint_id,
+                outcome.completion_ms / 1000,
+                output_tokens=output_tokens,
             )
             return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)

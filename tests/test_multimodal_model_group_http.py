@@ -248,3 +248,30 @@ def test_explicit_equivalent_endpoints_race_for_every_capability(
         == "unavailable_requires_provider_invoice"
         for event in attempt_events
     )
+
+
+def test_fast_empty_media_response_cannot_beat_slower_valid_response() -> None:
+    agents = [
+        ModelAgent(
+            "empty_endpoint", "provider/shared", tags=("image",),
+            group_name="shared_image_group", endpoint_equivalence=_equivalence("image"),
+        ),
+        ModelAgent(
+            "valid_endpoint", "provider/shared", tags=("image",),
+            group_name="shared_image_group", endpoint_equivalence=_equivalence("image"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def send(agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        if agent.id == "valid_endpoint":
+            time.sleep(0.01)
+            return {"data": [{"url": "https://example.invalid/image.png"}]}
+        return {}
+
+    orchestrator.client.proxy_send = send  # type: ignore[method-assign]
+    assert orchestrator.proxy_capability(
+        {"model": "shared-image-group", "prompt": "diagram"},
+        capability="image",
+        endpoint="images/generations",
+    ) == {"data": [{"url": "https://example.invalid/image.png"}]}
