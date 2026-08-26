@@ -265,14 +265,11 @@ class CostRoutingCoordinator:
         """Resolve the current pool at submission time so discovery changes take effect."""
         if self._embedding_backend_override is not None:
             return self._embedding_backend_override
-        try:
-            agent = (
-                self.orchestrator._agent(routing_agent_id)
-                if routing_agent_id is not None
-                else self._embedding_agent_for_model(model)
-            )
-        except (AttributeError, KeyError, RuntimeError, ValueError):
-            return self._local_embedding_backend
+        agent = (
+            self.orchestrator._agent(routing_agent_id)
+            if routing_agent_id is not None
+            else self._embedding_agent_for_model(model)
+        )
         return (
             self._local_embedding_backend
             if agent.base_url.startswith("mock://")
@@ -506,18 +503,14 @@ class CostRoutingCoordinator:
         shared_attribution = dict(attribution or {})
         backend: EmbeddingBatchBackend | None = self._embedding_backend_override
         if routing_agent_id is None and backend is None:
-            try:
-                selected_agent = self._embedding_agent_for_model(model)
-            except (AttributeError, KeyError, RuntimeError, ValueError):
-                backend = self._local_embedding_backend
-            else:
-                routing_agent_id = getattr(selected_agent, "id", None)
-                if routing_agent_id is None:
-                    backend = (
-                        self._local_embedding_backend
-                        if selected_agent.base_url.startswith("mock://")
-                        else self._provider_embedding_backend
-                    )
+            selected_agent = self._embedding_agent_for_model(model)
+            routing_agent_id = getattr(selected_agent, "id", None)
+            if routing_agent_id is None:
+                backend = (
+                    self._local_embedding_backend
+                    if selected_agent.base_url.startswith("mock://")
+                    else self._provider_embedding_backend
+                )
         if routing_agent_id is not None:
             agent = self.orchestrator._agent(routing_agent_id)
             shared_attribution["provider"] = (
