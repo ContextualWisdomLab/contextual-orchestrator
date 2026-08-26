@@ -384,7 +384,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     )
     if any(model.provider_name == "configured_gateway" for model in chat_models):
         for agent in tuple(orchestrator.candidates):
-            if agent.provider_name == "configured_gateway" and not agent.model.strip():
+            if (
+                agent.provider_name == "configured_gateway"
+                and not agent.model.strip()
+                and any(
+                    candidate.id != agent.id and not candidate.disabled
+                    for candidate in orchestrator.candidates
+                )
+            ):
                 orchestrator.remove_agent("default", agent.id)
     return result
 

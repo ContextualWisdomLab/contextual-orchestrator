@@ -101,6 +101,40 @@ def test_auto_discovery_removes_placeholder_for_existing_gateway_model(monkeypat
     assert orchestrator.agents == [existing]
 
 
+def test_auto_discovery_keeps_last_enabled_placeholder_for_disabled_gateway_model(
+    monkeypatch,
+) -> None:
+    """Discovery preserves operator quarantine without aborting server startup."""
+    discovered = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="chat-capable-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args: ([discovered], []),
+    )
+    existing = ModelAgent(
+        "configured_gateway_chat_capable_model",
+        "chat-capable-model",
+        provider_name="configured_gateway",
+        disabled=True,
+    )
+    placeholder = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        provider_name="configured_gateway",
+    )
+    orchestrator = TaskOrchestrator([existing, placeholder])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert orchestrator.candidates == [existing, placeholder]
+    assert orchestrator.agents == [placeholder]
+
+
 def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
     """Startup fails closed without taking down an explicitly configured pool."""
     embedding = DiscoveredModel(
