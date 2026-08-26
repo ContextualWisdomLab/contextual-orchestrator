@@ -3189,9 +3189,12 @@ class TaskOrchestrator:
                     free_only=free_only,
                 )
             except RuntimeError as exc:
-                if not required_tags:
-                    raise
-                raise ValueError("no enabled vision-capable model is available") from exc
+                if selection_tags:
+                    raise ValueError(
+                        "no enabled model supports required tags: "
+                        + ", ".join(selection_tags)
+                    ) from exc
+                raise
         elif any(tag not in final_agent.tags for tag in required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
