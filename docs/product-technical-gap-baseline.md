@@ -1,5 +1,29 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 20:35 KST protected-main delivery evidence
+
+Protected `main` is exact commit
+`56a898b85654f5c8468e3d8448d93120b24bd269`, the normal protected merge of
+[PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
+from reviewed source head `d49846d5c8deca55c60315a8fbb461ecdebf67eb`.
+No terminal hosted gate failed on the merged PR; the final source-head
+hash-locked suite passed `2352` tests with zero failures. This supersedes the
+older #851 branch-only entries below without rewriting their historical audit
+record.
+
+This protected-main delivery closes
+[issue #102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102)
+and [issue #846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846).
+Operator-declared equivalent endpoints can race through bounded execution while
+preserving modality validation, deadline/cancellation outcomes, provider-call
+usage and cost provenance, and the shared retry/circuit boundary. The same
+merge delivers constant-time spend accounting, provider-diverse virtual-model
+failover, conducted structured responses, per-call generated-workflow budget
+checkpoints, and configured local output limits without mutating caller-owned
+requests. These claims are bounded to the exact merge above; production
+provider quotas and deployment-specific capacity remain separate acceptance
+evidence.
+
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
