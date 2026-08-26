@@ -979,8 +979,10 @@ class ModelClient:
             return vectors, 0
         destination = self._validate_provider(agent)  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
+        remaining = self.remaining_request_timeout()  # pragma: no cover
+        timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
         response = self._send_raw_with_retry(  # pragma: no cover
-            agent, "embeddings", payload, destination
+            agent, "embeddings", payload, destination, timeout=timeout
         )
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
         if not isinstance(data, list) or len(data) != len(texts):  # pragma: no cover
@@ -1419,11 +1421,19 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)
+        ):
+            remaining = self.remaining_request_timeout()  # pragma: no cover
+            timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
+            with _local_provider_slot(agent, self.local_concurrency, timeout):  # pragma: no cover
+                yield from self._stream_send(agent, payload, destination, timeout=timeout)
 
     def _stream_send(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         api_key = _provider_credential(agent)
@@ -1438,6 +1448,9 @@ class ModelClient:
             method="POST",
         )
         stream_error: RuntimeError | None = None
+        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
+        if timeout is not None:
+            self._local.provider_transport_timeout = timeout
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1468,6 +1481,9 @@ class ModelClient:
             # and exception cause inside the gateway; callers get one stable,
             # package-owned error instead of raw provider diagnostics.
             stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+        finally:
+            if timeout is not None:
+                self._local.provider_transport_timeout = previous_timeout
         if stream_error is not None:
             raise stream_error
 

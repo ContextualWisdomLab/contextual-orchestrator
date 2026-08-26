@@ -4858,7 +4858,11 @@ def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, A
         ("embedding_batch", "embedding_batch_backend"),
     ):
         try:
-            backend = getattr(coordinator, backend_name)
+            backend = (
+                coordinator._embedding_backend_for_model("contextual-orchestrator")
+                if check_name == "embedding_batch"
+                else getattr(coordinator, backend_name)
+            )
             # Backend identifiers may contain URLs, tenant names, or deployment
             # secrets. Readiness exposes only a server-controlled status.
             backend_id = getattr(backend, "name", None)
@@ -6064,14 +6068,19 @@ def build_server(
                     for embedding_agent in embedding_agents:
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
-                                inputs,
-                                model=agent.model,
-                                attribution=attribution,
-                                metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
-                                routing_agent_id=agent.id,
-                            ))
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                    inputs,
+                                    model=agent.model,
+                                    attribution=attribution,
+                                    metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
+                                    routing_agent_id=agent.id,
+                                ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
+                            if isinstance(exc, RequestDeadlineExceeded):
+                                raise
                             last_embedding_error = exc
                             orchestrator._group_router.observe_failure(embedding_agent.id)
                             continue
@@ -6147,16 +6156,21 @@ def build_server(
                     for embedding_agent in embedding_agents:
                         attempt_started_at = time.perf_counter()
                         try:
-                            document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
-                                inputs,
-                                model=agent.model,
-                                attribution=attribution,
-                                metadata=submit_metadata,
-                                routing_agent_id=agent.id,
-                                input_attributions=input_attributions,
-                                input_metadata=input_metadata,
-                            ))
+                            with orchestrator.client.request_settings(
+                                request_deadline_monotonic=request_deadline
+                            ):
+                                document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
+                                    inputs,
+                                    model=agent.model,
+                                    attribution=attribution,
+                                    metadata=submit_metadata,
+                                    routing_agent_id=agent.id,
+                                    input_attributions=input_attributions,
+                                    input_metadata=input_metadata,
+                                ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
+                            if isinstance(exc, RequestDeadlineExceeded):
+                                raise
                             last_embedding_error = exc
                             orchestrator._group_router.observe_failure(embedding_agent.id)
                             continue

@@ -719,19 +719,33 @@ def test_remote_transport_uses_kv_credential_for_chat_and_stream() -> None:
             return iter([b'data: {"choices":[{"delta":{"content":"delta"}}]}\n', b"data: [DONE]\n"])
 
     client = ModelClient()
+    responses = iter(
+        [
+            _Response({"choices": [{"message": {"content": "chat"}}]}),
+            StreamingResponse(),
+        ]
+    )
+    observed_timeouts = []
+
+    def open_provider(*_args, **_kwargs):
+        observed_timeouts.append(
+            getattr(client._local, "provider_transport_timeout", None)
+        )
+        return next(responses)
+
     with patch("contextual_orchestrator.orchestrator.get_credential", return_value="remote-secret"), patch.object(
         client,
         "_open_provider",
-        side_effect=[
-            _Response({"choices": [{"message": {"content": "chat"}}]}),
-            StreamingResponse(),
-        ],
+        side_effect=open_provider,
     ) as open_provider:
         assert client._send(agent, {"model": agent.model}) == "chat"
-        assert list(client._stream_send(agent, {"model": agent.model, "stream": True})) == ["delta"]
+        assert list(
+            client._stream_send(agent, {"model": agent.model, "stream": True}, timeout=7.0)
+        ) == ["delta"]
 
     for call in open_provider.call_args_list:
         assert call.args[0].get_header("Authorization") == "Bearer remote-secret"
+    assert observed_timeouts == [None, 7.0]
 
 
 def test_remote_http_is_still_rejected() -> None:
@@ -801,10 +815,13 @@ def test_stream_chat_forwards_local_template_arguments() -> None:
     client = ModelClient(chat_template_args={"enable_thinking": False})
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
         client, "_stream_send", return_value=iter(("delta",))
-    ) as stream_send:
+    ) as stream_send, patch(
+        "contextual_orchestrator.orchestrator.time.monotonic", return_value=10.0
+    ), client.request_settings(request_deadline_monotonic=15.0):
         assert list(client.stream_chat(agent, [{"role": "user", "content": "ping"}])) == ["delta"]
 
     assert stream_send.call_args.args[1]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert stream_send.call_args.kwargs["timeout"] == 5.0
 
 
 if __name__ == "__main__":

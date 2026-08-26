@@ -83,8 +83,9 @@ def _serve():
     return server, server.server_address[1], token, coordinator
 
 
-def _request(method, url, token=None, body=None):
+def _request(method, url, token=None, body=None, extra_headers=None):
     headers = {"content-type": "application/json"}
+    headers.update(extra_headers or {})
     if token:
         headers["authorization"] = f"Bearer {token}"
     data = json.dumps(body).encode() if body is not None else None
@@ -94,6 +95,40 @@ def _request(method, url, token=None, body=None):
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:  # pragma: no cover - surfaced in asserts
         return exc.code, json.loads(exc.read())
+
+
+def test_embedding_endpoints_apply_the_caller_deadline() -> None:
+    server, port, token, coordinator = _serve()
+    observed: list[float | None] = []
+    original = coordinator.complete_embeddings_batch
+
+    def complete(*args, **kwargs):
+        observed.append(
+            coordinator.orchestrator.client.request_settings_snapshot()[
+                "request_deadline_monotonic"
+            ]
+        )
+        return original(*args, **kwargs)
+
+    coordinator.complete_embeddings_batch = complete  # type: ignore[method-assign]
+    try:
+        for path, payload in (
+            ("/v1/embeddings", {"model": "text-embedding-test", "input": "evidence"}),
+            ("/v1/batch/embeddings", {"model": "text-embedding-test", "inputs": ["evidence"]}),
+        ):
+            status, _document = _request(
+                "POST",
+                f"http://127.0.0.1:{port}{path}",
+                token,
+                payload,
+                {"x-request-timeout-ms": "180000"},
+            )
+            assert status == 200
+    finally:
+        server.shutdown()
+
+    assert len(observed) == 2
+    assert all(deadline is not None for deadline in observed)
 
 
 def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> None:
