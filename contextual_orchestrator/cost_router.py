@@ -1617,7 +1617,9 @@ class CostRoutingCoordinator:
                 route_mode="embedding",
                 workflow_run_id=batch_id,
                 attribution=shared_attribution,
-                input_attributions=[dict(request.attribution) for request in requests],
+                input_attributions=[
+                    dict(item.get("attribution") or {}) for item in embeddings
+                ],
             )
             total_cost_amount = float(record.cost_amount)
             currency_code = record.currency_code
