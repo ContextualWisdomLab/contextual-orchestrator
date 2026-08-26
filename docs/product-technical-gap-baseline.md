@@ -1,5 +1,24 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 10:30 KST review-remediation snapshot
+
+Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+The open queue was re-read at exact heads #855 `f2e66db7`, #851 `d42172b3`,
+#850 `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845 `24219ace`,
+and #834 parent `7896ac2f`. Auto-merge is enabled without bypass on every PR.
+The shared stale-table contract is stacked onto #845, #848, #849, and #850;
+#849 also makes the documented k6 traffic compatible with its isolated rate
+limit and validates programmatic request budgets, while #848 now rejects every
+duplicate front-matter or heading identifier declaration. Their replacement
+hosted checks and independent exact-head reviews remain required.
+
+PR #834 no longer presents invented policy rules, recent alerts, deployment
+region, environment, or health as runtime facts. It shows next-action empty
+states until evidence is loaded, and its simulation begins with an empty,
+actionable prompt. The focused admin/model-group contract is `38 passed`; the
+updated desktop render is recorded under `docs/images/ui-audit/`. This snapshot
+is branch evidence only, not protected-main or deployed evidence.
+
 ## 2026-08-26 10:00 KST customer-copy and responsive evidence
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
