@@ -162,6 +162,7 @@ def test_openai_large_embedding_input_uses_exact_tokenizer_and_8192_limit() -> N
         tags=("embedding",),
     )
     coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
+    coordinator._cl100k_token_counter = HeuristicTokenCounter(tokens_per_word=1.0)
     requests, part_counts, limits = coordinator._build_embedding_requests(
         ["token " * 9_000],
         model=agent.model,

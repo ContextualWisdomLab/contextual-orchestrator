@@ -17,7 +17,10 @@ environment: the DSN is passed in by the caller.
 from __future__ import annotations
 
 import math
+import json
 import re
+import subprocess
+import threading
 from typing import Any, List, Optional, Protocol
 
 _WORD_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
@@ -84,6 +87,33 @@ class PgTiktokenAdapter:
             content = message.get("content", "") if isinstance(message, dict) else ""
             total += self.count_text(str(content), model)
         return total
+
+
+class RustCl100kTokenCounter:
+    """Persistent Rust/Rayon exact cl100k tokenizer process."""
+
+    def __init__(self, executable: str = "contextual-token-counter") -> None:
+        self._process = subprocess.Popen(
+            [executable], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+        )
+        self._lock = threading.Lock()
+
+    def count_texts(self, texts: List[str]) -> List[int]:
+        """Count a batch exactly while preserving input order."""
+        with self._lock:
+            if self._process.stdin is None or self._process.stdout is None:
+                raise RuntimeError("Rust token counter transport is unavailable")
+            self._process.stdin.write(json.dumps({"texts": texts}) + "\n")
+            self._process.stdin.flush()
+            document = json.loads(self._process.stdout.readline())
+        counts = document.get("counts")
+        if not isinstance(counts, list) or len(counts) != len(texts):
+            raise RuntimeError("Rust token counter returned an invalid response")
+        return [int(value) for value in counts]
+
+    def count_text(self, text: str, model: str = "") -> int:
+        """Count one text exactly with cl100k_base."""
+        return self.count_texts([text])[0]
 
 
 def build_token_counter(

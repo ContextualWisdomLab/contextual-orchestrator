@@ -41,7 +41,7 @@ from .batch_routing import (
 from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
-from .token_counting import HeuristicTokenCounter, build_token_counter
+from .token_counting import HeuristicTokenCounter, RustCl100kTokenCounter, build_token_counter
 from .embedding_capabilities import embedding_model_capability
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
@@ -74,6 +74,7 @@ class CostRoutingCoordinator:
         self.token_counter = token_counter or (
             build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
         )
+        self._cl100k_token_counter: Any = None
         self.policy = routing_policy or RoutingPolicy(self.config)
         # Job registries live in Valkey when the credential registry carries
         # batch_job_registry_valkey_url, so submitted jobs survive a process
@@ -580,8 +581,18 @@ class CostRoutingCoordinator:
             ),
         }
         try:
-            agent = self._embedding_agent_for_model("contextual-orchestrator")
-            capability = embedding_model_capability(agent.provider_name, agent.model)
+            agents = self.orchestrator._capability_agents(
+                "embedding", "contextual-orchestrator"
+            )
+            capability = next(
+                (
+                    candidate
+                    for agent in agents
+                    if (candidate := embedding_model_capability(agent.provider_name, agent.model))
+                    is not None
+                ),
+                None,
+            )
         except (AttributeError, KeyError, RuntimeError, ValueError):
             capability = None
         if capability is not None:
@@ -699,9 +710,9 @@ class CostRoutingCoordinator:
     def _count_embedding_tokens(self, text: str, model: str) -> int:
         """Count tokens for embedding split decisions, tolerating adapters."""
         if model == "text-embedding-3-large":
-            import tiktoken
-
-            return len(tiktoken.get_encoding("cl100k_base").encode(text))
+            if self._cl100k_token_counter is None:
+                self._cl100k_token_counter = RustCl100kTokenCounter()
+            return self._cl100k_token_counter.count_text(text, model)
         try:
             value = int(self.token_counter.count_text(text, model))
         except Exception:
