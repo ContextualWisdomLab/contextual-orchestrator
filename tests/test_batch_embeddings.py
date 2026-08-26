@@ -329,6 +329,13 @@ def test_provider_batch_cancelled_while_queued_never_starts() -> None:
     assert calls == ["first"]
 
 
+def test_provider_backend_context_manager_closes_executor() -> None:
+    backend = ProviderEmbeddingBatchBackend(lambda requests: ([], 0))
+    with backend:
+        pass
+    assert backend._executor._shutdown
+
+
 def test_sync_provider_embeddings_wait_for_remote_completion() -> None:
     release = threading.Event()
     agent = ModelAgent(

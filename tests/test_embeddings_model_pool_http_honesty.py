@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
@@ -174,8 +174,16 @@ def test_http_embeddings_continues_after_terminal_backend_failure() -> None:
         ],
         client=Client(),
     )
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator._cl100k_packer = type(
+        "RustFixture", (), {
+            "weighted_average_embeddings": staticmethod(lambda parts: parts[0][0]),
+            "sum_token_counts": staticmethod(sum),
+        }
+    )()
     server = build_server(
-        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

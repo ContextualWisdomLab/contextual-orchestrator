@@ -185,10 +185,44 @@ class CostRoutingCoordinator:
                 )
                 vectors: List[List[float]] = []
                 provider_token_counts = []
-                for offset in range(0, len(texts), max_inputs):
-                    chunk_vectors, chunk_tokens = orchestrator.client.embed_with_usage(
-                        agent, texts[offset : offset + max_inputs]
-                    )
+                for offset in range(0, len(requests), max_inputs):
+                    chunk = requests[offset : offset + max_inputs]
+                    chunk_texts = [request.input_text for request in chunk]
+                    chunk_sessions = [
+                        request.attribution.get("session_id") for request in chunk
+                    ]
+                    chunk_key = hashlib.sha256(
+                        json.dumps(
+                            {
+                                "provider": agent.provider_name,
+                                "model": agent.model,
+                                "inputs": chunk_texts,
+                                "session_ids": chunk_sessions,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    with registry.lock("embedding_provider_shards", chunk_key):
+                        cached = embedding_shards.get(chunk_key)
+                        if isinstance(cached, dict):
+                            chunk_vectors = cached.get("vectors")
+                            chunk_tokens = cached.get("provider_tokens")
+                            if not isinstance(chunk_vectors, list) or type(chunk_tokens) is not int:
+                                raise RuntimeError("embedding shard checkpoint is invalid")
+                        else:
+                            chunk_vectors, chunk_tokens = orchestrator.client.embed_with_usage(
+                                agent, chunk_texts
+                            )
+                            if len(chunk_vectors) != len(chunk_texts):
+                                raise RuntimeError("provider embedding shard length mismatch")
+                            embedding_shards[chunk_key] = {
+                                "state": "completed",
+                                "session_ids": chunk_sessions,
+                                "vectors": chunk_vectors,
+                                "provider_tokens": chunk_tokens,
+                            }
                     vectors.extend(chunk_vectors)
                     provider_token_counts.append(chunk_tokens)
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
@@ -825,6 +859,11 @@ class CostRoutingCoordinator:
         return max(0, value)
 
     def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
+        """Serialize terminal materialization so cost is recorded exactly once."""
+        with self.job_registry.lock("embedding_document_materialization", batch_id):
+            return self._embeddings_batch_document_locked(batch_id)
+
+    def _embeddings_batch_document_locked(self, batch_id: str) -> Dict[str, Any]:
         """Return the naruon-shaped batch document for ``batch_id``.
 
         Polls the backend; once complete, retrieves the vectors, records one
@@ -1056,6 +1095,8 @@ class CostRoutingCoordinator:
         if not callable(cancel):
             raise ValueError("embedding batch backend does not support cancellation")
         status = cancel(job, reason=reason)
+        if status["status"] != "cancelled":
+            return self.embeddings_batch_document(batch_id)
         document = {
             "batch_id": batch_id,
             "status": status["status"],

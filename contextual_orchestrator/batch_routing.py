@@ -635,6 +635,22 @@ class ProviderEmbeddingBatchBackend:
         # than once.  Restart recovery requires an external single-consumer
         # dispatcher (or a future DB/KV compare-and-set claim).
 
+    def close(self) -> None:
+        """Release the bounded worker pool owned by this backend."""
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def __enter__(self) -> "ProviderEmbeddingBatchBackend":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:  # pragma: no cover - interpreter timing varies
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:
