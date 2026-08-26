@@ -255,7 +255,6 @@ def _fetch_configured_gateway_json(
     origin = urlunsplit(("https", parsed.netloc, "", "", ""))
     client = ModelClient(
         timeout=max(1, int(math.ceil(timeout))),
-        ca_bundle=certifi.where(),
         allowed_provider_hosts={parsed.hostname},
     )
     agent = ModelAgent(
@@ -838,6 +837,18 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
     return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
 
 
+def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
+    """Translate only explicit provider privacy evidence into agent tags."""
+    return (
+        *(("privacy:zdr",) if discovered.supports_zero_data_retention is True else ()),
+        *(("privacy:no_zdr",) if discovered.supports_zero_data_retention is False else ()),
+        *(("privacy:no_training",) if discovered.supports_no_training is True else ()),
+        *(("privacy:training_only",) if discovered.supports_no_training is False else ()),
+        *(("privacy:no_retention",) if discovered.supports_no_prompt_retention is True else ()),
+        *(("privacy:retention_only",) if discovered.supports_no_prompt_retention is False else ()),
+    )
+
+
 def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
     """Require explicit chat evidence when a provider supplied capabilities."""
     return (
@@ -862,6 +873,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         tags=(
             "discovered",
             *(("cost:free",) if discovered.is_free else ()),
+            *privacy_tags_for_discovered(discovered),
             *discovered.capabilities,
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),

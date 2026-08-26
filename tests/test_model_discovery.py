@@ -598,6 +598,27 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
     assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
 
 
+def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
+    """Every persistence path receives the same provider-declared privacy tags."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        supports_zero_data_retention=True,
+        supports_no_training=True,
+        supports_no_prompt_retention=False,
+    )
+
+    assert {
+        "privacy:zdr",
+        "privacy:no_training",
+        "privacy:retention_only",
+    } <= set(agent_from_discovered(discovered).tags)
+
+
 def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:
     price_book = PriceBook(InMemoryConfigStore())
     priced = DiscoveredModel(
