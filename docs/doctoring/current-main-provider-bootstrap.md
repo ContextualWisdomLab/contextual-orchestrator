@@ -6,7 +6,7 @@ The durable catalog decision is recorded in
 [`ADR 0015`](../planning/adrs/0015-durable-provider-catalog.md), including the
 third-normal-form dependency boundary and the last-known-good refresh contract.
 
-Contextual Orchestrator treats the five organization provider credentials as one
+Contextual Orchestrator treats the six organization provider credentials as one
 trusted bootstrap inventory:
 
 - `NVIDIA_NIM_API_KEY`
@@ -14,6 +14,7 @@ trusted bootstrap inventory:
 - `BYTEZ_API_KEY`
 - `OPENROUTER_API_KEY`
 - `OPENAI_API_KEY`
+- `OPENCODE_ZEN_API_KEY`
 
 GitHub Actions secrets are transport into a one-shot bootstrap process, not the
 runtime credential source. Production bootstrap requires the PostgreSQL credential
