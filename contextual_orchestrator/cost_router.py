@@ -136,12 +136,16 @@ class CostRoutingCoordinator:
                     shards[-1].append(request)
                 for shard in shards:
                     shard_texts = [request.input_text for request in shard]
+                    shard_session_ids = [
+                        request.attribution.get("session_id") for request in shard
+                    ]
                     shard_key = hashlib.sha256(
                         json.dumps(
                             {
                                 "provider": agent.provider_name,
                                 "model": agent.model,
                                 "inputs": shard_texts,
+                                "session_ids": shard_session_ids,
                             },
                             ensure_ascii=False,
                             sort_keys=True,
@@ -163,6 +167,7 @@ class CostRoutingCoordinator:
                                 raise RuntimeError("provider embedding shard length mismatch")
                             embedding_shards[shard_key] = {
                                 "state": "completed",
+                                "session_ids": shard_session_ids,
                                 "vectors": chunk_vectors,
                                 "provider_tokens": used,
                             }
@@ -567,10 +572,20 @@ class CostRoutingCoordinator:
             for part_position, part in enumerate(packed_parts):
                 source_index = part.source_index
                 part_counts[source_index] = part.part_count
+                source_metadata = dict(input_metadata[source_index] if input_metadata else {})
+                source_attribution = {
+                    **attribution,
+                    **(input_attributions[source_index] if input_attributions else {}),
+                }
+                source_session_id = source_metadata.get(
+                    "lineageweave_post_session_id", source_metadata.get("session_id")
+                )
+                if isinstance(source_session_id, str) and source_session_id:
+                    source_attribution["session_id"] = source_session_id
                 requests.append(EmbeddingBatchRequest(
                     input_text=part.text, model=model,
-                    attribution={**attribution, **(input_attributions[source_index] if input_attributions else {})},
-                    metadata=dict(input_metadata[source_index] if input_metadata else {}),
+                    attribution=source_attribution,
+                    metadata=source_metadata,
                     source_index=source_index, part_index=part.part_index,
                     part_count=part.part_count, token_count=part.token_count,
                     token_start=part.token_start, token_end=part.token_end,
@@ -585,7 +600,12 @@ class CostRoutingCoordinator:
                 **attribution,
                 **(input_attributions[source_index] if input_attributions else {}),
             }
-            source_metadata = input_metadata[source_index] if input_metadata else {}
+            source_metadata = dict(input_metadata[source_index] if input_metadata else {})
+            source_session_id = source_metadata.get(
+                "lineageweave_post_session_id", source_metadata.get("session_id")
+            )
+            if isinstance(source_session_id, str) and source_session_id:
+                source_attribution["session_id"] = source_session_id
             source_text = str(text)
             if not source_text:
                 raise ValueError("embedding inputs must be non-empty strings")

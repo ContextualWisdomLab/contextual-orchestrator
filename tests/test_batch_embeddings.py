@@ -912,10 +912,37 @@ def test_batch_embeddings_http_preserves_index_aligned_input_context() -> None:
             "session-a",
             "session-b",
         ]
+        assert [item["attribution"]["session_id"] for item in document["embeddings"]] == [
+            "session-a",
+            "session-b",
+        ]
         assert [record["team_name"] for record in coordinator.ledger.records()] == [
             "alpha",
             "beta",
         ]
+    finally:
+        server.shutdown()
+
+
+def test_batch_embeddings_preserves_top_level_session_in_durable_attribution() -> None:
+    """One post session survives submission, polling, and usage attribution."""
+    server, port, token, _coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/batch/embeddings",
+            token,
+            {
+                "model": "text-embedding-test",
+                "inputs": ["first", "second"],
+                "session_id": "post-session-a",
+            },
+        )
+        assert status == 200, document
+        assert {
+            item["attribution"]["session_id"] for item in document["embeddings"]
+        } == {"post-session-a"}
     finally:
         server.shutdown()
 

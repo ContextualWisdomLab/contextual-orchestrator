@@ -75,13 +75,13 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
-    "include_orchestration_trace", "stream", "attribution", "routing",
+    "include_orchestration_trace", "stream", "attribution", "routing", "session_id",
     # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
     "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
-    "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "model", "input", "instructions", "stream", "metadata", "reasoning", "session_id",
     "prompt_cache_key", "client_metadata",
     # OpenAI Responses native output budget (not max_tokens on this surface).
     "max_output_tokens",
@@ -94,10 +94,10 @@ ALLOWED_RESPONSES_KEYS = {
     # (omit-real optionals), not rejected wholesale.
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
-ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "input_metadata", "input_attributions", "user", "encoding_format", "dimensions", "routing"}
+ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "session_id"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "input_metadata", "input_attributions", "user", "encoding_format", "dimensions", "routing", "session_id"}
 ALLOWED_EMBEDDINGS_KEYS = {
-    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing",
+    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing", "session_id",
 }
 ALLOWED_COMPLETIONS_KEYS = {
     "model", "prompt", "stream", "stream_options", "echo", "suffix", "best_of",
@@ -117,7 +117,7 @@ ALLOWED_COMPLETIONS_KEYS = {
     "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
     "reasoning", "background", "include",
     "tool_resources",
-} | {"attribution", "routing"}
+} | {"attribution", "routing", "session_id"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 # Chat message object keys this gateway interprets. Anything else fails closed
 # with unknown_message_fields (named error, not silent strip/smuggle).
@@ -5589,7 +5589,7 @@ def build_server(
                     for key in ("metadata", "client_metadata")
                     if isinstance((value := body.get(key)), dict)
                 ]
-                request_session_id = session_id_from_request(self.headers, *metadata_values)
+                request_session_id = session_id_from_request(self.headers, body, *metadata_values)
                 if request_session_id != current_session_id():
                     self._bind_session(request_session_id)
                 cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
@@ -6202,7 +6202,11 @@ def build_server(
                         attribution["model_name"] = model_name
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_batch_api"
+                    if request_session_id is not None:
+                        attribution["session_id"] = request_session_id
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
+                    if request_session_id is not None:
+                        submit_metadata["session_id"] = request_session_id
                     endpoint_alias = _validate_batch_embeddings_endpoint(body)
                     if endpoint_alias is not None:
                         submit_metadata["endpoint_alias"] = endpoint_alias
