@@ -18,6 +18,8 @@ import weakref
 from pathlib import Path
 from typing import Any, Dict
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.batch_job_registry import (
@@ -384,6 +386,13 @@ def test_embedding_claim_lease_uses_request_or_provider_timeout() -> None:
     with client.request_settings(request_deadline_monotonic=time.monotonic() + 10):
         lease = coordinator._embedding_claim_lease_seconds()
     assert lease is not None and 0 < lease <= 10
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan"), True])
+def test_model_client_rejects_unbounded_provider_timeout(timeout: object) -> None:
+    """Durable provider claims require a positive finite transport timeout."""
+    with pytest.raises(ValueError, match="provider timeout must be a positive finite number"):
+        ModelClient(timeout=timeout)  # type: ignore[arg-type]
 
 
 def test_idle_local_claim_locks_are_reclaimed() -> None:
