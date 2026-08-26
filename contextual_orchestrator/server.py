@@ -5147,9 +5147,11 @@ def build_server(
                     self._authorize("inference")
                     batch_id = path[len("/v1/batch/embeddings/"):]
                     try:
-                        document = coordinator.embeddings_batch_document(batch_id)
-                        document["poll_after_ms"] = security.batch_poll_after_ms
-                        document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
+                        document = {
+                            **coordinator.embeddings_batch_document(batch_id),
+                            "poll_after_ms": security.batch_poll_after_ms,
+                            "job_retention_ms": coordinator.embedding_batch_retention_ms,
+                        }
                         self._send(document)
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
@@ -5624,8 +5626,11 @@ def build_server(
                             "embeddings_batch_not_found",
                             "embeddings batch was not found",
                         ) from None
-                    document["poll_after_ms"] = security.batch_poll_after_ms
-                    document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
+                    document = {
+                        **document,
+                        "poll_after_ms": security.batch_poll_after_ms,
+                        "job_retention_ms": coordinator.embedding_batch_retention_ms,
+                    }
                     orchestrator.record_analytics_event(
                         "embeddings_batch_cancelled",
                         {
@@ -6254,8 +6259,11 @@ def build_server(
                             "embeddings_unavailable",
                             "all enabled embedding-capable model group members failed",
                         ) from last_embedding_error
-                    document["poll_after_ms"] = security.batch_poll_after_ms
-                    document["job_retention_ms"] = coordinator.embedding_batch_retention_ms
+                    document = {
+                        **document,
+                        "poll_after_ms": security.batch_poll_after_ms,
+                        "job_retention_ms": coordinator.embedding_batch_retention_ms,
+                    }
                     is_complete = document.get("status") == "completed"
                     orchestrator.record_analytics_event(
                         "embeddings_batch_created",

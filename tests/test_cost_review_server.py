@@ -24,7 +24,7 @@ from contextual_orchestrator.server import SecurityConfig, _readiness_payload, b
 
 def _serve(security=None):
     agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
-                         tags=("reasoning", "coding", "writing"), priority=1)]
+                         tags=("reasoning", "coding", "writing", "embedding"), priority=1)]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
     price_book = PriceBook(config)

@@ -84,8 +84,8 @@ class CostRoutingCoordinator:
         registry = job_registry if job_registry is not None else build_job_registry(self.config)
         self.job_registry = registry
         embedding_shards = registry.mapping("embedding_provider_shards")
+        client = getattr(orchestrator, "client", None)
         if batch_backend is None:
-            client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
             self.batch_backend = LocalBatchBackend(
                 runner=lambda messages, mode, model: orchestrator.complete(
@@ -122,11 +122,55 @@ class CostRoutingCoordinator:
             capability = embedding_model_capability(
                 getattr(agent, "provider_name", ""), agent.model
             )
+            def execute_provider_shard(
+                shard: List[EmbeddingBatchRequest],
+            ) -> tuple[List[List[float]], int]:
+                """Execute or reuse one content-addressed provider shard."""
+                shard_texts = [request.input_text for request in shard]
+                shard_session_ids = [
+                    request.attribution.get("session_id") for request in shard
+                ]
+                shard_key = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "provider": agent.provider_name,
+                            "model": agent.model,
+                            "inputs": shard_texts,
+                            "session_ids": shard_session_ids,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                with registry.lock(
+                    "embedding_provider_shards", shard_key,
+                    lease_seconds=self._embedding_claim_lease_seconds(),
+                ):
+                    cached = embedding_shards.get(shard_key)
+                    if isinstance(cached, dict):
+                        chunk_vectors = cached.get("vectors")
+                        used = cached.get("provider_tokens")
+                        if not isinstance(chunk_vectors, list) or type(used) is not int:
+                            raise RuntimeError("embedding shard checkpoint is invalid")
+                        return chunk_vectors, used
+                    chunk_vectors, used = orchestrator.client.embed_with_usage(agent, shard_texts)
+                    if len(chunk_vectors) != len(shard_texts):
+                        raise RuntimeError("provider embedding shard length mismatch")
+                    embedding_shards[shard_key] = {
+                        "state": "completed",
+                        "session_ids": shard_session_ids,
+                        "vectors": chunk_vectors,
+                        "provider_tokens": used,
+                    }
+                    return chunk_vectors, used
+
+            vectors: List[List[float]] = []
+            provider_token_counts: List[int] = []
+            completed_request_count = 0
             try:
                 if capability is None:
                     return orchestrator.client.embed_with_usage(agent, texts)
-                vectors: List[List[float]] = []
-                provider_token_counts: List[int] = []
                 shards: List[List[EmbeddingBatchRequest]] = []
                 for request in requests:
                     if request.token_count > capability.max_tokens_per_input:
@@ -135,44 +179,10 @@ class CostRoutingCoordinator:
                         shards.append([])
                     shards[-1].append(request)
                 for shard in shards:
-                    shard_texts = [request.input_text for request in shard]
-                    shard_session_ids = [
-                        request.attribution.get("session_id") for request in shard
-                    ]
-                    shard_key = hashlib.sha256(
-                        json.dumps(
-                            {
-                                "provider": agent.provider_name,
-                                "model": agent.model,
-                                "inputs": shard_texts,
-                                "session_ids": shard_session_ids,
-                            },
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest()
-                    with registry.lock("embedding_provider_shards", shard_key):
-                        cached = embedding_shards.get(shard_key)
-                        if isinstance(cached, dict):
-                            chunk_vectors = cached.get("vectors")
-                            used = cached.get("provider_tokens")
-                            if not isinstance(chunk_vectors, list) or type(used) is not int:
-                                raise RuntimeError("embedding shard checkpoint is invalid")
-                        else:
-                            chunk_vectors, used = orchestrator.client.embed_with_usage(
-                                agent, shard_texts
-                            )
-                            if len(chunk_vectors) != len(shard_texts):
-                                raise RuntimeError("provider embedding shard length mismatch")
-                            embedding_shards[shard_key] = {
-                                "state": "completed",
-                                "session_ids": shard_session_ids,
-                                "vectors": chunk_vectors,
-                                "provider_tokens": used,
-                            }
+                    chunk_vectors, used = execute_provider_shard(shard)
                     vectors.extend(chunk_vectors)
                     provider_token_counts.append(used)
+                    completed_request_count += len(shard)
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
             except Exception as exc:
                 max_inputs = getattr(exc, "max_inputs", None)
@@ -183,46 +193,11 @@ class CostRoutingCoordinator:
                     "embedding_max_inputs_per_batch",
                     max_inputs,
                 )
-                vectors: List[List[float]] = []
-                provider_token_counts = []
-                for offset in range(0, len(requests), max_inputs):
-                    chunk = requests[offset : offset + max_inputs]
-                    chunk_texts = [request.input_text for request in chunk]
-                    chunk_sessions = [
-                        request.attribution.get("session_id") for request in chunk
-                    ]
-                    chunk_key = hashlib.sha256(
-                        json.dumps(
-                            {
-                                "provider": agent.provider_name,
-                                "model": agent.model,
-                                "inputs": chunk_texts,
-                                "session_ids": chunk_sessions,
-                            },
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ).hexdigest()
-                    with registry.lock("embedding_provider_shards", chunk_key):
-                        cached = embedding_shards.get(chunk_key)
-                        if isinstance(cached, dict):
-                            chunk_vectors = cached.get("vectors")
-                            chunk_tokens = cached.get("provider_tokens")
-                            if not isinstance(chunk_vectors, list) or type(chunk_tokens) is not int:
-                                raise RuntimeError("embedding shard checkpoint is invalid")
-                        else:
-                            chunk_vectors, chunk_tokens = orchestrator.client.embed_with_usage(
-                                agent, chunk_texts
-                            )
-                            if len(chunk_vectors) != len(chunk_texts):
-                                raise RuntimeError("provider embedding shard length mismatch")
-                            embedding_shards[chunk_key] = {
-                                "state": "completed",
-                                "session_ids": chunk_sessions,
-                                "vectors": chunk_vectors,
-                                "provider_tokens": chunk_tokens,
-                            }
+                remaining = requests[completed_request_count:]
+                for offset in range(0, len(remaining), max_inputs):
+                    chunk_vectors, chunk_tokens = execute_provider_shard(
+                        remaining[offset : offset + max_inputs]
+                    )
                     vectors.extend(chunk_vectors)
                     provider_token_counts.append(chunk_tokens)
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
@@ -230,7 +205,10 @@ class CostRoutingCoordinator:
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
             embed,
             job_registry=registry,
-            max_concurrency=getattr(orchestrator.client, "local_concurrency", 1),
+            max_concurrency=getattr(client, "local_concurrency", 1),
+            claim_lease_seconds=(
+                float(client.timeout) if float(getattr(client, "timeout", 0)) > 0 else None
+            ),
         )
         self.embedding_batch_backend = embedding_batch_backend or self._local_embedding_backend
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
@@ -265,14 +243,11 @@ class CostRoutingCoordinator:
         """Resolve the current pool at submission time so discovery changes take effect."""
         if self._embedding_backend_override is not None:
             return self._embedding_backend_override
-        try:
-            agent = (
-                self.orchestrator._agent(routing_agent_id)
-                if routing_agent_id is not None
-                else self._embedding_agent_for_model(model)
-            )
-        except (AttributeError, KeyError, RuntimeError, ValueError):
-            return self._local_embedding_backend
+        agent = (
+            self.orchestrator._agent(routing_agent_id)
+            if routing_agent_id is not None
+            else self._embedding_agent_for_model(model)
+        )
         return (
             self._local_embedding_backend
             if agent.base_url.startswith("mock://")
@@ -505,19 +480,17 @@ class CostRoutingCoordinator:
         """
         shared_attribution = dict(attribution or {})
         backend: EmbeddingBatchBackend | None = self._embedding_backend_override
+        if not inputs and backend is None and routing_agent_id is None:
+            backend = self._local_embedding_backend
         if routing_agent_id is None and backend is None:
-            try:
-                selected_agent = self._embedding_agent_for_model(model)
-            except (AttributeError, KeyError, RuntimeError, ValueError):
-                backend = self._local_embedding_backend
-            else:
-                routing_agent_id = getattr(selected_agent, "id", None)
-                if routing_agent_id is None:
-                    backend = (
-                        self._local_embedding_backend
-                        if selected_agent.base_url.startswith("mock://")
-                        else self._provider_embedding_backend
-                    )
+            selected_agent = self._embedding_agent_for_model(model)
+            routing_agent_id = getattr(selected_agent, "id", None)
+            if routing_agent_id is None:
+                backend = (
+                    self._local_embedding_backend
+                    if selected_agent.base_url.startswith("mock://")
+                    else self._provider_embedding_backend
+                )
         if routing_agent_id is not None:
             agent = self.orchestrator._agent(routing_agent_id)
             shared_attribution["provider"] = (
@@ -860,8 +833,21 @@ class CostRoutingCoordinator:
 
     def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
         """Serialize terminal materialization so cost is recorded exactly once."""
-        with self.job_registry.lock("embedding_document_materialization", batch_id):
+        with self.job_registry.lock(
+            "embedding_document_materialization", batch_id,
+            lease_seconds=self._embedding_claim_lease_seconds(),
+        ):
             return self._embeddings_batch_document_locked(batch_id)
+
+    def _embedding_claim_lease_seconds(self) -> float | None:
+        """Bound a claim by the current request and configured provider timeout."""
+        client = self.orchestrator.client
+        remaining_timeout = getattr(client, "remaining_request_timeout", None)
+        remaining = remaining_timeout() if callable(remaining_timeout) else None
+        configured = float(getattr(client, "timeout", 0))
+        if configured <= 0:
+            return remaining
+        return configured if remaining is None else min(configured, remaining)
 
     def _embeddings_batch_document_locked(self, batch_id: str) -> Dict[str, Any]:
         """Return the naruon-shaped batch document for ``batch_id``.
@@ -1002,6 +988,9 @@ class CostRoutingCoordinator:
                 route_mode="embedding",
                 workflow_run_id=batch_id,
                 attribution=shared_attribution,
+                input_attributions=[
+                    dict(item.get("attribution") or {}) for item in embeddings
+                ],
             )
             total_cost_amount = float(record.cost_amount)
             currency_code = record.currency_code
