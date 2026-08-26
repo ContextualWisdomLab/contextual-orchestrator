@@ -477,11 +477,21 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 "image_edit": (("text", "image"), ("image",)),
                 "audio_speech": (("text",), ("speech",)),
                 "audio_transcription": (("audio",), ("transcription",)),
+                "video_generation": (("text",), ("video",)),
+                "rerank": (("text",), ("rerank",)),
+                "ocr": (("image",), ("text",)),
+                "realtime": ((), ("realtime",)),
+                "guardrail": ((), ("guardrail",)),
+                "moderation": ((), ("moderation",)),
+                "search": ((), ("search",)),
+                "vector_store": ((), ("vector_store",)),
             }
             fallback_inputs, fallback_outputs = mode_modalities.get(
                 normalized_mode, ((), ())
             )
-            declared_inputs = info.get("supported_input_modalities")
+            declared_inputs = info.get(
+                "supported_modalities", info.get("supported_input_modalities")
+            )
             declared_outputs = info.get("supported_output_modalities")
             inputs = (
                 tuple(value for value in declared_inputs if isinstance(value, str))

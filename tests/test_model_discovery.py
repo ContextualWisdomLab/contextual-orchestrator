@@ -213,6 +213,9 @@ def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
             {"id": "image-model"},
             {"id": "speech-model"},
             {"id": "transcription-model"},
+            {"id": "video-model"},
+            {"id": "rerank-model"},
+            {"id": "moderation-model"},
         ]
     }
     metadata = {
@@ -235,6 +238,19 @@ def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
                 "model_name": "transcription-model",
                 "model_info": {"mode": "audio_transcription"},
             },
+            {
+                "model_name": "video-model",
+                "model_info": {
+                    "mode": "video_generation",
+                    "supported_modalities": ["text", "image"],
+                    "supported_output_modalities": ["video"],
+                },
+            },
+            {"model_name": "rerank-model", "model_info": {"mode": "rerank"}},
+            {
+                "model_name": "moderation-model",
+                "model_info": {"mode": "moderation"},
+            },
         ]
     }
 
@@ -247,6 +263,9 @@ def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
         {"input_modalities": ["text"], "output_modalities": ["image"]},
         {"input_modalities": ["text"], "output_modalities": ["speech"]},
         {"input_modalities": ["audio"], "output_modalities": ["transcription"]},
+        {"input_modalities": ["text", "image"], "output_modalities": ["video"]},
+        {"input_modalities": ["text"], "output_modalities": ["rerank"]},
+        {"input_modalities": [], "output_modalities": ["moderation"]},
     ]
 
 
