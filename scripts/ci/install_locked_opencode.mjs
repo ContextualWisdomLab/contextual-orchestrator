@@ -30,7 +30,7 @@ for (const [name, expectedVersion] of candidates) {
     }
     const source = path.join(path.dirname(packagePath), "bin", platform === "windows" ? "opencode.exe" : "opencode")
     const target = path.join(path.dirname(cliPackagePath), "bin", "opencode.exe")
-    if (!fs.existsSync(source)) throw new Error(`${name} does not contain its binary`)
+    if (!fs.existsSync(source)) continue
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.copyFileSync(source, target)
     fs.chmodSync(target, 0o755)
