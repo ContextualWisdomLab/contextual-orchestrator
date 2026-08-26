@@ -81,8 +81,9 @@ push or open a PR.
   (`opencode.jsonc`, `noema-review.yml`, `strix.yml`) — are being migrated to
   use `contextual-orchestrator` as their shared backend, with
   `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
-  `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` registered in this repo's KV so
-  it auto-discovers models across all five and auto-optimizes routing by
+  `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, and `OPENCODE_ZEN_API_KEY`
+  registered in this repo's KV so it auto-discovers models across all six and
+  auto-optimizes routing by
   cost (see `contextual_orchestrator/model_discovery.py`, the
   `discover-models` CLI subcommand, and `ModelAgent.auth_scheme` for
   non-Bearer providers like Bytez). The provider-config change to the org

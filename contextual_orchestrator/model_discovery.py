@@ -7,7 +7,7 @@ and/or :class:`~contextual_orchestrator.cost_ledger.PriceBook` rows.
 
 Credentials are never fabricated: a provider resolves through :func:`get_credential`
 (the KV registry), and a provider with nothing registered is silently skipped so
-registering a subset of the five supported keys still works. Stdlib only
+registering a subset of the six supported keys still works. Stdlib only
 (``urllib.request``), matching this repo's dependency-free transport convention.
 """
 

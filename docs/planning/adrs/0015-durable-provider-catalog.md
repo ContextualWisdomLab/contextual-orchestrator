@@ -32,7 +32,7 @@ effort: L
 
 ## Context
 
-Registering the five organization provider secrets in PostgreSQL is necessary
+Registering the six organization provider secrets in PostgreSQL is necessary
 but not sufficient. A production process must also retain discovered provider
 accounts and models so a transient catalog outage does not erase the serving
 pool, and operators must distinguish live discovery from last-known-good
