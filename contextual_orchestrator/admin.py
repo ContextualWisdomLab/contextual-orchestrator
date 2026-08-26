@@ -31,9 +31,9 @@ ADMIN_TRANSLATIONS = {
         "group_deleted": "Group deleted. Its provider models remain available.",
         "search_agents": "Search agents",
         "all_statuses": "All statuses",
-        "no_agents_match": "No agents match the current filters.",
-        "no_agents_configured": "No agents are configured yet.",
-        "no_audit_events": "No audit events yet.",
+        "no_agents_match": "No agents match these filters. Clear a filter to see more agents.",
+        "no_agents_configured": "Register an agent to start routing requests.",
+        "no_audit_events": "Run a workflow to create your first audit event.",
         "orchestration_policy": "Orchestration Policy",
         "simulation_title": "Simulation",
         "run_trace": "Run Trace",
@@ -45,12 +45,12 @@ ADMIN_TRANSLATIONS = {
         "access_control_title": "Access Control",
         "integrations_title": "Integrations",
         "doc_viewer_title": "Document Viewer",
-        "doc_viewer_desc": "Clearfolio integrated document viewer: upload, async conversion, and PDF preview for admin document review.",
+        "doc_viewer_desc": "Upload a document, wait for processing to finish, then open its PDF preview.",
         "doc_viewer_unset": "Not configured",
         "doc_viewer_open": "Open viewer",
         "doc_viewer_open_doc": "Open document",
-        "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.",
+        "doc_viewer_docid": "Document ID",
+        "doc_viewer_hint": "Ask an administrator to connect a document viewer, then refresh this page.",
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
@@ -61,8 +61,8 @@ ADMIN_TRANSLATIONS = {
         "spend_runs": "Runs",
         "settings_title": "Settings",
         "session_title": "Operator session",
-        "session_hint": "Use an opaque HttpOnly session cookie so the browser never retains the admin bearer.",
-        "session_token_placeholder": "Admin bearer token",
+        "session_hint": "Enter your access token to open a secure operator session.",
+        "session_token_placeholder": "Access token",
         "session_start": "Start session",
         "session_end": "End session",
         "session_status_ready": "Session established",
@@ -217,7 +217,7 @@ ADMIN_TRANSLATIONS = {
         "single_api_status": "OpenAI-compatible endpoint active",
         "no_trace": "Run a conduct trace to populate workflow evidence.",
         "source_basis": "Source basis",
-        "source_basis_text": "Fugu: one interface. TRINITY: thinker, worker, verifier. Conductor: access-list workflow visibility.",
+        "source_basis_text": "Routing uses measured quality, cost, and availability. Review the trace before applying policy changes.",
         "agent_header": "Agent",
         "model_header": "Model",
         "tags_header": "Tags",
@@ -239,9 +239,9 @@ ADMIN_TRANSLATIONS = {
         "route_degradation": "Route degradation",
         "verifier_disagreement": "Verifier disagreement",
         "agent_capacity": "Agent capacity",
-        "worker_latency": "worker exceeded latency threshold",
+        "worker_latency": "A processing step is slower than the selected limit; review the trace before continuing.",
         "confidence_low": "confidence below policy threshold",
-        "planner_capacity": "planner pool near soft limit",
+        "planner_capacity": "Planning capacity is nearly full; reduce queued work or add capacity.",
         "evaluation_hint": "Replay prompts against route or conduct mode before policy rollout.",
         "golden_prompts": "Golden prompts",
         "security_reviews": "Security reviews",
@@ -279,9 +279,9 @@ ADMIN_TRANSLATIONS = {
         "group_deleted": "그룹을 삭제했습니다. 공급자 모델은 그대로 사용할 수 있습니다.",
         "search_agents": "에이전트 검색",
         "all_statuses": "전체 상태",
-        "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다.",
-        "no_agents_configured": "아직 구성된 에이전트가 없습니다.",
-        "no_audit_events": "아직 감사 이벤트가 없습니다.",
+        "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다. 더 보려면 필터를 해제하세요.",
+        "no_agents_configured": "요청 라우팅을 시작하려면 에이전트를 등록하세요.",
+        "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
         "orchestration_policy": "오케스트레이션 정책",
         "simulation_title": "시뮬레이션",
         "run_trace": "트레이스 실행",
@@ -293,12 +293,12 @@ ADMIN_TRANSLATIONS = {
         "access_control_title": "접근 제어",
         "integrations_title": "연동",
         "doc_viewer_title": "문서 뷰어",
-        "doc_viewer_desc": "Clearfolio 통합 문서 뷰어: 업로드, 비동기 변환, PDF 미리보기를 통한 관리자 문서 검토.",
+        "doc_viewer_desc": "문서를 업로드하고 처리가 끝나면 PDF 미리보기를 여세요.",
         "doc_viewer_unset": "미설정",
         "doc_viewer_open": "뷰어 열기",
         "doc_viewer_open_doc": "문서 열기",
-        "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "--clearfolio-url (또는 CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) 설정 시 활성화됩니다.",
+        "doc_viewer_docid": "문서 ID",
+        "doc_viewer_hint": "관리자에게 문서 뷰어 연결을 요청한 다음 이 페이지를 새로고침하세요.",
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
@@ -309,8 +309,8 @@ ADMIN_TRANSLATIONS = {
         "spend_runs": "실행",
         "settings_title": "설정",
         "session_title": "운영자 세션",
-        "session_hint": "브라우저가 관리자 bearer를 보관하지 않도록 불투명 HttpOnly 세션 쿠키를 사용합니다.",
-        "session_token_placeholder": "관리자 bearer 토큰",
+        "session_hint": "보안 운영자 세션을 열려면 액세스 토큰을 입력하세요.",
+        "session_token_placeholder": "액세스 토큰",
         "session_start": "세션 시작",
         "session_end": "세션 종료",
         "session_status_ready": "세션이 설정되었습니다",
@@ -465,7 +465,7 @@ ADMIN_TRANSLATIONS = {
         "single_api_status": "OpenAI 호환 엔드포인트 활성",
         "no_trace": "conduct 트레이스를 실행하면 워크플로 근거가 채워집니다.",
         "source_basis": "논문 근거",
-        "source_basis_text": "Fugu: 단일 인터페이스. TRINITY: thinker, worker, verifier. Conductor: access-list 기반 워크플로 가시성.",
+        "source_basis_text": "라우팅에는 측정된 품질, 비용, 가용성을 사용합니다. 정책을 적용하기 전에 트레이스를 검토하세요.",
         "agent_header": "에이전트",
         "model_header": "모델",
         "tags_header": "태그",
@@ -487,9 +487,9 @@ ADMIN_TRANSLATIONS = {
         "route_degradation": "라우팅 성능 저하",
         "verifier_disagreement": "검증 불일치",
         "agent_capacity": "에이전트 용량",
-        "worker_latency": "worker 지연 임계값 초과",
+        "worker_latency": "처리 단계가 선택한 제한보다 느립니다. 계속하기 전에 트레이스를 검토하세요.",
         "confidence_low": "신뢰도가 정책 임계값보다 낮음",
-        "planner_capacity": "planner 풀이 소프트 한도에 근접",
+        "planner_capacity": "계획 용량이 거의 찼습니다. 대기 작업을 줄이거나 용량을 추가하세요.",
         "evaluation_hint": "정책 롤아웃 전에 route 또는 conduct 모드로 프롬프트를 재생합니다.",
         "golden_prompts": "골든 프롬프트",
         "security_reviews": "보안 리뷰",
@@ -925,7 +925,7 @@ ADMIN_HTML = r"""<!doctype html>
                 <button class="btn primary" id="run" data-i18n="run_trace">Run Trace</button>
               </div>
             </div>
-            <div class="metric source"><span data-i18n="source_basis">Source basis</span><strong data-i18n="source_basis_text">Fugu: one interface. TRINITY: thinker, worker, verifier. Conductor: access-list workflow visibility.</strong></div>
+            <div class="metric source"><span data-i18n="source_basis">Source basis</span><strong data-i18n="source_basis_text">Routing uses measured quality, cost, and availability. Review the trace before applying policy changes.</strong></div>
             <div class="metric"><span data-i18n="latency_threshold">Latency P95 route threshold</span><strong>2.50s</strong></div>
             <div class="metric"><span data-i18n="verifier_required">Verifier required</span><strong>Yes</strong></div>
             <div class="metric"><span data-i18n="agent_exclusion">Agent exclusion policy</span><strong>Config</strong></div>
@@ -963,9 +963,9 @@ ADMIN_HTML = r"""<!doctype html>
           <section class="panel">
             <div class="panel-header"><h2 data-i18n="recent_errors">Recent Errors</h2><button class="btn" id="viewAudit" data-i18n="view_all">View all</button></div>
             <div class="audit-list">
-              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="route_degradation">Route degradation</b><br><small data-i18n="worker_latency">worker exceeded latency threshold</small></div><small>2m</small></div>
+              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="route_degradation">Route degradation</b><br><small data-i18n="worker_latency">A processing step is slower than the selected limit; review the trace before continuing.</small></div><small>2m</small></div>
               <div class="event"><span class="status-icon">!</span><div><b data-i18n="verifier_disagreement">Verifier disagreement</b><br><small data-i18n="confidence_low">confidence below policy threshold</small></div><small>11m</small></div>
-              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="agent_capacity">Agent capacity</b><br><small data-i18n="planner_capacity">planner pool near soft limit</small></div><small>18m</small></div>
+              <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="agent_capacity">Agent capacity</b><br><small data-i18n="planner_capacity">Planning capacity is nearly full; reduce queued work or add capacity.</small></div><small>18m</small></div>
             </div>
           </section>
         </aside>
@@ -1000,11 +1000,11 @@ Summarize this research thread and verify claims.</textarea>
           <table><thead><tr><th data-i18n="provider_header">Provider</th><th data-i18n="endpoint_header">Endpoint</th><th data-i18n="policy_header">Policy</th></tr></thead><tbody id="integrationRows"></tbody></table>
         </section>
         <section class="panel wide">
-          <div class="panel-header"><h1 data-i18n="session_title">Operator session</h1><span class="chip">HttpOnly</span></div>
-          <p class="muted" data-i18n="session_hint">Use an opaque HttpOnly session cookie so the browser never retains the admin bearer.</p>
+          <div class="panel-header"><h1 data-i18n="session_title">Operator session</h1><span class="chip">Secure</span></div>
+          <p class="muted" data-i18n="session_hint">Enter your access token to open a secure operator session.</p>
           <form id="sessionForm" class="actions">
-            <label class="sr-only" for="sessionToken" data-i18n="session_token_placeholder">Admin bearer token</label>
-            <input id="sessionToken" type="password" autocomplete="off" data-i18n-placeholder="session_token_placeholder" placeholder="Admin bearer token">
+            <label class="sr-only" for="sessionToken" data-i18n="session_token_placeholder">Access token</label>
+            <input id="sessionToken" type="password" autocomplete="off" data-i18n-placeholder="session_token_placeholder" placeholder="Access token">
             <button class="btn primary" type="submit" data-i18n="session_start">Start session</button>
             <button class="btn" id="endSession" type="button" data-i18n="session_end">End session</button>
           </form>
@@ -1012,13 +1012,13 @@ Summarize this research thread and verify claims.</textarea>
         </section>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="doc_viewer_title">Document Viewer</h1><span class="chip" id="docViewerStatus" data-i18n="doc_viewer_unset">Not configured</span></div>
-          <p class="muted" data-i18n="doc_viewer_desc">Clearfolio integrated document viewer: upload, async conversion, and PDF preview for admin document review.</p>
+          <p class="muted" data-i18n="doc_viewer_desc">Upload a document, wait for processing to finish, then open its PDF preview.</p>
           <div id="docViewerActions" hidden>
             <a id="docViewerOpen" class="btn primary" target="_blank" rel="noopener" data-i18n="doc_viewer_open">Open viewer</a>
-            <input id="docViewerDocId" type="text" data-i18n-placeholder="doc_viewer_docid" placeholder="docId" />
+            <input id="docViewerDocId" type="text" data-i18n-placeholder="doc_viewer_docid" placeholder="Document ID" />
             <button id="docViewerOpenDoc" class="btn" data-i18n="doc_viewer_open_doc">Open document</button>
           </div>
-          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.</p>
+          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Ask an administrator to connect a document viewer, then refresh this page.</p>
         </section>
       </section>
       <section class="detail-grid view" data-view="observability" hidden>

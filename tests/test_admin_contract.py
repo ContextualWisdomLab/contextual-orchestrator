@@ -44,7 +44,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'els.statusFilter.addEventListener("change", renderAgents)' in ADMIN_HTML
     assert "function agentStatus(index)" in ADMIN_HTML
     assert "no_agents_match" in ADMIN_HTML
-    assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == "No agents match the current filters."
+    assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == (
+        "No agents match these filters. Clear a filter to see more agents."
+    )
     assert '{ pass: "ok", warn: "warning", fail: "failure" }[row.status]' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["readiness_ok"] == "Pass"
     assert ADMIN_TRANSLATIONS["ko"]["readiness_failure"] == "실패"
@@ -78,9 +80,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
         "group_deleted",
     ):
         assert key in ADMIN_TRANSLATIONS["en"] and key in ADMIN_TRANSLATIONS["ko"]
-    assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == "No agents are configured yet."
+    assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == "Register an agent to start routing requests."
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`' in ADMIN_HTML
-    assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "No audit events yet."
+    assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "Run a workflow to create your first audit event."
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`' in ADMIN_HTML
     assert 'id="sessionForm"' in ADMIN_HTML
     assert 'id="sessionToken"' in ADMIN_HTML
@@ -89,6 +91,19 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'finally {\n        els.sessionToken.value = "";' in ADMIN_HTML
     assert 'headers: {"origin": window.location.origin}' not in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
+    explanatory_keys = (
+        "doc_viewer_desc",
+        "doc_viewer_hint",
+        "session_hint",
+        "source_basis_text",
+        "worker_latency",
+        "planner_capacity",
+    )
+    internal_terms = ("clearfolio", "httponly", "bearer", "contextual_orchestrator_", "--clearfolio", "worker", "planner pool")
+    for locale in ("en", "ko"):
+        copy = " ".join(ADMIN_TRANSLATIONS[locale][key] for key in explanatory_keys).lower()
+        assert not any(term in copy for term in internal_terms)
+    assert not any(term in ADMIN_HTML.lower() for term in ("clearfolio integrated", "httponly</span>", "worker exceeded", "planner pool"))
     assert "Mask email, phone" not in ADMIN_HTML
     assert "Field encryption and audited release" in ADMIN_HTML
 
