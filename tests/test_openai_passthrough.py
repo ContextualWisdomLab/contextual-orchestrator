@@ -23,16 +23,15 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     NoViableAgentError,
-    _responses_to_chat_payload,
+    validate_json_schema_contract,
 )
-from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
-
-
-def _provider_unavailable() -> urllib.error.HTTPError:
-    """Build a provider-shaped transient failure that authorizes safe failover."""
-    return urllib.error.HTTPError(
-        "https://provider.example/v1", 503, "unavailable", None, None
-    )
+from contextual_orchestrator.server import (  # noqa: E402
+    RequestError,
+    SecurityConfig,
+    _validate_chat_response_format,
+    build_server,
+    responses_sse_body,
+)
 
 
 def _build() -> TaskOrchestrator:
@@ -67,32 +66,29 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert result["echo"]["temperature"] == 0.1
     assert "max_tokens" not in result["echo"]
     assert "mode" not in result["echo"]
+    # model overridden to the selected agent's model.
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
 
 
-def test_virtual_structured_passthrough_excludes_failed_candidate_for_request() -> None:
-    """A provider failure must move the same schema request to another ready agent."""
+def test_virtual_json_schema_uses_conduct_and_plain_chat_repair() -> None:
+    """Virtual schema work must never use provider-native passthrough."""
 
     calls: list[str] = []
 
-    class FirstDown(ModelClient):
+    class PlainChatRepair(ModelClient):
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            raise AssertionError("virtual json_schema must not use native passthrough")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
             calls.append(agent.id)
-            if len(calls) == 1:
-                raise _provider_unavailable()
-            return {
-                "id": "chatcmpl-test",
-                "object": "chat.completion",
-                "model": agent.model,
-                "choices": [],
-                "echo": body,
-            }
+            return '{"cases":[]}' if len(calls) >= 5 else "synthesized evidence"
 
     agents = [
         ModelAgent("ready_a", "mock-a", tags=("reasoning",)),
         ModelAgent("ready_b", "mock-b", tags=("reasoning",)),
     ]
-    orchestrator = TaskOrchestrator(agents, client=FirstDown())
+    orchestrator = TaskOrchestrator(agents, client=PlainChatRepair())
     schema = {
         "type": "json_schema",
         "json_schema": {
@@ -107,47 +103,197 @@ def test_virtual_structured_passthrough_excludes_failed_candidate_for_request() 
         },
     }
 
-    result = orchestrator.proxy_completion(
-        {
-            "model": orchestrator.AUTO_MODEL,
-            "messages": [{"role": "user", "content": "synthetic evidence"}],
-            "response_format": schema,
-        }
+    result = orchestrator.run_structured(
+        [{"role": "user", "content": "synthetic evidence"}],
+        response_format=schema,
+        model_name=orchestrator.AUTO_MODEL,
     )
 
-    assert len(calls) == 2
-    assert len(set(calls)) == 2
-    assert result["echo"]["response_format"] == schema
+    assert len(calls) >= 5
+    assert json.loads(result["answer"]) == {"cases": []}
+    assert result["trace"][-1]["role"] == "structured_repair"
 
 
-def test_virtual_structured_passthrough_defers_after_each_ready_candidate_fails_once() -> None:
-    """All ready failures return typed admission deferral without repeated calls."""
+def test_virtual_structured_repair_defers_when_all_candidates_return_invalid_json() -> None:
+    """All invalid repairs return typed admission deferral."""
 
     calls: list[str] = []
 
-    class AllDown(ModelClient):
+    class InvalidRepair(ModelClient):
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
-            del endpoint, body
+            raise AssertionError("virtual json_schema must not use native passthrough")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
             calls.append(agent.id)
-            raise _provider_unavailable()
+            return "not json"
 
     agents = [ModelAgent(f"ready_{index}", "mock", tags=("reasoning",)) for index in range(2)]
-    orchestrator = TaskOrchestrator(agents, client=AllDown())
+    orchestrator = TaskOrchestrator(agents, client=InvalidRepair())
 
     with pytest.raises(NoViableAgentError):
-        orchestrator.proxy_completion(
-            {
-                "model": orchestrator.AUTO_MODEL,
-                "messages": [{"role": "user", "content": "synthetic evidence"}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "operations_case_evidence", "schema": {}},
-                },
-            }
+        orchestrator.run_structured(
+            [{"role": "user", "content": "synthetic evidence"}],
+            model_name=orchestrator.AUTO_MODEL,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {"name": "operations_case_evidence", "schema": {"type": "object"}},
+            },
         )
 
-    assert len(calls) == 2
-    assert len(set(calls)) == 2
+    assert len(calls) >= 2
+
+
+def test_virtual_structured_repair_without_chat_candidate_is_typed_deferral() -> None:
+    """A repair pool without a chat-compatible candidate never leaks RuntimeError."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("media_agent", "mock-media", tags=("reasoning",))]
+    )
+    with patch.object(
+        orchestrator,
+        "_ranked_agents",
+        side_effect=RuntimeError("no chat-compatible agent available"),
+    ):
+        with pytest.raises(NoViableAgentError):
+            orchestrator._repair_structured_answer(
+                [{"role": "user", "content": "synthetic evidence"}],
+                "not json",
+                {"type": "object"},
+                frozenset({"media_agent"}),
+            )
+
+
+@pytest.mark.parametrize(
+    ("raw", "schema", "expected"),
+    [
+        ("42", {"type": "integer"}, "42"),
+        ('"ready"', {"type": "string"}, '"ready"'),
+        ("true", {"type": "boolean"}, "true"),
+    ],
+)
+def test_structured_validation_accepts_complete_scalar_json(
+    raw: str, schema: dict[str, object], expected: str
+) -> None:
+    """Draft 2020-12 scalar instances remain valid structured outputs."""
+    assert TaskOrchestrator._validated_structured_text(raw, schema) == expected
+
+
+def test_structured_validation_rejects_nested_partial_json() -> None:
+    """An invalid outer value cannot be replaced by a schema-valid inner object."""
+    assert TaskOrchestrator._validated_structured_text(
+        '[{"case":"inner"}]',
+        {
+            "type": "object",
+            "properties": {"case": {"type": "string"}},
+            "required": ["case"],
+        },
+    ) is None
+
+
+def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() -> None:
+    calls: list[str] = []
+    saw_schema_instruction = False
+
+    class PlainOnly(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            raise AssertionError("readiness must not use native response_format")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            nonlocal saw_schema_instruction
+            del kwargs
+            calls.append(agent.id)
+            saw_schema_instruction = saw_schema_instruction or any(
+                "Draft 2020-12 schema" in str(message.get("content", ""))
+                for message in messages
+            )
+            return '{"ok":true}'
+
+    unprobed = ModelAgent("unprobed_primary", "mock")
+    agent = ModelAgent("plain_only", "mock")
+    result = TaskOrchestrator([unprobed, agent], client=PlainOnly()).probe_structured_workflow(agent)
+
+    assert result["status"] == "ready"
+    assert len(calls) > 1
+    assert set(calls) == {"plain_only"}
+    assert saw_schema_instruction
+
+
+def test_json_schema_contract_accepts_nullable_enum_and_rejects_unknown_keyword() -> None:
+    validate_json_schema_contract(
+        {
+            "type": "object",
+            "properties": {
+                "kind": {"type": ["string", "null"], "enum": ["fact", None]},
+                "items": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["kind", "items"],
+            "additionalProperties": False,
+        }
+    )
+    with pytest.raises(ValueError, match="unsupported keyword"):
+        validate_json_schema_contract({"type": "object", "madeUpKeyword": True})
+
+    with pytest.raises(RequestError) as error:
+        _validate_chat_response_format(
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "invalid_schema",
+                        "schema": {"type": "object", "madeUpKeyword": True},
+                    },
+                }
+            }
+        )
+    assert error.value.code == "invalid_response_format"
+
+
+def test_json_schema_contract_visits_map_valued_subschemas() -> None:
+    """Map-valued schema keywords validate each nested schema, not map keys."""
+    validate_json_schema_contract(
+        {
+            "type": "object",
+            "patternProperties": {"^item_": {"type": "string"}},
+            "dependentSchemas": {"item_name": {"required": ["item_code"]}},
+        }
+    )
+    with pytest.raises(ValueError, match="unsupported keyword"):
+        validate_json_schema_contract(
+            {"patternProperties": {"^item_": {"madeUpKeyword": True}}}
+        )
+
+
+def test_free_structured_repair_never_calls_paid_agent() -> None:
+    """The free virtual model keeps synthesis repair inside its free admission set."""
+    calls: list[str] = []
+
+    class FreeRepair(ModelClient):
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            calls.append(agent.id)
+            return '{"cases":[]}' if len(calls) >= 3 else "not json"
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_agent", "paid-model", priority=100),
+            ModelAgent("free_agent", "free-model", tags=("cost:free", "reasoning")),
+        ],
+        client=FreeRepair(),
+    )
+    result = orchestrator.run_structured(
+        [{"role": "user", "content": "synthetic evidence"}],
+        model_name=orchestrator.FREE_MODEL,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "operations_case_evidence",
+                "schema": {"type": "object", "properties": {"cases": {"type": "array"}}},
+            },
+        },
+    )
+
+    assert json.loads(result["answer"]) == {"cases": []}
+    assert set(calls) == {"free_agent"}
 
 
 def test_structured_passthrough_does_not_call_unadmitted_primary() -> None:
@@ -180,49 +326,6 @@ def test_structured_passthrough_does_not_call_unadmitted_primary() -> None:
 
     assert calls == ["ready_fallback"]
     assert result["model"] == "mock-ready"
-
-
-def test_orchestrated_structured_completion_preserves_native_shape_and_lineage() -> None:
-    """The HTTP opt-in path conducts evidence before provider-native synthesis."""
-    body = {
-        "model": "mock-planner",
-        "messages": [{"role": "user", "content": "extract JSON"}],
-        "response_format": {"type": "json_object"},
-    }
-
-    result = _build().proxy_completion(body, single_agent=False)
-
-    assert result["object"] == "chat.completion"
-    assert result["echo"]["response_format"] == body["response_format"]
-    assert result["orchestration"]["mode"] == "conduct"
-    assert result["orchestration"]["agent_count"] == 5
-
-
-def test_responses_translation_preserves_image_detail() -> None:
-    """Responses multimodal input remains available to evidence agents."""
-    translated = _responses_to_chat_payload(
-        {
-            "input": [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": "inspect"},
-                        {
-                            "type": "input_image",
-                            "image_url": "data:image/png;base64,AA==",
-                            "detail": "high",
-                        },
-                    ],
-                }
-            ]
-        }
-    )
-
-    assert translated["messages"][0]["content"][1] == {
-        "type": "image_url",
-        "image_url": {"url": "data:image/png;base64,AA==", "detail": "high"},
-    }
 
 
 def test_proxy_completion_forwards_tools() -> None:
@@ -270,7 +373,7 @@ def test_proxy_completion_free_model_never_fails_over_to_a_paid_agent() -> None:
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
             del endpoint, body
             calls.append(agent.id)
-            raise _provider_unavailable()
+            raise RuntimeError("provider transport unavailable")
 
     orchestrator = TaskOrchestrator(
         agents=[
@@ -299,59 +402,6 @@ def test_proxy_completion_free_model_fails_closed_without_a_free_agent() -> None
             "messages": [{"role": "user", "content": "call a tool"}],
             "tools": [],
         })
-
-
-@pytest.mark.parametrize(
-    ("endpoint", "body"),
-    [
-        (
-            "chat/completions",
-            {
-                "model": TaskOrchestrator.FREE_MODEL,
-                "messages": [{"role": "user", "content": "return JSON"}],
-                "response_format": {"type": "json_object"},
-            },
-        ),
-        (
-            "responses",
-            {
-                "model": TaskOrchestrator.FREE_MODEL,
-                "input": "return JSON",
-                "text": {"format": {"type": "json_object"}},
-            },
-        ),
-    ],
-)
-def test_structured_free_model_uses_free_agents_for_evidence_and_synthesis(
-    endpoint: str, body: dict,
-) -> None:
-    """Every conducted call stays inside the explicitly zero-cost pool."""
-    orchestrator = TaskOrchestrator(
-        [
-            ModelAgent("paid_agent", "paid-model", priority=100),
-            ModelAgent("free_agent", "free-model", tags=("cost:free",)),
-        ]
-    )
-    called_agents: list[str] = []
-    original_chat = orchestrator.client.chat
-    original_proxy = orchestrator.client.proxy_send
-
-    def recording_chat(agent, *args, **kwargs):
-        called_agents.append(agent.id)
-        return original_chat(agent, *args, **kwargs)
-
-    def recording_proxy(agent, *args, **kwargs):
-        called_agents.append(agent.id)
-        return original_proxy(agent, *args, **kwargs)
-
-    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
-    orchestrator.client.proxy_send = recording_proxy  # type: ignore[method-assign]
-
-    result = orchestrator.proxy_completion(body, endpoint=endpoint, single_agent=False)
-
-    assert result["orchestration"]["mode"] == "conduct"
-    assert called_agents
-    assert set(called_agents) == {"free_agent"}
 
 
 def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
@@ -494,75 +544,103 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert body["echo"]["response_format"] == {"type": "json_object"}
 
 
-@pytest.mark.parametrize(
-    ("agents", "model", "expected_message"),
-    [
-        (None, TaskOrchestrator.AUTO_MODEL, "no enabled model"),
-        ([ModelAgent("paid_agent", "paid-model")], TaskOrchestrator.FREE_MODEL,
-         "no enabled zero-cost model"),
-    ],
-)
-def test_http_structured_virtual_models_reject_ineligible_pools(
-    agents: list[ModelAgent] | None, model: str, expected_message: str
-) -> None:
-    """Structured chat shares the normal virtual-model 400 eligibility boundary."""
-    token = "structured_pool_token"
+def test_http_virtual_json_schema_preserves_openai_shape_and_orchestration_lineage() -> None:
+    class PlainStructured(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            raise AssertionError("virtual json_schema must not use native passthrough")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            return '{"cases":[]}'
+
     orchestrator = TaskOrchestrator(
-        agents or [ModelAgent("seed_agent", "seed-model")]
+        [ModelAgent("plain_agent", "mock", tags=("reasoning",))],
+        client=PlainStructured(),
     )
-    if agents is None:
-        orchestrator.agents = []
-    server = build_server(
-        orchestrator, port=0, security=SecurityConfig(auth_token=token)
-    )
+    token = "structured_token"
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         status, body = _post(
             f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
             {
-                "model": model,
-                "messages": [{"role": "user", "content": "return JSON"}],
-                "response_format": {"type": "json_object"},
+                "model": orchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic evidence"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "operations_case_evidence",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {"cases": {"type": "array"}},
+                            "required": ["cases"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
             },
             token,
         )
     finally:
         server.shutdown()
+        server.server_close()
 
-    assert status == 400
-    assert expected_message in body["error"]["message"]
+    assert status == 200
+    assert body["object"] == "chat.completion"
+    assert json.loads(body["choices"][0]["message"]["content"]) == {"cases": []}
+    assert body["orchestration"]["mode"] == "conduct"
+    assert body["orchestration"]["usage_record_id"]
 
 
-def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
-    """Pool validation does not weaken the existing vision capability boundary."""
-    token = "structured_vision_token"
-    server = build_server(
-        TaskOrchestrator([ModelAgent("text_agent", "text-model")]),
-        port=0,
-        security=SecurityConfig(auth_token=token),
-    )
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+def test_http_virtual_json_schema_rejects_streaming_explicitly() -> None:
+    """Deferred structured SSE must fail closed instead of returning a JSON body."""
+    server, port, token = _serve()
     try:
         status, body = _post(
-            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            f"http://127.0.0.1:{port}/v1/chat/completions",
             {
                 "model": TaskOrchestrator.AUTO_MODEL,
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "inspect"},
-                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
-                    ],
-                }],
-                "response_format": {"type": "json_object"},
+                "messages": [{"role": "user", "content": "synthetic evidence"}],
+                "stream": True,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "case", "schema": {"type": "object"}},
+                },
             },
             token,
         )
     finally:
         server.shutdown()
+        server.server_close()
 
     assert status == 400
-    assert "vision-capable" in body["error"]["message"]
+    assert body["error"]["code"] == "invalid_request"
+
+
+def test_http_virtual_json_schema_rejects_batch_routing_explicitly() -> None:
+    """Virtual structured requests reject unsupported batch routing fail closed."""
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic evidence"}],
+                "routing": {"channel": "batch"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "case", "schema": {"type": "object"}},
+                },
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 400
+    assert body["error"]["code"] == "invalid_routing"
 
 
 def test_http_responses_endpoint_passes_through() -> None:

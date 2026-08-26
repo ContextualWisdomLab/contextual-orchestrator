@@ -744,6 +744,16 @@ _RECORD_ATTRIBUTION_INSERT_SQL = {
     )
     for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
 }
+_USAGE_MEASUREMENT_INSERT_SQL = {
+    "qmark": (
+        "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
+        "VALUES (?, ?)"
+    ),
+    "pyformat": (
+        "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
+        "VALUES (%s, %s)"
+    ),
+}
 _INPUT_ATTRIBUTION_INSERT_SQL = {
     style: (
         "INSERT INTO usage_record_input_attributions "
@@ -762,16 +772,6 @@ _INPUT_ATTRIBUTION_SELECT_SQL = {
         "SELECT input_index, dimension_name, dimension_value "
         "FROM usage_record_input_attributions WHERE usage_record_id = %s "
         "ORDER BY input_index, dimension_name"
-    ),
-}
-_USAGE_MEASUREMENT_INSERT_SQL = {
-    "qmark": (
-        "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
-        "VALUES (?, ?)"
-    ),
-    "pyformat": (
-        "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
-        "VALUES (%s, %s)"
     ),
 }
 _USAGE_SELECT_SQL = (
@@ -1080,21 +1080,19 @@ class SqlLedgerStore:
             _USAGE_QUERY_SQL[(self._paramstyle, start is not None, end is not None)],
             tuple(params),
         )
-        rows = [
-            dict(zip(_USAGE_COLUMNS, values, strict=True)) for values in cur.fetchall()
-        ]
+        rows = [dict(zip(_USAGE_COLUMNS, values, strict=True)) for values in cur.fetchall()]
         inputs_by_record: Dict[str, List[Dict[str, str]]] = {
             str(row["usage_record_id"]): [] for row in rows
         }
         if rows:
             placeholder = "?" if self._paramstyle == "qmark" else "%s"
-            placeholders = ", ".join(placeholder for _row in rows)
+            identifiers = tuple(str(row["usage_record_id"]) for row in rows)
             cur.execute(
                 "SELECT usage_record_id, input_index, dimension_name, dimension_value "
-                "FROM usage_record_input_attributions "
-                f"WHERE usage_record_id IN ({placeholders}) "
-                "ORDER BY usage_record_id, input_index, dimension_name",
-                tuple(row["usage_record_id"] for row in rows),
+                "FROM usage_record_input_attributions WHERE usage_record_id IN ("
+                + ", ".join(placeholder for _ in identifiers)
+                + ") ORDER BY usage_record_id, input_index, dimension_name",
+                identifiers,
             )
             for usage_record_id, input_index, dimension_name, dimension_value in cur.fetchall():
                 inputs = inputs_by_record[str(usage_record_id)]

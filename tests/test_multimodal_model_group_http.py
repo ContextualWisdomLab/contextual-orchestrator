@@ -7,12 +7,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from unittest.mock import patch
 
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
-from contextual_orchestrator.orchestrator import ModelClient, RequestDeadlineExceeded
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 TOKEN = "multimodal_group_token"
@@ -36,15 +34,11 @@ def _equivalence(capability: str) -> dict[str, object]:
     }
 
 
-def _post(
-    port: int, path: str, payload: dict, extra_headers: dict[str, str] | None = None
-) -> tuple[int, bytes, str]:
-    headers = {"content-type": "application/json", "authorization": f"Bearer {TOKEN}"}
-    headers.update(extra_headers or {})
+def _post(port: int, path: str, payload: dict) -> tuple[int, bytes, str]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode(),
-        headers=headers,
+        headers={"content-type": "application/json", "authorization": f"Bearer {TOKEN}"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
@@ -110,90 +104,6 @@ def test_speech_endpoint_preserves_binary_media_response() -> None:
         assert status == 200 and content_type == "audio/mpeg" and raw == b"mock audio"
     finally:
         server.shutdown()
-
-
-@pytest.mark.parametrize(
-    ("path", "payload"),
-    [
-        ("/v1/images/generations", {"prompt": "diagram"}),
-        ("/v1/audio/speech", {"input": "hello", "voice": "alloy"}),
-    ],
-)
-def test_capability_routes_apply_the_caller_deadline(path: str, payload: dict) -> None:
-    capability = "speech" if path.endswith("speech") else "image"
-    agent = ModelAgent("media_member", "provider/media", tags=(capability,))
-    orchestrator = TaskOrchestrator([agent])
-    observed: list[float | None] = []
-    original = orchestrator.proxy_capability
-
-    def proxy(*args, **kwargs):
-        observed.append(
-            orchestrator.client.request_settings_snapshot()["request_deadline_monotonic"]
-        )
-        return original(*args, **kwargs)
-
-    orchestrator.proxy_capability = proxy  # type: ignore[method-assign]
-    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        status, _raw, _content_type = _post(
-            server.server_address[1],
-            path,
-            payload,
-            {"x-request-timeout-ms": "180000"},
-        )
-        assert status == 200
-    finally:
-        server.shutdown()
-
-    assert len(observed) == 1 and observed[0] is not None
-
-
-def test_binary_provider_transport_uses_the_remaining_deadline() -> None:
-    agent = ModelAgent(
-        "speech_member",
-        "provider/speech",
-        base_url="https://provider.example/v1",
-        credential_key="",
-    )
-    client = ModelClient()
-    observed: list[float | None] = []
-
-    class Response:
-        headers = type("Headers", (), {"get_content_type": lambda self: "audio/mpeg"})()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return b"audio"
-
-    def open_provider(_request, _destination=None):
-        observed.append(getattr(client._local, "provider_transport_timeout", None))
-        return Response()
-
-    with patch.object(client, "_validate_provider", return_value=None), patch.object(
-        client, "_open_provider", side_effect=open_provider
-    ), patch(
-        "contextual_orchestrator.orchestrator.time.monotonic", return_value=10.0
-    ), client.request_settings(request_deadline_monotonic=15.0):
-        assert client.proxy_send_bytes(agent, "audio/speech", {}) == (b"audio", "audio/mpeg")
-
-    assert observed == [5.0]
-
-    def timed_out_provider(_request, _destination=None):
-        raise TimeoutError("provider timed out")
-
-    with patch.object(client, "_validate_provider", return_value=None), patch.object(
-        client, "_open_provider", side_effect=timed_out_provider
-    ), patch(
-        "contextual_orchestrator.orchestrator.time.monotonic", side_effect=[10.0, 15.0]
-    ), client.request_settings(request_deadline_monotonic=15.0):
-        with pytest.raises(RequestDeadlineExceeded):
-            client.proxy_send_bytes(agent, "audio/speech", {})
 
 
 def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:

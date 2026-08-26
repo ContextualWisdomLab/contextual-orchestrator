@@ -36,6 +36,7 @@ from .orchestrator import (
     chat_completion_chunks,
     chat_completion_response,
     text_completion_response,
+    validate_json_schema_contract,
     redact_value,
     sse_stream_body,
 )
@@ -4069,6 +4070,10 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
+        try:
+            validate_json_schema_contract(schema_body)
+        except ValueError as exc:
+            raise RequestError(400, "invalid_response_format", str(exc)) from None
         # Explicit JSON null / blank description is omit-equivalent: pop so
         # passthrough matches omit (parity with Responses text.format).
         if "description" in schema:
@@ -6046,6 +6051,72 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        response_format = body.get("response_format")
+                        requested_model = body.get("model")
+                        if (
+                            isinstance(response_format, dict)
+                            and response_format.get("type") == "json_schema"
+                            and requested_model
+                            in {
+                                TaskOrchestrator.AUTO_MODEL,
+                                TaskOrchestrator.FREE_MODEL,
+                                "contextual-orchestrator",
+                            }
+                            and not tools_list
+                        ):
+                            if stream:
+                                raise RequestError(
+                                    400,
+                                    "invalid_request",
+                                    "streaming is not supported for orchestrated json_schema responses",
+                                )
+                            structured_routing = _validate_routing(body.get("routing"))
+                            if structured_routing and (
+                                structured_routing.get("channel") == "batch"
+                                or structured_routing.get("latency_tolerant") is True
+                            ):
+                                raise RequestError(
+                                    400,
+                                    "invalid_routing",
+                                    "batch routing is not supported for structured chat responses",
+                                )
+                            messages = _validate_messages(body.get("messages"))
+                            attribution = dict(_validate_attribution(body.get("attribution")) or {})
+                            end_user_id = _validate_completions_user(body)
+                            if end_user_id is not None and not attribution.get("account"):
+                                attribution["account"] = end_user_id
+                            attribution.setdefault("model_name", requested_model)
+                            attribution.setdefault("service", "chat_completions_api")
+                            started_at = time.perf_counter()
+                            with orchestrator.client.request_settings(
+                                max_output_tokens=max_tokens,
+                                temperature=temperature,
+                                top_p=top_p,
+                                presence_penalty=presence_penalty,
+                                frequency_penalty=frequency_penalty,
+                                request_deadline_monotonic=request_deadline,
+                            ):
+                                result = self._run(lambda: coordinator.complete_structured(
+                                    messages,
+                                    response_format=response_format,
+                                    attribution=attribution,
+                                    model_name=requested_model,
+                                    workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                ))
+                            orchestrator.record_analytics_event("chat_completion_structured", {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "workflow_run_id": result["workflow_run_id"],
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            })
+                            self._send(chat_completion_response(
+                                result,
+                                model=requested_model,
+                                include_trace=self._trace_requested(body, "/v1/chat/completions"),
+                                usage=result.get("usage"),
+                            ))
+                            return
                         tool_loop = bool(tools_list)
                         started_at = time.perf_counter()
                         if tool_loop:

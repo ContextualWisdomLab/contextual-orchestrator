@@ -489,16 +489,26 @@ def test_provider_batch_total_keeps_per_input_token_counts_explicitly_unknown() 
         lambda requests: ([[1.0] for _request in requests], 17)
     )
     agent = ModelAgent("embedding_worker", "mock-embedding", tags=("embedding",))
+    config = InMemoryConfigStore()
+    config.set("routing", "embedding_max_chars_per_part", 5)
     coordinator = CostRoutingCoordinator(
-        TaskOrchestrator([agent]), embedding_batch_backend=backend
+        TaskOrchestrator([agent]), config, embedding_batch_backend=backend
     )
-    document = coordinator.complete_embeddings_batch(["alpha", "beta"], wait_for_terminal=True)
+    document = coordinator.complete_embeddings_batch(
+        ["alpha-source", "beta-source"],
+        input_attributions=[{"team": "alpha"}, {"team": "beta"}],
+        wait_for_terminal=True,
+    )
     assert document["total_tokens"] == 17
     assert document["token_counts"] == [0, 0]
     assert document["token_count_provenance"] == [
         "unknown_provider_batch_total_only",
         "unknown_provider_batch_total_only",
     ]
+    assert [
+        item["team"] for item in coordinator.ledger.records()[0]["input_attributions"]
+    ] == ["alpha", "beta"]
+    assert document["input_part_counts"] == [3, 3]
 
 
 def test_sync_provider_embeddings_wait_is_bounded_by_caller_deadline() -> None:
