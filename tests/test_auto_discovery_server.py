@@ -43,6 +43,33 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
 
 
+def test_auto_discovery_removes_the_configured_gateway_placeholder(monkeypatch) -> None:
+    """A blank discovery seed never participates in inference after expansion."""
+    discovered = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="chat-capable-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args: ([discovered], []),
+    )
+    placeholder = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        provider_name="configured_gateway",
+    )
+    orchestrator = TaskOrchestrator([placeholder])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["added"] == ["configured_gateway_chat_capable_model"]
+    assert [agent.model for agent in orchestrator.agents] == ["chat-capable-model"]
+
+
 def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
     """Startup fails closed without taking down an explicitly configured pool."""
     embedding = DiscoveredModel(

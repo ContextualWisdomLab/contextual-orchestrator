@@ -362,7 +362,20 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     ]
     if not agents:
         return {"added": [], "updated": []}
-    return orchestrator.sync_discovered_agents(agents)
+    result = orchestrator.sync_discovered_agents(agents)
+    placeholders = {
+        agent.id
+        for agent in orchestrator.candidates
+        if agent.provider_name == "configured_gateway" and not agent.model.strip()
+    }
+    if placeholders:
+        orchestrator.candidates = [
+            agent for agent in orchestrator.candidates if agent.id not in placeholders
+        ]
+        orchestrator.agents = [
+            agent for agent in orchestrator.agents if agent.id not in placeholders
+        ]
+    return result
 
 
 def main(argv: list[str] | None = None) -> None:
