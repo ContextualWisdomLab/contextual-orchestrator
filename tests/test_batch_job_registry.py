@@ -435,6 +435,7 @@ def test_valkey_claim_uses_bounded_lease_and_wait_not_result_retention() -> None
                 "timeout": 90.0,
                 "blocking": True,
                 "blocking_timeout": 90.0,
+                "thread_local": False,
             },
         )
     ]

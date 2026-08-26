@@ -154,6 +154,7 @@ class JobRegistryFactory:
                 timeout=lease_seconds,
                 blocking=True,
                 blocking_timeout=lease_seconds,
+                thread_local=False,
             )
 
             @contextmanager
