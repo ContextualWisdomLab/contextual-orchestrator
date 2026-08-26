@@ -83,6 +83,7 @@ class CostRoutingCoordinator:
         # their results survive a restart too.
         registry = job_registry if job_registry is not None else build_job_registry(self.config)
         self.job_registry = registry
+        embedding_shards = registry.mapping("embedding_provider_shards")
         if batch_backend is None:
             client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
@@ -124,8 +125,9 @@ class CostRoutingCoordinator:
                     return orchestrator.client.embed_with_usage(agent, texts)
                 vectors: List[List[float]] = []
                 total_tokens = 0
-                chunk: List[str] = []
+                chunk: List[EmbeddingBatchRequest] = []
                 chunk_tokens = 0
+                shards: List[List[EmbeddingBatchRequest]] = []
                 for request in requests:
                     if request.token_count > capability.max_tokens_per_input:
                         raise ValueError("embedding input exceeds provider token limit")
@@ -133,15 +135,43 @@ class CostRoutingCoordinator:
                         len(chunk) >= capability.max_inputs
                         or chunk_tokens + request.token_count > capability.max_total_tokens
                     ):
-                        chunk_vectors, used = orchestrator.client.embed_with_usage(agent, chunk)
-                        vectors.extend(chunk_vectors)
-                        total_tokens += used
+                        shards.append(chunk)
                         chunk = []
                         chunk_tokens = 0
-                    chunk.append(request.input_text)
+                    chunk.append(request)
                     chunk_tokens += request.token_count
                 if chunk:
-                    chunk_vectors, used = orchestrator.client.embed_with_usage(agent, chunk)
+                    shards.append(chunk)
+                for shard in shards:
+                    shard_texts = [request.input_text for request in shard]
+                    shard_key = hashlib.sha256(
+                        json.dumps(
+                            {
+                                "provider": agent.provider_name,
+                                "model": agent.model,
+                                "inputs": shard_texts,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    cached = embedding_shards.get(shard_key)
+                    if isinstance(cached, dict):
+                        chunk_vectors = cached.get("vectors")
+                        used = cached.get("provider_tokens")
+                        if not isinstance(chunk_vectors, list) or type(used) is not int:
+                            raise RuntimeError("embedding shard checkpoint is invalid")
+                    else:
+                        chunk_vectors, used = orchestrator.client.embed_with_usage(
+                            agent, shard_texts
+                        )
+                        if len(chunk_vectors) != len(shard_texts):
+                            raise RuntimeError("provider embedding shard length mismatch")
+                        embedding_shards[shard_key] = {
+                            "vectors": chunk_vectors,
+                            "provider_tokens": used,
+                        }
                     vectors.extend(chunk_vectors)
                     total_tokens += used
                 return vectors, total_tokens
@@ -465,7 +495,11 @@ class CostRoutingCoordinator:
         existing_job_id = self._embedding_request_keys.get(request_key)
         if existing_job_id:
             existing_job = self._embedding_jobs.get(str(existing_job_id))
-            if existing_job is not None:
+            if existing_job is not None and existing_job.status not in {
+                "failed",
+                "cancelled",
+                "rejected",
+            }:
                 return existing_job
         backend = self._embedding_backend_for_model(model, routing_agent_id)
         job = backend.submit(requests, metadata=metadata)
