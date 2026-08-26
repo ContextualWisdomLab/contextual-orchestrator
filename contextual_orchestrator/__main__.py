@@ -222,6 +222,31 @@ def _bootstrap_discovery_sources() -> tuple[ProviderModelSource, ...]:
     return (*PROVIDER_MODEL_SOURCES, source)
 
 
+def _runtime_discovery_sources(
+    orchestrator: TaskOrchestrator,
+) -> tuple[ProviderModelSource, ...]:
+    """Build runtime sources only from injected pool config and preseeded KV."""
+    sources = list(PROVIDER_MODEL_SOURCES)
+    allowed_hosts = ",".join(sorted(orchestrator.client.allowed_provider_hosts))
+    seen: set[tuple[str, str]] = set()
+    for agent in orchestrator.candidates:
+        if agent.provider_name != "configured_gateway":
+            continue
+        source = configured_gateway_source(
+            {
+                "LLM_GATEWAY_API_URL": agent.base_url,
+                "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": allowed_hosts,
+            }
+        )
+        if source is None or get_credential(source.credential_name) is None:
+            continue
+        identity = (source.list_url, source.credential_name)
+        if identity not in seen:
+            sources.append(source)
+            seen.add(identity)
+    return tuple(sources)
+
+
 def _discover_models_command(argv: list[str]) -> None:
     """Query every provider with a KV-registered credential and report the models found.
 
@@ -298,12 +323,7 @@ def _discover_models_command(argv: list[str]) -> None:
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate only models with explicit chat capability evidence."""
-    sources = _bootstrap_discovery_sources()
-    discovered, _errors = (
-        discover_all_models()
-        if sources is PROVIDER_MODEL_SOURCES
-        else discover_all_models(sources)
-    )
+    discovered, _errors = discover_all_models(_runtime_discovery_sources(orchestrator))
     chat_models = [model for model in discovered if "chat" in model.capabilities]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [

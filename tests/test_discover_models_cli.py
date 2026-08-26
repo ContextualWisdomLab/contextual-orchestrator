@@ -110,10 +110,10 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
         "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "gateway.example",
     }
 
-    def urlopen(request, timeout=None):
-        assert request.headers["Authorization"] == "Bearer gateway-secret"
-        if request.full_url.endswith("/model/info"):
-            return _Response({
+    def fetch(url, **kwargs):
+        assert kwargs["api_key"] == "gateway-secret"
+        if url.endswith("/model/info"):
+            return {
                 "data": [
                     {
                         "model_name": "gpt-5.6-sol",
@@ -140,9 +140,9 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
                         },
                     },
                 ]
-            })
-        assert request.full_url == "https://gateway.example/v1/models"
-        return _Response({
+            }
+        assert url == "https://gateway.example/v1/models"
+        return {
             "data": [
                 {"id": "gpt-5.6-sol"},
                 {
@@ -151,7 +151,7 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
                 },
                 {"id": "text-embedding-3-large"},
             ]
-        })
+        }
 
     try:
         with (
@@ -159,8 +159,8 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
             patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
             patch.object(sys, "stdout", stdout),
             patch(
-                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-                side_effect=urlopen,
+                "contextual_orchestrator.model_discovery._fetch_configured_gateway_json",
+                side_effect=fetch,
             ),
         ):
             main()

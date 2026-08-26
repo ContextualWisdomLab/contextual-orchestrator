@@ -1,5 +1,8 @@
 """Server-startup model discovery activates discovered runtime agents."""
 
+import os
+from unittest.mock import patch
+
 from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
@@ -25,7 +28,7 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([chat, embedding], []),
+        lambda *_args: ([chat, embedding], []),
     )
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
@@ -52,7 +55,7 @@ def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(m
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([embedding], []),
+        lambda *_args: ([embedding], []),
     )
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
@@ -73,7 +76,7 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([discovered], []),
+        lambda *_args: ([discovered], []),
     )
     existing = ModelAgent(
         "openai_chat_capable_model",
@@ -86,3 +89,22 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert orchestrator.candidates == [bootstrap, existing]
+
+
+def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -> None:
+    captured = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda sources: (captured.extend(sources) or [], []),
+    )
+    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+    with patch.dict(
+        os.environ,
+        {
+            "LLM_GATEWAY_URL": "http://unsafe.invalid/v1",
+            "LLM_GATEWAY_API_KEY": "must-not-be-promoted",
+        },
+        clear=True,
+    ):
+        assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert all(source.provider_name != "configured_gateway" for source in captured)

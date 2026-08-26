@@ -17,16 +17,16 @@ from decimal import Decimal
 import json
 import math
 import re
-import ssl
 import urllib.error
 import urllib.request
+import certifi
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential
-from .orchestrator import ModelAgent
+from .orchestrator import ModelAgent, ModelClient
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
@@ -36,6 +36,7 @@ _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
 _MODELS_DEV_OPENCODE_PROVIDER = "opencode"
 CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
+MAX_DISCOVERY_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -211,19 +212,46 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
     headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
-    try:
-        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - validated https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-    except urllib.error.URLError as exc:
-        if not isinstance(exc.reason, ssl.SSLCertVerificationError):
-            raise
-        import certifi
-
-        context = ssl.create_default_context(cafile=certifi.where())
-        response = urllib.request.urlopen(  # noqa: S310 - validated https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request, timeout=timeout, context=context
-        )
-    with response:
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_configured_gateway_json(
+    url: str,
+    *,
+    api_key: str,
+    auth_scheme: str,
+    timeout: float,
+) -> Any:
+    """Fetch an operator URL through the gateway's pinned hardened transport."""
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise ValueError("configured gateway discovery URL is not a safe HTTPS URL")
+    origin = urlunsplit(("https", parsed.netloc, "", "", ""))
+    client = ModelClient(
+        timeout=max(1, int(math.ceil(timeout))),
+        ca_bundle=certifi.where(),
+        allowed_provider_hosts={parsed.hostname},
+    )
+    agent = ModelAgent(
+        "configured_gateway_discovery",
+        "configured-gateway-catalog",
+        base_url=origin,
+    )
+    destination = client._validate_provider(agent)
+    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    with client._open_provider(request, destination, timeout=timeout) as response:
+        raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+        raise ValueError("configured gateway discovery response exceeds the size limit")
+    return json.loads(raw.decode("utf-8"))
 
 
 def _valid_price_component(value: object) -> bool:
@@ -391,17 +419,27 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str):
             continue
         model_details = by_name.get(row["id"], [])
-        modes: set[str] = set()
+        deployment_outputs: list[tuple[str, ...]] = []
+        deployment_inputs: list[tuple[str, ...]] = []
         prices: set[tuple[object, object]] = set()
         pricing_complete = bool(model_details)
-        supports_vision = False
         for detail in model_details:
             info = detail.get("model_info") if isinstance(detail.get("model_info"), dict) else {}
             params = detail.get("litellm_params") if isinstance(detail.get("litellm_params"), dict) else {}
             mode = info.get("mode")
-            if isinstance(mode, str):
-                modes.add(mode.casefold())
-            supports_vision = supports_vision or info.get("supports_vision") is True
+            normalized_mode = mode.casefold() if isinstance(mode, str) else ""
+            outputs = tuple(
+                capability
+                for capability, matching_modes in (
+                    ("text", {"chat", "responses", "completion"}),
+                    ("embedding", {"embedding"}),
+                )
+                if normalized_mode in matching_modes
+            )
+            deployment_outputs.append(outputs)
+            deployment_inputs.append(
+                ("text", "image") if info.get("supports_vision") is True else ("text",)
+            )
             prompt = info.get("input_cost_per_token", params.get("input_cost_per_token"))
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")
@@ -410,18 +448,16 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 prices.add((prompt, completion))
             else:
                 pricing_complete = False
-        outputs = tuple(
-            capability
-            for capability, matching_modes in (
-                ("text", {"chat", "responses", "completion"}),
-                ("embedding", {"embedding"}),
-            )
-            if modes.intersection(matching_modes)
+        capability_complete = bool(model_details) and all(deployment_outputs)
+        capability_consensus = (
+            capability_complete
+            and len(set(deployment_outputs)) == 1
+            and len(set(deployment_inputs)) == 1
         )
-        if outputs:
+        if capability_consensus:
             row["architecture"] = {
-                "input_modalities": ["text", *(("image",) if supports_vision else ())],
-                "output_modalities": list(outputs),
+                "input_modalities": list(deployment_inputs[0]),
+                "output_modalities": list(deployment_outputs[0]),
             }
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
@@ -527,7 +563,17 @@ def discover_provider_models(
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
     try:
-        payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
+        fetch = (
+            _fetch_configured_gateway_json
+            if source.provider_name == "configured_gateway"
+            else _fetch_json
+        )
+        payload = fetch(
+            url,
+            api_key=api_key,
+            auth_scheme=source.auth_scheme,
+            timeout=timeout,
+        )
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
         # OSError covers ConnectionError/reset failures that are not URLError
         # subclasses, so a raw provider transport failure can never escape the
@@ -541,7 +587,7 @@ def discover_provider_models(
         payload = _merge_models_dev_metadata(payload, metadata, _MODELS_DEV_OPENCODE_PROVIDER)
     elif source.provider_name == "configured_gateway":
         try:
-            metadata = _fetch_json(
+            metadata = _fetch_configured_gateway_json(
                 f"{source.chat_base_url}/model/info",
                 api_key=api_key,
                 auth_scheme=source.auth_scheme,

@@ -70,6 +70,18 @@ def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None
     assert merged["data"][0]["architecture"]["output_modalities"] == ["text"]
 
 
+def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
+    payload = {"data": [{"id": "shared-model"}]}
+    metadata = {
+        "data": [
+            {"model_name": "shared-model", "model_info": {"mode": "chat"}},
+            {"model_name": "shared-model", "model_info": {"mode": "embedding"}},
+        ]
+    }
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+    assert "architecture" not in merged["data"][0]
+
+
 @pytest.fixture(autouse=True)
 def _fresh_backend():
     set_backend(InMemoryCredentialBackend())
