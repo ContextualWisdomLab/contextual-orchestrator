@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -244,6 +247,90 @@ def test_crash_residue_is_recovered_or_fails_closed(tmp_path: Path) -> None:
     second.mkdir()
     with pytest.raises(NimEvidenceError):
         publish_artifact_set(tmp_path / "ambiguous", _artifacts())
+
+
+def test_read_only_crash_staging_is_recovered(tmp_path: Path) -> None:
+    target = tmp_path / "nim_evidence"
+    abandoned = tmp_path / ".nim_evidence.staging-old"
+    abandoned.mkdir(mode=0o500)
+
+    publish_artifact_set(target, _artifacts())
+
+    assert target.is_dir()
+    assert not abandoned.exists()
+
+
+def test_concurrent_publications_are_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nim_evidence"
+    first = _artifacts()
+    first["benchmark_report.json"] = b'{"run":"first"}'
+    second = _artifacts()
+    second["benchmark_report.json"] = b'{"run":"second"}'
+    first_write_started = threading.Event()
+    release_first = threading.Event()
+    real_write_bytes = Path.write_bytes
+
+    def pause_first_report(path: Path, payload: bytes) -> int:
+        if payload == first["benchmark_report.json"]:
+            first_write_started.set()
+            assert release_first.wait(timeout=5)
+        return real_write_bytes(path, payload)
+
+    monkeypatch.setattr(Path, "write_bytes", pause_first_report)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(publish_artifact_set, target, first)
+        assert first_write_started.wait(timeout=5)
+        second_future = executor.submit(publish_artifact_set, target, second)
+        time.sleep(0.05)
+        assert not second_future.done()
+        release_first.set()
+        first_future.result(timeout=5)
+        second_future.result(timeout=5)
+
+    assert (target / "benchmark_report.json").read_bytes() == second["benchmark_report.json"]
+    assert {path.name for path in target.iterdir()} == set(second)
+
+
+def test_publication_rejects_unsafe_or_unopenable_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nim_evidence"
+    lock = tmp_path / ".nim_evidence.publish-lock"
+    lock.symlink_to(tmp_path / "elsewhere")
+    with pytest.raises(NimEvidenceError, match="symbolic link"):
+        publish_artifact_set(target, _artifacts())
+
+    lock.unlink()
+    real_open = os.open
+
+    def fail_lock_open(path: str | os.PathLike[str], *args: object) -> int:
+        if Path(path) == lock:
+            raise OSError("simulated lock failure")
+        return real_open(path, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("contextual_orchestrator.nim_evidence.os.open", fail_lock_open)
+    with pytest.raises(NimEvidenceError, match="opened safely"):
+        publish_artifact_set(target, _artifacts())
+
+
+def test_unremovable_crash_staging_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nim_evidence"
+    abandoned = tmp_path / ".nim_evidence.staging-old"
+    abandoned.mkdir()
+    real_rmtree = shutil.rmtree
+
+    def fail_abandoned(path: str | os.PathLike[str]) -> None:
+        if Path(path) == abandoned:
+            raise OSError("simulated staging cleanup failure")
+        real_rmtree(path)
+
+    monkeypatch.setattr("contextual_orchestrator.nim_evidence.shutil.rmtree", fail_abandoned)
+    with pytest.raises(NimEvidenceError, match="operator review"):
+        publish_artifact_set(target, _artifacts())
 
 
 def test_crash_recovery_treats_glob_metacharacters_as_literal(tmp_path: Path) -> None:

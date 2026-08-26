@@ -13,8 +13,15 @@ import re
 import shutil
 import stat
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
+
+try:  # pragma: no cover - selected by the host platform
+    import fcntl
+except ImportError:  # pragma: no cover - Windows compatibility
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 
 NIM_EVIDENCE_SCHEMA_VERSION = "1.0.0"
 NIM_ARTIFACT_NAMES = frozenset(
@@ -112,10 +119,50 @@ def _residue(final: Path, kind: str) -> list[Path]:
     return sorted(path for path in final.parent.iterdir() if path.name.startswith(prefix))
 
 
+@contextmanager
+def _publication_lock(final: Path) -> Iterator[None]:
+    """Serialize publishers that target the same evidence directory."""
+    lock_path = final.parent / f".{final.name}.publish-lock"
+    if lock_path.is_symlink():
+        raise NimEvidenceError("publication lock must not be a symbolic link")
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise NimEvidenceError("publication lock could not be opened safely") from exc
+    try:
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        else:  # pragma: no cover - Windows compatibility
+            if os.fstat(descriptor).st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        else:  # pragma: no cover - Windows compatibility
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        os.close(descriptor)
+
+
+def _remove_staging(path: Path) -> None:
+    """Remove private staging even when a crash preserved a read-only mode."""
+    try:
+        path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IRWXU)
+        shutil.rmtree(path)
+    except OSError as exc:
+        raise NimEvidenceError("abandoned publication staging requires operator review") from exc
+
+
 def _recover_publication(final: Path) -> None:
     """Remove abandoned staging and restore one unambiguous crash backup."""
     for staging in _residue(final, "staging"):
-        shutil.rmtree(staging)
+        _remove_staging(staging)
     backups = _residue(final, "backup")
     if len(backups) > 1:
         raise NimEvidenceError("multiple publication backups require operator review")
@@ -152,30 +199,31 @@ def publish_artifact_set(
     if final.is_symlink() or (final.exists() and not final.is_dir()):
         raise NimEvidenceError("output directory must be a real directory")
     final.parent.mkdir(parents=True, exist_ok=True)
-    _recover_publication(final)
-    staging = final.parent / f".{final.name}.staging-{uuid.uuid4().hex}"
-    staging.mkdir(mode=0o777)
-    final_mode = stat.S_IMODE(final.stat().st_mode) if final.exists() else None
-    backup: Path | None = None
-    try:
-        for name, payload in artifacts.items():
-            (staging / name).write_bytes(payload)
-        if final_mode is not None:
-            staging.chmod(final_mode)
-        if final.exists():
-            backup = final.parent / f".{final.name}.backup-{uuid.uuid4().hex}"
-            os.replace(final, backup)
+    with _publication_lock(final):
+        _recover_publication(final)
+        staging = final.parent / f".{final.name}.staging-{uuid.uuid4().hex}"
+        staging.mkdir(mode=0o777)
+        final_mode = stat.S_IMODE(final.stat().st_mode) if final.exists() else None
+        backup: Path | None = None
         try:
-            os.replace(staging, final)
-        except BaseException:
-            if backup is not None and backup.exists():
-                os.replace(backup, final)
-            raise
-        if backup is not None:
+            for name, payload in artifacts.items():
+                (staging / name).write_bytes(payload)
+            if final_mode is not None:
+                staging.chmod(final_mode)
+            if final.exists():
+                backup = final.parent / f".{final.name}.backup-{uuid.uuid4().hex}"
+                os.replace(final, backup)
             try:
-                shutil.rmtree(backup)
-            except OSError:
-                pass
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
+                os.replace(staging, final)
+            except BaseException:
+                if backup is not None and backup.exists():
+                    os.replace(backup, final)
+                raise
+            if backup is not None:
+                try:
+                    shutil.rmtree(backup)
+                except OSError:
+                    pass
+        finally:
+            if staging.exists():
+                _remove_staging(staging)

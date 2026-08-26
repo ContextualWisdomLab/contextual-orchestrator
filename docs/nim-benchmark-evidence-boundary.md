@@ -25,3 +25,9 @@ The provenance object accepts only the protected Git source identity, catalog
 and task-manifest SHA-256 identities, pricing-scenario SHA-256 or the explicit
 value `unknown`, plus workflow-run and evidence status. Unexpected fields fail
 closed so secrets cannot be silently serialized.
+
+Publication takes an advisory sibling lock per output directory. Concurrent
+writers therefore commit complete artifact sets in order rather than deleting
+one another's staging data. Crash recovery restores one unambiguous backup and
+removes read-only staging residue; ambiguous backups still require operator
+review.
