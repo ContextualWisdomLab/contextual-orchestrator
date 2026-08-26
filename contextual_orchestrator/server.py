@@ -6070,6 +6070,16 @@ def build_server(
                                     "invalid_request",
                                     "streaming is not supported for orchestrated json_schema responses",
                                 )
+                            structured_routing = _validate_routing(body.get("routing"))
+                            if structured_routing and (
+                                structured_routing.get("channel") == "batch"
+                                or structured_routing.get("latency_tolerant") is True
+                            ):
+                                raise RequestError(
+                                    400,
+                                    "invalid_routing",
+                                    "batch routing is not supported for structured chat responses",
+                                )
                             messages = _validate_messages(body.get("messages"))
                             attribution = dict(_validate_attribution(body.get("attribution")) or {})
                             end_user_id = _validate_completions_user(body)

@@ -3891,9 +3891,12 @@ class TaskOrchestrator:
                 ),
             },
         ]
-        primary = next(
-            agent for agent in self._ranked_agents(task, "synthesizer") if agent.id in admitted
-        )
+        try:
+            primary = self._ranked_agents(task, "synthesizer")[0]
+        except (IndexError, RuntimeError) as exc:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            ) from exc
         candidates = self._failover_candidates(
             primary, task, "synthesizer", allowed_agent_ids=set(admitted)
         )

@@ -144,6 +144,25 @@ def test_virtual_structured_repair_defers_when_all_candidates_return_invalid_jso
     assert len(calls) >= 2
 
 
+def test_virtual_structured_repair_without_chat_candidate_is_typed_deferral() -> None:
+    """A repair pool without a chat-compatible candidate never leaks RuntimeError."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("media_agent", "mock-media", tags=("reasoning",))]
+    )
+    with patch.object(
+        orchestrator,
+        "_ranked_agents",
+        side_effect=RuntimeError("no chat-compatible agent available"),
+    ):
+        with pytest.raises(NoViableAgentError):
+            orchestrator._repair_structured_answer(
+                [{"role": "user", "content": "synthetic evidence"}],
+                "not json",
+                {"type": "object"},
+                frozenset({"media_agent"}),
+            )
+
+
 def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() -> None:
     calls: list[str] = []
     saw_schema_instruction = False
@@ -570,6 +589,31 @@ def test_http_virtual_json_schema_rejects_streaming_explicitly() -> None:
 
     assert status == 400
     assert body["error"]["code"] == "invalid_request"
+
+
+def test_http_virtual_json_schema_rejects_batch_routing_explicitly() -> None:
+    """Virtual structured requests reject unsupported batch routing fail closed."""
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic evidence"}],
+                "routing": {"channel": "batch"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "case", "schema": {"type": "object"}},
+                },
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 400
+    assert body["error"]["code"] == "invalid_routing"
 
 
 def test_http_responses_endpoint_passes_through() -> None:
