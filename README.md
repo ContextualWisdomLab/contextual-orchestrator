@@ -30,6 +30,20 @@ docker compose up --build --wait
 curl http://127.0.0.1:8000/healthz
 ```
 
+The project defaults to `contextual-orchestrator` and has no fixed
+`container_name` values. Run isolated stacks in parallel with distinct project
+names and host ports:
+
+```bash
+CONTEXTUAL_ORCHESTRATOR_COMPOSE_PROJECT_NAME=contextual-orchestrator-dev2 \
+CONTEXTUAL_ORCHESTRATOR_PORT=8001 docker compose up --build --wait
+```
+
+Accelerator runtimes stay separate: CPU PyO3 arithmetic is in-process, macOS
+MLX is an authenticated native-host provider, and CUDA/OpenCL workers require
+measured vendor evidence before overlays or Kubernetes manifests are added.
+See [ADR 0006](docs/adr/0006-native-accelerator-runtime-boundaries.md).
+
 Register provider keys separately with `register-credential`; do not put them
 in `compose.yaml` or the gateway runtime environment.
 

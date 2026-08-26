@@ -1,4 +1,4 @@
-name: contextual-orchestrator
+name: ${CONTEXTUAL_ORCHESTRATOR_COMPOSE_PROJECT_NAME:-contextual-orchestrator}
 
 services:
   postgres:

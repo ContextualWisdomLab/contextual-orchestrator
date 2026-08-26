@@ -1,5 +1,14 @@
 # Product Planning Reboot
 
+## Accelerator runtime requirement
+
+The product boundary is defined by [ADR 0006](adr/0006-native-accelerator-runtime-boundaries.md).
+Exact CPU token/vector arithmetic uses the packaged PyO3 extension. macOS MLX
+is consumed through an authenticated native-host provider. CUDA/OpenCL workers
+and Kubernetes assets are gated on measured runtime evidence, a pinned supply
+chain, authenticated transport, and externalized shared state; speculative
+manifests are not product evidence.
+
 ## Goal
 
 Re-plan Contextual Orchestrator as an enterprise orchestration control plane, not as a generic multi-agent demo. The product should preserve the Fugu-style adoption promise of one model-like API while giving operators the evidence they need to manage model pools, latency-quality tradeoffs, workflow visibility, access control, and compliance constraints.
