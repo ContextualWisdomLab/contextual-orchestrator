@@ -32,8 +32,8 @@ necessary.
 | Commercial acceptance check | `/api/v1/commercial_acceptance_checks/latest` | Acceptance status and follow-up source. |
 | Commercial evidence export | `/api/v1/commercial_evidence_exports/latest` | Portable evidence source. |
 | Saleability decision | `/api/v1/saleability_decisions/latest` | Concrete blocker and review-process policy source. |
-| Buyer handoff bundle | `/api/v1/buyer_handoff_bundles/latest` | Buyer handoff package source. |
-| Buyer evidence manifest | `/api/v1/buyer_evidence_manifests/latest` | Evidence owner and caveat source. |
+| Buyer handoff bundle | `/api/v1/commercial_handoff_bundles/latest` | Buyer handoff package source. |
+| Buyer evidence manifest | `/api/v1/commercial_evidence_manifests/latest` | Evidence owner and caveat source. |
 | Readiness endpoints | `/api/v1/sales_readiness/latest`, `/api/v1/commercial_readiness/latest` | Local readiness source. |
 | Analytics snapshot | `/api/v1/analytics_snapshots/latest` | Local KPI and guardrail source. |
 

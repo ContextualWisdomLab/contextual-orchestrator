@@ -66,6 +66,10 @@ push or open a PR.
 
 ### This repo: the org LLM gateway
 
+- Endpoint races require a complete operator-reviewed equivalence contract.
+  Never infer equivalence from provider/model names, and never treat missing loser
+  usage as free or zero-cost execution.
+
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The

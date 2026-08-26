@@ -95,15 +95,15 @@ caveat evidence, or concrete-defect handling.
 
 The runtime buyer evidence endpoint workflow maps analytics, sales readiness,
 commercial readiness, repository documents, verification commands, Figma
-artifacts, and packaging decisions into `/api/v1/buyer_evidence_manifests/latest`
+artifacts, and packaging decisions into `/api/v1/commercial_evidence_manifests/latest`
 so buyer review evidence is available as both documentation and runtime JSON.
 
 The buyer handoff bundle workflow maps runtime reports, repository packet,
 Figma stakeholder artifacts, verification commands, packaging decision,
 production follow-up, buyer-specific follow-up, and concrete-defect handling
-into `/api/v1/buyer_handoff_bundles/latest`.
+into `/api/v1/commercial_handoff_bundles/latest`.
 
-The saleability decision gate maps `/api/v1/buyer_handoff_bundles/latest`,
+The saleability decision gate maps `/api/v1/commercial_handoff_bundles/latest`,
 concrete blocker detection, review-process non-blocker policy, warning
 follow-ups, and ready or blocked saleability states into
 `/api/v1/saleability_decisions/latest`.

@@ -23,8 +23,8 @@ evidence control plane.
 
 | Input | Runtime source | Decision use |
 |---|---|---|
-| Buyer handoff bundle | `/api/v1/buyer_handoff_bundles/latest` | Primary saleability input. |
-| Buyer evidence manifest | `/api/v1/buyer_evidence_manifests/latest` | Confirms buyer evidence has named sources and caveats. |
+| Buyer handoff bundle | `/api/v1/commercial_handoff_bundles/latest` | Primary saleability input. |
+| Buyer evidence manifest | `/api/v1/commercial_evidence_manifests/latest` | Confirms buyer evidence has named sources and caveats. |
 | Commercial readiness | `/api/v1/commercial_readiness/latest` | Confirms KRW 2,000,000,000 diligence criteria. |
 | Sales readiness | `/api/v1/sales_readiness/latest` | Confirms API, admin, trace, replay, security, analytics, locale, and provider evidence. |
 
