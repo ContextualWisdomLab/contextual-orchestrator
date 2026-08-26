@@ -67,7 +67,7 @@ def test_zdr_model_analysis_updates_only_quote_grounded_policy_fields() -> None:
     assert evidence[0].analyzer_model == "zdr-analyzer"
     assert enriched[1].supports_no_training is True
     assert enriched[1].supports_no_prompt_retention is None
-    assert enriched[1].supports_zero_data_retention is None
+    assert enriched[1].supports_zero_data_retention is True
 
 
 def test_analysis_rejects_hallucinated_quote_and_non_zdr_analyzer() -> None:

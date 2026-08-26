@@ -475,11 +475,17 @@ def analyze_discovered_privacy_policies(
     enriched: list[DiscoveredModel] = []
     for model in models:
         evidence = [by_url[url] for url in model.privacy_policy_urls if url in by_url]
+        zdr_available = [item.zero_data_retention_available for item in evidence]
         no_training = [item.supports_no_training for item in evidence]
         no_retention = [item.supports_no_prompt_retention for item in evidence]
         enriched.append(
             replace(
                 model,
+                supports_zero_data_retention=inferred_consensus(
+                    zdr_available,
+                    expected_sources=len(model.privacy_policy_urls),
+                    provider_value=model.supports_zero_data_retention,
+                ),
                 supports_no_training=inferred_consensus(
                     no_training,
                     expected_sources=len(model.privacy_policy_urls),
