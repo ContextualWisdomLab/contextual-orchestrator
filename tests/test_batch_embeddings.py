@@ -126,10 +126,12 @@ def test_batch_capabilities_publish_enforced_request_and_partition_limits() -> N
 
 def test_provider_batch_returns_immediately_then_polls_terminal_result() -> None:
     release = threading.Event()
+    calls = []
 
-    def runner(request):
+    def runner(requests):
+        calls.append(list(requests))
         release.wait(timeout=1)
-        return [float(len(request.input_text))], 1
+        return [[float(len(request.input_text))] for request in requests], 2
 
     backend = ProviderEmbeddingBatchBackend(runner)
     request = EmbeddingBatchRequest(input_text="synthetic input", model="synthetic-model")
@@ -149,10 +151,13 @@ def test_provider_batch_returns_immediately_then_polls_terminal_result() -> None
         "is_complete": True,
     }
     assert backend.retrieve(job)[0].embedding == [15.0]
+    assert len(calls) == 1
+    assert len(calls[0]) == 1
+    assert backend.usage(job) == {"prompt_tokens": 2}
 
 
 def test_provider_batch_exposes_failed_terminal_state() -> None:
-    def runner(_request):
+    def runner(_requests):
         raise RuntimeError("synthetic provider failure")
 
     backend = ProviderEmbeddingBatchBackend(runner)
@@ -165,6 +170,33 @@ def test_provider_batch_exposes_failed_terminal_state() -> None:
         time.sleep(0.01)
     assert backend.poll(job)["is_complete"] is True
     assert backend.retrieve(job) == []
+
+
+def test_provider_batch_sends_more_than_32_inputs_in_one_provider_call() -> None:
+    calls = []
+
+    def runner(requests):
+        calls.append(list(requests))
+        return [[float(index)] for index, _request in enumerate(requests)], 40
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    requests = [
+        EmbeddingBatchRequest(
+            input_text=f"synthetic input {index}", model="synthetic-model"
+        )
+        for index in range(40)
+    ]
+    job = backend.submit(requests)
+    for _attempt in range(100):
+        if backend.poll(job)["status"] == "completed":
+            break
+        time.sleep(0.01)
+
+    assert backend.poll(job)["status"] == "completed"
+    assert len(calls) == 1
+    assert len(calls[0]) == 40
+    assert len(backend.retrieve(job)) == 40
+    assert backend.usage(job) == {"prompt_tokens": 40}
 
 class _RecordingEmbeddingBackend:
     """Embedding backend that records the exact mapped requests it receives."""

@@ -577,7 +577,7 @@ class ProviderEmbeddingBatchBackend:
 
     def __init__(
         self,
-        runner: Callable[[EmbeddingBatchRequest], tuple[List[float], int]],
+        runner: Callable[[List[EmbeddingBatchRequest]], tuple[List[List[float]], int]],
         *,
         job_registry: Any = None,
         max_concurrency: int = 1,
@@ -606,6 +606,11 @@ class ProviderEmbeddingBatchBackend:
             if job_registry is not None
             else {}
         )
+        self._usage = (
+            job_registry.mapping("provider_embedding_usage")
+            if job_registry is not None
+            else {}
+        )
         for job_id in list(self._states):
             if self._states.get(job_id) in {"queued", "running"}:
                 self._states[job_id] = "queued"
@@ -625,18 +630,25 @@ class ProviderEmbeddingBatchBackend:
         """Execute one persisted job inside the bounded provider worker pool."""
         self._states[job_id] = "running"
         try:
+            requests = list(self._requests[job_id])
+            vectors, prompt_tokens = self._runner(requests)
+            if len(vectors) != len(requests):
+                raise ValueError("provider embedding batch result count did not match inputs")
+            dimensions = {len(vector) for vector in vectors}
+            if not vectors or dimensions == {0} or len(dimensions) != 1:
+                raise ValueError("provider embedding batch dimensions were inconsistent")
             items = []
-            for index, request in enumerate(self._requests[job_id]):
-                vector, prompt_tokens = self._runner(request)
+            for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
                 items.append(
                     EmbeddingBatchResultItem(
                         custom_id=request.custom_id,
                         index=index,
                         embedding=vector,
-                        prompt_tokens=prompt_tokens,
+                        prompt_tokens=0,
                         model=request.model,
                     )
                 )
+            self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
             self._results[job_id] = items
             self._states[job_id] = "completed"
         except Exception:  # noqa: BLE001 - polling exposes a bounded terminal state
@@ -654,6 +666,10 @@ class ProviderEmbeddingBatchBackend:
     def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
         """Return provider embeddings computed during submission."""
         return self._results.get(job.job_id, [])
+
+    def usage(self, job: BatchJob) -> Dict[str, int]:
+        """Return provider-reported batch usage without per-input allocation."""
+        return dict(self._usage.get(job.job_id, {}))
 
 
 class PgLlmBatchEmbeddingBackend:

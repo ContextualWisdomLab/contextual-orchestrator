@@ -98,16 +98,26 @@ class CostRoutingCoordinator:
             token_counter=self.token_counter, job_registry=registry
         )
 
-        def embed(request: EmbeddingBatchRequest) -> tuple[List[float], int]:
+        def embed(
+            requests: List[EmbeddingBatchRequest],
+        ) -> tuple[List[List[float]], int]:
+            if not requests:
+                return [], 0
+            first = requests[0]
             agent = (
-                orchestrator._agent(request.routing_agent_id)
-                if request.routing_agent_id is not None
-                else self._embedding_agent_for_model(request.model)
+                orchestrator._agent(first.routing_agent_id)
+                if first.routing_agent_id is not None
+                else self._embedding_agent_for_model(first.model)
             )
-            vectors, token_count = orchestrator.client.embed_with_usage(
-                agent, [request.input_text]
+            if any(
+                request.model != first.model
+                or request.routing_agent_id != first.routing_agent_id
+                for request in requests
+            ):
+                raise ValueError("provider embedding batch must use one resolved route")
+            return orchestrator.client.embed_with_usage(
+                agent, [request.input_text for request in requests]
             )
-            return vectors[0], token_count
 
         self._provider_embedding_backend = ProviderEmbeddingBatchBackend(
             embed,
@@ -657,6 +667,14 @@ class CostRoutingCoordinator:
             return document
 
         items: List[EmbeddingBatchResultItem] = backend.retrieve(job)
+        usage_reader = getattr(backend, "usage", None)
+        batch_usage = usage_reader(job) if callable(usage_reader) else {}
+        provider_batch_tokens = (
+            int(batch_usage["prompt_tokens"])
+            if type(batch_usage.get("prompt_tokens")) is int
+            and batch_usage["prompt_tokens"] >= 0
+            else None
+        )
         request_by_custom_id = {request.custom_id: request for request in requests}
         input_count = self._embedding_input_counts.get(batch_id, len(requests))
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)
@@ -698,19 +716,22 @@ class CostRoutingCoordinator:
             provider = str(
                 attribution.get("provider") or attribution.get("upstream_api") or "unknown"
             )
-            record = self.ledger.record_usage(
-                provider=provider,
-                model=model_name,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=0,
-                request_channel="batch",
-                route_mode="embedding",
-                workflow_run_id=batch_id,
-                attribution=attribution,
-            )
-            total_cost_amount += float(record.cost_amount)
-            currency_code = record.currency_code
-            token_counts.append(record.prompt_tokens)
+            if provider_batch_tokens is None:
+                record = self.ledger.record_usage(
+                    provider=provider,
+                    model=model_name,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,
+                    request_channel="batch",
+                    route_mode="embedding",
+                    workflow_run_id=batch_id,
+                    attribution=attribution,
+                )
+                total_cost_amount += float(record.cost_amount)
+                currency_code = record.currency_code
+                token_counts.append(record.prompt_tokens)
+            else:
+                token_counts.append(0)
             embeddings.append(
                 {
                     "index": source_index,
@@ -722,6 +743,32 @@ class CostRoutingCoordinator:
                 }
             )
 
+        if provider_batch_tokens is not None:
+            shared_attribution = dict(requests[0].attribution) if requests else {}
+            for key in list(shared_attribution):
+                if any(
+                    request.attribution.get(key) != shared_attribution[key]
+                    for request in requests[1:]
+                ):
+                    shared_attribution.pop(key)
+            provider = str(
+                shared_attribution.get("provider")
+                or shared_attribution.get("upstream_api")
+                or "unknown"
+            )
+            record = self.ledger.record_usage(
+                provider=provider,
+                model=model_name,
+                prompt_tokens=provider_batch_tokens,
+                completion_tokens=0,
+                request_channel="batch",
+                route_mode="embedding",
+                workflow_run_id=batch_id,
+                attribution=shared_attribution,
+            )
+            total_cost_amount = float(record.cost_amount)
+            currency_code = record.currency_code
+
         document = {
             "batch_id": batch_id,
             "status": "completed",
@@ -729,7 +776,12 @@ class CostRoutingCoordinator:
             "model": model_name,
             "embeddings": embeddings,
             "token_counts": token_counts,
-            "total_tokens": sum(token_counts),
+            "total_tokens": (
+                provider_batch_tokens
+                if provider_batch_tokens is not None
+                else sum(token_counts)
+            ),
+            "batch_token_count": provider_batch_tokens,
             "part_count": len(requests),
             "input_part_counts": part_counts,
             "map_reduce": {
