@@ -303,7 +303,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for candidate in orchestrator.agents
     )
     for candidate in tuple(orchestrator.agents):
-        if has_real_runtime_agent and candidate.base_url.startswith("mock://"):
+        if has_real_runtime_agent and "bootstrap_seed" in candidate.tags:
             orchestrator.patch_agent(
                 "default", candidate.id, {"status": "disabled"}
             )

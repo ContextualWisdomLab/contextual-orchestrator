@@ -4,21 +4,21 @@
       "id": "general_agent",
       "model": "mock-generalist",
       "base_url": "mock://generalist",
-      "tags": ["reasoning", "writing", "planning", "response_format"],
+      "tags": ["reasoning", "writing", "planning", "response_format", "bootstrap_seed"],
       "priority": 1
     },
     {
       "id": "builder_agent",
       "model": "mock-builder",
       "base_url": "mock://builder",
-      "tags": ["coding", "debugging", "implementation", "response_format"],
+      "tags": ["coding", "debugging", "implementation", "response_format", "bootstrap_seed"],
       "priority": 2
     },
     {
       "id": "reviewer_agent",
       "model": "mock-reviewer",
       "base_url": "mock://reviewer",
-      "tags": ["verification", "security", "review", "response_format"],
+      "tags": ["verification", "security", "review", "response_format", "bootstrap_seed"],
       "priority": 3
     }
   ]

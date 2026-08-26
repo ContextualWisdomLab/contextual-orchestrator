@@ -68,6 +68,10 @@ Provider-declared `supported_parameters=response_format` is retained as the
 when selecting from an automatically discovered pool; unknown support does not
 become presumed support. An explicitly requested operator-managed model remains
 the operator's transport contract.
+When live discovery activates a real chat model, only agents explicitly tagged
+`bootstrap_seed` are retired. A `mock://` transport alone is not proof that an
+agent is disposable; operator-configured mock agents remain in the declared
+pool unless the operator disables them.
 
 ## Consequences
 

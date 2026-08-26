@@ -28,7 +28,9 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
         lambda: ([chat, embedding], []),
     )
 
-    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
 
     result = _auto_discover_runtime_agents(orchestrator)
 
@@ -113,10 +115,37 @@ def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
         lambda: ([discovered], []),
     )
     orchestrator = TaskOrchestrator(
-        [ModelAgent("mock_seed_agent", "mock-model"), real_agent]
+        [
+            ModelAgent("mock_seed_agent", "mock-model", tags=("bootstrap_seed",)),
+            real_agent,
+        ]
     )
 
     result = _auto_discover_runtime_agents(orchestrator)
 
     assert result == {"added": [], "updated": ["mock_seed_agent"]}
     assert orchestrator.agents == [real_agent]
+
+
+def test_auto_discovery_preserves_operator_configured_mock(monkeypatch) -> None:
+    """Only tagged bootstrap fixtures retire when real discovery succeeds."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([discovered], []),
+    )
+    operator_mock = ModelAgent(
+        "operator_mock", "operator-model", base_url="mock://operator"
+    )
+    orchestrator = TaskOrchestrator([operator_mock])
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert operator_mock in orchestrator.agents
