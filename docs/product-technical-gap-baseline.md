@@ -1,5 +1,12 @@
 # Product and Technical Gap Baseline
 
+> Accelerator boundary: [ADR 0006](adr/0006-native-accelerator-runtime-boundaries.md)
+> keeps CPU PyO3 arithmetic in-process and MLX behind the authenticated
+> native-host provider contract. CUDA/OpenCL workers and Kubernetes manifests
+> remain open gaps until measured vendor-runtime and state-externalization
+> evidence exists; Compose supports parallel project names without
+> `container_name`.
+
 ## 2026-08-26 15:11 KST exact-head review-remediation snapshot
 
 Protected `main` remains normal merge `9c299fa4669139dbe246638e0c44b62051ec8830`.

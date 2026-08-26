@@ -40,6 +40,13 @@ The Fugu report combines these ideas into production constraints:
 
 ## Implementation Mapping
 
+Native acceleration follows [ADR 0006](adr/0006-native-accelerator-runtime-boundaries.md):
+the hash-locked CPU PyO3 arithmetic boundary remains in-process; macOS MLX is
+an authenticated external native-host provider; and CUDA/OpenCL are deferred to
+independently scalable workers until measured vendor-runtime evidence exists.
+Kubernetes replicas additionally require external authorities for mutable state;
+same-Pod sidecars do not satisfy independent accelerator scaling.
+
 This repository implements the interface and control plane, not the trained
 coordinator or its optional recursive self-worker. The public model is therefore
 an explicit control-plane candidate, while the worker pool is selected from
