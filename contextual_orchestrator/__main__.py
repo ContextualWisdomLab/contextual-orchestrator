@@ -330,7 +330,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
         "--rate-limit-requests",
-        type=int,
+        type=_positive_int,
         default=None,
         help="Per-client requests allowed per fixed window (default: SecurityConfig's 60). "
         "Size this above your measured peak concurrency — load tests and health "
@@ -338,7 +338,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--rate-limit-window-seconds",
-        type=int,
+        type=_positive_int,
         default=None,
         help="Fixed rate-limit window length in seconds (default: SecurityConfig's 60).",
     )
