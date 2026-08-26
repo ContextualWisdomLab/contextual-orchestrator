@@ -532,6 +532,8 @@ def _merge_openrouter_zdr_metadata(payload: Any, metadata: Any) -> Any:
         for endpoint in endpoints
         if isinstance(endpoint, dict) and isinstance(endpoint.get("model_id"), str)
     }
+    if not zdr_models:
+        return payload
     for row in rows:
         if isinstance(row, dict) and isinstance(row.get("id"), str):
             row["supports_zero_data_retention"] = row["id"] in zdr_models

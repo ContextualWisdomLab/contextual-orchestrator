@@ -52,6 +52,14 @@ def test_openrouter_zdr_metadata_covers_paid_and_free_models() -> None:
     assert [row["supports_zero_data_retention"] for row in merged["data"]] == [True, False]
 
 
+def test_openrouter_empty_zdr_inventory_keeps_support_unknown() -> None:
+    payload = {"data": [{"id": "paid/private"}]}
+
+    merged = _merge_openrouter_zdr_metadata(payload, {"data": []})
+
+    assert "supports_zero_data_retention" not in merged["data"][0]
+
+
 def test_openrouter_provider_privacy_preserves_terms_and_withholds_mixed_claims() -> None:
     payload = {"data": [{"id": "free/model"}]}
     providers = {
