@@ -1,5 +1,5 @@
 ---
-id: "0011"
+id: "0027"
 title: "Purpose-limited PII authorization and field-level encryption boundary"
 status: proposed
 proposed_date: "2026-08-19"
