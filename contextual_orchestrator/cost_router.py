@@ -149,6 +149,9 @@ class CostRoutingCoordinator:
         context = self._race_usage_context.get()
         if context is None:
             return
+        if context["workflow_run_id"] is None:
+            context["pending_usage"].append((endpoint_id, value))
+            return
         usage = None
         if isinstance(value, tuple) and len(value) == 3:
             usage = value[2]
@@ -176,6 +179,13 @@ class CostRoutingCoordinator:
             completion_tokens=counts[1],
         )
         context["records"].append(record)
+
+    def _flush_race_endpoint_usage(self, context: dict[str, Any]) -> None:
+        """Persist usage held until the workflow identity becomes available."""
+        pending = list(context["pending_usage"])
+        context["pending_usage"].clear()
+        for endpoint_id, value in pending:
+            self._record_race_endpoint_usage(endpoint_id, value)
 
     # ------------------------------------------------------------------
     # Sync + batch completion
@@ -245,6 +255,7 @@ class CostRoutingCoordinator:
                 "model_name": model_name,
                 "workflow_run_id": workflow_run_id,
                 "records": [],
+                "pending_usage": [],
             }
             race_token = self._race_usage_context.set(race_context)
             try:
@@ -253,6 +264,12 @@ class CostRoutingCoordinator:
                     endpoint=provider_endpoint,
                     single_agent=False,
                 )
+                lineage = provider_response.get("orchestration")
+                if isinstance(lineage, dict) and isinstance(
+                    lineage.get("workflow_run_id"), str
+                ):
+                    race_context["workflow_run_id"] = lineage["workflow_run_id"]
+                    self._flush_race_endpoint_usage(race_context)
             finally:
                 self._race_usage_context.reset(race_token)
             lineage = provider_response.get("orchestration")
@@ -361,10 +378,14 @@ class CostRoutingCoordinator:
             "model_name": model_name,
             "workflow_run_id": workflow_run_id,
             "records": [],
+            "pending_usage": [],
         }
         race_token = self._race_usage_context.set(race_context)
         try:
             result = self.orchestrator.run(messages, **run_kwargs)
+            if isinstance(result.get("workflow_run_id"), str):
+                race_context["workflow_run_id"] = result["workflow_run_id"]
+                self._flush_race_endpoint_usage(race_context)
         finally:
             self._race_usage_context.reset(race_token)
         cache_hit = result.get("cache_status") == "hit"

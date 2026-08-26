@@ -88,8 +88,9 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
         "route_mode": "route",
         "attribution": {"team": "alpha"},
         "model_name": "contextual-orchestrator",
-        "workflow_run_id": "run_race",
+        "workflow_run_id": None,
         "records": [],
+        "pending_usage": [],
     }
     token = coordinator._race_usage_context.set(context)
     try:
@@ -97,6 +98,9 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
             "mock_worker",
             ("duplicate", "mock_worker", {"prompt_tokens": 5, "completion_tokens": 2}),
         )
+        assert coordinator.ledger.records() == []
+        context["workflow_run_id"] = "run_race"
+        coordinator._flush_race_endpoint_usage(context)
     finally:
         coordinator._race_usage_context.reset(token)
     record = coordinator.ledger.records()[0]
