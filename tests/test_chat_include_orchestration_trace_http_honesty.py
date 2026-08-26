@@ -204,6 +204,32 @@ def test_http_chat_accepts_include_orchestration_trace_true() -> None:
         thread.join(timeout=5)
 
 
+def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> None:
+    """Structured synthesis preserves the same audited trace contract."""
+    server, thread, port = _server()
+    try:
+        base = {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "structured trace"}],
+            "response_format": {"type": "json_object"},
+        }
+        status, disclosed = _post(
+            port, {**base, "include_orchestration_trace": True}
+        )
+        hidden_status, hidden = _post(
+            port, {**base, "include_orchestration_trace": False}
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == hidden_status == 200
+    trace = disclosed["orchestration"]["trace"]
+    assert len(trace) >= 2
+    assert trace[-1]["role"] == "synthesizer"
+    assert "trace" not in hidden["orchestration"]
+
+
 def test_http_chat_accepts_include_orchestration_trace_false() -> None:
     server, thread, port = _server()
     try:

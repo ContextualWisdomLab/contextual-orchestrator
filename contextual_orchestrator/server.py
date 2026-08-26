@@ -5833,6 +5833,9 @@ def build_server(
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
                         tool_loop = bool(tools_list)
+                        include_trace = self._trace_requested(
+                            body, "/v1/chat/completions"
+                        )
                         started_at = time.perf_counter()
                         if tool_loop:
                             proxied = self._run(
@@ -5897,7 +5900,20 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
-                        self._send(proxied)
+                        if include_trace and not tool_loop:
+                            lineage = proxied.get("orchestration")
+                            workflow_run_id = (
+                                lineage.get("workflow_run_id")
+                                if isinstance(lineage, dict)
+                                else None
+                            )
+                            if not isinstance(workflow_run_id, str):
+                                raise RuntimeError(
+                                    "structured completion omitted workflow lineage"
+                                )
+                            workflow = orchestrator.get_workflow_run(workflow_run_id)
+                            lineage["trace"] = workflow["trace"]
+                        self._send(_response_payload(proxied, include_trace))
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
