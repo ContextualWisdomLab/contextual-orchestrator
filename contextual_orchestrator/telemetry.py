@@ -153,16 +153,23 @@ def inject_trace_context(headers: dict[str, str]) -> None:
 
 def _safe_attributes(
     attributes: Mapping[str, Any] | None,
-) -> dict[str, str | int | float | bool]:
-    """Keep only approved scalar span attributes; prompts and secrets never enter OTLP."""
-    result: dict[str, str | int | float | bool] = {}
+) -> dict[str, str | int | float | bool | list[str]]:
+    """Keep approved bounded span attributes; prompts and secrets never enter OTLP."""
+    result: dict[str, str | int | float | bool | list[str]] = {}
     for key, value in (attributes or {}).items():
         if (
             not isinstance(key, str)
             or not key
             or key not in _ALLOWED_ATTRIBUTE_KEYS
-            or isinstance(value, (dict, list, tuple, set))
+            or isinstance(value, (dict, set))
         ):
+            continue
+        if key == "gen_ai.response.finish_reasons" and isinstance(value, (list, tuple)):
+            reasons = [item[:256] for item in value if isinstance(item, str) and item]
+            if reasons:
+                result[key] = reasons
+            continue
+        if isinstance(value, (list, tuple)):
             continue
         if isinstance(value, str):
             result[key] = value[:256]
@@ -198,7 +205,11 @@ def record_provider_usage(usage: Mapping[str, Any] | None) -> None:
 
     def _count(key: str) -> int | None:
         value = usage.get(key)
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+        return (
+            value
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            else None
+        )
 
     attributes: dict[str, Any] = {}
     input_tokens = _count("prompt_tokens") if "prompt_tokens" in usage else _count("input_tokens")

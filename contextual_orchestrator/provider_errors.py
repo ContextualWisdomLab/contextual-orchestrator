@@ -26,6 +26,7 @@ import urllib.error
 from typing import Any
 
 __all__ = [
+    "MAX_PROVIDER_ERROR_BODY_BYTES",
     "MAX_SAFE_MESSAGE_CHARS",
     "PROVIDER_STATUS_SURFACES",
     "ProviderUpstreamError",
@@ -35,6 +36,9 @@ __all__ = [
 
 #: Upper bound for any provider-supplied message that reaches a caller.
 MAX_SAFE_MESSAGE_CHARS = 300
+
+#: Maximum provider response bytes inspected for one caller-safe diagnostic.
+MAX_PROVIDER_ERROR_BODY_BYTES = 65_536
 
 #: Upstream HTTP status -> ``(client_status, error_code, retryable)`` surface.
 #: The client status is what this gateway returns; ``error_code`` follows the
@@ -48,7 +52,7 @@ PROVIDER_STATUS_SURFACES: dict[int, tuple[int, str, bool]] = {
     404: (404, "model_not_found", False),
     405: (502, "api_error", False),
     408: (504, "provider_timeout", True),
-    409: (409, "conflict", False),
+    409: (409, "conflict", True),
     410: (404, "model_not_found", False),
     413: (413, "request_too_large", False),
     415: (400, "invalid_request_error", False),
@@ -70,16 +74,22 @@ _UNMAPPED_UPSTREAM_SURFACE: tuple[int, str, bool] = (502, "api_error", False)
 def safe_provider_message(exc: BaseException) -> str | None:
     """Extract one bounded, control-free diagnostic sentence from a failure.
 
-    Only an HTTP error's JSON ``error.message``-style fields pass through;
-    every other cause returns ``None`` so callers fall back to package-owned
-    sentences. Provider diagnostics can embed URLs, secrets, prompts, or
-    internal topology, so raw exception text never reaches API callers.
+    An HTTP error contributes only JSON ``error.message``-style fields. For
+    non-HTTP exceptions, this low-level helper returns a bounded first argument
+    or exception type for internal diagnostics; caller-facing classification
+    deliberately replaces those values with package-owned sentences.
+    Provider diagnostics can embed URLs, secrets, prompts, or internal topology,
+    so raw exception text never reaches API callers.
     Control characters are collapsed so no body can smuggle log-formatting
     or header content downstream.
     """
     if isinstance(exc, urllib.error.HTTPError):
         try:
-            payload = _json.loads(exc.read().decode("utf-8", errors="replace"))
+            payload = _json.loads(
+                exc.read(MAX_PROVIDER_ERROR_BODY_BYTES + 1)[
+                    :MAX_PROVIDER_ERROR_BODY_BYTES
+                ].decode("utf-8", errors="replace")
+            )
         except Exception:  # noqa: BLE001 - bodies are untrusted input
             return None
         raw: Any = None

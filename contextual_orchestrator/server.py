@@ -6857,6 +6857,19 @@ def build_server(
                         )
                 except ConnectionAbortedError:
                     raise
+                except ProviderUpstreamError as exc:
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": _error_payload(
+                            exc.error_code,
+                            _provider_upstream_message(exc),
+                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                        )["error"],
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     failed = {
                         **created_response,
@@ -6973,6 +6986,18 @@ def build_server(
                         TOOL_FALLBACK_STOPPED_CODE,
                         TOOL_FALLBACK_STOPPED_MESSAGE,
                         detail,
+                    )
+                    if not self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
+                except ProviderUpstreamError as exc:
+                    payload = _error_payload(
+                        exc.error_code,
+                        _provider_upstream_message(exc),
+                        {"request_id": uuid.uuid4().hex, **exc.detail},
                     )
                     if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

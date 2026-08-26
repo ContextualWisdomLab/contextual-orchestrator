@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.provider_errors import (  # noqa: E402
+    MAX_PROVIDER_ERROR_BODY_BYTES,
     MAX_SAFE_MESSAGE_CHARS,
     PROVIDER_STATUS_SURFACES,
     ProviderUpstreamError,
@@ -66,6 +67,24 @@ def test_safe_message_hides_unparseable_bodies_and_urls() -> None:
     assert safe_provider_message(_http_error(502)) is None
 
 
+def test_safe_message_reads_only_a_bounded_provider_body() -> None:
+    """Untrusted provider bodies are bounded before JSON parsing."""
+
+    class RecordingBody(io.BytesIO):
+        requested_size: int | None = None
+
+        def read(self, size: int = -1) -> bytes:
+            self.requested_size = size
+            return super().read(size)
+
+    body = RecordingBody(b"{}")
+    error = urllib.error.HTTPError(
+        "https://provider.example/chat/completions", 500, "error", None, body
+    )
+    assert safe_provider_message(error) is None
+    assert body.requested_size == MAX_PROVIDER_ERROR_BODY_BYTES + 1
+
+
 def test_safe_message_collapses_control_characters_and_bounds_length() -> None:
     """Control characters cannot smuggle log or header content; length is bounded."""
     long = safe_provider_message(
@@ -98,7 +117,7 @@ def test_classification_maps_every_upstream_status_to_openai_surface() -> None:
         403: (403, "permission_error", False),
         404: (404, "model_not_found", False),
         408: (504, "provider_timeout", True),
-        409: (409, "conflict", False),
+        409: (409, "conflict", True),
         413: (413, "request_too_large", False),
         422: (400, "invalid_request_error", False),
         425: (429, "rate_limit_exceeded", True),

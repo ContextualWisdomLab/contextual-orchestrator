@@ -530,7 +530,7 @@ class OrchestrationPolicy:
 # HTTP statuses worth retrying: request timeout, conflict, too-early, rate limit,
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
-TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -854,11 +854,19 @@ def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> 
     if isinstance(served_model, str) and served_model:
         attributes["gen_ai.response.model"] = served_model
     choices = data.get("choices")
-    finish_reason = (
-        choices[0].get("finish_reason") if isinstance(choices, list) and isinstance(choices[0], dict) else None
+    finish_reasons = (
+        [
+            choice["finish_reason"]
+            for choice in choices
+            if isinstance(choice, dict)
+            and isinstance(choice.get("finish_reason"), str)
+            and choice["finish_reason"]
+        ]
+        if isinstance(choices, list)
+        else []
     )
-    if isinstance(finish_reason, str) and finish_reason:
-        attributes["gen_ai.response.finish_reasons"] = finish_reason
+    if finish_reasons:
+        attributes["gen_ai.response.finish_reasons"] = finish_reasons
     annotate_current_span(attributes)
     record_provider_usage(data.get("usage"))
 

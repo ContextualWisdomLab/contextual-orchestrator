@@ -94,6 +94,16 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
         reset_session_id(token)
 
 
+def test_finish_reason_attribute_accepts_only_bounded_string_arrays():
+    """The standard finish-reasons array remains bounded and prompt-safe."""
+    assert telemetry_module._safe_attributes(
+        {"gen_ai.response.finish_reasons": ["stop", "x" * 300, 2, ""]}
+    ) == {"gen_ai.response.finish_reasons": ["stop", "x" * 256]}
+    assert telemetry_module._safe_attributes(
+        {"gen_ai.response.finish_reasons": {"stop": True}}
+    ) == {}
+
+
 def test_session_binding_is_reset():
     """A request cannot leak its session into a later request context."""
     token = set_session_id("session-2")
@@ -526,6 +536,16 @@ def test_record_provider_usage_accepts_responses_style_keys(monkeypatch):
     ]
 
 
+def test_record_provider_usage_rejects_negative_counts(monkeypatch):
+    """Impossible negative token counts never enter GenAI telemetry."""
+    captured: list[dict] = []
+    monkeypatch.setattr(telemetry_module, "annotate_current_span", captured.append)
+    telemetry_module.record_provider_usage(
+        {"prompt_tokens": -1, "completion_tokens": 2, "total_tokens": -3}
+    )
+    assert captured == [{"gen_ai.usage.output_tokens": 2}]
+
+
 def test_provider_response_telemetry_records_latency_model_finish_reason(monkeypatch):
     """One completed provider response annotates usage, model, reason, latency."""
     captured: dict[str, list] = {"annotate": [], "usage": []}
@@ -565,8 +585,31 @@ def test_provider_response_telemetry_records_latency_model_finish_reason(monkeyp
     assert content == "ok"
     annotated = captured["annotate"][0]
     assert annotated["gen_ai.response.model"] == "gpt-x-served"
-    assert annotated["gen_ai.response.finish_reasons"] == "stop"
+    assert annotated["gen_ai.response.finish_reasons"] == ["stop"]
     assert isinstance(annotated["contextual_orchestrator.latency_ms"], float)
     assert captured["usage"] == [
         {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11}
     ]
+
+
+def test_provider_response_telemetry_accepts_empty_and_multiple_choices(monkeypatch):
+    """Usage-only responses do not crash and all valid finish reasons are recorded."""
+    captured: list[dict] = []
+    monkeypatch.setattr(orchestrator_module, "annotate_current_span", captured.append)
+    monkeypatch.setattr(orchestrator_module, "record_provider_usage", lambda unused: None)
+
+    orchestrator_module._record_provider_response_telemetry({"choices": []}, 0.0)
+    orchestrator_module._record_provider_response_telemetry(
+        {
+            "choices": [
+                {"finish_reason": "stop"},
+                {"finish_reason": "length"},
+                {"finish_reason": None},
+                "malformed",
+            ]
+        },
+        0.0,
+    )
+
+    assert "gen_ai.response.finish_reasons" not in captured[0]
+    assert captured[1]["gen_ai.response.finish_reasons"] == ["stop", "length"]
