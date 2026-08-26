@@ -444,6 +444,18 @@ def test_virtual_effort_profile_selects_a_supported_provider() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["supported_agent"]
 
 
+def test_passthrough_with_no_ranked_provider_fails_cleanly(monkeypatch) -> None:
+    """An empty filtered pool reports unavailability instead of reading stale state."""
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = _build(client)
+    monkeypatch.setattr(orchestrator, "_failover_candidates", lambda *args, **kwargs: [])
+
+    with pytest.raises(RuntimeError, match="no eligible provider candidate"):
+        orchestrator.proxy_completion({"messages": [{"role": "user", "content": "x"}]})
+
+    assert client.calls == []
+
+
 def test_effort_support_filter_precedes_same_provider_deduplication() -> None:
     """A lower-ranked supported alias remains eligible for its provider."""
     client = SequencedProxyClient(

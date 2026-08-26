@@ -100,6 +100,26 @@ def test_stream_send_ignores_empty_and_missing_choices() -> None:
     assert deltas == ["before", "after"]
 
 
+def test_stream_send_records_response_model_and_finish_reason(monkeypatch) -> None:
+    """Streaming spans retain the same response identity as non-streaming calls."""
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.annotate_current_span", captured.append
+    )
+    frames = [
+        'data: {"model":"served-model","choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\n',
+        'data: {"model":"served-model","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        "data: [DONE]\n\n",
+    ]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url)
+        assert list(client._stream_send(agent, {"model": "gpt-x", "stream": True})) == ["ok"]
+
+    assert captured[-1]["gen_ai.response.model"] == "served-model"
+    assert captured[-1]["gen_ai.response.finish_reasons"] == ["stop"]
+
+
 def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
     """A mid-stream provider failure surfaces one package-owned error (CWE-209).
 

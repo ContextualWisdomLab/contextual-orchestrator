@@ -1598,6 +1598,8 @@ class ModelClient:
         stream_error: RuntimeError | None = None
         started = time.monotonic()
         stream_usage: dict[str, Any] | None = None
+        stream_model: str | None = None
+        stream_choices: list[dict[str, str]] = []
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1613,12 +1615,22 @@ class ModelClient:
                         continue
                     if isinstance(chunk, dict) and isinstance(chunk.get("usage"), dict):
                         stream_usage = chunk["usage"]
+                    if isinstance(chunk, dict) and isinstance(chunk.get("model"), str):
+                        stream_model = chunk["model"]
                     choices = chunk.get("choices") or [{}]
+                    stream_choices.extend(
+                        {"finish_reason": choice["finish_reason"]}
+                        for choice in choices
+                        if isinstance(choice, dict)
+                        and isinstance(choice.get("finish_reason"), str)
+                        and choice["finish_reason"]
+                    )
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
             _record_provider_response_telemetry(
-                {"usage": stream_usage} if stream_usage else {}, started
+                {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
+                started,
             )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
             # The gateway's own terminal tool-stop contract must survive the
@@ -1765,7 +1777,7 @@ class ModelClient:
         allow_transient_retries: bool = True,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
-        last_failure: tuple[Exception, ModelAgent] | None = None
+        last_error: Exception | None = None
         retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
         for attempt in range(retry_limit + 1):
             try:
@@ -3153,7 +3165,7 @@ class TaskOrchestrator:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
-        last_error: Exception | None = None
+        last_failure: tuple[Exception, ModelAgent] | None = None
         for candidate in candidates:
             started_at = time.perf_counter()
             candidate_payload = dict(upstream)
