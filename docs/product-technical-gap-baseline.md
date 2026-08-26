@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-26 19:10 KST protected-main and moving-queue evidence
+## 2026-08-26 19:13 KST protected-main and moving-queue evidence
 
 Protected `main` is exact `4562265721bc9f7907aebee90229bdef68009029`.
 The table below records GitHub state observed at the timestamp above. A queued
@@ -18,7 +18,7 @@ results do not transfer to a moving head or prove protected-main delivery.
 | [#869](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/869) | `760c52c89b2b9af918738044be156d2d9855ad10` / `main` | This is the root-fix candidate for the missing OpenCode Zen credential registration and generated passphrase masking; fifteen replacement hosted jobs remain queued and review is required. Acceptance is a successful post-fix provider-catalog canary with the complete KV inventory, followed by terminal exact-head gates and review. |
 | [#870](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/870) | `3cd539cb44c42546a525b2835ddc839c05493402` / `main` | Closed as superseded after its conduct regression fix was integrated into #868. Closure is not protected delivery; acceptance follows #868's current exact head. |
 | [#871](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/871) | `4d7cd6314536041e3f9a2d2fec812c3f6f14d810` / `fix/recover-passthrough-provider-failover` | Normally merged into #851 as merge commit `f3acd98e45fee27138cbc3f3080b6ecccf0d60b9`; protected delivery still follows #851 because its updated `main`-target exact head has replacement checks and review pending. |
-| [#874](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/874) | `e4f104d6ad4d3435c2dfc2c86d213d7c61acdf1a` / `fix/gateway-default-chat-model` | The configured-gateway discovery change is stacked on #868, has one pending context and no unresolved threads, and GitHub reports `UNSTABLE`. Reported local discovery and live gateway observations do not transfer to protected delivery; acceptance requires current-base integration, exact-head hosted gates, review, and a post-merge authenticated catalog check. |
+| [#874](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/874) | `394063569c278c0828362e2bf5b7eaf079854bb6` / `fix/gateway-default-chat-model` | The configured-gateway discovery change is stacked on #868; its latest commit correctly withholds incomplete or conflicting deployment prices. One context remains pending, no threads are unresolved, and GitHub reports `UNSTABLE`. Valid audit gaps remain for runtime environment-secret promotion, reuse of the hardened credentialed provider-egress boundary, and capability consensus across heterogeneous deployments. Acceptance requires those boundaries, current-base integration, exact-head hosted gates, review, and a post-merge authenticated catalog check. |
 
 [Provider catalog sync run 32945020378](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/runs/32945020378)
 ran on protected `main` `4562265721bc9f7907aebee90229bdef68009029` and
