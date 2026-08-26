@@ -38,12 +38,17 @@ import json
 import threading
 import weakref
 from collections.abc import MutableMapping
+from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
 # Registry entries expire after this many seconds so abandoned jobs do
 # not accumulate forever. Seven days comfortably outlives every batch
 # backend's own completion window.
 DEFAULT_RETENTION_SECONDS = 7 * 24 * 3600
+
+
+class ClaimNotAcquired(RuntimeError):
+    """Another worker owns a non-blocking durable job claim."""
 
 
 def _encode(value: Any) -> str:
@@ -136,11 +141,22 @@ class JobRegistryFactory:
         if self._client is not None:
             if lease_seconds is None or lease_seconds <= 0:
                 raise ValueError("durable claim lease_seconds must be positive")
-            return self._client.lock(
+            claim = self._client.lock(
                 lock_name,
                 timeout=lease_seconds,
                 blocking=False,
             )
+
+            @contextmanager
+            def acquired_claim():
+                if not claim.acquire():
+                    raise ClaimNotAcquired(lock_name)
+                try:
+                    yield claim
+                finally:
+                    claim.release()
+
+            return acquired_claim()
         with self._local_locks_guard:
             lock = self._local_locks.get(lock_name)
             if lock is None:

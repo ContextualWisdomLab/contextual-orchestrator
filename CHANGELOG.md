@@ -60,7 +60,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Route embedding batches through configured remote embedding agents instead
   of returning the standalone deterministic vector.
-
 - Make per-request budget checks constant time while preserving exact parity
   with full spend analytics across persisted, replaced, estimated, and
   provider-reported workflow runs.

@@ -138,6 +138,16 @@ class RequestDeadlineExceeded(RuntimeError):
     """Raised when the caller's request-scoped monotonic deadline is exhausted."""
 
 
+class NoViableAgentError(RuntimeError):
+    """Raised when recent capability evidence has no ready declared candidate."""
+
+    code = "no_viable_agent"
+
+    def __init__(self, *, retry_after_seconds: int) -> None:
+        super().__init__("no ready structured-capable agent")
+        self.retry_after_seconds = retry_after_seconds
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
 
@@ -243,26 +253,48 @@ class _FastMLSIJudgeAdapter:
             raise ValueError("mode must be auto, route, or conduct")
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
-        agent = self._agent()
-        request = {
-            "model": agent.model,
-            "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
-            "max_tokens": self.orchestrator.client.max_output_tokens,
-            "response_format": response_format,
-        }
+        primary = self._agent()
         effort_profile = self.orchestrator._role_effort_profile("judge")
-        if effort_profile is not None:
-            request = self.orchestrator.client.apply_effort_profile(
-                agent, request, effort_profile
-            )
-        request["stream"] = False
-        response = self.orchestrator.client.proxy_send(
-            agent, "chat/completions", request
+        candidates = self.orchestrator._structured_ready_candidates(
+            primary, self.text, self.allowed_agent_ids
         )
-        output = ModelClient._response_content(agent, response)
-        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
-        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
+        for agent in candidates:
+            request = {
+                "model": agent.model,
+                "messages": messages,
+                "temperature": self.orchestrator.client.temperature,
+                "max_tokens": self.orchestrator.client.max_output_tokens,
+                "response_format": response_format,
+            }
+            if effort_profile is not None:
+                request = self.orchestrator.client.apply_effort_profile(
+                    agent, request, effort_profile
+                )
+            request["stream"] = False
+            try:
+                self.orchestrator.client.remaining_request_timeout()
+                started_at = time.perf_counter()
+                response = self.orchestrator.client.proxy_send(
+                    agent, "chat/completions", request
+                )
+                output = ModelClient._response_content(agent, response)
+            except RequestDeadlineExceeded:
+                raise
+            except Exception:  # noqa: BLE001 - bounded structured-provider failover
+                self.orchestrator._group_router.observe_failure(agent.id)
+                self.orchestrator._record_failure(agent.id)
+                self.orchestrator._record_structured_not_ready(agent.id)
+                continue
+            self.orchestrator._group_router.observe_success(
+                agent.id, time.perf_counter() - started_at
+            )
+            self.orchestrator._record_success(agent.id)
+            usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+            return self._completion_payload(
+                output, agent.id, usage, self.mode if mode is None else mode
+            )
+        self.orchestrator.client.remaining_request_timeout()
+        raise RuntimeError("all structured judge providers failed") from None
 
     def _completion_payload(
         self,
@@ -957,6 +989,9 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
+        self._request_settings: ContextVar[dict[str, Any] | None] = ContextVar(
+            f"model_client_request_settings_{id(self)}", default=None
+        )
         if not verify_tls:
             raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
         # TLS trust for provider egress. The system trust store is the default;
@@ -1003,7 +1038,7 @@ class ModelClient:
 
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
-        scoped = getattr(self._local, "request_settings", {})
+        scoped = self._request_settings.get() or {}
         return {
             "temperature": scoped.get("temperature", self.default_temperature),
             "top_p": scoped.get("top_p", self.default_top_p),
@@ -1026,17 +1061,13 @@ class ModelClient:
     @contextmanager
     def request_settings(self, **overrides: Any):
         """Apply provider settings to only the current server request thread."""
-        previous = getattr(self._local, "request_settings", None)
         current = self.request_settings_snapshot()
         current.update({key: value for key, value in overrides.items() if value is not None})
-        self._local.request_settings = current
+        token = self._request_settings.set(current)
         try:
             yield
         finally:
-            if previous is None:
-                del self._local.request_settings
-            else:
-                self._local.request_settings = previous
+            self._request_settings.reset(token)
 
     #: Deterministic vector dimension for mock-provider embeddings (test fixture
     #: only; production providers always return their own dimensionality).
@@ -1267,6 +1298,36 @@ class ModelClient:
                 "error_type": _safe_provider_probe_error_type(exc),
                 "failure_code": failure_code,
             }
+
+    def probe_structured(
+        self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT
+    ) -> dict[str, Any]:
+        """Probe one declared agent's structured-output capability within its probe budget."""
+        probe_timeout = _validate_provider_probe_timeout(timeout)
+        current_deadline = self.request_settings_snapshot()["request_deadline_monotonic"]
+        probe_deadline = time.monotonic() + probe_timeout
+        if current_deadline is not None:
+            probe_deadline = min(float(current_deadline), probe_deadline)
+        try:
+            with self.request_settings(request_deadline_monotonic=probe_deadline):
+                self.proxy_send(
+                    agent,
+                    "chat/completions",
+                    {
+                        "model": agent.model,
+                        "messages": [{"role": "user", "content": "Return one JSON object."}],
+                        "max_tokens": 1,
+                        "response_format": {"type": "json_object"},
+                        "stream": False,
+                    },
+                )
+        except Exception as exc:  # noqa: BLE001 - readiness is bounded evidence
+            return {
+                "agent_id": agent.id,
+                "status": "not_ready",
+                "error_type": type(exc).__name__,
+            }
+        return {"agent_id": agent.id, "status": "ready"}
 
     def _send_with_retry(
         self,
@@ -2805,6 +2866,7 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self._circuit_lock = threading.Lock()
         self._provider_readiness_lock = threading.Lock()
+        self._structured_readiness: dict[str, dict[str, Any]] = {}
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -2876,6 +2938,78 @@ class TaskOrchestrator:
             "ready_agent_count": sum(item["status"] == "ready" for item in active),
             "items": items,
         }
+
+    def _structured_ready_candidates(
+        self,
+        primary: ModelAgent,
+        text: str,
+        allowed_agent_ids: set[str] | None,
+    ) -> list[ModelAgent]:
+        """Return recently probed structured-ready candidates from one declared set."""
+        candidates = self._failover_candidates(
+            primary, text, "verifier", allowed_agent_ids
+        )
+        if allowed_agent_ids is None:
+            candidates = [primary]
+        if len(candidates) > MAX_LOCAL_CONCURRENCY:
+            raise ValueError("declared structured candidate set exceeds concurrency limit")
+        now = time.monotonic()
+        with self._provider_readiness_lock:
+            stale = [
+                agent
+                for agent in candidates
+                if now
+                - float(
+                    self._structured_readiness.get(agent.id, {}).get(
+                        "checked_at", -math.inf
+                    )
+                )
+                >= self.circuit_reset_seconds
+            ]
+        if stale:
+            with ThreadPoolExecutor(max_workers=len(stale)) as executor:
+                futures = {
+                    executor.submit(
+                        copy_context().run,
+                        self.client.probe_structured,
+                        agent,
+                        timeout=DEFAULT_PROVIDER_PROBE_TIMEOUT,
+                    ): agent
+                    for agent in stale
+                }
+                results = [(futures[future], future.result()) for future in futures]
+            checked_at = time.monotonic()
+            with self._provider_readiness_lock:
+                for agent, result in results:
+                    ready = result.get("status") == "ready"
+                    self._structured_readiness[agent.id] = {
+                        "status": "ready" if ready else "not_ready",
+                        "checked_at": checked_at,
+                    }
+                    if ready:
+                        self._record_success(agent.id)
+                    else:
+                        self._record_failure(agent.id)
+        with self._provider_readiness_lock:
+            ready = [
+                agent
+                for agent in candidates
+                if self._structured_readiness.get(agent.id, {}).get("status") == "ready"
+                and not self._circuit_open(agent.id)
+            ]
+        if not ready:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
+        return ready
+
+    def _record_structured_not_ready(self, agent_id: str) -> None:
+        """Exclude one failed structured candidate until the existing circuit retry window."""
+        with self._provider_readiness_lock:
+            self._structured_readiness[agent_id] = {
+                "status": "not_ready",
+                "checked_at": time.monotonic(),
+            }
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
@@ -4874,6 +5008,8 @@ class TaskOrchestrator:
                 "judge": "model",
             }
         except RequestDeadlineExceeded:
+            raise
+        except NoViableAgentError:
             raise
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return {
