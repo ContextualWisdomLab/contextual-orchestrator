@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -187,6 +188,25 @@ def test_local_full_suite_installs_runtime_and_test_lockfiles():
     assert "--with-requirements requirements.lock" in dockerfile_text
     assert "--with-requirements fuzz/requirements-property.txt" in dockerfile_text
     assert '--with "$1"' in dockerfile_text
+
+
+def test_native_token_packer_is_built_from_source_not_tracked():
+    """Platform-specific PyO3 output must remain a reproducible build artifact."""
+    ignore_text = read_text(".gitignore")
+    tracked_files = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT_DIR,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+
+    assert "contextual_orchestrator/_token_packer*.so" in ignore_text
+    assert not any(
+        path.startswith("contextual_orchestrator/_token_packer")
+        and path.endswith((".so", ".dylib", ".dll", ".pyd"))
+        for path in tracked_files
+    )
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():

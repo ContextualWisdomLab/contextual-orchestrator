@@ -4,6 +4,7 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+contextual_orchestrator/_token_packer*.so
 tempcred.txt
 
 
