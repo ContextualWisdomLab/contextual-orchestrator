@@ -51,10 +51,12 @@ and focused OpenCode bootstrap evidence; its coverage-evidence job remains
 queued and Strix remains in progress. #883 and #879 have newly attached hosted
 jobs, but those jobs remain queued. #887 and #880 expose only successful
 third-party review statuses so far; absent required hosted jobs are not success
-evidence. #883 keeps auto-merge disabled while its exact local full suite is
-still running, and #868 keeps auto-merge disabled while replacement review and
-hosted jobs attach. No queued, running, or absent job is promoted to protected
-delivery evidence.
+evidence. #883's unchanged exact head completed the official local suite with
+`2372 passed in 685.59s`, has zero unresolved threads, and has normal
+auto-merge re-enabled; its hosted jobs and independent approval remain required.
+#868 has focused `actionlint` and fuzz evidence while replacement review and
+hosted jobs attach. No local, queued, running, or absent job is promoted to
+protected delivery evidence.
 
 PR #886 was closed unmerged after exact comparison with #887 and the current
 official OpenAI schemas. Those schemas define function descriptions as strings
