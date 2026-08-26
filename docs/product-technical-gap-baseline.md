@@ -73,6 +73,23 @@ scrubbed observations prove the local discovery and routing contracts, not a
 protected merge or production deployment; current-head hosted checks and an
 independent approval remain required.
 
+Current-head privacy runtime verification at `35959b52` kept all private
+gateway coordinates and credentials out of the evidence. Discovery returned
+570 models, 234 explicitly ZDR-capable chat candidates, and 31 declared policy
+sources across 17 non-OpenRouter domains, with one unrelated provider discovery
+error. A loopback Wardnet build from the stacked egress/API head `75bfd91e`
+then exercised the real bounded outbound-fetch path: three of the first eight
+deterministically selected policy documents produced 20,695--24,000 characters,
+while four oversized responses failed closed with HTTP 413 and one source
+failed validation. The model-analysis call also ran against one 20,695-character
+Wardnet document and returned the required JSON shape, but its 1,152-character
+`evidence_quote` was not a verbatim substring, so contextual-orchestrator
+correctly rejected it. Three additional explicit-ZDR structured-model attempts
+failed with HTTP 402. Therefore this run proves discovery, bounded crawl, model
+invocation, and quote enforcement separately, but records zero grounded
+assessments and zero policy-derived model updates; a funded explicit-ZDR route
+that returns a verbatim quote remains required to close the live analysis gap.
+
 Scheduled provider-catalog run `32960451916` failed before discovery because
 the workflow supplied five credentials while the fixed bootstrap inventory had
 expanded to six with OpenCode Zen. The workflow now supplies, validates, and
