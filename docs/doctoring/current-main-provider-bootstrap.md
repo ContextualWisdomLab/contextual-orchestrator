@@ -75,18 +75,20 @@ later discovery run.
 
 `.github/workflows/provider-catalog-sync.yml` runs hourly on protected `main` and may
 also be dispatched manually. It is intentionally absent from pull-request secret
-execution. The production environment must provide:
+execution. Every sync requires the five provider secrets above. Cross-run
+production persistence additionally requires:
 
-- the five provider secrets above;
 - `CONTEXTUAL_ORCHESTRATOR_KV_DSN`; and
 - `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE`.
 
-The GitHub-hosted workflow has an ephemeral filesystem. It therefore registers the
-five credentials in the durable PostgreSQL KV and verifies discovery,
-`eligible_model_count`, and `selected_agent_ids`; it does not claim durable
-agent-pool activation. A long-running service may either use the ordinary KV-backed
-startup discovery path or invoke this bootstrap with a persistent `--agents-db`
-under its own deployment boundary.
+The workflow uses the production PostgreSQL KV when both KV secrets are configured.
+When neither is configured, it uses a PostgreSQL service scoped to that workflow run
+so live provider discovery and the complete security contract remain continuously
+verified without claiming cross-run persistence. Configuring only one KV secret
+fails closed. Neither storage mode claims durable agent-pool activation. A
+long-running service may either use the ordinary KV-backed startup discovery path or
+invoke this bootstrap with a persistent `--agents-db` under its own deployment
+boundary.
 
 The workflow verifies that all five credential names were registered, at least one
 model was discovered, at least one chat-compatible model survived classification, a
