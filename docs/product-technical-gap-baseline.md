@@ -38,10 +38,13 @@ are stacked protected dependencies; official Spamhaus DROP, URLhaus, and
 ThreatFox feed refresh is isolated in #115. No duplicate DNS/SSRF
 implementation is accepted in this repository.
 
-Local live verification on implementation head `4b98d55c` used the configured
+Local live verification on current implementation head `2ccff004` used the configured
 gateway and credential without recording either value. Discovery returned eight
 deployments with zero provider errors: seven had explicit chat capability and one
-had embedding capability. Both `/v1/chat/completions` and `/v1/responses` returned
+had embedding capability; two preserved an explicit Responses capability, all
+eight retained complete provider-reported token pricing, none was free, and all
+eight kept ZDR unknown because the gateway supplied no consensus evidence. The
+earlier endpoint probe on head `4b98d55c` showed both `/v1/chat/completions` and `/v1/responses` returned
 HTTP 200 for an omitted model, `contextual-orchestrator`, and
 `orchestrator/auto`; both returned HTTP 400 with the zero-cost eligibility error
 for `orchestrator/free` because this deployment currently exposes no model with
