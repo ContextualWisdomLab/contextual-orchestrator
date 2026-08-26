@@ -119,9 +119,7 @@ class CostRoutingCoordinator:
             ):
                 raise ValueError("provider embedding batch must use one resolved route")
             texts = [request.input_text for request in requests]
-            capability = embedding_model_capability(
-                getattr(agent, "provider_name", ""), agent.model
-            )
+            capability = embedding_model_capability(agent.provider_name, agent.model)
             try:
                 if capability is None:
                     return orchestrator.client.embed_with_usage(agent, texts)
@@ -226,13 +224,14 @@ class CostRoutingCoordinator:
         """Resolve the current pool at submission time so discovery changes take effect."""
         if self._embedding_backend_override is not None:
             return self._embedding_backend_override
-        if routing_agent_id is not None:
-            agent = self.orchestrator._agent(routing_agent_id)
-        else:
-            try:
-                agent = self._embedding_agent_for_model(model)
-            except (AttributeError, KeyError, RuntimeError, ValueError):
-                return self._local_embedding_backend
+        try:
+            agent = (
+                self.orchestrator._agent(routing_agent_id)
+                if routing_agent_id is not None
+                else self._embedding_agent_for_model(model)
+            )
+        except (AttributeError, KeyError, RuntimeError, ValueError):
+            return self._local_embedding_backend
         return (
             self._local_embedding_backend
             if agent.base_url.startswith("mock://")
@@ -541,9 +540,7 @@ class CostRoutingCoordinator:
         capability = None
         if routing_agent_id is not None:
             agent = self.orchestrator._agent(routing_agent_id)
-            capability = embedding_model_capability(
-                getattr(agent, "provider_name", ""), agent.model
-            )
+            capability = embedding_model_capability(agent.provider_name, agent.model)
             if capability is not None:
                 max_tokens = capability.max_tokens_per_input
         requests: List[EmbeddingBatchRequest] = []
@@ -974,6 +971,7 @@ class CostRoutingCoordinator:
         routing_agent_id: str | None = None,
         input_attributions: Optional[List[Dict[str, Any]]] = None,
         input_metadata: Optional[List[Dict[str, Any]]] = None,
+        wait_for_terminal: bool = False,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -991,20 +989,26 @@ class CostRoutingCoordinator:
             input_attributions=input_attributions,
             input_metadata=input_metadata,
         )
-        backend = self._embedding_backend_for_job(job.job_id)
-        status = backend.poll(job)
-        wait = getattr(backend, "wait", None)
-        if not status.get("is_complete") and callable(wait):
-            client = self.orchestrator.client
-            remaining = (
-                client.remaining_request_timeout()
-                if hasattr(client, "remaining_request_timeout")
-                else None
-            )
-            timeout = remaining if remaining is not None else float(getattr(client, "timeout", 30.0))
-            wait(job, timeout)
-            if hasattr(client, "remaining_request_timeout"):
-                client.remaining_request_timeout()
+        if wait_for_terminal:
+            backend = self._embedding_backend_for_job(job.job_id)
+            wait = getattr(backend, "wait", None)
+            if callable(wait):
+                client = self.orchestrator.client
+                remaining = (
+                    client.remaining_request_timeout()
+                    if hasattr(client, "remaining_request_timeout")
+                    else None
+                )
+                wait(
+                    job,
+                    timeout=(
+                        remaining
+                        if remaining is not None
+                        else float(getattr(client, "timeout", 30.0))
+                    ),
+                )
+                if hasattr(client, "remaining_request_timeout"):
+                    client.remaining_request_timeout()
         return self.embeddings_batch_document(job.job_id)
 
     def cancel_embeddings_batch(self, batch_id: str, *, reason: str) -> Dict[str, Any]:
