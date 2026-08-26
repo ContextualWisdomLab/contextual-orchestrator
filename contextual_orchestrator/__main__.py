@@ -282,13 +282,17 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover and activate only models with explicit chat capability evidence."""
+    """Activate models carrying explicit provider-declared runtime capabilities."""
     discovered, _errors = discover_all_models()
-    chat_models = [model for model in discovered if "chat" in model.capabilities]
+    capable_models = [
+        model
+        for model in discovered
+        if {"chat", "embedding"}.intersection(model.capabilities)
+    ]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
         replace(agent_from_discovered(model), disabled=False)
-        for model in chat_models
+        for model in capable_models
         if agent_id_for(model) not in existing_ids
     ]
     if not agents:

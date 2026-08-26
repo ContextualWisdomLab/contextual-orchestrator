@@ -5,8 +5,8 @@ from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
 
-def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
-    """Startup routing excludes discovered deployments without chat evidence."""
+def test_auto_discovery_activates_declared_runtime_capabilities(monkeypatch) -> None:
+    """Startup exposes provider-declared chat and embedding capabilities."""
     chat = DiscoveredModel(
         provider_name="openai",
         model_id="chat-capable-model",
@@ -32,27 +32,27 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert len(result["added"]) == 1
-    agent = next(agent for agent in orchestrator.agents if agent.id == result["added"][0])
-    assert agent.model == chat.model_id
-    assert agent.disabled is False
-    assert "chat" in agent.tags
-    assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
+    assert len(result["added"]) == 2
+    agents = {agent.model: agent for agent in orchestrator.agents}
+    assert agents[chat.model_id].disabled is False
+    assert "chat" in agents[chat.model_id].tags
+    assert agents[embedding.model_id].disabled is False
+    assert "embedding" in agents[embedding.model_id].tags
 
 
-def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
+def test_auto_discovery_leaves_pool_unchanged_without_capability_evidence(monkeypatch) -> None:
     """Startup fails closed without taking down an explicitly configured pool."""
-    embedding = DiscoveredModel(
+    unclassified = DiscoveredModel(
         provider_name="openai",
         model_id="embedding-capable-model",
         credential_name="OPENAI_API_KEY",
         chat_base_url="https://api.openai.com/v1",
         auth_scheme="Bearer",
-        capabilities=("embedding",),
+        capabilities=(),
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([embedding], []),
+        lambda: ([unclassified], []),
     )
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])

@@ -95,15 +95,31 @@ class RustCl100kPacker:
 
     def __init__(self) -> None:
         try:
-            from contextual_orchestrator._token_packer import pack_cl100k
+            from contextual_orchestrator._token_packer import (
+                pack_cl100k,
+                sum_token_counts,
+                weighted_average_embeddings,
+            )
         except ImportError as exc:
             raise RuntimeError("Rust token packer extension is unavailable") from exc
         self._pack = pack_cl100k
+        self._sum_token_counts = sum_token_counts
+        self._weighted_average_embeddings = weighted_average_embeddings
 
     def pack_texts(self, texts: List[str], *, max_tokens_per_input: int,
                    max_inputs: int, max_total_tokens: int):
         """Return typed child parts and provider shards from Rust."""
         return self._pack(texts, max_tokens_per_input, max_inputs, max_total_tokens)
+
+    def sum_token_counts(self, values: List[int]) -> int:
+        """Return a checked exact token-count sum from the Rust core."""
+        return int(self._sum_token_counts(values))
+
+    def weighted_average_embeddings(
+        self, parts: List[tuple[List[float], int]]
+    ) -> List[float]:
+        """Reduce child vectors using exact token weights in the Rust core."""
+        return list(self._weighted_average_embeddings(parts))
 
 
 def build_token_counter(
