@@ -140,6 +140,25 @@ def test_successful_replacement_preserves_mode_and_ignores_backup_cleanup_failur
     assert (target / "benchmark_report.json").read_bytes() == b"{}"
 
 
+def test_recovery_ignores_stale_backup_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nim_evidence"
+    target.mkdir()
+    stale_backup = tmp_path / ".nim_evidence.backup-old"
+    stale_backup.mkdir()
+    real_rmtree = shutil.rmtree
+
+    def fail_stale_backup(path: str | os.PathLike[str]) -> None:
+        if Path(path).resolve() == stale_backup.resolve():
+            raise OSError("simulated cleanup failure")
+        real_rmtree(path)
+
+    monkeypatch.setattr("contextual_orchestrator.nim_evidence.shutil.rmtree", fail_stale_backup)
+    publish_artifact_set(target, _artifacts())
+    assert (target / "benchmark_report.json").read_bytes() == b"{}"
+
+
 def test_replacement_preserves_read_only_directory_mode(tmp_path: Path) -> None:
     target = tmp_path / "nim_evidence"
     target.mkdir(mode=0o500)

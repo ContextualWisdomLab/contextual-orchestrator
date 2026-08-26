@@ -121,7 +121,10 @@ def _recover_publication(final: Path) -> None:
         raise NimEvidenceError("multiple publication backups require operator review")
     if backups:
         if final.exists():
-            shutil.rmtree(backups[0])
+            try:
+                shutil.rmtree(backups[0])
+            except OSError:
+                pass
         else:
             os.replace(backups[0], final)
 
