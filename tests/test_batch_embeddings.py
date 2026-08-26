@@ -23,6 +23,8 @@ import time
 import urllib.error
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
@@ -42,6 +44,7 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ProviderResponseError,
+    RequestDeadlineExceeded,
     _provider_limit_contract,
 )
 from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
@@ -258,6 +261,34 @@ def test_provider_batch_exposes_failed_terminal_state() -> None:
     assert backend.retrieve(job) == []
 
 
+def test_identical_submission_retries_after_backend_terminal_failure() -> None:
+    class FailedBackend:
+        name = "failed-provider"
+
+        def __init__(self):
+            self.submissions = 0
+
+        def submit(self, requests, metadata=None):
+            del metadata
+            self.submissions += 1
+            return BatchJob(
+                f"failed_{self.submissions}", self.name, "queued", len(requests)
+            )
+
+        def poll(self, job):
+            return {"job_id": job.job_id, "status": "failed", "is_complete": True}
+
+    backend = FailedBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("worker_agent", "mock", tags=("reasoning",))]),
+        embedding_batch_backend=backend,
+    )
+    first = coordinator.submit_embeddings_batch(["same"], model="embedding-model")
+    second = coordinator.submit_embeddings_batch(["same"], model="embedding-model")
+    assert first.job_id != second.job_id
+    assert backend.submissions == 2
+
+
 def test_provider_batch_cancel_is_terminal_and_discards_late_result() -> None:
     release = threading.Event()
 
@@ -276,6 +307,74 @@ def test_provider_batch_cancel_is_terminal_and_discards_late_result() -> None:
     time.sleep(0.02)
     assert backend.poll(job)["status"] == "cancelled"
     assert backend.retrieve(job) == []
+
+
+def test_provider_batch_cancelled_while_queued_never_starts() -> None:
+    release = threading.Event()
+    calls: list[str] = []
+
+    def runner(requests):
+        calls.append(requests[0].input_text)
+        release.wait(timeout=1)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(runner, max_concurrency=1)
+    first = backend.submit([EmbeddingBatchRequest(input_text="first", model="model")])
+    second = backend.submit([EmbeddingBatchRequest(input_text="second", model="model")])
+    backend.cancel(second, reason="queued cancellation")
+    release.set()
+    assert backend.wait(first, 1.0)
+    assert backend.wait(second, 1.0)
+    assert backend.poll(second)["status"] == "cancelled"
+    assert calls == ["first"]
+
+
+def test_sync_provider_embeddings_wait_for_remote_completion() -> None:
+    release = threading.Event()
+    agent = ModelAgent(
+        "embedding_worker", "remote-embedding", base_url="https://provider.example/v1",
+        provider_name="provider", tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+
+    def embed_with_usage(_agent, texts):
+        release.wait(timeout=1)
+        return [[1.0] for _text in texts], len(texts)
+
+    orchestrator.client.embed_with_usage = embed_with_usage  # type: ignore[method-assign]
+    threading.Timer(0.05, release.set).start()
+    document = CostRoutingCoordinator(orchestrator).complete_embeddings_batch(
+        ["alpha"], model=agent.model, routing_agent_id=agent.id
+    )
+    assert document["status"] == "completed"
+    assert document["embeddings"][0]["embedding"] == [1.0]
+
+
+def test_sync_provider_embeddings_wait_is_bounded_by_caller_deadline() -> None:
+    agent = ModelAgent(
+        "embedding_worker", "remote-embedding", base_url="https://provider.example/v1",
+        provider_name="provider", tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+    release = threading.Event()
+
+    def embed_with_usage(_agent, texts):
+        release.wait(timeout=1)
+        orchestrator.client.remaining_request_timeout()
+        return [[1.0] for _text in texts], len(texts)
+
+    orchestrator.client.embed_with_usage = embed_with_usage  # type: ignore[method-assign]
+    coordinator = CostRoutingCoordinator(orchestrator)
+    with orchestrator.client.request_settings(
+        request_deadline_monotonic=time.monotonic() + 0.02
+    ):
+        try:
+            with pytest.raises(RequestDeadlineExceeded):
+                coordinator.complete_embeddings_batch(
+                    ["alpha"], model=agent.model, routing_agent_id=agent.id
+                )
+        finally:
+            release.set()
 
 
 def test_provider_batch_sends_more_than_32_inputs_in_one_provider_call() -> None:

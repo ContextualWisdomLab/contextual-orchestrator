@@ -119,7 +119,9 @@ class CostRoutingCoordinator:
             ):
                 raise ValueError("provider embedding batch must use one resolved route")
             texts = [request.input_text for request in requests]
-            capability = embedding_model_capability(agent.provider_name, agent.model)
+            capability = embedding_model_capability(
+                getattr(agent, "provider_name", ""), agent.model
+            )
             try:
                 if capability is None:
                     return orchestrator.client.embed_with_usage(agent, texts)
@@ -507,12 +509,11 @@ class CostRoutingCoordinator:
         existing_job_id = self._embedding_request_keys.get(request_key)
         if existing_job_id:
             existing_job = self._embedding_jobs.get(str(existing_job_id))
-            if existing_job is not None and existing_job.status not in {
-                "failed",
-                "cancelled",
-                "rejected",
-            }:
-                return existing_job
+            if existing_job is not None:
+                existing_backend = self._embedding_backend_for_job(existing_job.job_id)
+                existing_status = existing_backend.poll(existing_job).get("status")
+                if existing_status not in {"failed", "cancelled", "rejected"}:
+                    return existing_job
         backend = backend or self._embedding_backend_for_model(model, routing_agent_id)
         job = backend.submit(requests, metadata=metadata)
         self._embedding_job_backends[job.job_id] = backend.name
@@ -540,7 +541,9 @@ class CostRoutingCoordinator:
         capability = None
         if routing_agent_id is not None:
             agent = self.orchestrator._agent(routing_agent_id)
-            capability = embedding_model_capability(agent.provider_name, agent.model)
+            capability = embedding_model_capability(
+                getattr(agent, "provider_name", ""), agent.model
+            )
             if capability is not None:
                 max_tokens = capability.max_tokens_per_input
         requests: List[EmbeddingBatchRequest] = []
@@ -988,6 +991,20 @@ class CostRoutingCoordinator:
             input_attributions=input_attributions,
             input_metadata=input_metadata,
         )
+        backend = self._embedding_backend_for_job(job.job_id)
+        status = backend.poll(job)
+        wait = getattr(backend, "wait", None)
+        if not status.get("is_complete") and callable(wait):
+            client = self.orchestrator.client
+            remaining = (
+                client.remaining_request_timeout()
+                if hasattr(client, "remaining_request_timeout")
+                else None
+            )
+            timeout = remaining if remaining is not None else float(getattr(client, "timeout", 30.0))
+            wait(job, timeout)
+            if hasattr(client, "remaining_request_timeout"):
+                client.remaining_request_timeout()
         return self.embeddings_batch_document(job.job_id)
 
     def cancel_embeddings_batch(self, batch_id: str, *, reason: str) -> Dict[str, Any]:

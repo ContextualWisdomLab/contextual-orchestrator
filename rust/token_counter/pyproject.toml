@@ -9,4 +9,5 @@ requires-python = ">=3.10"
 
 [tool.maturin]
 module-name = "contextual_orchestrator._token_packer"
+python-source = "../.."
 features = ["pyo3/extension-module"]

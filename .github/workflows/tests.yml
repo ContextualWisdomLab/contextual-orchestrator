@@ -35,5 +35,8 @@ jobs:
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --require-hashes -r fuzz/requirements-property.txt
 
+      - name: Build package-scoped Rust token packer
+        run: python -m pip install --no-deps ./rust/token_counter
+
       - name: Run full test suite
         run: python -m pytest -q

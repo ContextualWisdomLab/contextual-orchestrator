@@ -158,7 +158,8 @@ def test_remote_embedding_agent_uses_provider_backend() -> None:
     )
     assert document["backend"] == "provider"
     assert document["embeddings"][0]["embedding"] == [0.25, 0.75]
-    assert document["token_counts"] == [3]
+    assert document["token_counts"] == [0]
+    assert document["batch_token_count"] == 3
 
 
 def test_embedding_backend_observes_agents_added_after_construction() -> None:

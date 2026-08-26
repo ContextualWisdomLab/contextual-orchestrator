@@ -91,7 +91,7 @@ class RustCl100kPacker:
 
     def __init__(self) -> None:
         try:
-            from _token_packer import pack_cl100k
+            from contextual_orchestrator._token_packer import pack_cl100k
         except ImportError as exc:
             raise RuntimeError("Rust token packer extension is unavailable") from exc
         self._pack = pack_cl100k
