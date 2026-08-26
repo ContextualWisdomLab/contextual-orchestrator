@@ -394,8 +394,8 @@ def analyze_discovered_privacy_policies(
         return list(models), []
 
     client = ModelClient(max_retries=0)
-    payload: Any = None
     analyzer_model: DiscoveredModel | None = None
+    grounded_rows: list[dict[str, Any]] = []
     for candidate in candidates:
         try:
             payload = (
@@ -405,34 +405,43 @@ def analyze_discovered_privacy_policies(
             )
         except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
             continue
-        analyzer_model = candidate
-        break
-    rows = payload.get("assessments") if isinstance(payload, dict) else None
-    if analyzer_model is None or not isinstance(rows, list):
+        rows = payload.get("assessments") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            continue
+        grounded_rows = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("source_url"), str)
+            and row["source_url"] in documents
+            and isinstance(row.get("evidence_quote"), str)
+            and bool(row["evidence_quote"])
+            and row["evidence_quote"] in documents[row["source_url"]]
+            and all(
+                value is None or isinstance(value, bool)
+                for value in (
+                    row.get("zero_data_retention_available"),
+                    row.get("no_training"),
+                    row.get("no_prompt_retention"),
+                )
+            )
+        ]
+        if grounded_rows:
+            analyzer_model = candidate
+            break
+    if analyzer_model is None:
         return list(models), []
 
     source_assessments: list[PrivacyPolicyAssessment] = []
     observed_at = datetime.now(timezone.utc)
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
+    for row in grounded_rows:
         source_url = row.get("source_url")
         evidence_quote = row.get("evidence_quote")
-        if (
-            not isinstance(source_url, str)
-            or source_url not in documents
-            or not isinstance(evidence_quote, str)
-            or not evidence_quote
-            or evidence_quote not in documents[source_url]
-        ):
-            continue
         values = [
             row.get("zero_data_retention_available"),
             row.get("no_training"),
             row.get("no_prompt_retention"),
         ]
-        if any(value is not None and not isinstance(value, bool) for value in values):
-            continue
         source_assessments.append(
             PrivacyPolicyAssessment(
                 subject_provider="",

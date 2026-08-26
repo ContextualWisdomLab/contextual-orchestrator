@@ -102,6 +102,40 @@ def test_analysis_rejects_hallucinated_quote_and_non_zdr_analyzer() -> None:
     assert absent == []
 
 
+def test_analysis_fails_over_after_analyzer_returns_only_ungrounded_rows() -> None:
+    """A schema-shaped hallucination cannot prevent a grounded candidate attempt."""
+    policy_url = "https://provider.example/privacy"
+    first = _model("a-provider", "first-zdr", zdr=True)
+    second = _model("b-provider", "second-zdr", zdr=True)
+    target = _model("provider", "model", policy_urls=(policy_url,))
+    attempted: list[str] = []
+
+    def analyze(candidate, _documents):
+        attempted.append(candidate.model_id)
+        quote = "invented evidence" if candidate is first else "No retained prompts."
+        return {
+            "assessments": [
+                {
+                    "source_url": policy_url,
+                    "zero_data_retention_available": None,
+                    "no_training": None,
+                    "no_prompt_retention": True,
+                    "evidence_quote": quote,
+                }
+            ]
+        }
+
+    enriched, evidence = analyze_discovered_privacy_policies(
+        [first, second, target],
+        crawler=lambda _url: "No retained prompts.",
+        analyzer=analyze,
+    )
+
+    assert attempted == ["first-zdr", "second-zdr"]
+    assert evidence[0].analyzer_model == "second-zdr"
+    assert enriched[2].supports_no_prompt_retention is True
+
+
 def test_analysis_rejects_ambiguous_duplicate_source_assessments() -> None:
     """Conflicting rows for one source cannot become order-dependent truth."""
     policy_url = "https://provider.example/privacy"
