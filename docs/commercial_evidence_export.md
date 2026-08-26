@@ -28,8 +28,8 @@ control plane.
 | Input | Runtime source | Export use |
 |---|---|---|
 | Saleability decision | `/api/v1/saleability_decisions/latest` | Primary ready, warning, or blocked decision. |
-| Buyer handoff bundle | `/api/v1/buyer_handoff_bundles/latest` | Packaged buyer handoff state. |
-| Buyer evidence manifest | `/api/v1/buyer_evidence_manifests/latest` | Buyer evidence index by owner, source, evidence type, and completion state. |
+| Buyer handoff bundle | `/api/v1/commercial_handoff_bundles/latest` | Packaged buyer handoff state. |
+| Buyer evidence manifest | `/api/v1/commercial_evidence_manifests/latest` | Buyer evidence index by owner, source, evidence type, and completion state. |
 | Commercial readiness | `/api/v1/commercial_readiness/latest` | KRW 2,000,000,000 due-diligence criteria. |
 | Sales readiness | `/api/v1/sales_readiness/latest` | API, admin, trace, replay, security, analytics, locale, and provider evidence. |
 | Analytics snapshot | `/api/v1/analytics_snapshots/latest` | Measured local KPI and guardrail source status. |

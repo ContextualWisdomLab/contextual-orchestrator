@@ -95,17 +95,25 @@ def test_buyer_evidence_manifest_report_indexes_runtime_and_caveat_evidence() ->
 
 
 def test_buyer_evidence_manifest_endpoint_openapi_admin_and_docs_contract() -> None:
+    canonical_path = "/api/v1/commercial_evidence_manifests/latest"
+    legacy_path = "/api/v1/buyer_evidence_manifests/latest"
+    assert canonical_path in OPENAPI_SPEC["paths"]
+    assert OPENAPI_SPEC["paths"][canonical_path]["get"]["operationId"] == (
+        "get_latest_commercial_evidence_manifest"
+    )
     assert "/api/v1/buyer_evidence_manifests/latest" in OPENAPI_SPEC["paths"]
     assert OPENAPI_SPEC["paths"]["/api/v1/buyer_evidence_manifests/latest"]["get"]["operationId"] == (
         "get_latest_buyer_evidence_manifest"
     )
-    assert "/api/v1/buyer_evidence_manifests/latest" in ADMIN_HTML
+    assert OPENAPI_SPEC["paths"][legacy_path]["get"]["deprecated"] is True
+    assert canonical_path in ADMIN_HTML
+    assert legacy_path not in ADMIN_HTML
     assert "buyer_evidence_manifest_title" in ADMIN_TRANSLATIONS["en"]
     assert "buyer_evidence_manifest_title" in ADMIN_TRANSLATIONS["ko"]
 
     manifest_doc = Path("docs/commercial_buyer_evidence_manifest.md").read_text(encoding="utf-8")
     assert "Commercial Buyer Evidence Manifest" in manifest_doc
-    assert "/api/v1/buyer_evidence_manifests/latest" in manifest_doc
+    assert canonical_path in manifest_doc
     assert "Figma Code Connect is not used" in manifest_doc
     assert "Review process is not a blocker" in manifest_doc
 
@@ -124,9 +132,17 @@ def test_buyer_evidence_manifest_endpoint_openapi_admin_and_docs_contract() -> N
             "inference_secret",
         )
         manifest_status, manifest = get_json(
-            f"http://127.0.0.1:{port}/api/v1/buyer_evidence_manifests/latest",
+            f"http://127.0.0.1:{port}{canonical_path}",
             "admin_secret",
         )
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{legacy_path}",
+            headers={"authorization": "Bearer admin_secret", "connection": "close"},
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            legacy_manifest = json.loads(response.read().decode("utf-8"))
+            assert response.headers["Deprecation"] == "true"
+            assert canonical_path in response.headers["Link"]
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -141,6 +157,14 @@ def test_buyer_evidence_manifest_endpoint_openapi_admin_and_docs_contract() -> N
     }
     assert manifest["measurement_status"] == "local_buyer_evidence_manifest"
     assert "items" in manifest
+    assert legacy_manifest == manifest
+
+
+def test_deprecated_python_manifest_alias_preserves_payload() -> None:
+    orchestrator = build()
+    assert orchestrator.buyer_evidence_manifest_report() == (
+        orchestrator.commercial_evidence_manifest_report()
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
