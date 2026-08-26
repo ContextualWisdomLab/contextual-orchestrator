@@ -27,6 +27,7 @@ from contextual_orchestrator.batch_routing import (
     BatchRequest,
     BatchResultItem,
     LocalBatchBackend,
+    ProviderEmbeddingBatchBackend,
 )
 from contextual_orchestrator.kv_config import InMemoryConfigStore
 
@@ -81,6 +82,17 @@ def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
     assert counts["batch_1"] == 7
     assert counts.get("missing") is None
     assert "batch_1" in counts and len(counts) == 1
+
+
+def test_provider_backend_does_not_claim_durable_inflight_rows_on_construction() -> None:
+    """A shared registry is state storage, not a multi-process atomic work queue."""
+    client = FakeValkeyClient()
+    factory = JobRegistryFactory(client)
+    factory.mapping("provider_embedding_states")["inflight"] = "queued"
+    calls = []
+    ProviderEmbeddingBatchBackend(lambda requests: (calls.append(requests) or [], 0), job_registry=factory)
+    assert calls == []
+    assert factory.mapping("provider_embedding_states")["inflight"] == "queued"
 
 
 def test_mapping_delete_and_iteration_match_dict_semantics() -> None:

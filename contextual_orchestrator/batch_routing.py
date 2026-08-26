@@ -629,10 +629,27 @@ class ProviderEmbeddingBatchBackend:
             if job_registry is not None
             else {}
         )
-        for job_id in list(self._states):
-            if self._states.get(job_id) in {"queued", "running"}:
-                self._states[job_id] = "queued"
-                self._executor.submit(self._run_job, job_id)
+        # A durable registry makes state visible across processes, but it is not
+        # an atomic work queue.  Do not resubmit inherited queued/running rows:
+        # doing so in every web process can execute one paid provider call more
+        # than once.  Restart recovery requires an external single-consumer
+        # dispatcher (or a future DB/KV compare-and-set claim).
+
+    def close(self) -> None:
+        """Release the bounded worker pool owned by this backend."""
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def __enter__(self) -> "ProviderEmbeddingBatchBackend":
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self.close()
+
+    def __del__(self) -> None:  # pragma: no cover - interpreter timing varies
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None

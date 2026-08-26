@@ -87,7 +87,11 @@ class PgTiktokenAdapter:
 
 
 class RustCl100kPacker:
-    """Typed PyO3 boundary for Rust/Rayon cl100k chunking and packing."""
+    """Typed PyO3 boundary for Rust/Rayon cl100k chunking and packing.
+
+    There is intentionally no Python approximation fallback: provider limit
+    enforcement must use the exact Rust authority or fail closed.
+    """
 
     def __init__(self) -> None:
         try:

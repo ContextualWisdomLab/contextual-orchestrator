@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import sys
 import threading
 import urllib.error
@@ -11,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
@@ -144,6 +145,52 @@ def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
         status, body = _post(port, "/v1/embeddings", {"input": "invoice search chunk"})
         assert status == 200, body
         assert body.get("model") == "mock-planner"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_continues_after_terminal_backend_failure() -> None:
+    class Client:
+        local_concurrency = 1
+        timeout = 1.0
+
+        def remaining_request_timeout(self):
+            return 1.0
+
+        @contextmanager
+        def request_settings(self, **_kwargs):
+            yield
+
+        def embed_with_usage(self, agent, texts):
+            if agent.id == "first_embedding":
+                raise RuntimeError("measured first-member failure")
+            return [[2.0] for _text in texts], len(texts)
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("first_embedding", "embed-first", base_url="https://first.example/v1", provider_name="first", tags=("embedding",), priority=1),
+            ModelAgent("second_embedding", "embed-second", base_url="https://second.example/v1", provider_name="second", tags=("embedding",), priority=2),
+        ],
+        client=Client(),
+    )
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator._cl100k_packer = type(
+        "RustFixture", (), {
+            "weighted_average_embeddings": staticmethod(lambda parts: parts[0][0]),
+            "sum_token_counts": staticmethod(sum),
+        }
+    )()
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(server.server_address[1], "/v1/embeddings", {"input": "invoice"})
+        assert status == 200, body
+        assert body["data"][0]["embedding"] == [2.0]
     finally:
         server.shutdown()
         thread.join(timeout=5)
