@@ -96,6 +96,7 @@ def test_commercial_operations_readiness_report_tracks_operations_handoff_warnin
     assert items["backup_recovery_plan"]["completion_state"] == "warning"
     assert items["support_slo_ownership"]["completion_state"] == "warning"
     assert report["related_runtime_reports"]["commercial_onboarding_status"] == "commercial_onboarding_ready_with_warnings"
+    assert report["related_runtime_reports"]["release_authorization_status"] == "release_authorization_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["operations_links"]["runtime_endpoint"] == "/api/v1/commercial_operations_readiness/latest"
 
@@ -144,6 +145,7 @@ def test_commercial_operations_readiness_endpoint_openapi_admin_and_docs_contrac
     assert unauth_status == 401
     assert unauth_body["error"]["code"] == "unauthorized"
     assert operations_status == 200
+    assert operations["related_runtime_reports"]["release_authorization_status"] == "release_authorization_blocked"
     assert operations["operations_status"] in {
         "commercial_operations_ready",
         "commercial_operations_ready_with_warnings",

@@ -8314,12 +8314,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return an operations-handoff readiness gate over onboarding evidence."""
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -8520,12 +8522,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a buyer security-review attestation gate over operations evidence."""
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -8752,6 +8756,7 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a buyer economic-review gate over value and ROI evidence."""
         commercial = self.commercial_readiness_report(
@@ -8768,6 +8773,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         root = Path(__file__).resolve().parents[1]
@@ -8998,32 +9004,38 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the final buyer-close gate over commercial readiness evidence."""
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         export = self.commercial_evidence_export_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -9281,22 +9293,26 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a buyer-facing GTM readiness index over commercial evidence."""
         close = self.commercial_close_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         export = self.commercial_evidence_export_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -9591,22 +9607,26 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer launch/trial readiness gate over commercial evidence."""
         gtm = self.commercial_go_to_market_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -9898,6 +9918,7 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the final KRW 2B commercial completion scorecard."""
         commercial = self.commercial_readiness_report(
@@ -9909,11 +9930,13 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         launch = self.commercial_launch_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()

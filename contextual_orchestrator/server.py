@@ -5260,42 +5260,49 @@ def build_server(
                     self._send(orchestrator.commercial_operations_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_security_attestations/latest":
                     self._send(orchestrator.commercial_security_attestation_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_value_readiness/latest":
                     self._send(orchestrator.commercial_value_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_close_readiness/latest":
                     self._send(orchestrator.commercial_close_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_go_to_market_readiness/latest":
                     self._send(orchestrator.commercial_go_to_market_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_launch_readiness/latest":
                     self._send(orchestrator.commercial_launch_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_completion_scorecards/latest":
                     self._send(orchestrator.commercial_completion_scorecard_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_buyer_acceptance_workflows/latest":

@@ -24,6 +24,11 @@ snapshot produces `authority_evidence_unavailable`, so
 `/api/v1/commercial_release_candidates/latest` remains useful for local product
 demonstrations without claiming release authorization.
 
+The release candidate, gap, procurement, contract, onboarding, operations,
+security-attestation, value, close, go-to-market, launch, and completion report
+chain receives the same verified snapshot. Nested release status therefore
+cannot silently fall back to unavailable evidence after server verification.
+
 ## Customer next action
 
 Register `CONTEXTUAL_ORCHESTRATOR_RELEASE_AUTHORITY_SIGNING_KEY` in the KV for
