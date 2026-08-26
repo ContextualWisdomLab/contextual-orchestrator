@@ -121,6 +121,12 @@ class CostRoutingCoordinator:
     # ------------------------------------------------------------------
     # Provider / model resolution
     # ------------------------------------------------------------------
+    @staticmethod
+    def _agent_provider_model(agent: Any, fallback_model: str) -> tuple[str, str]:
+        """Derive the ledger provider/model identity for one served agent."""
+        provider = agent.provider_name or _provider_from_base_url(agent.base_url)
+        return provider or "unknown", agent.model or fallback_model
+
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
         trace = result.get("trace") or []
@@ -130,8 +136,7 @@ class CostRoutingCoordinator:
         if agent_id:
             try:
                 agent = self.orchestrator._agent(agent_id)
-                provider = agent.provider_name or _provider_from_base_url(agent.base_url)
-                return provider or "unknown", agent.model or fallback_model
+                return self._agent_provider_model(agent, fallback_model)
             except Exception:
                 pass
         return "unknown", fallback_model
@@ -176,7 +181,7 @@ class CostRoutingCoordinator:
             request_channel="sync",
             attribution=context["attribution"],
             model_name=context["model_name"],
-            provider_model=(agent.provider_name, agent.model),
+            provider_model=self._agent_provider_model(agent, context["model_name"]),
             workflow_run_id=context["workflow_run_id"],
             prompt_tokens=counts[0],
             completion_tokens=counts[1],

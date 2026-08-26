@@ -112,6 +112,55 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
     assert record["workflow_run_id"] == "run_race"
 
 
+def test_race_loser_derives_provider_from_base_url_when_name_is_absent() -> None:
+    """Race-loser spend uses the same provider identity as winner accounting."""
+    agent = ModelAgent(
+        id="gateway_worker",
+        model="gateway-model",
+        base_url="https://gateway.example/v1",
+        provider_name="",
+        tags=("reasoning",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry(
+            "gateway.example",
+            "gateway-model",
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=2.0,
+        )
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+    context = {
+        "route_mode": "route",
+        "attribution": None,
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": "run_gateway_race",
+        "workflow_ready": True,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "gateway_worker",
+            (
+                "duplicate",
+                "gateway_worker",
+                {"prompt_tokens": 1000, "completion_tokens": 1000},
+            ),
+        )
+    finally:
+        coordinator._race_usage_context.reset(token)
+
+    record = coordinator.ledger.records()[0]
+    assert record["provider_name"] == "gateway.example"
+    assert record["upstream_api"] == "gateway.example"
+    assert record["cost_amount"] == 3.0
+
+
 def test_race_loser_cost_does_not_inflate_openai_completion_usage() -> None:
     coordinator = _coordinator()
 
