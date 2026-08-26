@@ -20,7 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import NoViableAgentError  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient, NoViableAgentError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
 
 
@@ -60,6 +60,118 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
 
 
+def test_virtual_structured_passthrough_excludes_failed_candidate_for_request() -> None:
+    """A provider failure must move the same schema request to another ready agent."""
+
+    calls: list[str] = []
+
+    class FirstDown(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            calls.append(agent.id)
+            if len(calls) == 1:
+                raise RuntimeError("provider transport unavailable")
+            return {
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "model": agent.model,
+                "choices": [],
+                "echo": body,
+            }
+
+    agents = [
+        ModelAgent("ready_a", "mock-a", tags=("reasoning",)),
+        ModelAgent("ready_b", "mock-b", tags=("reasoning",)),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=FirstDown())
+    schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "operations_case_evidence",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"cases": {"type": "array"}},
+                "required": ["cases"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": orchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "synthetic evidence"}],
+            "response_format": schema,
+        }
+    )
+
+    assert len(calls) == 2
+    assert len(set(calls)) == 2
+    assert result["echo"]["response_format"] == schema
+
+
+def test_virtual_structured_passthrough_defers_after_each_ready_candidate_fails_once() -> None:
+    """All ready failures return typed admission deferral without repeated calls."""
+
+    calls: list[str] = []
+
+    class AllDown(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del endpoint, body
+            calls.append(agent.id)
+            raise RuntimeError("provider transport unavailable")
+
+    agents = [ModelAgent(f"ready_{index}", "mock", tags=("reasoning",)) for index in range(2)]
+    orchestrator = TaskOrchestrator(agents, client=AllDown())
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.proxy_completion(
+            {
+                "model": orchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic evidence"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "operations_case_evidence", "schema": {}},
+                },
+            }
+        )
+
+    assert len(calls) == 2
+    assert len(set(calls)) == 2
+
+
+def test_structured_passthrough_does_not_call_unadmitted_primary() -> None:
+    """A virtual request must start with a capability-admitted candidate."""
+
+    calls: list[str] = []
+
+    class Recorder(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del endpoint
+            calls.append(agent.id)
+            return {"model": agent.model, "echo": body}
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("unready_primary", "mock-unready"),
+            ModelAgent("ready_fallback", "mock-ready"),
+        ],
+        client=Recorder(),
+    )
+    orchestrator._structured_admitted_agent_ids = lambda: {"ready_fallback"}  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": orchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "synthetic evidence"}],
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    assert calls == ["ready_fallback"]
+    assert result["model"] == "mock-ready"
+
+
 def test_proxy_completion_forwards_tools() -> None:
     orch = _build()
     tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
@@ -94,6 +206,37 @@ def test_proxy_completion_free_model_uses_only_an_explicitly_free_agent() -> Non
     })
 
     assert result["model"] == "free-model"
+
+
+def test_proxy_completion_free_model_never_fails_over_to_a_paid_agent() -> None:
+    """A zero-cost request remains zero-cost when its ready provider fails."""
+
+    calls: list[str] = []
+
+    class FreeDown(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del endpoint, body
+            calls.append(agent.id)
+            raise RuntimeError("provider transport unavailable")
+
+    orchestrator = TaskOrchestrator(
+        agents=[
+            ModelAgent("free_agent", "mock-free", tags=("cost:free",)),
+            ModelAgent("paid_agent", "mock-paid"),
+        ],
+        client=FreeDown(),
+    )
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.proxy_completion(
+            {
+                "model": orchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "synthetic request"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    assert calls == ["free_agent"]
 
 
 def test_proxy_completion_free_model_fails_closed_without_a_free_agent() -> None:

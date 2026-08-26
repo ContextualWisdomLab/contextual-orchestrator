@@ -21,6 +21,17 @@ request duration and the configured provider timeout; all transport retries for
 that provider share that single budget. Backoff consumes the same budget. This
 applies to decoded chat, full structured JSON, and binary provider responses.
 
+Provider-specific payload features such as `response_format` remain an exact
+passthrough rather than being merged across agents. When the caller selects a
+virtual orchestrator model, however, passthrough is still admitted through the
+same capability-specific readiness evidence and request-scoped failed-candidate
+set as the structured workflow. A failed ready candidate is invalidated and
+excluded for the rest of that request; the unchanged payload may move to the
+next ready candidate while time remains. Each candidate is called at most once.
+If all admitted candidates fail, the server returns typed `no_viable_agent`
+with `Retry-After` instead of collapsing provider failure into an opaque 500.
+An explicitly requested provider model remains exact and is never substituted.
+
 The deadline does not allocate a fraction to a provider, change model order,
 change reasoning effort, or modify cost attribution. Successful failover retains
 the serving provider's reported usage. Exhaustion fails closed as HTTP 504 with
@@ -33,6 +44,8 @@ provider timeout while still making it one budget across retries.
   with a 90-second timeout and offer only the actual remainder to successors.
 - Multi-agent workflow, structured validation, session, trace, and cost lineage
   remain unchanged.
+- JSON-schema passthrough preserves the schema byte-for-byte across bounded
+  candidate failover and never admits an unprobed catalog entry.
 - An in-flight blocking provider transport can only be interrupted at the
   transport timeout boundary; cancellation below that boundary is provider and
   operating-system dependent.
