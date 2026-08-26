@@ -778,6 +778,10 @@ def test_batch_embeddings_http_preserves_index_aligned_input_context() -> None:
             "session-a",
             "session-b",
         ]
+        assert [item["attribution"]["session_id"] for item in document["embeddings"]] == [
+            "session-a",
+            "session-b",
+        ]
         assert [record["team_name"] for record in coordinator.ledger.records()] == [
             "alpha",
             "beta",
