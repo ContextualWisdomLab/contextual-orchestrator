@@ -40,6 +40,11 @@ from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
+
+_RACE_USAGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
+    "race_usage_context", default=None
+)
+
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
@@ -67,9 +72,7 @@ class CostRoutingCoordinator:
         self.config = config_store or InMemoryConfigStore()
         self.price_book = price_book or PriceBook(self.config)
         self.ledger = ledger or CostLedger(self.price_book)
-        self._race_usage_context: ContextVar[dict[str, Any] | None] = ContextVar(
-            "race_usage_context", default=None
-        )
+        self._race_usage_context = _RACE_USAGE_CONTEXT
         if hasattr(orchestrator, "_race_usage_sink"):
             orchestrator._race_usage_sink = self._record_race_endpoint_usage
         self.token_counter = token_counter or (
@@ -149,7 +152,7 @@ class CostRoutingCoordinator:
         context = self._race_usage_context.get()
         if context is None:
             return
-        if context["workflow_run_id"] is None:
+        if not context["workflow_ready"]:
             context["pending_usage"].append((endpoint_id, value))
             return
         usage = None
@@ -254,6 +257,7 @@ class CostRoutingCoordinator:
                 "attribution": attribution,
                 "model_name": model_name,
                 "workflow_run_id": workflow_run_id,
+                "workflow_ready": workflow_run_id is not None,
                 "records": [],
                 "pending_usage": [],
             }
@@ -269,7 +273,8 @@ class CostRoutingCoordinator:
                     lineage.get("workflow_run_id"), str
                 ):
                     race_context["workflow_run_id"] = lineage["workflow_run_id"]
-                    self._flush_race_endpoint_usage(race_context)
+                race_context["workflow_ready"] = True
+                self._flush_race_endpoint_usage(race_context)
             finally:
                 self._race_usage_context.reset(race_token)
             lineage = provider_response.get("orchestration")
@@ -377,6 +382,7 @@ class CostRoutingCoordinator:
             "attribution": attribution,
             "model_name": model_name,
             "workflow_run_id": workflow_run_id,
+            "workflow_ready": workflow_run_id is not None,
             "records": [],
             "pending_usage": [],
         }
@@ -385,11 +391,13 @@ class CostRoutingCoordinator:
             result = self.orchestrator.run(messages, **run_kwargs)
             if isinstance(result.get("workflow_run_id"), str):
                 race_context["workflow_run_id"] = result["workflow_run_id"]
-                self._flush_race_endpoint_usage(race_context)
+            race_context["workflow_ready"] = True
+            self._flush_race_endpoint_usage(race_context)
         finally:
             self._race_usage_context.reset(race_token)
         cache_hit = result.get("cache_status") == "hit"
-        records = list(race_context["records"])
+        race_records = list(race_context["records"])
+        records = list(race_records)
         if cache_hit:
             records.append(
                 self._record_completion(
@@ -428,7 +436,7 @@ class CostRoutingCoordinator:
                         completion_tokens=counts[1] if counts else None,
                     )
                 )
-            if not records:
+            if len(records) == len(race_records):
                 records.append(
                     self._record_completion(
                         messages=messages,
@@ -446,10 +454,14 @@ class CostRoutingCoordinator:
         result["routing_reason"] = decision.reason
         result["usage_record_id"] = record.usage_record_id
         result["usage_record_ids"] = [item.usage_record_id for item in records]
+        race_record_ids = {item.usage_record_id for item in race_records}
+        client_usage_records = [
+            item for item in records if item.usage_record_id not in race_record_ids
+        ]
         result["usage"] = {
-            "prompt_tokens": sum(item.prompt_tokens for item in records),
-            "completion_tokens": sum(item.completion_tokens for item in records),
-            "total_tokens": sum(item.total_tokens for item in records),
+            "prompt_tokens": sum(item.prompt_tokens for item in client_usage_records),
+            "completion_tokens": sum(item.completion_tokens for item in client_usage_records),
+            "total_tokens": sum(item.total_tokens for item in client_usage_records),
         }
         currencies = {item.currency_code for item in records}
         result["cost"] = {

@@ -89,6 +89,7 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
         "attribution": {"team": "alpha"},
         "model_name": "contextual-orchestrator",
         "workflow_run_id": None,
+        "workflow_ready": False,
         "records": [],
         "pending_usage": [],
     }
@@ -100,6 +101,7 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
         )
         assert coordinator.ledger.records() == []
         context["workflow_run_id"] = "run_race"
+        context["workflow_ready"] = True
         coordinator._flush_race_endpoint_usage(context)
     finally:
         coordinator._race_usage_context.reset(token)
@@ -108,6 +110,61 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
     assert record["completion_tokens"] == 2
     assert record["measurement_status"] == "measured"
     assert record["workflow_run_id"] == "run_race"
+
+
+def test_race_loser_cost_does_not_inflate_openai_completion_usage() -> None:
+    coordinator = _coordinator()
+
+    def run(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", {"prompt_tokens": 5, "completion_tokens": 2}),
+        )
+        return {
+            "workflow_run_id": "run_race_usage",
+            "mode": "route",
+            "answer": "winner",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "winner",
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+                }
+            ],
+        }
+
+    coordinator.orchestrator.run = run  # type: ignore[method-assign]
+    result = coordinator.complete([{"role": "user", "content": "race"}], mode="route")
+    assert result["usage"] == {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+        "total_tokens": 10,
+    }
+    assert len(coordinator.ledger.records()) == 2
+    assert result["cost"]["cost_amount"] == 0.022
+
+
+def test_ready_race_usage_without_workflow_id_is_not_discarded() -> None:
+    coordinator = _coordinator()
+    context = {
+        "route_mode": "route",
+        "attribution": None,
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": None,
+        "workflow_ready": True,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "mock_worker",
+            ("duplicate", "mock_worker", {"prompt_tokens": 1, "completion_tokens": 1}),
+        )
+    finally:
+        coordinator._race_usage_context.reset(token)
+    assert len(coordinator.ledger.records()) == 1
+    assert coordinator.ledger.records()[0]["workflow_run_id"] is None
 
 
 def test_conducted_plain_completion_records_every_step_usage() -> None:
