@@ -26,8 +26,10 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
     ProviderResponseError,
+    RequestDeadlineExceeded,
     is_transient_error,
 )
+import contextual_orchestrator.orchestrator as orchestrator_module
 from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 
@@ -366,6 +368,107 @@ def test_exhausted_provider_transport_uses_failover_error_category() -> None:
     with pytest.raises(ProviderResponseError):
         client._send_with_retry(agent, {"model": agent.model})
     assert client.calls == ["primary_worker"]
+
+
+def test_provider_retry_reuses_one_timeout_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Transport retries receive only the remainder of one provider-attempt budget."""
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class TimedFailureClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=1, retry_backoff=0.0)
+            self.timeouts: list[float] = []
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination
+            timeout = self._local.provider_transport_timeout
+            self.timeouts.append(timeout)
+            now[0] += 60.0
+            raise TimeoutError("provider timed out")
+
+    client = TimedFailureClient()
+    agent = ModelAgent("provider_worker", "provider-model", base_url="https://provider.example/v1")
+    with pytest.raises(ProviderResponseError):
+        client._send_with_retry(agent, {"model": agent.model})
+    assert client.timeouts == [90.0, 30.0]
+
+
+def test_request_deadline_allows_backup_only_the_remaining_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 180-second caller budget survives one 90-second provider exhaustion."""
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class DeadlineClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=0)
+            self.calls: list[tuple[str, float]] = []
+
+        def _validate_provider(self, agent):  # type: ignore[override]
+            del agent
+            return None
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del payload, destination
+            timeout = self._local.provider_transport_timeout
+            self.calls.append((agent.id, timeout))
+            if agent.id == "primary_worker":
+                now[0] += timeout
+                raise TimeoutError("primary exhausted its provider budget")
+            self._local.usage = {"completion_tokens": 7}
+            return "backup answer"
+
+    agents = [
+        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=5),
+        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=1),
+    ]
+    client = DeadlineClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+    with client.request_settings(request_deadline_monotonic=180.0):
+        output, served, usage = orchestrator._invoke(
+            agents[0], [{"role": "user", "content": "route"}], text="route", role="worker"
+        )
+    assert output == "backup answer"
+    assert served == "backup_worker"
+    assert usage == {"completion_tokens": 7}
+    assert client.calls == [("primary_worker", 90.0), ("backup_worker", 90.0)]
+
+
+def test_all_provider_failures_end_at_shared_request_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Candidate failover cannot continue after the explicit caller deadline."""
+    now = [0.0]
+    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
+
+    class AllTimedOut(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=90, max_retries=0)
+
+        def _validate_provider(self, agent):  # type: ignore[override]
+            del agent
+            return None
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination
+            timeout = self._local.provider_transport_timeout
+            now[0] += timeout
+            raise TimeoutError("provider timed out")
+
+    agents = [
+        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=5),
+        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=1),
+    ]
+    client = AllTimedOut()
+    orchestrator = TaskOrchestrator(agents, client=client)
+    with client.request_settings(request_deadline_monotonic=180.0):
+        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
+            orchestrator._invoke(
+                agents[0], [{"role": "user", "content": "route"}], text="route", role="worker"
+            )
+    assert now[0] == 180.0
 
 
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:

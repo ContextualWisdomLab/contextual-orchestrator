@@ -141,12 +141,18 @@ class CostRoutingCoordinator:
             return requested
         raise RuntimeError("embedding model is unavailable")
 
-    def _embedding_backend_for_model(self, model: str) -> EmbeddingBatchBackend:
+    def _embedding_backend_for_model(
+        self, model: str, routing_agent_id: str | None = None
+    ) -> EmbeddingBatchBackend:
         """Resolve the current pool at submission time so discovery changes take effect."""
         if self._embedding_backend_override is not None:
             return self._embedding_backend_override
         try:
-            agent = self._embedding_agent_for_model(model)
+            agent = (
+                self.orchestrator._agent(routing_agent_id)
+                if routing_agent_id is not None
+                else self._embedding_agent_for_model(model)
+            )
         except (AttributeError, KeyError, RuntimeError, ValueError):
             return self._local_embedding_backend
         return (
@@ -406,7 +412,7 @@ class CostRoutingCoordinator:
             existing_job = self._embedding_jobs.get(str(existing_job_id))
             if existing_job is not None:
                 return existing_job
-        backend = self._embedding_backend_for_model(model)
+        backend = self._embedding_backend_for_model(model, routing_agent_id)
         job = backend.submit(requests, metadata=metadata)
         self._embedding_job_backends[job.job_id] = backend.name
         self._embedding_jobs[job.job_id] = job

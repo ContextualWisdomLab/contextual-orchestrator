@@ -156,7 +156,6 @@ def test_provider_batch_exposes_failed_terminal_state() -> None:
     assert backend.poll(job)["is_complete"] is True
     assert backend.retrieve(job) == []
 
-
 class _RecordingEmbeddingBackend:
     """Embedding backend that records the exact mapped requests it receives."""
 

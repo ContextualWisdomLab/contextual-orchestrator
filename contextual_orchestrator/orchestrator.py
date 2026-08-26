@@ -118,6 +118,10 @@ class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
 
 
+class RequestDeadlineExceeded(RuntimeError):
+    """Raised when the caller's request-scoped monotonic deadline is exhausted."""
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
 
@@ -914,7 +918,18 @@ class ModelClient:
             "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
             "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
             "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
+            "request_deadline_monotonic": scoped.get("request_deadline_monotonic"),
         }
+
+    def remaining_request_timeout(self) -> float | None:
+        """Return seconds remaining on the caller deadline, or ``None`` when absent."""
+        deadline = self.request_settings_snapshot()["request_deadline_monotonic"]
+        if deadline is None:
+            return None
+        remaining = float(deadline) - time.monotonic()
+        if remaining <= 0:
+            raise RequestDeadlineExceeded("request deadline exceeded")
+        return remaining
 
     @contextmanager
     def request_settings(self, **overrides: Any):
@@ -1054,7 +1069,9 @@ class ModelClient:
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_with_retry(agent, payload, destination)
+            remaining = self.remaining_request_timeout()
+            provider_timeout = self.timeout if remaining is None else min(self.timeout, remaining)
+            return self._send_with_retry(agent, payload, destination, timeout=provider_timeout)
 
     def apply_effort_profile(
         self,
@@ -1162,21 +1179,29 @@ class ModelClient:
         *,
         timeout: float | None = None,
     ) -> str:
-        """Call the provider, retrying transient failures with exponential backoff + jitter."""
+        """Call a provider with one timeout budget shared by all transport retries."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        provider_timeout = self.timeout if timeout is None else float(timeout)
+        deadline = time.monotonic() + provider_timeout
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                last_error = TimeoutError("provider attempt deadline exceeded")
+                break
             try:
-                return (
-                    self._send(agent, payload, destination)
-                    if timeout is None
-                    else self._send(agent, payload, destination, timeout=timeout)
-                )
+                self._local.provider_transport_timeout = remaining
+                return self._send(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
-                self._sleep(self._backoff_delay(attempt))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._sleep(min(self._backoff_delay(attempt), remaining))
+            finally:
+                self._local.provider_transport_timeout = None
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
@@ -1216,10 +1241,13 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        effective_timeout = timeout
+        if effective_timeout is None:
+            effective_timeout = getattr(self._local, "provider_transport_timeout", None)
         opened = (
             self._open_provider(request, destination)
-            if timeout is None
-            else self._open_provider(request, destination, timeout=timeout)
+            if effective_timeout is None
+            else self._open_provider(request, destination, timeout=effective_timeout)
         )
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -4337,6 +4365,8 @@ class TaskOrchestrator:
             retry_attempt = 0
             while True:
                 try:
+                    if hasattr(self.client, "remaining_request_timeout"):
+                        self.client.remaining_request_timeout()
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
                     output = (
@@ -4348,6 +4378,8 @@ class TaskOrchestrator:
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
+                        raise
+                    if isinstance(exc, RequestDeadlineExceeded):
                         raise
                     if isinstance(exc, ProviderResponseError):
                         self._record_failure(agent.id)
@@ -4396,6 +4428,8 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
+        if hasattr(self.client, "remaining_request_timeout"):
+            self.client.remaining_request_timeout()
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(

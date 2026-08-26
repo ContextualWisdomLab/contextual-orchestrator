@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import secrets
 import struct
 import threading
@@ -25,6 +26,7 @@ from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
+    RequestDeadlineExceeded,
     TaskOrchestrator,
     _coerce_input_text,
     _new_chat_completion_id,
@@ -520,6 +522,34 @@ def _cache_bypass_header(value: str | None) -> bool:
     if normalized in {"false", "0"}:
         return False
     raise RequestError(400, "invalid_cache_bypass", "X-Cache-Bypass must be true, false, 1, or 0")
+
+
+def _request_deadline_header(value: str | None) -> float | None:
+    """Translate an explicit caller timeout header into a monotonic deadline."""
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip()
+    if not normalized.isascii() or not normalized.isdecimal():
+        raise RequestError(
+            400,
+            "invalid_request_timeout",
+            "X-Request-Timeout-Ms must be a positive integer",
+        )
+    timeout_ms = int(normalized)
+    if timeout_ms <= 0:
+        raise RequestError(
+            400,
+            "invalid_request_timeout",
+            "X-Request-Timeout-Ms must be a positive integer",
+        )
+    timeout_seconds = timeout_ms / 1000.0
+    if not math.isfinite(timeout_seconds):
+        raise RequestError(
+            400,
+            "invalid_request_timeout",
+            "X-Request-Timeout-Ms exceeds the supported numeric range",
+        )
+    return time.monotonic() + timeout_seconds
 
 
 MAX_JSON_NESTING_DEPTH = 32
@@ -5543,6 +5573,9 @@ def build_server(
                 if request_session_id != current_session_id():
                     self._bind_session(request_session_id)
                 cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
+                request_deadline = _request_deadline_header(
+                    self.headers.get("x-request-timeout-ms")
+                )
                 cache_partition = self._cache_partition()
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
@@ -5674,6 +5707,7 @@ def build_server(
                         top_p=top_p,
                         presence_penalty=presence_penalty,
                         frequency_penalty=frequency_penalty,
+                        request_deadline_monotonic=request_deadline,
                     ):
                         result = self._run(lambda: coordinator.complete(
                             messages,
@@ -5846,9 +5880,12 @@ def build_server(
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
                         started_at = time.perf_counter()
-                        proxied = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
-                        )
+                        with orchestrator.client.request_settings(
+                            request_deadline_monotonic=request_deadline
+                        ):
+                            proxied = self._run(
+                                lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
+                            )
                         orchestrator.record_analytics_event(
                             "chat_completion_passthrough",
                             {
@@ -5892,6 +5929,7 @@ def build_server(
                         top_p=top_p,
                         presence_penalty=presence_penalty,
                         frequency_penalty=frequency_penalty,
+                        request_deadline_monotonic=request_deadline,
                     ):
                         if stream and orchestrator.would_route(messages, mode, model_name):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
@@ -6465,6 +6503,8 @@ def build_server(
                 )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
+            except RequestDeadlineExceeded:
+                self._send_error(504, "request_deadline_exceeded", "request deadline exceeded")
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
