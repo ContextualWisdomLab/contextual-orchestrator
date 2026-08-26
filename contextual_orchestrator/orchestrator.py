@@ -901,6 +901,40 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+_PASSTHROUGH_TRIGGER_KEYS = (
+    "response_format",
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+)
+
+
+def _is_omit_equivalent_control(key: str, value: Any) -> bool:
+    """Mirror the HTTP-boundary treat-as-omit rules for optional provider controls.
+
+    ``response_format`` / ``tool_choice`` / ``function_call`` treat JSON null,
+    empty objects, and blank strings as omit; the choice keys additionally treat
+    the honest no-op keywords ``"none"`` / ``"auto"`` as omit. ``tools`` /
+    ``functions`` treat JSON null and empty arrays as omit. A trigger key
+    carrying only such a value is omit-equivalent to the key being absent, so it
+    must not select the conducted-evidence + synthesis path on its own (parity
+    with the ``_validate_chat_*`` boundary rules in ``server.py``).
+    """
+    if value is None:
+        return True
+    if key in ("tools", "functions"):
+        return isinstance(value, list) and not value
+    if isinstance(value, dict):
+        return not value
+    if isinstance(value, str):
+        stripped = value.strip().casefold()
+        if not stripped:
+            return True
+        return key in ("tool_choice", "function_call") and stripped in ("none", "auto")
+    return False
+
+
 def _is_passthrough_failover_error(exc: BaseException) -> bool:
     """Recognize failures proving that a passthrough request was not accepted."""
     current: BaseException | None = exc
@@ -2814,21 +2848,20 @@ class TaskOrchestrator:
         """Serve provider-shaped requests through orchestration or explicit passthrough.
 
         Structured and Responses requests conduct the normal evidence workflow
-        when the HTTP boundary opts in. Direct callers retain the established
-        single-provider passthrough contract.
+        when the HTTP boundary opts in. Omit-equivalent controls (JSON nulls,
+        empty objects/arrays, blank strings, and the honest no-op keywords such
+        as ``tool_choice="auto"`` without tools) never opt a request in on their
+        own — they take the plain passthrough path exactly like an absent key.
+        Direct callers retain the established single-provider passthrough
+        contract.
         """
         normalized_endpoint = endpoint.strip("/")
         if not single_agent and (
             normalized_endpoint == "responses"
             or any(
-                key in body and body.get(key) is not None
-                for key in (
-                    "response_format",
-                    "tools",
-                    "tool_choice",
-                    "functions",
-                    "function_call",
-                )
+                key in body
+                and not _is_omit_equivalent_control(key, body.get(key))
+                for key in _PASSTHROUGH_TRIGGER_KEYS
             )
         ):
             return self._orchestrated_provider_completion(
@@ -2891,6 +2924,10 @@ class TaskOrchestrator:
             if requested_model == self.FREE_MODEL
             else None
         )
+        # Cross-provider failover lives ONLY on this plain virtual passthrough
+        # path (and the virtual tools path reached with single_agent=True).
+        # Conducted structured synthesis never replays across providers — see
+        # _orchestrated_provider_completion.
         ranked_candidates = self._failover_candidates(
             agent, text, "worker", allowed_agent_ids=allowed_agent_ids
         )
@@ -2960,7 +2997,17 @@ class TaskOrchestrator:
         endpoint: str,
         effort_profile: ReasoningEffortProfile | None,
     ) -> dict[str, Any]:
-        """Conduct evidence work, then preserve the caller's provider contract."""
+        """Conduct evidence work, then preserve the caller's provider contract.
+
+        Structured synthesis here is INTENTIONALLY single-provider: the final
+        synthesized response is produced by exactly one selected synthesizer
+        agent with no cross-provider retry loop. Cross-provider failover is a
+        property of the plain virtual passthrough / virtual tools paths only
+        (see ``proxy_completion``), where a raw request can be replayed on a
+        different provider without changing its meaning; replaying a conducted
+        synthesis would mix evidence and attribution across providers, so it
+        stays single-shot and fails closed instead.
+        """
         response_request = endpoint == "responses"
         chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
         messages = chat_body.get("messages")
@@ -3080,6 +3127,9 @@ class TaskOrchestrator:
                 active_profile,
             )
         synthesis_started = time.perf_counter()
+        # Single-provider by design: no cross-provider failover on this
+        # conducted synthesis call (see the docstring above) — only the plain
+        # virtual passthrough / virtual tools paths fail over across providers.
         raw = self.client.proxy_send(final_agent, endpoint, upstream)
         echo = raw.get("echo")
         if isinstance(echo, dict):

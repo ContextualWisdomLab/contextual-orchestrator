@@ -5844,9 +5844,14 @@ def build_server(
                                 )
                         orchestrator.record_analytics_event(
                             (
+                                # Plain tools passthrough vs conducted-evidence
+                                # + synthesis: the structured path runs a full
+                                # evidence workflow before synthesis, so it is
+                                # reported under its own conducted label rather
+                                # than the passthrough one.
                                 "chat_completion_passthrough"
                                 if tool_loop
-                                else "chat_completion_orchestrated"
+                                else "chat_completion_conducted"
                             ),
                             {
                                 "endpoint_path": "/v1/chat/completions",

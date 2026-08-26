@@ -238,6 +238,41 @@ def test_all_candidates_chain_the_last_failure() -> None:
     assert caught.value.__cause__ is final
 
 
+@pytest.mark.parametrize(
+    "control",
+    [
+        {"response_format": {}},
+        {"tools": []},
+        {"tool_choice": "auto"},
+    ],
+    ids=["response_format_empty_object", "tools_empty_array", "tool_choice_auto"],
+)
+def test_omit_equivalent_controls_take_plain_passthrough(control: dict[str, Any]) -> None:
+    """Empty SDK-default controls select plain passthrough, not conducted synthesis."""
+    client = SequencedProxyClient(
+        {"primary_agent": {"model": "primary-model", "choices": []}}
+    )
+    orchestrator = _build(client)
+
+    def _forbidden_conduct(*args: object, **kwargs: object) -> dict[str, Any]:
+        raise AssertionError(
+            "conducted-evidence+synthesis must not run for omit-equivalent controls"
+        )
+
+    orchestrator.conduct = _forbidden_conduct  # type: ignore[method-assign]
+    body = {
+        "model": TaskOrchestrator.AUTO_MODEL,
+        "messages": [{"role": "user", "content": "x"}],
+        **control,
+    }
+
+    result = orchestrator.proxy_completion(body, single_agent=False)
+
+    assert result["model"] == "primary-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+    assert "orchestration" not in result
+
+
 def test_same_provider_is_attempted_only_once() -> None:
     """Two aliases for one upstream cannot replay a non-idempotent request."""
     client = SequencedProxyClient(

@@ -126,6 +126,34 @@ def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     assert records[3]["total_tokens"] > 0
 
 
+def test_unreported_provider_calls_bill_request_prompt_once() -> None:
+    """One completion attributes its request prompt once, not once per unreported call."""
+    coordinator = _coordinator()
+    coordinator.orchestrator.client.take_usage = lambda: None
+
+    messages = [{"role": "user", "content": "return mixed usage JSON"}]
+    coordinator.complete(
+        messages,
+        provider_request={
+            "model": "mock-a",
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    records = coordinator.ledger.records()
+    unreported = [
+        record for record in records if record["measurement_status"] == "estimated"
+    ]
+    assert len(unreported) >= 2
+    request_prompt = coordinator.token_counter.count_messages(messages, "mock-a")
+    # The full request prompt lands on the first unreported step only; later
+    # unreported steps estimate just their own output tokens.
+    assert sum(record["prompt_tokens"] for record in unreported) == request_prompt
+    assert unreported[0]["prompt_tokens"] == request_prompt
+    assert all(record["prompt_tokens"] == 0 for record in unreported[1:])
+
+
 def test_sync_completion_survives_usage_persistence_failure() -> None:
     sink = InMemoryUsageTelemetrySink()
     config = InMemoryConfigStore()

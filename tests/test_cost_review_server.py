@@ -179,6 +179,34 @@ def test_chat_completion_reports_real_usage_and_records_cost() -> None:
         server.shutdown()
 
 
+def test_chat_completion_fallback_path_labels_estimated_measurement_status() -> None:
+    """Provider-unreported usage stays honestly labeled estimated end to end."""
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _request(
+            "POST",
+            f"{base}/v1/chat/completions",
+            token,
+            {
+                "model": "mock-a",
+                "messages": [{"role": "user", "content": "hello there world"}],
+            },
+        )
+        assert status == 200, body
+        # The mock provider reports no usage, so both the completion cost
+        # payload and the analytics usage-ledger rows must carry the explicit
+        # estimated measurement status instead of claiming provider-measured.
+        assert body["orchestration"]["cost"]["measurement_status"] == "estimated"
+
+        status, records = _request("GET", f"{base}/api/v1/llm_usage_records", token)
+        assert status == 200, records
+        assert records["total_count"] == 1
+        assert records["items"][0]["measurement_status"] == "estimated"
+    finally:
+        server.shutdown()
+
+
 def test_structured_chat_cost_records_keep_service_and_account_attribution() -> None:
     """Structured workflow calls roll up under the same chat dimensions."""
     server, port, token = _serve()

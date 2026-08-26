@@ -162,6 +162,14 @@ class CostRoutingCoordinator:
         augmented with ``channel``, ``routing_reason``, ``usage``, and the
         ``usage_record_id``. Batch requests are dispatched to the batch backend
         and return a job envelope; their cost is recorded on retrieval.
+
+        For structured provider workflows, each trace step records one ledger
+        row. Rows backed by provider-reported token counts are labeled
+        ``measurement_status="measured"``; rows that fall back to heuristic
+        estimates are labeled ``"estimated"``. The original request prompt is
+        attributed at most once per completion: it lands in full on the first
+        unreported step, and later unreported steps estimate only their own
+        output tokens.
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
@@ -201,13 +209,22 @@ class CostRoutingCoordinator:
                 raise RuntimeError("provider completion omitted orchestration lineage")
             result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
             records = []
+            # The caller's request prompt is attributed at most once per
+            # completion: the full prompt lands on the first trace step that
+            # reports no provider usage of its own, and every later unreported
+            # step estimates only its own output tokens. One workflow run must
+            # never bill the same request prompt once per unreported step.
+            request_prompt_attributed = False
             for step in result.get("trace", []):
                 if not isinstance(step, dict):
                     continue
                 counts = self._provider_usage(step.get("usage"))
+                attribute_request_prompt = counts is None and not request_prompt_attributed
+                if attribute_request_prompt:
+                    request_prompt_attributed = True
                 records.append(
                     self._record_completion(
-                        messages=messages if counts is None else [],
+                        messages=messages if attribute_request_prompt else [],
                         answer=step.get("output", "") if counts is None else "",
                         route_mode=result.get("mode"),
                         request_channel="sync",
@@ -306,6 +323,19 @@ class CostRoutingCoordinator:
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
     ):
+        """Record one completion's usage + cost and return its ledger record.
+
+        ``prompt_tokens``/``completion_tokens`` carry provider-reported counts;
+        when either is missing the ledger falls back to heuristic estimates and
+        the row is labeled ``measurement_status="estimated"`` instead of
+        ``"measured"``. The status is exposed on the completion's ``cost``
+        payload, batch retrieval results, and analytics usage-record rows so a
+        buyer can always tell provider-measured spend from estimated spend.
+        For multi-step structured workflows the caller passes the original
+        request ``messages`` only for the first unreported step, keeping the
+        request prompt attributed at most once per completion; later unreported
+        steps pass empty messages and estimate their own output alone.
+        """
         provider, model = provider_model
         measurement_status = (
             "measured"
