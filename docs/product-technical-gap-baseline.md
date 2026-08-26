@@ -1,5 +1,22 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-26 10:00 KST customer-copy and responsive evidence
+
+Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
+PR #834 implementation head `a5f8d8424e7eb5c4aa1281ae4de02b5f7647b290`
+removes customer-visible internal configuration, authentication, research-role,
+worker/planner, agent-ID, and endpoint terminology. English and Korean empty and
+warning states now identify the next action. Headless Chromium renders at
+`1440 × 1200` and `390 × 844` are recorded in
+[`docs/ui-audit-2026-08-26.md`](ui-audit-2026-08-26.md); the mobile page has no
+document-level horizontal overflow and the focused admin/integration contract
+is `10 passed`.
+
+This remains local exact-head UI evidence rather than protected-main or deployed
+authenticated evidence. The next acceptance action is to complete #834's hosted
+checks and independent review, merge normally, then repeat the screenshots and
+interactions against the deployed console.
+
 ## 2026-08-26 08:55 KST protected-main and open-queue baseline
 
 Protected `main` is `762f7a345b1d8c82584023a7ff05b4660d628cab`.
