@@ -14,6 +14,7 @@ registering a subset of the five supported keys still works. Stdlib only
 from __future__ import annotations
 
 from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import re
@@ -23,7 +24,7 @@ import urllib.request
 import certifi
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential
@@ -37,6 +38,7 @@ _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
 _MODELS_DEV_OPENCODE_PROVIDER = "opencode"
 _OPENROUTER_ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
+_OPENROUTER_PROVIDER_POLICIES_URL = "https://openrouter.ai/api/frontend/v1/all-providers"
 CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
 MAX_DISCOVERY_RESPONSE_BYTES = 8 * 1024 * 1024
 
@@ -194,6 +196,9 @@ class DiscoveredModel:
     currency_code: str = "USD"
     is_free: bool = False
     supports_zero_data_retention: bool | None = None
+    supports_no_training: bool | None = None
+    supports_no_prompt_retention: bool | None = None
+    privacy_policy_urls: tuple[str, ...] = ()
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -255,6 +260,7 @@ def _fetch_configured_gateway_json(
         "configured_gateway_discovery",
         "configured-gateway-catalog",
         base_url=origin,
+        credential_key=CONFIGURED_GATEWAY_CREDENTIAL_NAME,
     )
     destination = client._validate_provider(agent)
     headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
@@ -435,11 +441,27 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         # below may restore these fields.
         row.pop("pricing", None)
         row.pop("architecture", None)
+        for key in (
+            "supports_zero_data_retention",
+            "supports_no_training",
+            "supports_no_prompt_retention",
+            "privacy_policy_urls",
+        ):
+            row.pop(key, None)
         model_details = by_name.get(row["id"], [])
         deployment_outputs: list[tuple[str, ...]] = []
         deployment_inputs: list[tuple[str, ...]] = []
         prices: set[tuple[object, object]] = set()
         pricing_complete = bool(model_details)
+        privacy_values = {
+            key: []
+            for key in (
+                "supports_zero_data_retention",
+                "supports_no_training",
+                "supports_no_prompt_retention",
+            )
+        }
+        policy_urls: set[str] = set()
         for detail in model_details:
             info = detail.get("model_info") if isinstance(detail.get("model_info"), dict) else {}
             params = detail.get("litellm_params") if isinstance(detail.get("litellm_params"), dict) else {}
@@ -465,6 +487,16 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 prices.add((prompt, completion))
             else:
                 pricing_complete = False
+            for key, values in privacy_values.items():
+                values.append(info.get(key))
+            for key in ("privacy_policy_url", "terms_of_service_url"):
+                value = info.get(key)
+                if (
+                    isinstance(value, str)
+                    and urlsplit(value).scheme == "https"
+                    and urlsplit(value).hostname
+                ):
+                    policy_urls.add(value)
         capability_complete = bool(model_details) and all(deployment_outputs)
         capability_consensus = (
             capability_complete
@@ -480,6 +512,11 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:
                 row["pricing"] = {"prompt": prompt, "completion": completion}
+        for key, values in privacy_values.items():
+            if values and all(isinstance(value, bool) for value in values) and len(set(values)) == 1:
+                row[key] = values[0]
+        if policy_urls:
+            row["privacy_policy_urls"] = sorted(policy_urls)
     return payload
 
 
@@ -498,6 +535,89 @@ def _merge_openrouter_zdr_metadata(payload: Any, metadata: Any) -> Any:
         if isinstance(row, dict) and isinstance(row.get("id"), str):
             row["supports_zero_data_retention"] = row["id"] in zdr_models
     return payload
+
+
+def _merge_openrouter_provider_privacy(
+    payload: Any, providers: Any, endpoints_by_model: Mapping[str, Any]
+) -> Any:
+    """Join provider-declared training, retention, and policy evidence for free models."""
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    provider_rows = providers.get("data") if isinstance(providers, dict) else None
+    if not isinstance(rows, list) or not isinstance(provider_rows, list):
+        return payload
+    policies = {
+        provider["slug"]: provider["dataPolicy"]
+        for provider in provider_rows
+        if isinstance(provider, dict)
+        and isinstance(provider.get("slug"), str)
+        and isinstance(provider.get("dataPolicy"), dict)
+    }
+    for row in rows:
+        model_id = row.get("id") if isinstance(row, dict) else None
+        details = endpoints_by_model.get(model_id) if isinstance(model_id, str) else None
+        endpoints = details.get("endpoints") if isinstance(details, dict) else None
+        if not isinstance(endpoints, list) or not endpoints:
+            continue
+        endpoint_policies = [
+            policies.get(endpoint.get("tag"))
+            for endpoint in endpoints
+            if isinstance(endpoint, dict)
+        ]
+        complete = len(endpoint_policies) == len(endpoints) and all(
+            isinstance(policy, dict) for policy in endpoint_policies
+        )
+        known = [policy for policy in endpoint_policies if isinstance(policy, dict)]
+        for source_key, target_key in (
+            ("training", "supports_no_training"),
+            ("retainsPrompts", "supports_no_prompt_retention"),
+        ):
+            values = [policy.get(source_key) for policy in known]
+            if any(value is False for value in values):
+                row[target_key] = True
+            elif complete and values and all(value is True for value in values):
+                row[target_key] = False
+        urls = {
+            value
+            for policy in known
+            for key in ("privacyPolicyURL", "termsOfServiceURL")
+            if isinstance((value := policy.get(key)), str)
+            and urlsplit(value).scheme == "https"
+            and urlsplit(value).hostname
+        }
+        if urls:
+            row["privacy_policy_urls"] = sorted(urls)
+    return payload
+
+
+def _openrouter_free_model_endpoints(
+    payload: Any, *, api_key: str, timeout: float
+) -> dict[str, Any]:
+    """Fetch endpoint/provider mappings only for explicitly zero-price models."""
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    model_ids = [
+        row["id"]
+        for row in rows or ()
+        if isinstance(row, dict)
+        and isinstance(row.get("id"), str)
+        and isinstance(row.get("pricing"), dict)
+        and _pricing_is_free(row.get("pricing"))
+    ]
+
+    def fetch(model_id: str) -> tuple[str, Any]:
+        author, separator, slug = model_id.partition("/")
+        if not separator or not author or not slug:
+            return model_id, None
+        try:
+            return model_id, _fetch_json(
+                f"https://openrouter.ai/api/v1/models/{quote(author, safe='')}/{quote(slug, safe=':')}/endpoints",
+                api_key=api_key,
+                timeout=timeout,
+            ).get("data")
+        except (AttributeError, urllib.error.URLError, TimeoutError, ValueError, OSError):
+            return model_id, None
+
+    with ThreadPoolExecutor(max_workers=min(8, len(model_ids) or 1)) as executor:
+        return dict(executor.map(fetch, model_ids))
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
@@ -555,6 +675,21 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     row["supports_zero_data_retention"]
                     if isinstance(row.get("supports_zero_data_retention"), bool)
                     else None
+                ),
+                supports_no_training=(
+                    row["supports_no_training"]
+                    if isinstance(row.get("supports_no_training"), bool)
+                    else None
+                ),
+                supports_no_prompt_retention=(
+                    row["supports_no_prompt_retention"]
+                    if isinstance(row.get("supports_no_prompt_retention"), bool)
+                    else None
+                ),
+                privacy_policy_urls=tuple(
+                    value
+                    for value in row.get("privacy_policy_urls", ())
+                    if isinstance(value, str)
                 ),
             )
         )
@@ -630,6 +765,15 @@ def discover_provider_models(
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
             metadata = None
         payload = _merge_openrouter_zdr_metadata(payload, metadata)
+        try:
+            policies = _fetch_json(_OPENROUTER_PROVIDER_POLICIES_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            policies = None
+        payload = _merge_openrouter_provider_privacy(
+            payload,
+            policies,
+            _openrouter_free_model_endpoints(payload, api_key=api_key, timeout=timeout),
+        )
     elif source.provider_name == "configured_gateway":
         try:
             metadata = _fetch_configured_gateway_json(
@@ -677,6 +821,14 @@ def _slug(value: str) -> str:
 def agent_id_for(discovered: DiscoveredModel) -> str:
     """Two-or-more-word snake_case id, matching this repo's naming convention."""
     return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
+
+
+def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
+    """Require explicit chat evidence when a provider supplied capabilities."""
+    return (
+        (not discovered.capabilities or "chat" in discovered.capabilities)
+        and is_general_chat_agent_model_id(discovered.model_id)
+    )
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
@@ -729,7 +881,7 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 
     written = 0
     for model in _deduplicate_discovered_models(discovered):
-        if not is_general_chat_agent_model_id(model.model_id):
+        if not is_discovered_chat_candidate(model):
             continue
         if not (
             _valid_price_component(model.prompt_price_per_1k)
@@ -821,7 +973,7 @@ def select_cheapest_discovered_agent(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_general_chat_agent_model_id(model.model_id)
+        if is_discovered_chat_candidate(model)
     ]
     if not eligible:
         return None
@@ -837,7 +989,7 @@ def select_top_n_cheapest_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_general_chat_agent_model_id(model.model_id)
+        if is_discovered_chat_candidate(model)
     ]
     if not eligible:
         return []
@@ -866,7 +1018,7 @@ def select_bootstrap_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_general_chat_agent_model_id(model.model_id)
+        if is_discovered_chat_candidate(model)
     ]
     if not eligible:
         return []

@@ -352,6 +352,32 @@ def test_structural_provider_response_stops_before_tool_failover() -> None:
     assert orchestrator._circuit == {}
 
 
+def test_structural_provider_response_stays_inside_explicit_pool_failover() -> None:
+    """One malformed free/group member cannot poison the requested bounded pool."""
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+    ]
+
+    class MalformedPrimaryClient(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            if agent.id == "primary_worker":
+                raise ProviderResponseError("provider response did not contain assistant content")
+            return "bounded backup"
+
+    orchestrator = TaskOrchestrator(agents, client=MalformedPrimaryClient())
+
+    answer, served_id, _usage = orchestrator._invoke(
+        agents[0],
+        [{"role": "user", "content": "route this"}],
+        text="route this",
+        role="worker",
+        allowed_agent_ids={agent.id for agent in agents},
+    )
+
+    assert (answer, served_id) == ("bounded backup", "backup_worker")
+
+
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning",)),

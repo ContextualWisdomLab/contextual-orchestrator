@@ -263,6 +263,9 @@ def normalize_discovered_model(
         output_modalities=tuple(model.output_modalities),
         is_free=bool(model.is_free),
         supports_zero_data_retention=model.supports_zero_data_retention,
+        supports_no_training=model.supports_no_training,
+        supports_no_prompt_retention=model.supports_no_prompt_retention,
+        privacy_policy_urls=tuple(model.privacy_policy_urls),
     )
 
 
@@ -290,6 +293,12 @@ def _restore_model_semantics(
         is_free="cost:free" in normalized,
         supports_zero_data_retention=(
             True if "privacy:zdr" in normalized else False if "privacy:no_zdr" in normalized else None
+        ),
+        supports_no_training=(
+            True if "privacy:no_training" in normalized else False if "privacy:training_only" in normalized else None
+        ),
+        supports_no_prompt_retention=(
+            True if "privacy:no_retention" in normalized else False if "privacy:retention_only" in normalized else None
         ),
     )
 

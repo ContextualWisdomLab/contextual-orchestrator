@@ -28,6 +28,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ProviderDiscoveryError,
     ProviderModelSource,
     _merge_configured_gateway_metadata,
+    _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
     _price_per_1k,
     agent_from_discovered,
@@ -51,6 +52,46 @@ def test_openrouter_zdr_metadata_distinguishes_supported_models() -> None:
     assert [row["supports_zero_data_retention"] for row in merged["data"]] == [True, False]
 
 
+def test_openrouter_provider_privacy_preserves_terms_and_mixed_safe_routes() -> None:
+    payload = {"data": [{"id": "free/model"}]}
+    providers = {
+        "data": [
+            {
+                "slug": "private",
+                "dataPolicy": {
+                    "training": False,
+                    "retainsPrompts": False,
+                    "privacyPolicyURL": "https://private.example/privacy",
+                },
+            },
+            {
+                "slug": "training",
+                "dataPolicy": {
+                    "training": True,
+                    "retainsPrompts": True,
+                    "termsOfServiceURL": "https://training.example/terms",
+                },
+            },
+        ]
+    }
+
+    merged = _merge_openrouter_provider_privacy(
+        payload,
+        providers,
+        {"free/model": {"endpoints": [{"tag": "private"}, {"tag": "training"}]}},
+    )
+
+    assert merged["data"][0] == {
+        "id": "free/model",
+        "supports_no_training": True,
+        "supports_no_prompt_retention": True,
+        "privacy_policy_urls": [
+            "https://private.example/privacy",
+            "https://training.example/terms",
+        ],
+    }
+
+
 def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None:
     """Logical-model pricing requires complete consensus across deployments."""
     payload = {
@@ -70,6 +111,7 @@ def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None
                     "mode": "chat",
                     "input_cost_per_token": 0.000001,
                     "output_cost_per_token": 0.000002,
+                    "supports_no_training": True,
                 },
             },
             {
@@ -78,6 +120,7 @@ def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None
                     "mode": "chat",
                     "input_cost_per_token": {"invalid": True},
                     "output_cost_per_token": 0.000002,
+                    "supports_no_training": False,
                 },
             },
         ]
@@ -86,7 +129,33 @@ def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None
     merged = _merge_configured_gateway_metadata(payload, metadata)
 
     assert "pricing" not in merged["data"][0]
+    assert "supports_no_training" not in merged["data"][0]
     assert merged["data"][0]["architecture"]["output_modalities"] == ["text"]
+
+
+def test_configured_gateway_preserves_consensus_privacy_evidence() -> None:
+    payload = {"data": [{"id": "free-model"}]}
+    detail = {
+        "model_name": "free-model",
+        "model_info": {
+            "mode": "chat",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+            "supports_zero_data_retention": True,
+            "supports_no_training": True,
+            "supports_no_prompt_retention": True,
+            "privacy_policy_url": "https://provider.example/privacy",
+        },
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, {"data": [detail, detail]})
+
+    assert merged["data"][0]["supports_zero_data_retention"] is True
+    assert merged["data"][0]["supports_no_training"] is True
+    assert merged["data"][0]["supports_no_prompt_retention"] is True
+    assert merged["data"][0]["privacy_policy_urls"] == [
+        "https://provider.example/privacy"
+    ]
 
 
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:

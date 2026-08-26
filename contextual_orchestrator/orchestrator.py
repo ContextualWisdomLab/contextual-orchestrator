@@ -32,6 +32,8 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+import certifi
+
 from .chat_capability import (
     is_chat_compatible_model_id,
     is_general_chat_agent_model_id,
@@ -891,7 +893,9 @@ class ModelClient:
                 return ssl.create_default_context(cafile=ca_bundle)
             except OSError as exc:
                 raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
-        return ssl.create_default_context()
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        return context
 
     @staticmethod
     def _normalize_allowed_provider_hosts(hosts: Iterable[str] | None) -> frozenset[str]:
@@ -4361,8 +4365,12 @@ class TaskOrchestrator:
                 except Exception as exc:
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
-                    if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
+                    if isinstance(exc, ToolFallbackStoppedError):
                         raise
+                    if isinstance(exc, ProviderResponseError):
+                        if allowed_agent_ids is None:
+                            raise
+                        break
                     decision = classify_tool_failure(exc)
                     action = decision.action
                     # A failed attempt is one Bernoulli stability observation

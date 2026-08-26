@@ -181,6 +181,8 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
         currency_code="USD",
         is_free=True,
         supports_zero_data_retention=True,
+        supports_no_training=True,
+        supports_no_prompt_retention=True,
     )
     store = InMemoryProviderCatalogStore()
     store.record_success(
@@ -196,6 +198,8 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
                 "capability:text",
                 "cost:free",
                 "privacy:zdr",
+                "privacy:no_training",
+                "privacy:no_retention",
                 "input:text",
                 "input:image",
                 "output:text",

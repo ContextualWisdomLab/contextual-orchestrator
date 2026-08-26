@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ssl
 import urllib.error
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
@@ -30,6 +31,7 @@ from contextual_orchestrator.model_discovery import (
     MAX_DISCOVERY_RESPONSE_BYTES,
     _provider_discovery_error_code,
     _valid_price_component,
+    agent_from_discovered,
     discover_provider_models,
     refresh_price_book,
     select_bootstrap_discovered_agents,
@@ -116,6 +118,7 @@ def test_configured_gateway_uses_pinned_bounded_provider_transport() -> None:
             timeout=1,
         ) == {"data": []}
     validate.assert_called_once()
+    assert validate.call_args.args[0].credential_key == "LLM_GATEWAY_API_KEY"
     request = opened.call_args.args[0]
     assert request.headers["Authorization"] == "Bearer secret"
     assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
@@ -371,6 +374,19 @@ def test_bootstrap_rejects_non_positive_limits_and_empty_catalogs() -> None:
     assert select_bootstrap_discovered_agents(ineligible, book, 5) == []
     assert select_top_n_cheapest_discovered_agents(ineligible, book, 5) == []
     assert select_cheapest_discovered_agent([], book) is None
+
+
+def test_bootstrap_rejects_explicit_non_chat_capabilities() -> None:
+    """A video-looking catalog row cannot enter the chat pool by identifier fallback."""
+    book = PriceBook(InMemoryConfigStore())
+    video = replace(
+        _chat_model("openrouter", "vendor-video-model"),
+        capabilities=("video",),
+        output_modalities=("video",),
+    )
+
+    assert select_bootstrap_discovered_agents([video], book, 1) == []
+    assert "video" in agent_from_discovered(video).tags
 
 
 def test_bootstrap_fills_remainder_from_deferred_same_family_models() -> None:

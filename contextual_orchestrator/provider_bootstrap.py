@@ -19,7 +19,6 @@ import json
 import os
 from typing import Mapping, Sequence
 
-from .chat_capability import is_general_chat_agent_model_id
 from .cost_ledger import PriceBook
 from .credentials import (
     InMemoryCredentialBackend,
@@ -35,6 +34,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    is_discovered_chat_candidate,
     refresh_price_book,
 )
 from .orchestrator import ModelAgent, TaskOrchestrator
@@ -168,7 +168,7 @@ def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
     Models that survive retain only explicit provider/catalog capability and
     cost evidence in addition to the generic chat-serving tags.
     """
-    return is_general_chat_agent_model_id(model.model_id)
+    return is_discovered_chat_candidate(model)
 
 
 def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
@@ -180,6 +180,10 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *(("cost:free",) if model.is_free else ()),
                 *(("privacy:zdr",) if model.supports_zero_data_retention is True else ()),
                 *(("privacy:no_zdr",) if model.supports_zero_data_retention is False else ()),
+                *(("privacy:no_training",) if model.supports_no_training is True else ()),
+                *(("privacy:training_only",) if model.supports_no_training is False else ()),
+                *(("privacy:no_retention",) if model.supports_no_prompt_retention is True else ()),
+                *(("privacy:retention_only",) if model.supports_no_prompt_retention is False else ()),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
