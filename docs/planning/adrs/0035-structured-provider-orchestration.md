@@ -52,6 +52,12 @@ inventing or merging tool calls. Direct Python callers retain the established
 single-provider default; the authenticated HTTP boundary explicitly selects
 the conducted path where it is safe.
 
+When a tool description exceeds the provider-compatible 1024-character field
+limit, the gateway preserves the exact description in a versioned system
+message and replaces only the constrained field with a short reference to that
+message. This is a lossless wire adaptation: silently truncating documentation
+or guessing a summary is prohibited.
+
 Capability tags are positive declarations. A known vision-capable candidate is
 preferred for image evidence; absence of any such declaration does not rewrite
 an existing provider contract into a false claim of incompatibility.
@@ -65,6 +71,8 @@ an existing provider contract into a false claim of incompatibility.
 - Structured requests consume additional test-time compute.
 - Tool execution cannot gain multi-agent verification until an OpenAI-compatible
   stateful tool-loop contract is implemented.
+- Overlong tool documentation adds one system message while retaining the
+  caller's original message order after that compatibility preface.
 
 ## References
 

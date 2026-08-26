@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "tool_description_length_http_honesty_token"  # noqa: S105
@@ -78,31 +79,57 @@ def test_http_chat_accepts_tool_description_at_1024_chars() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_tool_description_over_1024_chars() -> None:
-    server, thread, port = _server()
+def test_http_chat_preserves_tool_description_over_1024_chars() -> None:
+    class CapturingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.payload: dict = {}
+
+        def proxy_send(self, agent, endpoint, payload):  # noqa: ANN001, ARG002
+            self.payload = payload
+            return {"model": agent.model, "choices": [{"message": {"content": "ok"}}]}
+
+    client = CapturingClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))],
+        client=client,
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN, rate_limit_requests=10_000),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    description = "semantic tool documentation " * 60
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "desc 1025"}],
+                "messages": [{"role": "user", "content": "use the tool"}],
                 "tools": [
                     {
                         "type": "function",
                         "function": {
                             "name": "lookup",
-                            "description": "d" * 1025,
+                            "description": description,
                             "parameters": {"type": "object", "properties": {}},
                         },
                     }
                 ],
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_tools" in blob
-        assert "1024" in blob
-        assert "unknown_fields" not in blob
+        assert status == 200, body
+        forwarded = client.payload
+        short_description = forwarded["tools"][0]["function"]["description"]
+        assert len(short_description) <= 1024
+        preserved = json.loads(forwarded["messages"][0]["content"])
+        assert preserved == {
+            "type": "contextual_orchestrator_tool_descriptions_v1",
+            "tools": [{"name": "lookup", "description": description}],
+        }
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -110,5 +137,5 @@ def test_http_chat_rejects_tool_description_over_1024_chars() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_tool_description_at_1024_chars()
-    test_http_chat_rejects_tool_description_over_1024_chars()
+    test_http_chat_preserves_tool_description_over_1024_chars()
     print("ok")

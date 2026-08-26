@@ -1,5 +1,15 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-27 tool-description compatibility evidence
+
+Hourly-loop run `32986962178` proved the pinned OpenCode installer and then
+failed at the gateway with `400 invalid_tools` because an OpenCode tool carried
+more than 1024 description characters. The focused compatibility slice keeps
+the provider field within its limit while preserving the exact full text in a
+versioned system-message document; it neither truncates nor invents a summary.
+The HTTP regression captures the forwarded provider payload and proves both
+the bounded field and byte-for-byte semantic text preservation.
+
 ## 2026-08-26 protected-main catalog evidence slice
 
 Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`
