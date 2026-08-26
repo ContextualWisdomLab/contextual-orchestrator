@@ -79,6 +79,13 @@ ADMIN_TRANSLATIONS = {
         "readiness_summary_text": "Sales and commercial criteria passed: {pass}. Need attention: {warn}. Failed: {fail}. See the rows below to fix what failed.",
         "readiness_source": "Readiness source",
         "readiness_measurement_status": "Measurement status",
+        "measurement_local_runtime_estimate": "Estimated on this server",
+        "measurement_local_runtime_snapshot": "Measured on this server",
+        "measurement_local_runtime": "Generated locally on this server",
+        "measurement_estimate": "Estimated",
+        "measurement_unknown": "Unknown",
+        "spend_no_price": "No price set",
+        "spend_no_price_action": "Add provider pricing to estimate cost.",
         "readiness_remediation_label": "Remediation",
         "sales_readiness": "Sales readiness",
         "sales_readiness_title": "Sales Readiness",
@@ -328,6 +335,13 @@ ADMIN_TRANSLATIONS = {
         "readiness_summary_text": "판매 및 상용 기준 통과 {pass}개, 주의 {warn}개, 실패 {fail}개. 아래 행에서 실패 항목을 해결하세요.",
         "readiness_source": "준비 근거",
         "readiness_measurement_status": "측정 상태",
+        "measurement_local_runtime_estimate": "이 서버에서 추정됨",
+        "measurement_local_runtime_snapshot": "이 서버에서 측정됨",
+        "measurement_local_runtime": "이 서버에서 생성됨",
+        "measurement_estimate": "추정값",
+        "measurement_unknown": "알 수 없음",
+        "spend_no_price": "가격 미설정",
+        "spend_no_price_action": "비용을 추정하려면 공급자 가격을 추가하세요.",
         "readiness_remediation_label": "보완 조치",
         "sales_readiness": "판매 준비도",
         "sales_readiness_title": "판매 준비도",
@@ -1252,16 +1266,16 @@ Summarize this research thread and verify claims.</textarea>
       renderSpend();
       renderReadiness();
     }
-    const MEASUREMENT_STATUS_LABELS = {
-      local_runtime_estimate: "Estimated on this server",
-      local_runtime_snapshot: "Measured on this server",
-      estimate: "Estimated",
-      unknown: "Unknown"
+    const MEASUREMENT_STATUS_KEYS = {
+      local_runtime_estimate: "measurement_local_runtime_estimate",
+      local_runtime_snapshot: "measurement_local_runtime_snapshot",
+      estimate: "measurement_estimate",
+      unknown: "measurement_unknown"
     };
     function statusLabel(raw) {
-      if (!raw) return MEASUREMENT_STATUS_LABELS.estimate;
-      if (MEASUREMENT_STATUS_LABELS[raw]) return MEASUREMENT_STATUS_LABELS[raw];
-      if (String(raw).startsWith("local_")) return "Generated locally on this server";
+      if (!raw) return t(MEASUREMENT_STATUS_KEYS.estimate);
+      if (MEASUREMENT_STATUS_KEYS[raw]) return t(MEASUREMENT_STATUS_KEYS[raw]);
+      if (String(raw).startsWith("local_")) return t("measurement_local_runtime");
       return String(raw);
     }
     function renderSpend() {
@@ -1283,7 +1297,7 @@ Summarize this research thread and verify claims.</textarea>
       if (rowsEl) {
         rowsEl.innerHTML = (spend.by_model || []).map(row => {
           const price = row.price_per_million_usd == null ? "&mdash;" : escapeHtml(row.price_per_million_usd);
-          const cost = row.estimated_cost_usd == null ? '<span class="chip" title="Add provider pricing to estimate cost.">No price set</span>' : ("$" + escapeHtml(row.estimated_cost_usd));
+          const cost = row.estimated_cost_usd == null ? `<span class="chip" title="${escapeHtml(t("spend_no_price_action"))}">${escapeHtml(t("spend_no_price"))}</span>` : ("$" + escapeHtml(row.estimated_cost_usd));
           return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.estimated_output_tokens)}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
         }).join("") || `<tr><td colspan="5">${t("no_trace")}</td></tr>`;
       }

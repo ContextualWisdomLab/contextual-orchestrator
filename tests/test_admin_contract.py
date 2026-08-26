@@ -59,6 +59,10 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
         "Sales and commercial criteria passed:"
     )
     assert ADMIN_TRANSLATIONS["ko"]["readiness_summary_text"].startswith("판매 및 상용 기준 통과")
+    assert ADMIN_TRANSLATIONS["en"]["measurement_local_runtime_snapshot"] == "Measured on this server"
+    assert ADMIN_TRANSLATIONS["ko"]["measurement_local_runtime_snapshot"] == "이 서버에서 측정됨"
+    assert 'return t("measurement_local_runtime")' in ADMIN_HTML
+    assert 't("spend_no_price_action")' in ADMIN_HTML
     assert "${escapeHtml(statusLabel(" in ADMIN_HTML
     assert "<strong>${statusLabel(" not in ADMIN_HTML
     assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
