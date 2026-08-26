@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-26 19:13 KST protected-main and moving-queue evidence
+## 2026-08-26 19:42 KST protected-main and moving-queue evidence
 
 Protected `main` is exact `4562265721bc9f7907aebee90229bdef68009029`.
 The table below records GitHub state observed at the timestamp above. A queued
@@ -9,9 +9,9 @@ results do not transfer to a moving head or prove protected-main delivery.
 
 | PR | Exact head / base | Observed evidence, customer gap, and next acceptance action |
 | --- | --- | --- |
-| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `d88e3218f093c7d4b77bd78a1d2b54445595ecb5` / `main` | GitHub reports `DIRTY` and review required despite terminal checks on this old remote head. The `229/229` k6 result (`128/128` inference and `101/101` liveness, zero request errors), official-runner diagnostic `2269 passed, 3 failed`, and alternate dependency-complete diagnostic `2272 passed` were all measured locally on unpushed exact tree `b6703e4c4d16c01ba79e5e2fd6d1354c585eb24e`; they have no hosted workflow run ID and are not evidence for remote head `d88e3218...` or protected `main`. Acceptance is normal integration of the #857 runner authority, a green official exact-head run, fresh k6 evidence, and independent review. |
-| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `f3acd98e45fee27138cbc3f3080b6ecccf0d60b9` / `main` | The moving head now includes #871's measured equivalent-endpoint race. Fifteen replacement hosted jobs are pending and GitHub reports `BLOCKED`; earlier full-suite evidence does not transfer. Provider failover is not protected delivery until every required job is terminal-successful and review policy is satisfied. |
-| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `b49d6ff1f439964671e979ae2202aa6bbedd572d` / `main` | The moving head now includes #867's request-scoped structured-provider reliability changes; sixteen hosted jobs are pending and three review threads remain unresolved. The official `2353 passed, 0 failed` numeric/runner result, Rust `9 passed`, and Docker native-extension import belong to predecessor `ef0213aa959a8979afb9cf7e9ef6ce74ae643499`; later head movement prevents transferring that evidence. Acceptance is resolution of validated findings and the same evidence on one stable current exact head plus required review. |
+| [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `4fa39837202e556eb683f1b82e4c9147f033d779` / `main` | GitHub reports `BLOCKED`; fifteen hosted jobs are pending and three review threads are unresolved on this moving head. The `229/229` k6 result (`128/128` inference and `101/101` liveness, zero request errors), official-runner diagnostic `2269 passed, 3 failed`, and alternate dependency-complete diagnostic `2272 passed` were measured locally on unpushed exact tree `b6703e4c4d16c01ba79e5e2fd6d1354c585eb24e`; they have no hosted workflow run ID and do not transfer to the current remote head or protected `main`. Acceptance is resolution of current findings, a green official exact-head run, fresh k6 evidence, and counted review. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `b9c66ed574bf5ebf90f9c6094d7b444bb2e211f3` / `main` | The moving head includes #871's measured equivalent-endpoint race and subsequent structured race-accounting repair. Fifteen replacement hosted jobs are pending, three review threads are unresolved, and GitHub reports `BLOCKED`; earlier full-suite evidence does not transfer. Provider failover and recovered #846 work are not protected delivery until current findings resolve, every required job is terminal-successful, and review policy is satisfied. |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `22f620dc89b6999d88298ac70bde36591168c86e` / `main` | The moving head includes #867's request-scoped structured-provider reliability changes and a deployment-scoped embedding deduplication repair. Fifteen hosted jobs are pending, no review threads are unresolved, and review is required. The official `2353 passed, 0 failed` numeric/runner result, Rust `9 passed`, and Docker native-extension import belong to predecessor `ef0213aa959a8979afb9cf7e9ef6ce74ae643499`; later head movement prevents transferring that evidence. Acceptance requires the same evidence on one stable current exact head plus terminal gates and counted review. |
 | [#858](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/858) | `4fc2f7c4c211f00b8f578f062224a9fdd39e9c47` / `main` | The full suite is successful, but two hosted jobs remain queued, review is required, and GitHub reports `BLOCKED`. Customer-copy and escaping changes require terminal exact-head checks and independent review. |
 | [#867](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/867) | `3cd34813323d846573cf22480038cf545adde26d` / `fix/provider-backed-embedding-batch` | Normally merged into #857 as merge commit `b49d6ff1f439964671e979ae2202aa6bbedd572d`; protected delivery now follows #857's updated `main`-target exact head and its replacement checks, findings, and review. |
 | [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `5839c957193ec8ce21ec8a3d34a7663f698f84b4` / `main` | The moving head now includes the normally merged #870 conduct regression fix, #874 configured-gateway discovery stack, and follow-up boundary fixes. Runtime auto-discovery consumes injected pool configuration plus preseeded KV instead of environment secrets and isolates an invalid persisted gateway instead of aborting startup; configured-gateway catalog calls reuse the DNS-pinned, proxy/redirect-independent provider transport with a bounded body; and price, input, and output capability metadata require complete deployment consensus. A local exact-head focused run passed `59` tests and `git diff --check`; replacement hosted jobs and counted review remain pending, no review threads are unresolved, and GitHub reports `BLOCKED`. Auto-merge remains enabled only after that closure audit, but acceptance still requires terminal exact-head hosted gates, counted review, normal protected merge, and an authenticated runtime/default check. |
@@ -53,10 +53,19 @@ maps to #871's measured first-valid-completion acceptance; issue
 remains open until trace-read authority is independently enforced across every
 producing surface; and issue
 [#846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846)
-maps to the #851/#867 recovery and passthrough stack. Each gap closes only with
+has a current-exact recovery matrix: constant-time budget counters, telemetry
+session correlation, and request-scoped sampling are semantic replacements on
+protected `main`; passthrough failover and structured-provider orchestration are
+owned by #851 exact `b9c66ed574bf5ebf90f9c6094d7b444bb2e211f3`
+(their shared historical commits also appear in #857, but #851 is the delivery
+authority). Two minimal gaps remain: generated workflows do not yet checkpoint
+and stop between provider calls when an in-flight budget is reached, and local
+chat passthrough does not restore the configured default `max_tokens` when the
+caller omits it. The orphan commit IDs are ancestors of none of current
+protected `main`, #851, or #857, so this mapping is semantic/test evidence—not
+transferred ancestry, checks, or review. Each remaining gap closes only with
 current exact-head tests, hosted terminal-success gates, independent review,
-normal protected merge, and—where the claim is operational—a post-merge runtime
-canary.
+and normal protected merge.
 
 ### References for the current NVIDIA benchmark boundary
 
