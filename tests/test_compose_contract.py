@@ -3,6 +3,15 @@
 from pathlib import Path
 
 
+def test_compose_project_name_is_isolated_without_fixed_container_names() -> None:
+    compose = Path("compose.yaml").read_text()
+    assert (
+        "name: ${CONTEXTUAL_ORCHESTRATOR_COMPOSE_PROJECT_NAME:-contextual-orchestrator}"
+        in compose
+    )
+    assert "container_name:" not in compose
+
+
 def test_compose_uses_postgres_kv_and_secret_bootstrap() -> None:
     compose = Path("compose.yaml").read_text()
     assert "credential_bootstrap:" in compose

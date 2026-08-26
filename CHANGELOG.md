@@ -12,6 +12,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- ADR 0006 defines evidence-gated CPU, MLX, CUDA/OpenCL, Compose, and
+  Kubernetes accelerator runtime boundaries.
 - Bound decoded and structured-passthrough provider retries and failover by an explicit request-scoped monotonic deadline while preserving structured workflow and cost lineage.
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
