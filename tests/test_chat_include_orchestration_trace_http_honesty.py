@@ -166,6 +166,26 @@ def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tool_passthrough_rejects_non_boolean_trace_flag() -> None:
+    """Tool passthrough must not bypass authorization-sensitive type checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "trace string"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+                "include_orchestration_trace": "yes",
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_include_orchestration_trace"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_include_orchestration_trace_null() -> None:
     """Trace disclosure is a strict authorization-sensitive JSON boolean."""
     server, thread, port = _server()

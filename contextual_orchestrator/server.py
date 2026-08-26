@@ -5836,6 +5836,16 @@ def build_server(
                         tool_loop = bool(tools_list)
                         if (
                             tool_loop
+                            and "include_orchestration_trace" in body
+                            and type(body["include_orchestration_trace"]) is not bool
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_include_orchestration_trace",
+                                "include_orchestration_trace must be a boolean",
+                            )
+                        if (
+                            tool_loop
                             and body.get("include_orchestration_trace") is True
                         ):
                             raise RequestError(
