@@ -12,6 +12,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- An explicit `--max-body-bytes` server option that preserves the 64 KiB
+  default while allowing bounded authenticated multimodal deployments.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and
   `COMPLEX_HINTS` keyword tables are deleted; ordering is now
   eligibility contracts -> declaration priority/capability fit/cosine
