@@ -12,7 +12,7 @@ It is local runtime evidence, not hosted-check or protected-main evidence.
 - `mobile-models-scrolled.png`: the same mobile viewport after keyboard focus
   and horizontal scroll expose Recent latency and Success.
 - `desktop-session-required.png`: unauthenticated edge state with an actionable
-  path to Access Control.
+  path to the Integrations session form.
 - `runtime-report.txt`: browser-observed overflow, navigation visibility, edge
   copy, and model status values. Both tested viewports reported zero document
   overflow; the mobile selector was visible and sidebar hidden. The keyboard
