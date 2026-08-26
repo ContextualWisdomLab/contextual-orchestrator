@@ -1043,7 +1043,7 @@ def test_pending_http_batch_declares_rate_budget_polling_cadence() -> None:
     security = SecurityConfig(
         auth_token="cost_token", rate_limit_requests=4, rate_limit_window_seconds=2
     )
-    server, port, token, _coordinator = _serve(
+    server, port, token, coordinator = _serve(
         embedding_batch_backend=_PendingEmbeddingBackend(), security=security
     )
     base = f"http://127.0.0.1:{port}"
@@ -1057,6 +1057,8 @@ def test_pending_http_batch_declares_rate_budget_polling_cadence() -> None:
         assert status == 202
         assert created["poll_after_ms"] == 500
         assert created["job_retention_ms"] == 7 * 24 * 60 * 60 * 1_000
+        report = coordinator.orchestrator._group_router.member_report("embedding_worker")
+        assert report["success_count"] == 1
 
         time.sleep(created["poll_after_ms"] / 1000)
         status, polled = _request(

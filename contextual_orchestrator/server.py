@@ -6472,18 +6472,17 @@ def build_server(
                             last_embedding_error = exc
                             orchestrator._group_router.observe_failure(embedding_agent.id)
                             continue
-                        if document.get("status") == "completed":
-                            orchestrator._group_router.observe_success(
-                                embedding_agent.id,
-                                time.perf_counter() - attempt_started_at,
-                            )
-                        elif document.get("status") == "failed":
+                        if document.get("status") == "failed":
                             last_embedding_error = RuntimeError(
                                 "embedding-capable model group member failed"
                             )
                             orchestrator._group_router.observe_failure(embedding_agent.id)
                             document = None
                             continue
+                        orchestrator._group_router.observe_success(
+                            embedding_agent.id,
+                            time.perf_counter() - attempt_started_at,
+                        )
                         break
                     if document is None:
                         raise RequestError(

@@ -15,4 +15,6 @@ def test_fuzz_jobs_install_native_token_packer_from_pinned_builder() -> None:
     assert "ghcr.io/pyo3/maturin@sha256:" in installer
     assert "--target token-wheel" in installer
     assert '--output "type=local,dest=${WHEEL_DIRECTORY}"' in installer
-    assert 'python -m pip install --no-deps "$1"' in installer
+    assert "hashlib.sha256" in installer
+    assert "--hash=sha256:" in installer
+    assert 'python -m pip install --no-deps --require-hashes -r "${REQUIREMENTS_FILE}"' in installer
