@@ -63,6 +63,11 @@ excludes obvious embedding, reranking, speech, image, moderation, safety, and
 realtime transports. They are never used to infer reasoning, verification,
 coding, vision, or provider-native effort capabilities. Those require explicit
 catalog or measured evidence under the gateway-owned policy.
+Provider-declared `supported_parameters=response_format` is retained as the
+`response_format` serving tag. Virtual structured synthesis requires that tag
+when selecting from an automatically discovered pool; unknown support does not
+become presumed support. An explicitly requested operator-managed model remains
+the operator's transport contract.
 
 ## Consequences
 
