@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-26 18:58 KST protected-main and moving-queue evidence
+## 2026-08-26 19:04 KST protected-main and moving-queue evidence
 
 Protected `main` is exact `4562265721bc9f7907aebee90229bdef68009029`.
 The table below records GitHub state observed at the timestamp above. A queued
@@ -10,7 +10,7 @@ results do not transfer to a moving head or prove protected-main delivery.
 | PR | Exact head / base | Observed evidence, customer gap, and next acceptance action |
 | --- | --- | --- |
 | [#849](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/849) | `d88e3218f093c7d4b77bd78a1d2b54445595ecb5` / `main` | GitHub reports `DIRTY` and review required despite terminal checks on this old head. A separate current-main diagnostic run exercised all `229/229` k6 requests successfully (`128/128` inference and `101/101` liveness, zero request errors), but the official runner reported `2269 passed, 3 failed`; an alternate dependency-complete invocation reached `2272 passed` and is diagnostic only. Acceptance is normal integration of the #857 runner authority, a green official exact-head run, fresh k6 evidence, and independent review. |
-| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `f3acd98e45fee27138cbc3f3080b6ecccf0d60b9` / `main` | The moving head now includes #871's measured equivalent-endpoint race. Sixteen replacement hosted jobs are pending, review is required, and GitHub reports `BLOCKED`; earlier full-suite evidence does not transfer. Provider failover is not protected delivery until every required job is terminal-successful and review policy is satisfied. |
+| [#851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851) | `f3acd98e45fee27138cbc3f3080b6ecccf0d60b9` / `main` | The moving head now includes #871's measured equivalent-endpoint race. Fifteen replacement hosted jobs are pending and GitHub reports `BLOCKED`; earlier full-suite evidence does not transfer. Provider failover is not protected delivery until every required job is terminal-successful and review policy is satisfied. |
 | [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `dc5ed7a134efa68963e0c348d84c4375a79860f6` / `main` | Current hosted jobs are predominantly queued and three review threads remain unresolved. The official `2353 passed, 0 failed` numeric/runner result, Rust `9 passed`, and Docker native-extension import belong to predecessor `ef0213aa959a8979afb9cf7e9ef6ce74ae643499`; later head movement prevents transferring that evidence. Acceptance is resolution of validated findings and the same evidence on one stable current exact head plus required review. |
 | [#858](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/858) | `4fc2f7c4c211f00b8f578f062224a9fdd39e9c47` / `main` | The full suite is successful, but two hosted jobs remain queued, review is required, and GitHub reports `BLOCKED`. Customer-copy and escaping changes require terminal exact-head checks and independent review. |
 | [#867](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/867) | `a504be59fd2a7f070d8a12b50826765e79b68fd3` / `fix/provider-backed-embedding-batch` | GitHub reports the stacked diff `DIRTY`, one hosted context pending, six unresolved review threads, and auto-merge off. Acceptance is current #857 integration, resolution of validated findings, conflict-free exact diff, hosted checks, and review. |
@@ -25,6 +25,21 @@ failed before discovery because the bootstrap inventory lacked
 `OPENCODE_ZEN_API_KEY`. #869 is the candidate root fix and secret-registration
 boundary; only a successful canary after protected merge can close the runtime
 gap.
+
+Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86)
+remains blocked on measured authority rather than code scaffolding. NVIDIA's
+current NIM LLM API documents `GET /v1/models` as the loaded, available model-ID
+inventory and documents chat, completions, Responses, tokenization, health, and
+metrics as separate surfaces; the model list is not authoritative modality,
+quality, or price evidence. NVIDIA's hosted developer access and enterprise
+per-GPU licensing likewise do not establish a per-token hypothetical price.
+Acceptance therefore requires bounded live probes for every discovered model, a
+locked task/scorer manifest, equal-budget direct/route/conduct comparisons,
+provider usage and latency evidence, paired uncertainty and Pareto output, and
+an explicit versioned price scenario. Unknown capability, quality, or price must
+remain unknown; it must not be replaced with an identifier heuristic, zero
+cost, arbitrary score, or invented weight (NVIDIA, 2026a, 2026b; Chen et al.,
+2023; Ong et al., 2024).
 
 The buyer-facing next actions remain tied to existing requirements and decision
 boundaries rather than queue intent. [Product planning](product_planning.md)
@@ -41,6 +56,23 @@ maps to the #851/#867 recovery and passthrough stack. Each gap closes only with
 current exact-head tests, hosted terminal-success gates, independent review,
 normal protected merge, and—where the claim is operational—a post-merge runtime
 canary.
+
+### References for the current NVIDIA benchmark boundary
+
+Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large
+language models while reducing cost and improving performance* [Preprint].
+arXiv. https://doi.org/10.48550/arXiv.2305.05176
+
+NVIDIA. (2026a). *API reference: NVIDIA NIM for large language models*.
+https://docs.nvidia.com/nim/large-language-models/latest/reference/api-reference.html
+
+NVIDIA. (2026b). *Metrics: NVIDIA NIM LLMs benchmarking*.
+https://docs.nvidia.com/nim/benchmarking/llm/latest/metrics.html
+
+Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E.,
+Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with
+preference data* [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2406.18665
 
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
