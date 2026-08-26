@@ -237,6 +237,20 @@ def test_virtual_text_models_require_an_enabled_eligible_pool() -> None:
     assert free_error.value.status == 400
 
 
+def test_virtual_and_group_models_exclude_disabled_members() -> None:
+    """Disabled agents are configuration records, never routable pool capacity."""
+    orchestrator = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")])
+    disabled = ModelAgent(
+        "disabled_agent", "disabled-model", disabled=True, group_name="disabled_group"
+    )
+    orchestrator.agents = [disabled]
+
+    with pytest.raises(RequestError, match="no enabled model"):
+        _require_pool_model(orchestrator, TaskOrchestrator.AUTO_MODEL)
+    with pytest.raises(RequestError, match="not available in the agent pool"):
+        _require_pool_model(orchestrator, "disabled-group")
+
+
 def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
     token = "responses_stream_token"
     orchestrator = TaskOrchestrator([ModelAgent("paid_worker", "paid-model")])
