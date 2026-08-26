@@ -291,11 +291,19 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in chat_models
         if agent_id_for(model) not in existing_ids
     ]
-    if not agents:
+    if not chat_models:
         return {"added": [], "updated": []}
-    result = orchestrator.sync_discovered_agents(agents)
+    result = (
+        orchestrator.sync_discovered_agents(agents)
+        if agents
+        else {"added": [], "updated": []}
+    )
+    has_real_runtime_agent = any(
+        not candidate.base_url.startswith("mock://")
+        for candidate in orchestrator.agents
+    )
     for candidate in tuple(orchestrator.agents):
-        if candidate.base_url.startswith("mock://"):
+        if has_real_runtime_agent and candidate.base_url.startswith("mock://"):
             orchestrator.patch_agent(
                 "default", candidate.id, {"status": "disabled"}
             )

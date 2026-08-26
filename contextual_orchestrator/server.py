@@ -5833,8 +5833,19 @@ def build_server(
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
                         tool_loop = bool(tools_list)
-                        include_trace = self._trace_requested(
-                            body, "/v1/chat/completions"
+                        if (
+                            tool_loop
+                            and body.get("include_orchestration_trace") is True
+                        ):
+                            raise RequestError(
+                                400,
+                                "trace_unavailable",
+                                "orchestration trace is unavailable for single-agent tool passthrough",
+                            )
+                        include_trace = (
+                            False
+                            if tool_loop
+                            else self._trace_requested(body, "/v1/chat/completions")
                         )
                         started_at = time.perf_counter()
                         if tool_loop:
@@ -5882,24 +5893,6 @@ def build_server(
                                         provider_request=body,
                                     )
                                 )
-                        orchestrator.record_analytics_event(
-                            (
-                                # Plain tools passthrough vs conducted-evidence
-                                # + synthesis: the structured path runs a full
-                                # evidence workflow before synthesis, so it is
-                                # reported under its own conducted label rather
-                                # than the passthrough one.
-                                "chat_completion_passthrough"
-                                if tool_loop
-                                else "chat_completion_conducted"
-                            ),
-                            {
-                                "endpoint_path": "/v1/chat/completions",
-                                "actor_scope": "inference",
-                                "status_code": 200,
-                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                            },
-                        )
                         if include_trace and not tool_loop:
                             lineage = proxied.get("orchestration")
                             workflow_run_id = (
@@ -5913,7 +5906,24 @@ def build_server(
                                 )
                             workflow = orchestrator.get_workflow_run(workflow_run_id)
                             lineage["trace"] = workflow["trace"]
-                        self._send(_response_payload(proxied, include_trace))
+                        orchestrator.record_analytics_event(
+                            (
+                                "chat_completion_passthrough"
+                                if tool_loop
+                                else "chat_completion_conducted"
+                            ),
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(
+                            proxied
+                            if tool_loop
+                            else _response_payload(proxied, include_trace)
+                        )
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")

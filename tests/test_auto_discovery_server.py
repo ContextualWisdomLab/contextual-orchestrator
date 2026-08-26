@@ -88,3 +88,35 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert orchestrator.candidates == [bootstrap, existing]
+
+
+def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
+    monkeypatch,
+) -> None:
+    """Restarted discovery cannot restore mocks beside an active real agent."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    real_agent = ModelAgent(
+        "openai_chat_capable_model",
+        discovered.model_id,
+        base_url=discovered.chat_base_url,
+        tags=("discovered", "chat"),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([discovered], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("mock_seed_agent", "mock-model"), real_agent]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": ["mock_seed_agent"]}
+    assert orchestrator.agents == [real_agent]

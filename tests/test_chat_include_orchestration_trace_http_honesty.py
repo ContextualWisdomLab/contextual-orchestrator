@@ -230,6 +230,36 @@ def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> No
     assert "trace" not in hidden["orchestration"]
 
 
+def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:
+    """A granted trace audit cannot exist without a disclosed workflow trace."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "use a tool"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_value",
+                            "description": "Read one value.",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "include_orchestration_trace": True,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400
+    assert body["error"]["code"] == "trace_unavailable"
+
+
 def test_http_chat_accepts_include_orchestration_trace_false() -> None:
     server, thread, port = _server()
     try:
