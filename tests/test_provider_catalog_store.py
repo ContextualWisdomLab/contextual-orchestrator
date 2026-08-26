@@ -57,6 +57,7 @@ def test_schema_is_normalized_and_contains_no_secret_value_column() -> None:
         "provider_account",
         "provider_model",
         "model_serving_tag",
+        "model_policy_source",
         "catalog_refresh_run",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in PROVIDER_CATALOG_SCHEMA_SQL
@@ -183,6 +184,7 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
         supports_zero_data_retention=True,
         supports_no_training=True,
         supports_no_prompt_retention=True,
+        privacy_policy_urls=("https://provider.example/privacy",),
     )
     store = InMemoryProviderCatalogStore()
     store.record_success(
@@ -233,10 +235,11 @@ def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
 class _FakeCursor:
     """Minimal DB-API cursor recording parameterized catalog statements."""
 
-    def __init__(self, rows=None, tag_rows=None) -> None:
+    def __init__(self, rows=None, tag_rows=None, policy_source_rows=None) -> None:
         self.calls: list[tuple[str, object]] = []
         self.rows = list(rows or [])
         self.tag_rows = list(tag_rows or [])
+        self.policy_source_rows = list(policy_source_rows or [])
         self._current_rows = self.rows
 
     def __enter__(self):
@@ -247,7 +250,13 @@ class _FakeCursor:
 
     def execute(self, statement: str, params=None) -> None:
         self.calls.append((statement, params))
-        self._current_rows = self.tag_rows if "FROM model_serving_tag AS mst" in statement else self.rows
+        self._current_rows = (
+            self.tag_rows
+            if "FROM model_serving_tag AS mst" in statement
+            else self.policy_source_rows
+            if "FROM model_policy_source AS mps" in statement
+            else self.rows
+        )
 
     def fetchall(self):
         return list(self._current_rows)
@@ -256,8 +265,8 @@ class _FakeCursor:
 class _FakeConnection:
     """Minimal transaction object exercising the PostgreSQL adapter."""
 
-    def __init__(self, rows=None, tag_rows=None) -> None:
-        self.cursor_object = _FakeCursor(rows, tag_rows)
+    def __init__(self, rows=None, tag_rows=None, policy_source_rows=None) -> None:
+        self.cursor_object = _FakeCursor(rows, tag_rows, policy_source_rows)
         self.commits = 0
 
     def __enter__(self):
@@ -289,7 +298,12 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     )
     store.record_success(
         source,
-        [_model(source, "model-a")],
+        [
+            replace(
+                _model(source, "model-a"),
+                privacy_policy_urls=("https://provider.example/privacy",),
+            )
+        ],
         eligible_model_ids={"model-a"},
         serving_tags={"model-a": ("discovered", "chat")},
     )
@@ -298,6 +312,7 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     )
     assert "UPDATE provider_model SET enabled_flag = false" in success_sql
     assert "INSERT INTO model_serving_tag" in success_sql
+    assert "INSERT INTO model_policy_source" in success_sql
     assert connections[-1].commits >= 1
 
     store.record_failure(source, error_code="provider_timeout: secret-token")
@@ -358,6 +373,7 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
             ("model-b", "cost:free"),
             ("model-b", "input:text"),
         ],
+        [("model-b", "https://provider.example/privacy")],
     )
     store = PostgresProviderCatalogStore(
         "postgresql://catalog.example/db",
@@ -376,14 +392,17 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
             capabilities=("chat",),
             input_modalities=("text",),
             is_free=True,
+            privacy_policy_urls=("https://provider.example/privacy",),
         )
     ]
-    model_query, model_params = connection.cursor_object.calls[-2]
-    tag_query, tag_params = connection.cursor_object.calls[-1]
+    model_query, model_params = connection.cursor_object.calls[-3]
+    tag_query, tag_params = connection.cursor_object.calls[-2]
+    policy_query, policy_params = connection.cursor_object.calls[-1]
     assert "JOIN provider_account AS pa" in model_query
     assert "FROM model_serving_tag AS mst" in tag_query
+    assert "FROM model_policy_source AS mps" in policy_query
     assert "serving_eligible_flag = true" in model_query
-    assert model_params == tag_params == (provider_account_id(source),)
+    assert model_params == tag_params == policy_params == (provider_account_id(source),)
 
 
 if __name__ == "__main__":  # pragma: no cover
