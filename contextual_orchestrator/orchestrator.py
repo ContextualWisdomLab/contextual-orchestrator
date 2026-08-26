@@ -1113,6 +1113,8 @@ class ModelClient:
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
+        if isinstance(timeout, bool) or not math.isfinite(float(timeout)) or timeout <= 0:
+            raise ValueError("provider timeout must be a positive finite number")
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
