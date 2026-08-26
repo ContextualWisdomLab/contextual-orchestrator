@@ -152,7 +152,9 @@ def test_last_pusher_cannot_supply_required_last_push_approval() -> None:
         "require_last_push_approval": True,
         "last_pusher_login": "reviewer",
     }
-    assert "independent_approval_missing" in evaluate_release_authorization(evidence)["blockers"]
+    blocked = evaluate_release_authorization(evidence)
+    assert {"independent_approval_missing", "last_push_approval_missing"}.issubset(blocked["blockers"])
+    assert blocked["review"]["require_last_push_approval"] is True
 
     evidence["review_policy"]["last_pusher_login"] = "pusher"
     assert evaluate_release_authorization(evidence)["authorized"] is True

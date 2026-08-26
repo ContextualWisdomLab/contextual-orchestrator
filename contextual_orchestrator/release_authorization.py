@@ -100,6 +100,7 @@ def _result(
     passing_check_count: int = 0,
     independent_approval_count: int = 0,
     required_approval_count: int = 0,
+    require_last_push_approval: bool = False,
     findings_inventory_complete: bool = False,
     unresolved_finding_count: int = 0,
 ) -> dict[str, Any]:
@@ -121,6 +122,7 @@ def _result(
         "review": {
             "required_independent_approval_count": required_approval_count,
             "independent_exact_head_approval_count": independent_approval_count,
+            "require_last_push_approval": require_last_push_approval,
         },
         "findings": {
             "inventory_complete": findings_inventory_complete,
@@ -267,6 +269,8 @@ def evaluate_release_authorization(
             independent_approval_count += 1
     if independent_approval_count < required_approval_count:
         blockers.append("independent_approval_missing")
+        if require_last_push_approval:
+            blockers.append("last_push_approval_missing")
 
     findings = authority.get("findings_inventory")
     findings_complete = False
@@ -299,6 +303,7 @@ def evaluate_release_authorization(
         passing_check_count=passing_check_count,
         independent_approval_count=independent_approval_count,
         required_approval_count=required_approval_count,
+        require_last_push_approval=require_last_push_approval,
         findings_inventory_complete=findings_complete,
         unresolved_finding_count=unresolved_finding_count,
     )
