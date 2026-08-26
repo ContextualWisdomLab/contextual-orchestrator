@@ -21,8 +21,11 @@ OpenRouter discovery reads its provider-reported per-token prices and recognizes
 
 Privacy discovery is also model-specific rather than inferred from price. The
 OpenRouter ZDR endpoint inventory is joined to every paid and free catalog row;
-absence from a successfully fetched complete inventory is explicit non-support,
-while an inventory failure remains unknown. Free-model endpoint/provider policy
+absence from a successfully fetched, structurally valid, **non-empty** inventory
+is explicit non-support. The official response schema permits an empty `data`
+array, so a completely empty inventory remains unknown, as does an inventory
+failure; discovery does not turn either ambiguous state into blanket
+non-support. Free-model endpoint/provider policy
 records additionally expose whether at least one route prohibits training or
 prompt retention and retain their HTTPS policy sources. A configured gateway may
 publish the same fields through model metadata, but a logical model receives a
