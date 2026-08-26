@@ -351,10 +351,16 @@ class CostRoutingCoordinator:
         """Probe only a job's declared access list under durable claim ownership."""
         initial = dict(self._readiness_jobs[job_id])
         deadline_epoch = initial.get("deadline_epoch")
-        lease = (
+        deadline_remaining = (
             max(1.0, float(deadline_epoch) - time.time())
             if deadline_epoch is not None
             else max(float(getattr(self.orchestrator.client, "timeout", 1.0)), 1.0)
+        )
+        # A short renewable TTL permits another worker to recover promptly
+        # after a crash while the persisted deadline remains the hard ceiling.
+        lease = min(
+            deadline_remaining,
+            max(float(initial["timeout_seconds"]) + 1.0, 1.0),
         )
         try:
             with self.job_registry.lock(

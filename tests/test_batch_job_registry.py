@@ -285,7 +285,9 @@ def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success()
 
         def lock(self, name: str, **kwargs: Any) -> object:
             self.locks.append((name, kwargs))
-            return self.RenewalClaim(self)
+            if "provider_readiness_job_execution" in name:
+                return self.RenewalClaim(self)
+            return self.Claim(True)
 
     class SlowProbeClient(ModelClient):
         def __init__(self) -> None:
@@ -318,6 +320,12 @@ def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success()
     assert document["status"] == "completed"
     assert document["ready_count"] == 7
     assert client.extensions >= 1
+    execution_claim = next(
+        kwargs
+        for name, kwargs in client.locks
+        if "provider_readiness_job_execution" in name
+    )
+    assert execution_claim["timeout"] < 1.2
 
 
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:

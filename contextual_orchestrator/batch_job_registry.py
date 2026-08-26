@@ -197,7 +197,7 @@ class JobRegistryFactory:
                     try:
                         claim.release()
                     except Exception as exc:  # noqa: BLE001 - redis is optional.
-                        if type(exc).__name__ != "LockNotOwnedError":
+                        if renew_until_epoch is None or type(exc).__name__ != "LockNotOwnedError":
                             raise
 
             return acquired_claim()
