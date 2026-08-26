@@ -263,7 +263,10 @@ def test_local_chat_backend_registry_backed_results_round_trip() -> None:
 
     registry = JobRegistryFactory(FakeValkeyClient())
     backend = LocalBatchBackend(
-        lambda messages, mode: {"answer": f"ran-{mode}", "mode": mode},
+        lambda messages, mode, model: {
+            "answer": f"ran-{mode}-{model}",
+            "mode": mode,
+        },
         max_concurrency=2,
         job_registry=registry,
     )
@@ -276,4 +279,4 @@ def test_local_chat_backend_registry_backed_results_round_trip() -> None:
     assert job.request_count == 3
     results = backend.retrieve(job)
     assert [item.custom_id for item in results] == ["req_a", "req_b", "req_c"]
-    assert all(item.answer.startswith("ran-") for item in results)
+    assert all(item.answer == "ran-auto-contextual-orchestrator" for item in results)

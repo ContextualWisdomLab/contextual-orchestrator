@@ -165,15 +165,26 @@ def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
     """Apply the shared ordinary-chat eligibility policy to a catalog row.
 
     This is a negative compatibility filter, not positive capability inference.
-    Models that survive receive only generic chat-serving tags until an explicit
-    provider/catalog capability record or measured evidence is available.
+    Models that survive retain only explicit provider/catalog capability and
+    cost evidence in addition to the generic chat-serving tags.
     """
     return is_general_chat_agent_model_id(model.model_id)
 
 
-def serving_tags_for_discovered(_model: DiscoveredModel) -> tuple[str, ...]:
-    """Return capability-neutral tags safe for any compatible chat candidate."""
-    return _GENERIC_SERVING_TAGS
+def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
+    """Return only provider-declared capabilities, modalities, and cost evidence."""
+    return tuple(
+        dict.fromkeys(
+            (
+                *_GENERIC_SERVING_TAGS,
+                *(("cost:free",) if model.is_free else ()),
+                *model.capabilities,
+                *(f"capability:{value}" for value in model.capabilities),
+                *(f"input:{value}" for value in model.input_modalities),
+                *(f"output:{value}" for value in model.output_modalities),
+            )
+        )
+    )
 
 
 def _known_cost_sort_key(

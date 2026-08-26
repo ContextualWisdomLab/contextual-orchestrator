@@ -194,6 +194,36 @@ def test_http_embeddings_rejects_explicit_model_without_embedding_capability() -
         thread.join(timeout=5)
 
 
+def test_http_embeddings_rejects_explicit_excluded_embedding_model() -> None:
+    """An explicit model cannot bypass its provider capability exclusion."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "excluded_embedding",
+                "excluded",
+                tags=("embedding",),
+                provider_exclusions=("embedding",),
+            )
+        ]
+    )
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            "/v1/embeddings",
+            {"model": "excluded", "input": "invoice search chunk"},
+        )
+        assert status == 400, body
+        assert "invalid_model" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_batch_embeddings_rejects_model_outside_agent_pool() -> None:
     server, thread, port = _server()
     try:
