@@ -46,6 +46,8 @@ def test_reported_usage_preferred_and_labeled() -> None:
         client=client,
         price_per_million={"priced-model": 10.0},
     )
+    # Accounting contract, not dispatch: pin the single-step route path.
+    orchestrator._triage_fn = lambda text: False
     orchestrator.run([{"role": "user", "content": "do the work"}])
     row = next(r for r in orchestrator.spend_analytics()["by_model"] if r["model"] == "priced-model")
 
@@ -57,6 +59,7 @@ def test_reported_usage_preferred_and_labeled() -> None:
 def test_reported_prompt_tokens_surface_in_totals() -> None:
     client = _ReportingClient(completion_tokens=30)  # also reports prompt_tokens=5 per call
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))], client=client)
+    orchestrator._triage_fn = lambda text: False  # single-step route accounting
     orchestrator.run([{"role": "user", "content": "route once"}])
     totals = orchestrator.spend_analytics()["totals"]
     assert totals["prompt_tokens_source"] == "reported"

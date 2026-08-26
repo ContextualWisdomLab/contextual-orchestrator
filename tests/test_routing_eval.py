@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from dataclasses import replace
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -66,22 +64,19 @@ def test_eval_does_not_persist_runs() -> None:
     assert orchestrator._workflow_runs == {}
 
 
-def test_auto_route_uses_length_threshold() -> None:
-    orchestrator = _orch()
-    orchestrator.policy = replace(
-        orchestrator.policy,
-        route_text_length_threshold=10_000,
-        conduct_hint_threshold=99,
-    )
+def test_auto_route_follows_structured_triage_verdict() -> None:
+    """Route-vs-conduct follows the exact-schema triage verdict, not text length.
 
+    The former character-length and keyword-hint rules were hand-tuned
+    heuristics; the decision now comes from one strict JSON triage call whose
+    verdict is injectable here for deterministic testing.
+    """
+    orchestrator = _orch()
+    orchestrator._triage_fn = lambda text: False
     prompt = "x" * 2000
     assert orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
 
-    orchestrator.policy = replace(
-        orchestrator.policy,
-        route_text_length_threshold=1,
-        conduct_hint_threshold=99,
-    )
+    orchestrator._triage_fn = lambda text: True
     assert not orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
 
 
