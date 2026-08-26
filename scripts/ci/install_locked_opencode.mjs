@@ -3,6 +3,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 
 const require = createRequire(import.meta.url)
@@ -31,7 +32,8 @@ for (const [name, expectedVersion] of candidates) {
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.copyFileSync(source, target)
     fs.chmodSync(target, 0o755)
-    process.exit(0)
+    const verified = spawnSync(target, ["--version"], { stdio: "ignore", windowsHide: true })
+    if (verified.status === 0) process.exit(0)
   } catch (error) {
     if (error?.code !== "MODULE_NOT_FOUND") throw error
   }
