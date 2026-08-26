@@ -192,9 +192,28 @@ def test_model_client_embedding_uses_provider_endpoint_and_usage() -> None:
         patch.object(client, "_validate_provider", return_value=(2, ("127.0.0.1", 443))),
         patch.object(client, "_open_provider", side_effect=open_provider),
     ):
-        vector, token_count = client.embed_one(agent, "evidence")
+        vectors, token_count = client.embed_with_usage(agent, ["evidence"])
 
-    assert vector == [0.125, 0.875]
+    assert vectors == [[0.125, 0.875]]
     assert token_count == 4
     assert seen[0].full_url == "https://provider.example/v1/embeddings"
     assert seen[0].get_header("Authorization") == "Bearer embedding-secret"
+
+
+def test_model_client_embedding_rejects_non_object_data_entry() -> None:
+    """Malformed provider rows fail through the classified response boundary."""
+    from unittest.mock import patch
+
+    from contextual_orchestrator.orchestrator import ProviderResponseError
+
+    agent = ModelAgent(
+        "embedding_agent", "embedding-model",
+        base_url="https://provider.example/v1", tags=("embedding",),
+    )
+    client = ModelClient(max_retries=0)
+    with (
+        patch.object(client, "_validate_provider", return_value=(2, ("127.0.0.1", 443))),
+        patch.object(client, "_send_raw_with_retry", return_value={"data": ["invalid"]}),
+        pytest.raises(ProviderResponseError),
+    ):
+        client.embed_with_usage(agent, ["evidence"])

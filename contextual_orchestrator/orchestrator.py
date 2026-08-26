@@ -905,45 +905,6 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def embed_one(self, agent: ModelAgent, text: str) -> tuple[list[float], int]:
-        """Return one provider-backed embedding and its reported token count."""
-        if agent.base_url.startswith("mock://"):
-            raise NotConfigured("mock agents do not provide production embeddings")
-        destination = self._validate_provider(agent)
-        api_key = _provider_credential(agent)
-        credential_name = _provider_credential_name(agent)
-        if credential_name and not api_key:
-            raise NotConfigured(
-                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
-            )
-        headers = {"content-type": "application/json"}
-        if api_key:
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
-        inject_trace_context(headers)
-        request = urllib.request.Request(
-            self._provider_url(agent, "/embeddings"),
-            data=json.dumps({"model": agent.model, "input": text}).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with self._open_provider(request, destination) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        data = payload.get("data")
-        vector = data[0].get("embedding") if isinstance(data, list) and data else None
-        if not isinstance(vector, list) or not vector:
-            raise ProviderResponseError(
-                f"provider {agent.id} response did not contain an embedding"
-            )
-        try:
-            values = [float(value) for value in vector]
-        except (TypeError, ValueError) as exc:
-            raise ProviderResponseError(
-                f"provider {agent.id} returned an invalid embedding"
-            ) from exc
-        usage = payload.get("usage") or {}
-        token_count = usage.get("prompt_tokens", usage.get("total_tokens", 0))
-        return values, int(token_count or 0)
-
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
         scoped = getattr(self._local, "request_settings", {})
@@ -982,6 +943,12 @@ class ModelClient:
         vector so unit tests can exercise cosine ordering without network
         access; this fixture is never used against production traffic.
         """
+        return self.embed_with_usage(agent, texts)[0]
+
+    def embed_with_usage(
+        self, agent: ModelAgent, texts: list[str]
+    ) -> tuple[list[list[float]], int]:
+        """Return provider embeddings with the provider-reported input token count."""
         if not isinstance(texts, list) or not texts:
             raise ValueError("texts must be a non-empty list of strings")
         for item in texts:
@@ -994,13 +961,15 @@ class ModelClient:
                 raw = [byte for byte in digest[: self.MOCK_EMBEDDING_DIMENSION]]
                 centered = [(value / 255.0) * 2.0 - 1.0 for value in raw]
                 vectors.append(centered)
-            return vectors
+            return vectors, 0
         destination = self._validate_provider(agent)  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
-        response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
+        response = self._send_raw_with_retry(  # pragma: no cover
+            agent, "embeddings", payload, destination
+        )
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
         if not isinstance(data, list) or len(data) != len(texts):  # pragma: no cover
-            raise RuntimeError(  # pragma: no cover
+            raise ProviderResponseError(  # pragma: no cover
                 f"provider {agent.id} returned an invalid embeddings payload"
             )
         vectors = []  # pragma: no cover
@@ -1009,11 +978,15 @@ class ModelClient:
             if not isinstance(vector, list) or not all(  # pragma: no cover
                 isinstance(value, (int, float)) and math.isfinite(float(value)) for value in vector
             ):
-                raise RuntimeError(  # pragma: no cover
+                raise ProviderResponseError(  # pragma: no cover
                     f"provider {agent.id} returned a non-numeric embedding vector"
                 )
             vectors.append([float(value) for value in vector])  # pragma: no cover
-        return vectors  # pragma: no cover
+        usage = response.get("usage") if isinstance(response, dict) else None  # pragma: no cover
+        token_count = (usage or {}).get(  # pragma: no cover
+            "prompt_tokens", (usage or {}).get("total_tokens", 0)
+        )
+        return vectors, int(token_count or 0)  # pragma: no cover
 
     def chat(
         self,
@@ -4246,7 +4219,9 @@ class TaskOrchestrator:
         capability = {"embeddings": "embedding"}.get(capability, capability)
         if not capability:
             raise ValueError("capability must be a non-empty string")
-        virtual_model = model_name in {self.AUTO_MODEL, self.FREE_MODEL}
+        virtual_model = model_name in {
+            "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL
+        }
         free_only = model_name == self.FREE_MODEL
         exact_models = {agent.model for agent in self.candidates}
         requested_group = (

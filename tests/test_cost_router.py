@@ -138,10 +138,10 @@ def test_remote_embedding_agent_uses_provider_backend() -> None:
     class _Client:
         local_concurrency = 1
 
-        def embed_one(self, selected_agent, text):
+        def embed_with_usage(self, selected_agent, texts):
             assert selected_agent is agent
-            assert text == "evidence"
-            return [0.25, 0.75], 3
+            assert texts == ["evidence"]
+            return [[0.25, 0.75]], 3
 
     class _Orchestrator:
         agents = [agent]
@@ -159,6 +159,44 @@ def test_remote_embedding_agent_uses_provider_backend() -> None:
     assert document["backend"] == "provider"
     assert document["embeddings"][0]["embedding"] == [0.25, 0.75]
     assert document["token_counts"] == [3]
+
+
+def test_embedding_backend_observes_agents_added_after_construction() -> None:
+    """Late discovery switches new submissions from local fixtures to the provider."""
+    remote = type("Agent", (), {
+        "model": "embedding-model", "tags": ("embedding",),
+        "base_url": "https://provider.example/v1",
+    })()
+
+    class _Client:
+        local_concurrency = 1
+
+        def embed_with_usage(self, selected_agent, texts):
+            assert selected_agent is remote
+            return [[0.5, 0.5]], 2
+
+    class _Orchestrator:
+        agents = []
+        client = _Client()
+
+        def select_capability_agent(self, capability, model):
+            assert capability == "embedding"
+            if not self.agents:
+                raise RuntimeError("not discovered")
+            assert model in {"contextual-orchestrator", remote.model}
+            return remote
+
+        def complete(self, messages, *, mode, model_name):
+            return {"answer": "", "mode": mode}
+
+    orchestrator = _Orchestrator()
+    coordinator = CostRoutingCoordinator(orchestrator)
+    orchestrator.agents.append(remote)
+    document = coordinator.complete_embeddings_batch(
+        ["evidence"], model="contextual-orchestrator"
+    )
+    assert document["backend"] == "provider"
+    assert document["embeddings"][0]["embedding"] == [0.5, 0.5]
 
 
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:
