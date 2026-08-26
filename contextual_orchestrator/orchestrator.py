@@ -1425,7 +1425,10 @@ class ModelClient:
             remaining = self.remaining_request_timeout()  # pragma: no cover
             timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
             with _local_provider_slot(agent, self.local_concurrency, timeout):  # pragma: no cover
-                yield from self._stream_send(agent, payload, destination, timeout=timeout)
+                if remaining is None:
+                    yield from self._stream_send(agent, payload, destination)
+                else:
+                    yield from self._stream_send(agent, payload, destination, timeout=timeout)
 
     def _stream_send(
         self,
