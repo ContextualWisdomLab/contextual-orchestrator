@@ -238,7 +238,7 @@ confidential-client secret placement remain deployment-controller operations.
 Once a provider's credential is registered in the KV, `contextual_orchestrator`
 can discover that provider's available models and turn them into agent-pool
 candidates automatically — no hand-written `agents.json` entry required.
-`contextual_orchestrator/model_discovery.py` covers five providers out of the
+`contextual_orchestrator/model_discovery.py` covers six providers out of the
 box, all resolved through `get_credential` (never fabricated, never read from
 `os.getenv`):
 
@@ -276,7 +276,7 @@ python -m contextual_orchestrator discover-models --agents-db state/pool.db
 ```
 
 A provider with nothing registered is silently skipped — registering one key
-or all five both work. `discover-models` prints a JSON report
+or all six both work. `discover-models` prints a JSON report
 (`discovered_count`, `priced_count`, `providers_with_errors`, and each
 `{provider, model, agent_id}` found) and, with `--agents-db`, persists the
 discovered agents into the same sqlite agent-pool file `--serve --agents-db`

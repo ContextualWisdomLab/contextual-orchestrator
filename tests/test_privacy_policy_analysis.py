@@ -7,6 +7,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     register_credential,
@@ -152,7 +154,7 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
         def read(self, _limit: int) -> bytes:
             return json.dumps({
                 "status": 200,
-                "content_type": "text/html",
+                "content_type": "text/plain",
                 "final_url": "https://provider.example/privacy",
                 "body_base64": base64.b64encode(b"<html>Static shell</html>").decode(),
             }).encode()
@@ -177,7 +179,9 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
         ):
             text = crawl_policy_document(
                 "https://provider.example/privacy",
-                camoufox_renderer=lambda _url: "<html><body>Rendered policy.</body></html>",
+                camoufox_renderer=lambda _url: (
+                    f"<script>{'x' * 24_000}</script><main>Rendered policy.</main>"
+                ),
             )
             proxy = _wardnet_browser_proxy()
     finally:
@@ -193,6 +197,7 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
 
 
 def test_pinned_mcp_client_renders_and_closes_camoufox_tab() -> None:
+    pytest.importorskip("mcp")
     calls: list[tuple[str, dict[str, object]]] = []
 
     class _Context:

@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
+    RequestError,
     SecurityConfig,
     _validate_completions_model,
     _validate_embeddings_model,
@@ -77,6 +78,13 @@ def test_text_model_omission_selects_gateway_default() -> None:
         body: dict = {}
         assert validate(body) == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
         assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
+
+def test_text_model_rejects_explicit_null() -> None:
+    for validate in (_validate_completions_model, _validate_responses_model):
+        with pytest.raises(RequestError) as error:
+            validate({"model": None})
+        assert error.value.code == "invalid_model"
 
 
 def test_unit_model_rejects_blank() -> None:

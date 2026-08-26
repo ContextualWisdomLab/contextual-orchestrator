@@ -4473,10 +4473,10 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
     non-string values still fail closed. Strip + write back so passthrough pool
     matching sees the same id as form/JS padded names.
     """
-    model = body.get("model")
-    if model is None:
+    if "model" not in body:
         body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
         return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    model = body.get("model")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()

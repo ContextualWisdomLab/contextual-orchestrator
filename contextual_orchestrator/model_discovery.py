@@ -254,7 +254,7 @@ def _fetch_configured_gateway_json(
         raise ValueError("configured gateway discovery URL is not a safe HTTPS URL")
     origin = urlunsplit(("https", parsed.netloc, "", "", ""))
     client = ModelClient(
-        timeout=max(1, int(math.ceil(timeout))),
+        timeout=max(1, math.ceil(timeout)),
         allowed_provider_hosts={parsed.hostname},
     )
     agent = ModelAgent(

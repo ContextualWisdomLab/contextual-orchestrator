@@ -273,7 +273,8 @@ def crawl_policy_document(
         except (ImportError, OSError, RuntimeError, TypeError, ValueError):
             rendered = ""
         if rendered:
-            text = rendered[:MAX_POLICY_CHARACTERS]
+            text = rendered[:MAX_POLICY_BYTES]
+            content_type = "text/html"
     if content_type == "text/plain":
         return " ".join(text.split())[:MAX_POLICY_CHARACTERS]
     parser = _PolicyTextExtractor()
