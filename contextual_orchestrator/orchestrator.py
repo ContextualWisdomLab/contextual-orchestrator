@@ -533,6 +533,20 @@ LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
+def _http_error_body(error: urllib.error.HTTPError, limit: int = 65536) -> bytes:
+    """Read an HTTP error body once so independent classifiers see identical evidence."""
+    cache_key = "_contextual_orchestrator_response_body"
+    cached = getattr(error, cache_key, None)
+    if isinstance(cached, bytes):
+        return cached[:limit]
+    body = error.read(65536)
+    try:
+        setattr(error, cache_key, body)
+    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
+        pass
+    return body[:limit]
+
+
 def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     """Return whether an HTTP error carries the terminal tool-stop contract."""
     cache_key = "_contextual_orchestrator_tool_execution_stopped"
@@ -540,7 +554,7 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     if isinstance(cached, bool):
         return cached
     try:
-        payload = json.loads(error.read(65536).decode("utf-8"))
+        payload = json.loads(_http_error_body(error).decode("utf-8"))
     except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         result = False
     else:
@@ -841,7 +855,7 @@ def _provider_limit_contract(
 ) -> tuple[str | None, int | None, int | None]:
     """Extract only explicit machine-readable provider limits from an error."""
     try:
-        document = json.loads(exc.read(16 * 1024).decode("utf-8"))
+        document = json.loads(_http_error_body(exc, 16 * 1024).decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None, None, None
 

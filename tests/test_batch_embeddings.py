@@ -350,6 +350,23 @@ def test_sync_provider_embeddings_wait_for_remote_completion() -> None:
     assert document["embeddings"][0]["embedding"] == [1.0]
 
 
+def test_provider_batch_total_keeps_per_input_token_counts_explicitly_unknown() -> None:
+    backend = ProviderEmbeddingBatchBackend(
+        lambda requests: ([[1.0] for _request in requests], 17)
+    )
+    agent = ModelAgent("embedding_worker", "mock-embedding", tags=("embedding",))
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]), embedding_batch_backend=backend
+    )
+    document = coordinator.complete_embeddings_batch(["alpha", "beta"], wait_for_terminal=True)
+    assert document["total_tokens"] == 17
+    assert document["token_counts"] == [0, 0]
+    assert document["token_count_provenance"] == [
+        "unknown_provider_batch_total_only",
+        "unknown_provider_batch_total_only",
+    ]
+
+
 def test_sync_provider_embeddings_wait_is_bounded_by_caller_deadline() -> None:
     agent = ModelAgent(
         "embedding_worker", "remote-embedding", base_url="https://provider.example/v1",

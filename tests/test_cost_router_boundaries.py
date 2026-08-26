@@ -383,6 +383,7 @@ def test_document_recounts_tokens_when_backend_reports_zero_usage() -> None:
     document = coordinator.embeddings_batch_document(job.job_id)
     # HeuristicTokenCounter counts word units with the BPE expansion factor.
     assert document["token_counts"] == [4]
+    assert document["token_count_provenance"] == ["measured_or_estimated_per_input"]
 
 
 def test_complete_embeddings_batch_round_trips_locally() -> None:

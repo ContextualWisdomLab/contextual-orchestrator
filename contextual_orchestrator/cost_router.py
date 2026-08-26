@@ -966,6 +966,11 @@ class CostRoutingCoordinator:
             "model": model_name,
             "embeddings": embeddings,
             "token_counts": token_counts,
+            "token_count_provenance": (
+                ["unknown_provider_batch_total_only"] * input_count
+                if provider_batch_tokens is not None
+                else ["measured_or_estimated_per_input"] * input_count
+            ),
             "total_tokens": (
                 provider_batch_tokens
                 if provider_batch_tokens is not None
