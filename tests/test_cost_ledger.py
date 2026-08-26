@@ -403,6 +403,53 @@ def test_sql_ledger_stores_descriptive_attribution_in_normalized_tables() -> Non
     ).fetchone() == (0,)
 
 
+def test_sql_ledger_preserves_input_attribution_without_splitting_aggregate_cost() -> None:
+    """Keep one provider charge while retaining every input's canonical provenance."""
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    ledger = _priced_ledger(store=store)
+
+    record = ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=11,
+        completion_tokens=0,
+        attribution={},
+        input_attributions=[
+            {"service": "search", "team": "alpha"},
+            {"service": "catalog", "team": "beta"},
+        ],
+    )
+
+    assert connection.execute("SELECT COUNT(*) FROM llm_usage_records").fetchone() == (1,)
+    assert connection.execute(
+        "SELECT COUNT(*) FROM usage_record_input_attributions WHERE usage_record_id = ?",
+        (record.usage_record_id,),
+    ).fetchone() == (14,)
+    row = store.query()[0]
+    assert row["prompt_tokens"] == 11
+    assert row["input_attributions"] == [
+        {
+            "account": "unattributed",
+            "company": "unattributed",
+            "group": "unattributed",
+            "model_name": "gpt-x",
+            "service": "search",
+            "team": "alpha",
+            "upstream_api": "openai",
+        },
+        {
+            "account": "unattributed",
+            "company": "unattributed",
+            "group": "unattributed",
+            "model_name": "gpt-x",
+            "service": "catalog",
+            "team": "beta",
+            "upstream_api": "openai",
+        },
+    ]
+
+
 def test_sql_ledger_enables_foreign_keys_and_cascades_attribution_rows() -> None:
     """Keep relational attribution rows attached to their usage fact."""
     connection = sqlite3.connect(":memory:")
