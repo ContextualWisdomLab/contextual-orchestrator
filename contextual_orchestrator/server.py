@@ -5010,6 +5010,13 @@ def build_server(
             if session_token is not None:
                 reset_session_id(session_token)
 
+        def finish(self) -> None:
+            """Finish the response and release request correlation state."""
+            try:
+                super().finish()
+            finally:
+                self._reset_session()
+
         # Bound inactive request/header reads to the operator-configured abuse
         # accounting window. StreamRequestHandler applies this to the socket;
         # BaseHTTPRequestHandler then closes timed-out persistent connections.
