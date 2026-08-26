@@ -29,27 +29,28 @@ fn sum_token_counts(values: Vec<usize>) -> PyResult<usize> {
 
 #[pyfunction]
 fn weighted_average_embeddings(parts: Vec<(Vec<f64>, usize)>) -> PyResult<Vec<f64>> {
-    let vectors: Vec<&Vec<f64>> = parts
-        .iter()
-        .filter_map(|(vector, _weight)| (!vector.is_empty()).then_some(vector))
-        .collect();
-    if vectors.is_empty() {
+    if parts.is_empty() {
         return Ok(Vec::new());
     }
-    let dimension = vectors.iter().map(|vector| vector.len()).max().unwrap_or(0);
-    let weights: Vec<usize> = parts
-        .iter()
-        .map(|(_vector, weight)| (*weight).max(1))
-        .collect();
+    let dimension = parts[0].0.len();
+    if dimension == 0 || parts.iter().any(|(vector, _)| vector.len() != dimension) {
+        return Err(PyValueError::new_err(
+            "embedding vectors must have one shared positive dimension",
+        ));
+    }
+    if parts.iter().any(|(_, weight)| *weight == 0) {
+        return Err(PyValueError::new_err(
+            "embedding token weights must be positive",
+        ));
+    }
+    let weights: Vec<usize> = parts.iter().map(|(_, weight)| *weight).collect();
     let total_weight = sum_token_counts(weights.clone())?;
     (0..dimension)
         .map(|offset| {
             let weighted_sum = parts
                 .iter()
                 .zip(weights.iter())
-                .map(|((vector, _weight), weight)| {
-                    vector.get(offset).copied().unwrap_or(0.0) * (*weight as f64)
-                })
+                .map(|((vector, _weight), weight)| vector[offset] * (*weight as f64))
                 .sum::<f64>();
             let reduced = weighted_sum / (total_weight as f64);
             if reduced.is_finite() {
@@ -238,6 +239,11 @@ mod tests {
                 vec![2.5, 4.5]
             );
             assert!(weighted_average_embeddings(vec![(vec![f64::INFINITY], 1)]).is_err());
+            assert!(weighted_average_embeddings(vec![(vec![1.0], 0)]).is_err());
+            assert!(
+                weighted_average_embeddings(vec![(vec![1.0], 1), (vec![1.0, 2.0], 1)]).is_err()
+            );
+            assert!(weighted_average_embeddings(vec![(Vec::new(), 1)]).is_err());
         });
     }
 }

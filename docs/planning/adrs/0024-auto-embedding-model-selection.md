@@ -65,8 +65,10 @@ guess, or consumer-side fallback.
    local test/development path. When the active pool contains a remote
    embedding-capable agent, the default coordinator calls that agent's
    OpenAI-compatible `/embeddings` endpoint and records the provider-reported
-   token count. It never substitutes the standalone SHA-256 vector for a
-   configured remote agent.
+   token count. Multi-part vector reduction uses exact positive token counts in
+   the Rust core and fails closed on empty, ragged, non-finite, or zero-weight
+   inputs; it never pads dimensions or repairs weights by convention. It never
+   substitutes the standalone SHA-256 vector for a configured remote agent.
 
 ## Contract and acceptance evidence
 

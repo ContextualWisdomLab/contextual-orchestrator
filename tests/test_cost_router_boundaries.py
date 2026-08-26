@@ -25,8 +25,8 @@ from contextual_orchestrator.cost_router import (
 from contextual_orchestrator.cost_router import (
     _positive_int,
     _provider_from_base_url,
-    _weighted_average_embedding,
 )
+from contextual_orchestrator.token_counting import RustCl100kPacker
 
 
 def _coordinator(**kwargs: Any) -> Coordinator:
@@ -199,22 +199,20 @@ def test_positive_int_defaults_on_garbage_and_non_positive() -> None:
 # --- weighted average embedding reduction ----------------------------------------------
 
 
-def test_weighted_average_empty_vectors_returns_empty() -> None:
-    assert _weighted_average_embedding([]) == []
-    assert _weighted_average_embedding([([], 5)]) == []
+def test_rust_weighted_average_empty_parts_returns_empty() -> None:
+    assert RustCl100kPacker().weighted_average_embeddings([]) == []
 
 
-def test_weighted_average_clamps_degenerate_weights_to_one() -> None:
-    reduced = _weighted_average_embedding([([2.0, 4.0], 0), ([4.0, 6.0], -1)])
-    # Zero/negative weights clamp up to 1, so this is the plain part mean.
-    assert reduced == [pytest.approx(3.0), pytest.approx(5.0)]
+def test_rust_weighted_average_rejects_nonpositive_token_weights() -> None:
+    with pytest.raises(ValueError, match="weights must be positive"):
+        RustCl100kPacker().weighted_average_embeddings([([2.0, 4.0], 0)])
 
 
-def test_weighted_average_respects_ragged_dimensions_and_weights() -> None:
-    reduced = _weighted_average_embedding([([1.0, 3.0, 9.0], 3), ([2.0], 1)])
-    assert reduced[0] == pytest.approx((1.0 * 3 + 2.0 * 1) / 4)
-    assert reduced[1] == pytest.approx(9.0 / 4)  # short vector contributes zero
-    assert reduced[2] == pytest.approx(27.0 / 4)
+def test_rust_weighted_average_rejects_ragged_dimensions() -> None:
+    with pytest.raises(ValueError, match="shared positive dimension"):
+        RustCl100kPacker().weighted_average_embeddings(
+            [([1.0, 3.0, 9.0], 3), ([2.0], 1)]
+        )
 
 
 # --- embeddings batch document lifecycle -------------------------------------------------
