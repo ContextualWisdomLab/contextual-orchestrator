@@ -186,18 +186,34 @@ class CostRoutingCoordinator:
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
             except Exception as exc:
                 max_inputs = getattr(exc, "max_inputs", None)
-                if type(max_inputs) is not int or max_inputs < 1 or len(texts) <= max_inputs:
+                max_total_tokens = getattr(exc, "max_tokens", None)
+                has_input_limit = type(max_inputs) is int and max_inputs > 0
+                has_token_limit = type(max_total_tokens) is int and max_total_tokens > 0
+                if not has_input_limit and not has_token_limit:
                     raise
-                self.config.set(
-                    _EMBEDDING_CONFIG_CATEGORY,
-                    "embedding_max_inputs_per_batch",
-                    max_inputs,
-                )
-                remaining = requests[completed_request_count:]
-                for offset in range(0, len(remaining), max_inputs):
-                    chunk_vectors, chunk_tokens = execute_provider_shard(
-                        remaining[offset : offset + max_inputs]
+                if has_input_limit:
+                    self.config.set(
+                        _EMBEDDING_CONFIG_CATEGORY,
+                        "embedding_max_inputs_per_batch",
+                        max_inputs,
                     )
+                chunks: List[List[EmbeddingBatchRequest]] = []
+                for request in requests[completed_request_count:]:
+                    if has_token_limit and request.token_count > max_total_tokens:
+                        raise
+                    current = chunks[-1] if chunks else []
+                    exceeds_inputs = has_input_limit and len(current) >= max_inputs
+                    exceeds_tokens = has_token_limit and current and (
+                        self._rust_embedding_core().sum_token_counts(
+                            [item.token_count for item in current] + [request.token_count]
+                        )
+                        > max_total_tokens
+                    )
+                    if not current or exceeds_inputs or exceeds_tokens:
+                        chunks.append([])
+                    chunks[-1].append(request)
+                for chunk in chunks:
+                    chunk_vectors, chunk_tokens = execute_provider_shard(chunk)
                     vectors.extend(chunk_vectors)
                     provider_token_counts.append(chunk_tokens)
                 return vectors, self._rust_embedding_core().sum_token_counts(provider_token_counts)
@@ -835,9 +851,16 @@ class CostRoutingCoordinator:
         """Serialize terminal materialization so cost is recorded exactly once."""
         with self.job_registry.lock(
             "embedding_document_materialization", batch_id,
-            lease_seconds=self._embedding_claim_lease_seconds(),
+            lease_seconds=self._embedding_document_lease_seconds(),
         ):
             return self._embeddings_batch_document_locked(batch_id)
+
+    def _embedding_document_lease_seconds(self) -> float | None:
+        """Use the configured provider timeout after a successful terminal wait."""
+        configured = float(getattr(self.orchestrator.client, "timeout", 0))
+        if configured > 0:
+            return configured
+        return self._embedding_claim_lease_seconds()
 
     def _embedding_claim_lease_seconds(self) -> float | None:
         """Bound a claim by the current request and configured provider timeout."""
@@ -967,6 +990,10 @@ class CostRoutingCoordinator:
             )
 
         if provider_batch_tokens is not None:
+            # A provider-reported batch total has no defensible per-input
+            # allocation. Preserve each input's attribution in ``embeddings``
+            # above, and record usage once against common batch dimensions
+            # instead of inventing proportional cost shares.
             shared_attribution = dict(requests[0].attribution) if requests else {}
             for key in list(shared_attribution):
                 if any(
@@ -1064,7 +1091,7 @@ class CostRoutingCoordinator:
                     if hasattr(client, "remaining_request_timeout")
                     else None
                 )
-                wait(
+                status = wait(
                     job,
                     timeout=(
                         remaining
@@ -1072,7 +1099,10 @@ class CostRoutingCoordinator:
                         else float(getattr(client, "timeout", 30.0))
                     ),
                 )
-                if hasattr(client, "remaining_request_timeout"):
+                if (
+                    not status.get("is_complete", False)
+                    and hasattr(client, "remaining_request_timeout")
+                ):
                     client.remaining_request_timeout()
         return self.embeddings_batch_document(job.job_id)
 

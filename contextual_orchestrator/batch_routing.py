@@ -592,7 +592,9 @@ class ProviderEmbeddingBatchBackend:
         if type(max_concurrency) is not int or max_concurrency < 1:
             raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
-        self._executor = ThreadPoolExecutor(max_workers=max_concurrency)
+        self._max_concurrency = max_concurrency
+        self._executor: ThreadPoolExecutor | None = None
+        self._executor_lock = threading.Lock()
         self._registry = job_registry or JobRegistryFactory()
         self._claim_lease_seconds = claim_lease_seconds
         self._terminal_events: Dict[str, threading.Event] = {}
@@ -631,14 +633,23 @@ class ProviderEmbeddingBatchBackend:
             if job_registry is not None
             else {}
         )
-        for job_id in list(self._states):
-            if self._states.get(job_id) in {"queued", "running"}:
+        pending_job_ids = [
+            job_id
+            for job_id in list(self._states)
+            if self._states.get(job_id) in {"queued", "running"}
+        ]
+        if pending_job_ids:
+            self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+            for job_id in pending_job_ids:
                 self._terminal_events[job_id] = threading.Event()
-                self._executor.submit(self._run_job, job_id)
+                self._executor.submit(copy_context().run, self._run_job, job_id)
 
     def close(self) -> None:
         """Release the bounded worker pool owned by this backend."""
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        with self._executor_lock:
+            executor, self._executor = self._executor, None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def __enter__(self) -> "ProviderEmbeddingBatchBackend":
         return self
@@ -659,7 +670,11 @@ class ProviderEmbeddingBatchBackend:
         self._requests[job_id] = list(requests)
         self._states[job_id] = "queued"
         self._terminal_events[job_id] = threading.Event()
-        self._executor.submit(copy_context().run, self._run_job, job_id)
+        with self._executor_lock:
+            if self._executor is None:
+                self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+            executor = self._executor
+        executor.submit(copy_context().run, self._run_job, job_id)
         return BatchJob(job_id=job_id, backend=self.name, status="queued", request_count=len(requests))
 
     def _run_job(self, job_id: str) -> None:
@@ -683,7 +698,7 @@ class ProviderEmbeddingBatchBackend:
                 if len(vectors) != len(requests):
                     raise ValueError("provider embedding batch result count did not match inputs")
                 dimensions = {len(vector) for vector in vectors}
-                if not vectors or dimensions == {0} or len(dimensions) != 1:
+                if vectors and (dimensions == {0} or len(dimensions) != 1):
                     raise ValueError("provider embedding batch dimensions were inconsistent")
                 items = []
                 for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
@@ -722,7 +737,7 @@ class ProviderEmbeddingBatchBackend:
                     }
                     self._states[job_id] = "failed"
         finally:
-            event = self._terminal_events.get(job_id)
+            event = self._terminal_events.pop(job_id, None)
             if event is not None:
                 event.set()
 
@@ -756,7 +771,7 @@ class ProviderEmbeddingBatchBackend:
                 self._cancellations[job.job_id] = {"reason": reason}
                 self._states[job.job_id] = "cancelled"
                 status = "cancelled"
-                event = self._terminal_events.get(job.job_id)
+                event = self._terminal_events.pop(job.job_id, None)
                 if event is not None:
                     event.set()
         return {
@@ -777,7 +792,6 @@ class ProviderEmbeddingBatchBackend:
     def usage(self, job: BatchJob) -> Dict[str, int]:
         """Return provider-reported batch usage without per-input allocation."""
         return dict(self._usage.get(job.job_id, {}))
-
 
 class PgLlmBatchEmbeddingBackend:
     """Embeddings batch backend that submits to **pg-llm-batch** and retrieves.
