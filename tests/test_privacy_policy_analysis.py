@@ -42,7 +42,7 @@ def _model(
     )
 
 
-def test_zdr_model_analysis_updates_only_quote_grounded_policy_fields() -> None:
+def test_zdr_model_analysis_keeps_optional_zdr_as_provenance_only() -> None:
     policy_url = "https://provider.example/privacy"
     analyzer = _model("openrouter", "zdr-analyzer", zdr=True)
     target = _model("provider", "paid-model", policy_urls=(policy_url,))
@@ -65,9 +65,10 @@ def test_zdr_model_analysis_updates_only_quote_grounded_policy_fields() -> None:
     )
 
     assert evidence[0].analyzer_model == "zdr-analyzer"
+    assert evidence[0].zero_data_retention_available is True
     assert enriched[1].supports_no_training is True
     assert enriched[1].supports_no_prompt_retention is None
-    assert enriched[1].supports_zero_data_retention is True
+    assert enriched[1].supports_zero_data_retention is None
 
 
 def test_analysis_rejects_hallucinated_quote_and_non_zdr_analyzer() -> None:
