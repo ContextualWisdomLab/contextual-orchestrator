@@ -8,6 +8,10 @@
 - Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- Slow provider I/O is isolated per request; `/healthz` remains independently
+  serviceable, and saturated inference returns `503 concurrency_limit_exceeded`
+  instead of waiting for a run slot. HTTP/1.1 fixed-length responses are
+  persistent; incremental SSE explicitly closes after `[DONE]`.
 
 ## Current Endpoints
 
@@ -53,7 +57,7 @@
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
 | `GET` | `/api/v1/workflow_runs/{workflow_run_id}` | Inspect one run and trace |
-| `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list evidence |
+| `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list and accessed-output evidence; requires both admin and trace-purpose authorization before resource lookup. |
 | `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status/priority/tags/provider exclusions |
 | `DELETE` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Remove a worker only when it belongs to the addressed pool |
 | `POST` | `/api/v1/evaluation_runs` | Replay prompts and return a reproducible evaluation run |
@@ -100,4 +104,8 @@ These product surfaces are now implemented in this prototype:
 
 ## Production Library Target
 
-FastAPI should replace the current stdlib HTTP adapter when the API needs authentication, richer OpenAPI schema generation, dependency injection, and typed request/response models.
+The current stdlib adapter is measured for 64 simultaneous delayed-provider
+requests in the [k6 baseline](benchmarks/2026-08-25-web-concurrency-k6.md).
+Adopt the already-declared FastAPI/Uvicorn extra only when typed dependency
+injection or multi-process ASGI measurements justify a migration; do not run a
+second, divergent API contract in parallel.

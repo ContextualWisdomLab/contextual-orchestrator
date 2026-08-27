@@ -38,6 +38,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
+    openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
@@ -365,11 +366,35 @@ def test_discover_provider_models_skips_when_credential_missing() -> None:
     assert discover_provider_models(OPENAI_SOURCE) == []
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"data": {"total_credits": 10, "total_usage": 9}}, True),
+        ({"data": {"total_credits": 10, "total_usage": 10}}, False),
+        ({"data": {"total_credits": 10, "total_usage": 11}}, False),
+        ({"data": {"total_credits": "invalid", "total_usage": 0}}, None),
+    ],
+)
+def test_openrouter_paid_inference_uses_attested_remaining_credit(
+    payload: dict, expected: bool | None
+) -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        assert openrouter_paid_inference_available() is expected
+
+
 def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     payload = {
         "data": [
-            {"id": "meta/llama-3.3", "pricing": {"prompt": "0.0000006", "completion": "0.0000012"}},
+            {
+                "id": "meta/llama-3.3",
+                "pricing": {"prompt": "0.0000006", "completion": "0.0000012"},
+                "supported_parameters": ["response_format"],
+            },
             {"id": "no-pricing-model"},
             {"missing": "id-field"},
         ]
@@ -390,7 +415,9 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
-    assert all(model.capabilities == ("chat",) for model in discovered)
+    assert discovered[0].capabilities == ("chat", "response_format")
+    assert discovered[1].capabilities == ("chat",)
+    assert "response_format" in agent_from_discovered(discovered[0]).tags
 
 
 def test_openrouter_discovery_preserves_every_declared_modality() -> None:
@@ -445,6 +472,28 @@ def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -
 
     assert [model.model_id for model in discovered] == ["free/model"]
     endpoint_fetch.assert_not_called()
+def test_non_text_model_does_not_gain_structured_response_capability() -> None:
+    """A provider parameter alone cannot make an image-only model a synthesizer."""
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {
+                "id": "provider/image-only",
+                "architecture": {
+                    "input_modalities": ["text"],
+                    "output_modalities": ["image"],
+                },
+                "supported_parameters": ["response_format"],
+            }
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert discovered[0].capabilities == ("image",)
 
 
 def test_discovery_treats_null_modality_arrays_as_unspecified() -> None:
@@ -742,6 +791,18 @@ def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
         "privacy:no_training",
         "privacy:retention_only",
     } <= set(agent_from_discovered(discovered).tags)
+def test_response_format_metadata_does_not_make_non_chat_model_eligible() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="embedding-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat", "response_format"),
+    )
+
+    with pytest.raises(ValueError, match="not eligible"):
+        agent_from_discovered(discovered)
 
 
 def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:

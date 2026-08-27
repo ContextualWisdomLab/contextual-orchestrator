@@ -41,6 +41,7 @@ _OPENROUTER_ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
 _OPENROUTER_PROVIDER_POLICIES_URL = "https://openrouter.ai/api/frontend/v1/all-providers"
 CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
 MAX_DISCOVERY_RESPONSE_BYTES = 8 * 1024 * 1024
+_OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
@@ -735,6 +736,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
+        supported_parameters = (
+            row.get("supported_parameters")
+            if isinstance(row.get("supported_parameters"), list)
+            else []
+        )
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
         inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
@@ -753,7 +759,16 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         capabilities = tuple(
             dict.fromkeys(
                 _CAPABILITY_NAMES.get(value, value)
-                for value in (*source_capabilities, *outputs)
+                for value in (
+                    *source_capabilities,
+                    *outputs,
+                    *(
+                        ("response_format",)
+                        if "response_format" in supported_parameters
+                        and (not outputs or "text" in outputs)
+                        else ()
+                    ),
+                )
             )
         )
         prompt_price = _price_per_1k(pricing.get("prompt"))
@@ -927,6 +942,39 @@ def discover_all_models(
     return _deduplicate_discovered_models(discovered), errors
 
 
+def openrouter_paid_inference_available(
+    *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+) -> bool | None:
+    """Return whether OpenRouter attests a strictly positive credit balance."""
+    api_key = get_credential("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+    try:
+        payload = _fetch_json(
+            _OPENROUTER_CREDITS_URL,
+            api_key=api_key,
+            timeout=timeout,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return None
+        total_credits = Decimal(str(data["total_credits"]))
+        total_usage = Decimal(str(data["total_usage"]))
+        if not total_credits.is_finite() or not total_usage.is_finite():
+            return None
+        return total_credits - total_usage > 0
+    except (
+        ArithmeticError,
+        KeyError,
+        TypeError,
+        ValueError,
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+    ):
+        return None
+
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -962,7 +1010,10 @@ def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
     """Build a disabled capability agent or reject a chat-ineligible record."""
-    if not any(capability != "chat" for capability in discovered.capabilities) and not (
+    if not any(
+        capability not in {"chat", "response_format"}
+        for capability in discovered.capabilities
+    ) and not (
         is_general_chat_agent_model_id(discovered.model_id)
     ):
         raise ValueError("model is not eligible for a general chat agent")

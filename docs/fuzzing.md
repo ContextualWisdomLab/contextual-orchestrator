@@ -4,12 +4,12 @@ The orchestrator consumes untrusted input at a handful of well-defined seams:
 HTTP request bodies, agent-pool configuration, arbitrary prompt text, trace
 payloads that pass through secret/PII redaction, untrusted model-generated
 judge verdicts, a remote provider's model-list HTTP response, PII encryption-
-key text, and reasoning-effort profiles. Those seams
+key text, reasoning-effort profiles, and structured provider output. Those seams
 are fuzzed with two complementary, permissively licensed tools.
 
 | Tool | License | Role |
 | --- | --- | --- |
-| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`), covering all eight targets below. Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
+| [Hypothesis](https://hypothesis.readthedocs.io/) | MPL-2.0 | Always-on property tests in the normal `pytest` suite (`tests/fuzz/`), covering all nine targets below. Deterministic, cross-platform, shrinks any counterexample to a minimal repro. |
 | [Atheris](https://github.com/google/atheris) | Apache-2.0 | Coverage-guided (libFuzzer) harnesses in `fuzz/`, run in a bounded CI job on Python 3.12. Covers targets 1-5, 7, and 8; target 6 currently has Hypothesis coverage only. |
 
 Both drivers call the same invariant checks in [`fuzz/targets.py`](../fuzz/targets.py),
@@ -45,6 +45,9 @@ deserialize request config validate untrusted input"`):
    Arbitrary decoded JSON must yield a finite `ReasoningEffortProfile` or raise
    `EffortProfileError` / `TypeError` / `ValueError`. Never crash on NaN,
    infinity, bool-as-number, or unknown keys.
+9. **Structured provider output** — `_structured_output_error`. Arbitrary model
+   text and caller-provided JSON Schema must return a bounded validation result;
+   JSON parsing and schema-validator failures never escape the trust boundary.
 
 ## Running locally
 

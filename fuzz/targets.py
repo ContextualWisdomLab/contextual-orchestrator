@@ -29,6 +29,9 @@ consume untrusted bytes/JSON:
    role-compute JSON. Must raise ``EffortProfileError`` / ``TypeError`` /
    ``ValueError`` or return a finite profile. Never crash on NaN, bool-as-
    number, or unknown keys.
+9. ``orchestrator._structured_output_error`` -- provider text and caller JSON
+   Schema. Arbitrary values must return a bounded validation result without an
+   unhandled parser or validator exception.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -49,6 +52,7 @@ from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
     _parse_model_judge_reply,
+    _structured_output_error,
     chat_completion_chunks,
     redact_text,
     redact_value,
@@ -373,3 +377,13 @@ def exercise_model_judge_reply(reply: str) -> None:
         return
     assert decision in {"ACCEPT", "REJECT"}
     assert isinstance(reason, str) and reason.strip()
+
+
+def exercise_structured_output_error(content: str, schema: Any) -> None:
+    """Drive provider JSON and caller schema through the validation boundary."""
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "fuzz", "schema": schema},
+    }
+    result = _structured_output_error(content, response_format)
+    assert result in {None, "invalid_json", "schema_missing", "schema_violation"}

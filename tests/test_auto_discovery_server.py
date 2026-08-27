@@ -2,6 +2,7 @@
 
 import os
 from unittest.mock import patch
+from dataclasses import replace
 
 from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
 from contextual_orchestrator.model_discovery import DiscoveredModel
@@ -31,7 +32,9 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
         lambda *_args: ([chat, embedding], []),
     )
 
-    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
 
     result = _auto_discover_runtime_agents(orchestrator)
 
@@ -41,6 +44,38 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert agent.disabled is False
     assert "chat" in agent.tags
     assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
+    assert all(not candidate.base_url.startswith("mock://") for candidate in orchestrator.agents)
+    assert "bootstrap_agent" in result["updated"]
+
+
+def test_auto_discovery_disables_paid_openrouter_without_credit(monkeypatch) -> None:
+    """Catalog availability cannot promote an unaffordable paid deployment."""
+    paid = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid-chat",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat", "response_format"),
+    )
+    free = replace(paid, model_id="provider/free-chat", is_free=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([paid, free], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.openrouter_paid_inference_available",
+        lambda: False,
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    by_model = {agent.model: agent for agent in orchestrator.candidates}
+    assert by_model[paid.model_id].disabled is True
+    assert by_model[free.model_id].disabled is False
 
 
 def test_auto_discovery_removes_the_configured_gateway_placeholder(monkeypatch) -> None:
@@ -181,6 +216,22 @@ def test_unrelated_discovery_keeps_configured_gateway_placeholder(monkeypatch) -
 
     assert result["added"] == ["openai_chat_capable_model"]
     assert placeholder in orchestrator.agents
+def test_auto_discovery_preserves_sole_real_bootstrap_seed(monkeypatch) -> None:
+    """A seed cannot count itself as the replacement that retires it."""
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([], []),
+    )
+    seed = ModelAgent(
+        "bootstrap_agent",
+        "bootstrap-model",
+        base_url="https://provider.invalid/v1",
+        tags=("bootstrap_seed",),
+    )
+    orchestrator = TaskOrchestrator([seed])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert orchestrator.agents == [seed]
 
 
 def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> None:
@@ -246,3 +297,87 @@ def test_runtime_auto_discovery_skips_gateway_outside_allowlist(monkeypatch) -> 
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert all(source.provider_name != "configured_gateway" for source in captured)
+def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
+    monkeypatch,
+) -> None:
+    """Restarted discovery cannot restore mocks beside an active real agent."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    real_agent = ModelAgent(
+        "openai_chat_capable_model",
+        discovered.model_id,
+        base_url=discovered.chat_base_url,
+        tags=("discovered", "chat"),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([discovered], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("mock_seed_agent", "mock-model", tags=("bootstrap_seed",)),
+            real_agent,
+        ]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": ["mock_seed_agent"]}
+    assert orchestrator.agents == [real_agent]
+
+
+def test_auto_discovery_retires_mock_seed_when_current_discovery_is_empty(
+    monkeypatch,
+) -> None:
+    """A transient empty discovery cannot preserve a stale bootstrap fixture."""
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([], []),
+    )
+    real_agent = ModelAgent(
+        "existing_real_agent",
+        "existing-real-model",
+        base_url="https://provider.invalid/v1",
+        tags=("discovered", "chat"),
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("mock_seed_agent", "mock-model", tags=("bootstrap_seed",)),
+            real_agent,
+        ]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": ["mock_seed_agent"]}
+    assert orchestrator.agents == [real_agent]
+
+
+def test_auto_discovery_preserves_operator_configured_mock(monkeypatch) -> None:
+    """Only tagged bootstrap fixtures retire when real discovery succeeds."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([discovered], []),
+    )
+    operator_mock = ModelAgent(
+        "operator_mock", "operator-model", base_url="mock://operator"
+    )
+    orchestrator = TaskOrchestrator([operator_mock])
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert operator_mock in orchestrator.agents

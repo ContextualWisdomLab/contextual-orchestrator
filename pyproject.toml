@@ -5,17 +5,14 @@ description = "Paper-grounded model orchestration lab with an enterprise admin c
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "certifi>=2024.8.30",
   "cryptography>=43.0",
   "opentelemetry-api>=1.30.0",
   "opentelemetry-sdk>=1.30.0",
   "opentelemetry-exporter-otlp-proto-http>=1.30.0",
+  "jsonschema>=4.26.0",
 ]
 
 [project.optional-dependencies]
-policy-browser = [
-  "mcp==2.1.1",
-]
 test = [
   "hypothesis>=6.100",
 ]
