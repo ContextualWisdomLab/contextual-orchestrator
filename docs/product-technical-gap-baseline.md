@@ -1,5 +1,54 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-27 bare-gateway discovery and virtual-model acceptance slice
+
+The user-facing report was reproduced as a code path, not an environment
+quirk: with `LLM_GATEWAY_API_URL=https://llm-gateway-dev.hyosungitx.com` +
+`LLM_GATEWAY_API_KEY` in bootstrap transport, plain OpenAI-compatible
+gateways (e.g. a LiteLLM proxy) whose `/v1/models` rows carry no modality
+metadata produced `DiscoveredModel` rows with **empty** capabilities for
+chat deployments, while embedding deployments that happen to carry richer
+`/model/info` evidence kept an `embedding` capability. Empty-capability
+chat rows were then guaranteed to be dropped by the runtime activation
+filter (`"chat" in model.capabilities`), which is exactly "embedding
+discovers, chat does not".
+
+Closure in PR #868 (`fix/gateway-default-chat-model` core slice):
+
+1. `_parse_openai_compatible`: an identifier that passes the ordinary chat
+   transport gate (`is_general_chat_agent_model_id`) now receives the
+   `chat` capability, so a bare gateway list discovers usable chat models.
+   Endpoint-only ids (embedding/rerank/transcription/...) never pass that
+   gate, so no non-chat model is mislabeled.
+2. `_auto_discover_runtime_agents` activates candidates with the same
+   `is_discovered_chat_candidate` rule the serving bootstrap uses, so the
+   two entry points agree on bare-listing evidence.
+3. Structured chat trace disclosure path is restored (authorized callers
+   receive the disclosed workflow trace; tool passthrough reports
+   `trace_unavailable`), and `response_format` is a preference that can
+   never fail-closed purely because a pool lacks the tag, while vision
+   stays a hard entitlement.
+4. `orchestrator/auto`, `orchestrator/free`, and the advertised
+   `contextual-orchestrator` default resolve to a concrete synthesizer on
+   every structured surface; omitted-model and null/blank-model semantics
+   now differ honestly (omission defaults; explicit null/blank fails
+   closed).
+5. ZDR discovery already marks both paid and free models on OpenRouter
+   (`endpoints/zdr`) and configured gateways (`/model/info` consensus);
+   no ZDR regression introduced.
+
+Evidence: full suite `2483 passed, 1 skipped` locally and the hosted
+"Full unit and contract suite" green on the exact head; focused suites
+green. Non-critical CI only: fuzz hash-locks were aligned
+(`rpds-py`/`typing-extensions`) with `requirements.lock`; the Strix
+security-run provider was externally unavailable at one point (rate limit,
+token cap, or connection) and is re-run on dispatch — not a code
+defect.
+
+Remaining gap: the durable catalog still lacks operator-visible
+per-refresh status on every consumed config; follow-up leaves ZDR
+position for a metadata-freshness slice.
+
 ## 1. Executive Summary
 This document serves as the baseline for the Contextual Orchestrator (an enterprise-grade LLM model orchestration gateway). To achieve a tier-one enterprise valuation (targeting the $20B+ market for AI infrastructure and governance), we must bridge the gap between our current state and a fully auditable, highly concurrent, standard-compliant SaaS gateway.
 
@@ -10,9 +59,10 @@ This document serves as the baseline for the Contextual Orchestrator (an enterpr
 
 ### Gap Analysis (Product)
 1. **Dynamic Model Discovery & Standard API Routing**:
-   - *Current*: `llm-gateway-dev.hyosungitx.com` with API keys resolves embeddings, but other models (chat, multimodal) fail discovery. 
-   - *Target*: Seamless dynamic model discovery for `orchestrator/auto`, `orchestrator/free`, and omitted models. Paid vs free model discovery fully automated regardless of provider or custom gateway endpoint. Full OpenAPI/RESTful standard compliance. (Addressed partially in PR #868 and #874)
-   - *ZDR Discovery*: OpenRouter and configured gateways must discover ZDR models and parse privacy policies for automated compliance.
+   - *Current*: `llm-gateway-dev.hyosungitx.com` with API keys resolves embeddings, but other models (chat, multimodal) fail discovery.
+   - *Root cause (closed in PR #868)*: plain OpenAI-compatible listing rows without capability metadata were parsed with empty capabilities and then dropped by the runtime chat-activation filter; endpoint embedding rows kept richer metadata and survived.
+   - *Target*: Seamless dynamic model discovery for `orchestrator/auto`, `orchestrator/free`, and omitted models. Paid vs free model discovery fully automated regardless of provider or custom gateway endpoint. Full OpenAPI/RESTful standard compliance.
+   - *ZDR Discovery*: OpenRouter and configured gateways discover ZDR models (paid and free) and parse privacy policies for automated compliance.
 2. **PII Masking vs Business Continuity**:
    - *Current*: PII masking disrupts downstream workflows if over-aggressive.
    - *Target*: Context-aware differential privacy and entity resolution masking that preserves structural integrity without destroying analytical value (ADR 0027, 0028).
