@@ -1324,14 +1324,25 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
 def _validate_completions_model(body: dict[str, Any]) -> str:
     """Validate or default the chat/completions model.
 
-    Incidental leading/trailing whitespace is stripped and written back so
-    tools/response_format passthrough (``proxy_completion``) matches the same
-    pool model id as the orchestration path. Form/JS SDKs often pad model names.
+    An omitted ``model`` selects the advertised gateway default so clients do
+    not have to know any deployment name. Explicit JSON null or a blank string
+    are client mistakes, not omissions, and still fail closed (400). Leading
+    and trailing whitespace is stripped and written back so tools/response_format
+    passthrough (``proxy_completion``) matches the same pool model id as the
+    orchestration path; form/JS SDKs often pad model names.
     """
     model = body.get("model")
-    if model is None or (isinstance(model, str) and not model.strip()):
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
         body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
         return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
     if not isinstance(model, str):
         raise RequestError(400, "invalid_model", "model must be a string")
     model = model.strip()
@@ -4469,16 +4480,23 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 def _validate_responses_model(body: dict[str, Any]) -> str:
     """Validate or default the Responses API model.
 
-    An omitted model selects the advertised gateway default. Explicit empty or
-    non-string values still fail closed. Strip + write back so passthrough pool
-    matching sees the same id as form/JS padded names.
+    An omitted model selects the advertised gateway default. Explicit JSON
+    null or empty/whitespace strings are client mistakes, not omissions, and
+    fail closed (400). Non-string values also fail closed. Strip + write back
+    so passthrough pool matching sees the same id as form/JS padded names.
     """
     model = body.get("model")
-    if model is None or (isinstance(model, str) and not model.strip()):
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
         body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
         return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
-    if not isinstance(model, str):
-        raise RequestError(400, "invalid_model", "model must be a string")
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
