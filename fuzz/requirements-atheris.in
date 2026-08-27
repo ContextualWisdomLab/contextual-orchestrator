@@ -6,8 +6,3 @@ pip
 atheris==3.1.0; python_full_version == "3.12.*"
 cryptography>=43.0
 jsonschema>=4.26.0
-
-# rpds-py is pinned to match requirements.lock so the combined
-# -r requirements.lock -r fuzz/requirements-*.txt install resolves.
-rpds-py==0.30.0
-typing-extensions==4.15.0; python_full_version < "3.13"

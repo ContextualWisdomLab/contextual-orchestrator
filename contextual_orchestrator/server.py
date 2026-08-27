@@ -15,8 +15,9 @@ import struct
 import threading
 import time
 import traceback
+import urllib.error
 import urllib.parse
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
@@ -41,6 +42,7 @@ from .orchestrator import (
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
+from .release_authorization import verify_release_authority_snapshot
 from .telemetry import (
     attach_trace_context,
     configure_telemetry,
@@ -50,6 +52,11 @@ from .telemetry import (
     session_id_from_headers,
     session_id_from_request,
     set_session_id,
+)
+from .video_jobs import (
+    VideoJobContractError,
+    VideoJobRegistry,
+    video_agent_affinity_key,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -4198,13 +4205,6 @@ def _validate_tool_function_fields(
         expected_types=(str,),
         error_message=f"{name_prefix}.description must be a string when provided",
     )
-    description = function.get("description")
-    if isinstance(description, str) and len(description) > 1024:
-        raise RequestError(
-            400,
-            "invalid_tools",
-            f"{name_prefix}.description must be at most 1024 characters",
-        )
 
 
 def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -5012,6 +5012,7 @@ def build_server(
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server.
 
@@ -5021,7 +5022,9 @@ def build_server(
     """
     security = security or SecurityConfig()
     security.check_bind(host)
+    release_authority = verify_release_authority_snapshot(release_authority)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
+    video_jobs = VideoJobRegistry(coordinator.job_registry)
     configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
@@ -5161,6 +5164,91 @@ def build_server(
                         self._send(coordinator.embeddings_batch_document(batch_id))
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
+                    return
+                if path.startswith("/v1/videos/"):
+                    self._authorize("inference")
+                    principal_id = security.principal_id(self.headers)
+                    suffix = path[len("/v1/videos/") :]
+                    content_request = suffix.endswith("/content")
+                    gateway_job_id = (
+                        suffix[: -len("/content")] if content_request else suffix
+                    )
+                    if not gateway_job_id or "/" in gateway_job_id:
+                        raise RequestError(
+                            400, "invalid_video_job", "video job id must be one path segment"
+                        )
+                    try:
+                        owner = video_jobs.owner(gateway_job_id, principal_id)
+                    except KeyError:
+                        self._send_error(
+                            404, "video_job_not_found", "video job was not found"
+                        )
+                        return
+                    agent = next(
+                        (
+                            candidate
+                            for candidate in orchestrator.candidates
+                            if candidate.id == owner.agent_id
+                        ),
+                        None,
+                    )
+                    if agent is None:
+                        self._send_error(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        )
+                        return
+                    if owner.agent_affinity_key != video_agent_affinity_key(agent):
+                        self._send_error(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        )
+                        return
+                    provider_path = f"videos/{urllib.parse.quote(owner.provider_job_id, safe='')}"
+                    try:
+                        if content_request:
+                            raw, content_type = self._run(
+                                lambda: orchestrator.client.proxy_get_bytes(
+                                    agent, f"{provider_path}/content",
+                                    max_response_bytes=security.max_body_bytes,
+                                )
+                            )
+                            self._send_bytes(raw, content_type)
+                        else:
+                            result = self._run(
+                                lambda: orchestrator.client.proxy_get_json(
+                                    agent, provider_path,
+                                    max_response_bytes=security.max_body_bytes,
+                                )
+                            )
+                            previous_usage = owner.provider_usage
+                            owner = video_jobs.observe_provider_result(owner, result)
+                            if previous_usage is None and owner.provider_usage is not None:
+                                coordinator.record_async_video_usage(
+                                    agent=agent, usage=owner.provider_usage,
+                                    gateway_job_id=owner.gateway_job_id,
+                                )
+                            self._send(video_jobs.public_response(result, owner))
+                    except urllib.error.HTTPError as exc:
+                        if exc.code == 404:
+                            raise RequestError(
+                                404,
+                                "video_job_not_found",
+                                "The video job is no longer available; submit a new video request.",
+                            ) from exc
+                        raise RequestError(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        ) from exc
+                    except Exception as exc:  # noqa: BLE001 - provider trust boundary
+                        raise RequestError(
+                            503,
+                            "video_provider_unavailable",
+                            "The video provider is unavailable; restore its configured account and retry.",
+                        ) from exc
                     return
                 self._authorize("admin", purpose=self._admin_purpose(path))
                 if path == "/api/v1/cost_attribution_dimensions":
@@ -5314,72 +5402,84 @@ def build_server(
                     self._send(orchestrator.commercial_release_candidate_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_gap_registers/latest":
                     self._send(orchestrator.commercial_gap_register_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_procurement_readiness/latest":
                     self._send(orchestrator.commercial_procurement_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_contract_readiness/latest":
                     self._send(orchestrator.commercial_contract_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_onboarding_readiness/latest":
                     self._send(orchestrator.commercial_onboarding_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_operations_readiness/latest":
                     self._send(orchestrator.commercial_operations_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_security_attestations/latest":
                     self._send(orchestrator.commercial_security_attestation_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_value_readiness/latest":
                     self._send(orchestrator.commercial_value_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_close_readiness/latest":
                     self._send(orchestrator.commercial_close_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_go_to_market_readiness/latest":
                     self._send(orchestrator.commercial_go_to_market_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_launch_readiness/latest":
                     self._send(orchestrator.commercial_launch_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_completion_scorecards/latest":
                     self._send(orchestrator.commercial_completion_scorecard_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_buyer_acceptance_workflows/latest":
@@ -5689,12 +5789,42 @@ def build_server(
                 if path in capability_routes:
                     _validate_capability_request(path, body)
                     capability, endpoint, binary = capability_routes[path]
+                    principal_id = security.principal_id(self.headers)
+
+                    def register_video_job(agent: ModelAgent, provider_result: dict[str, Any]) -> dict[str, Any]:
+                        response = video_jobs.register(
+                            provider_result,
+                            agent.id,
+                            principal_id,
+                            agent_affinity_key=video_agent_affinity_key(agent),
+                        )
+                        coordinator.record_async_video_usage(
+                            agent=agent,
+                            usage=provider_result.get("usage"),
+                            gateway_job_id=response["id"],
+                        )
+                        return response
+
                     try:
                         result = self._run(
                             lambda: orchestrator.proxy_capability(
-                                body, capability=capability, endpoint=endpoint, binary=binary
+                                body,
+                                capability=capability,
+                                endpoint=endpoint,
+                                binary=binary,
+                                selection_sink=(
+                                    register_video_job
+                                    if capability == "video"
+                                    else None
+                                ),
                             )
                         )
+                    except VideoJobContractError as exc:
+                        raise RequestError(
+                            502,
+                            "invalid_video_job_response",
+                            "The video provider did not return a trackable job; retry after checking provider status.",
+                        ) from exc
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
                     except RuntimeError as exc:
@@ -5970,7 +6100,7 @@ def build_server(
                         include_trace = (
                             False
                             if tool_loop
-                            else self._validate_trace_request(body)
+                            else include_trace
                         )
                         started_at = time.perf_counter()
                         if tool_loop:
@@ -7295,8 +7425,9 @@ def serve(
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> None:
-    """Serve the admin console and resource-oriented orchestration API."""
+    """Serve the API with an optional persisted release-authority snapshot."""
     server = build_server(
         orchestrator,
         host=host,
@@ -7304,6 +7435,7 @@ def serve(
         security=security,
         clearfolio_url=clearfolio_url,
         coordinator=coordinator,
+        release_authority=release_authority,
     )
     print(f"listening on http://{host}:{port}")
     server.serve_forever()
