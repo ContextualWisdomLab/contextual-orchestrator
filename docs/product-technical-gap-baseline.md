@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
 ## 1. Executive Summary
@@ -51,7 +50,7 @@ This document serves as the baseline for the Contextual Orchestrator (an enterpr
 5. **Documentation**: APA 7th citations required for routing strategies.
 
 *Note: All architectural changes must cite relevant literature in APA 7th format. Scheduled for hourly updates.*
-=======
+
 # Product and Technical Gap Baseline
 
 ## 2026-08-27 trace-authority acceptance slice
@@ -1130,4 +1129,3 @@ REMAINING GAP (follow-up loop): re-fit these priors against fast-mlsirm/
 TEPP calibrated quality latents before enabling benchmark priors on any
 revenue-serving route; until then their influence is capped at the same
 budget an unmeasured member already spends.
->>>>>>> main

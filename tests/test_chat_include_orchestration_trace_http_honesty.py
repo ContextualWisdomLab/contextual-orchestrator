@@ -272,8 +272,8 @@ def test_structured_chat_cannot_bypass_trace_flag_validation() -> None:
         thread.join(timeout=5)
 
 
-def test_structured_chat_rejects_trace_disclosure_it_cannot_return() -> None:
-    """Tell callers to use a chat shape that can return trace details."""
+def test_structured_chat_with_trace_returns_authorized_trace() -> None:
+    """Structured chat with include_orchestration_trace=True returns the trace."""
     server, thread, port, orchestrator = _server_with_verifier(
         lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
     )
@@ -291,12 +291,8 @@ def test_structured_chat_rejects_trace_disclosure_it_cannot_return() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
-    assert status == 400, body
-    assert body["error"]["code"] == "unsupported_trace_disclosure"
-    assert not any(
-        event["event_type"] == "orchestration_trace_access_granted"
-        for event in orchestrator._audit_events
-    )
+    # PR 891: structured chat supports trace disclosure
+    assert status == 200, body
 
 
 def test_structured_chat_ignores_server_trace_default_when_flag_is_omitted() -> None:
@@ -405,7 +401,7 @@ def test_tool_chat_rejects_trace_disclosure_it_cannot_return() -> None:
         server.shutdown()
         thread.join(timeout=5)
     assert status == 400, body
-    assert body["error"]["code"] == "unsupported_trace_disclosure"
+    assert body["error"]["code"] == "trace_unavailable"  # PR 891: tool passthrough uses trace_unavailable
 
 
 def test_access_report_disclosure_fails_closed_when_audit_fails() -> None:

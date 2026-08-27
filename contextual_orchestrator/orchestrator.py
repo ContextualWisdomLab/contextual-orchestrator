@@ -3200,10 +3200,19 @@ class TaskOrchestrator:
         if not isinstance(messages, list) or not messages:
             raise ValueError("structured completion requires non-empty messages")
         task = self._latest_user_text(messages)
+        # Vision is a hard entitling capability the request payload cannot
+        # grant, so it stays a required tag. ``response_format`` is a gateway
+        # contract that any general chat synthesizer can honor because the
+        # provider payload itself carries the format: prefer a deployment that
+        # advertises it, but never fail closed merely because the pool does not
+        # tag it. Missing format filtering is therefore a 400, not a 500 or a
+        # silent fallback. Deferred (virtual/gateway-default) model names must
+        # resolve to a concrete synthesizer even without that tag.
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        response_format_requested = bool(chat_body.get("response_format"))
         selection_tags = (
             *required_tags,
-            *(("response_format",) if chat_body.get("response_format") else ()),
+            *(("response_format",) if response_format_requested else ()),
         )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
@@ -3213,8 +3222,11 @@ class TaskOrchestrator:
                 final_agent = self._select_agent(
                     task,
                     "synthesizer",
-                    required_tags=selection_tags,
+                    required_tags=required_tags,
                     free_only=free_only,
+                    prefer_tags=(
+                        (("response_format",) if response_format_requested else ())
+                    ),
                 )
             except RuntimeError as exc:
                 if selection_tags:
@@ -5049,13 +5061,17 @@ class TaskOrchestrator:
         *,
         free_only: bool = False,
         required_tags: tuple[str, ...] = (),
+        prefer_tags: tuple[str, ...] = (),
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
         excluded by the capability contract enforced by
         :func:`is_general_chat_agent_model_id`; this is an endpoint-compatibility
-        gate, not a task-keyword heuristic.
+        gate, not a task-keyword heuristic. ``required_tags`` must all be present
+        (hard entitlements); ``prefer_tags`` only influence tie-breaking when a
+        candidate already carries them, so a pool that does not advertise an
+        optional gateway capability still resolves.
         """
         ranked = [
             agent
@@ -5065,6 +5081,14 @@ class TaskOrchestrator:
             if is_general_chat_agent_model_id(agent.model)
             and all(tag in agent.tags for tag in required_tags)
         ]
+        if prefer_tags and ranked:
+            preferred = [
+                agent
+                for agent in ranked
+                if all(tag in agent.tags for tag in prefer_tags)
+            ]
+            if preferred:
+                ranked = preferred
         if not ranked:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         selected = ranked[0]
