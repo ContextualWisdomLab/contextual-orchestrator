@@ -39,6 +39,7 @@ from .chat_capability import (
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .model_group import ModelGroupRouter, canonical_group_name
+from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .telemetry import inject_trace_context, traced
 from .pii_protection import (
@@ -2801,7 +2802,7 @@ class TaskOrchestrator:
         # Quality ledger: identical estimator family as the transport ledger but
         # fed by real-time fast-mlsirm judge verdicts on final answers, so
         # measured accuracy -- not transport success -- steers future routing.
-        self._quality_router = ModelGroupRouter()
+        self._quality_router = ModelGroupRouter(prior_resolver=resolve_quality_prior)
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)

@@ -1012,3 +1012,13 @@ enabled and remains open until its fresh exact-head gates complete:
 
 These are PR-head claims only. None is protected-main or release evidence until
 terminal Checks and required independent approvals cause a normal merge.
+
+### Live exact-head continuation — 2026-08-27 09:28 KST
+
+Added model capability prior integration for `ModelGroupRouter`:
+- Embedded `Chatbot Arena` and `Artificial Analysis` baseline scores as Beta distribution priors.
+- Updated `ModelGroupRouter` to accept a `prior_resolver` without breaking the existing group stability calculation or `_report_locked` structure.
+- Updated `contextual_orchestrator/orchestrator.py` to use `resolve_quality_prior` for its `_quality_router`.
+- PR #883 requires investigation for `strix` check failures.
+- PR #888 and #887 have their CodeRabbit comments handled or under review.
+- The 1-hour recurring `schedule` gap-loop continues.

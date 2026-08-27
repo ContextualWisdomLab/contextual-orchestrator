@@ -78,6 +78,7 @@ class ModelGroupRouter:
         *,
         ewma_gain: float = EWMA_LATENCY_GAIN,
         min_latency_seconds: float = MIN_ROUTING_LATENCY_SECONDS,
+        prior_resolver: Callable[[str], tuple[float, float]] | None = None,
     ) -> None:
         if not 0 < ewma_gain <= 1:
             raise ValueError("ewma_gain must be within (0, 1]")
@@ -85,6 +86,7 @@ class ModelGroupRouter:
             raise ValueError("min_latency_seconds must be finite and positive")
         self._ewma_gain = float(ewma_gain)
         self._min_latency_seconds = float(min_latency_seconds)
+        self._prior_resolver = prior_resolver
         self._lock = threading.Lock()
         # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
         # None until the first observation of each kind arrives.
@@ -93,14 +95,19 @@ class ModelGroupRouter:
     def register_member(self, member_id: str) -> None:
         """Ensure a member exists in the ledger (idempotent, keeps history)."""
         with self._lock:
-            self._members.setdefault(member_id, self._blank_state())
+            self._members.setdefault(member_id, self._blank_state(member_id))
 
-    @staticmethod
-    def _blank_state() -> dict[str, float | None]:
+    def _blank_state(self, member_id: str) -> dict[str, float | None]:
         """Fresh per-member ledger row: Laplace prior counts, no speed samples."""
+        if self._prior_resolver is not None:
+            alpha, beta = self._prior_resolver(member_id)
+        else:
+            alpha, beta = BETA_PRIOR_SUCCESS_COUNT, BETA_PRIOR_FAILURE_COUNT
         return {
-            "alpha": BETA_PRIOR_SUCCESS_COUNT,
-            "beta": BETA_PRIOR_FAILURE_COUNT,
+            "alpha": alpha,
+            "beta": beta,
+            "prior_alpha": alpha,
+            "prior_beta": beta,
             "ewma": None,
             "ewma_tps": None,
         }
@@ -187,8 +194,8 @@ class ModelGroupRouter:
             state = self._members.get(member_id)
             if state is None:
                 return 0
-            alpha = float(state["alpha"]) - BETA_PRIOR_SUCCESS_COUNT
-            beta = float(state["beta"]) - BETA_PRIOR_FAILURE_COUNT
+            alpha = float(state["alpha"]) - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))
+            beta = float(state["beta"]) - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))
             return int(max(alpha, 0.0)) + int(max(beta, 0.0))
 
     def ranked_member_ids(self, member_ids: list[str] | tuple[str, ...]) -> list[str]:
@@ -209,7 +216,7 @@ class ModelGroupRouter:
     # --- internal helpers (callers must hold ``self._lock``) ---------------
 
     def _ensure_locked(self, member_id: str) -> dict[str, float | None]:
-        return self._members.setdefault(member_id, self._blank_state())
+        return self._members.setdefault(member_id, self._blank_state(member_id))
 
     def _score_locked(self, member_id: str) -> float:
         state = self._members.get(member_id)
@@ -246,7 +253,7 @@ class ModelGroupRouter:
             "ewma_tokens_per_second": (
                 None if ewma_tps is None else round(float(ewma_tps), 6)
             ),
-            "success_count": int(alpha - BETA_PRIOR_SUCCESS_COUNT),
-            "failure_count": int(beta - BETA_PRIOR_FAILURE_COUNT),
+            "success_count": int(alpha - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))),
+            "failure_count": int(beta - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))),
             "score": round(self._score_locked(member_id), 9),
         }
