@@ -14,6 +14,11 @@ OPENAPI_SPEC = {
         "securitySchemes": {
             "admin_bearer_auth": {"type": "http", "scheme": "bearer"},
             "inference_bearer_auth": {"type": "http", "scheme": "bearer"},
+            "trace_bearer_auth": {
+                "type": "http",
+                "scheme": "bearer",
+                "description": "Bearer credential verified for the trace purpose",
+            },
         },
         "schemas": {
             "ModelGroupWrite": {
@@ -97,6 +102,10 @@ OPENAPI_SPEC = {
                                     "messages": {"type": "array", "items": {"type": "object"}},
                                     "stream": {"type": "boolean"},
                                     "response_format": {"type": "object"},
+                                    "include_orchestration_trace": {
+                                        "type": "boolean",
+                                        "description": "Requires the same caller to have the trace purpose",
+                                    },
                                 },
                             }
                         }
@@ -829,7 +838,7 @@ OPENAPI_SPEC = {
             "get": {
                 "operationId": "get_access_report",
                 "summary": "Get access report for a workflow run",
-                "security": [{"admin_bearer_auth": []}],
+                "security": [{"admin_bearer_auth": [], "trace_bearer_auth": []}],
                 "parameters": [
                     {
                         "name": "workflow_run_id",
