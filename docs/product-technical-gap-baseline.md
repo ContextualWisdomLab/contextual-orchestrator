@@ -1012,3 +1012,49 @@ enabled and remains open until its fresh exact-head gates complete:
 
 These are PR-head claims only. None is protected-main or release evidence until
 terminal Checks and required independent approvals cause a normal merge.
+
+### Live exact-head continuation — 2026-08-27 09:28 KST
+
+Added model capability prior integration for `ModelGroupRouter`:
+- Embedded `Chatbot Arena` and `Artificial Analysis` baseline scores as Beta distribution priors.
+- Updated `ModelGroupRouter` to accept a `prior_resolver` without breaking the existing group stability calculation or `_report_locked` structure.
+- Updated `contextual_orchestrator/orchestrator.py` to use `resolve_quality_prior` for its `_quality_router`.
+- PR #883 requires investigation for `strix` check failures.
+- PR #888 and #887 have their CodeRabbit comments handled or under review.
+- The 1-hour recurring `schedule` gap-loop continues.
+
+### Live exact-head continuation — 2026-08-27 09:52 KST
+
+Added OpenRouter upstream real-time reliability collector (`OpenRouterUptimeCollector`):
+- Fetches live telemetry (`uptime_last_30m`) from `/api/v1/models/{model_id}/endpoints`.
+- Dynamically integrates this telemetry into `ModelGroupRouter` by exposing `update_prior` to safely adjust `alpha` and `beta` values without mutating underlying stability logic.
+- Avoids HTTP blocks during startup by orchestrating a non-blocking Daemon thread polling at set intervals, enabling resilient routing dynamically over time.
+- Integrated the change into PR #892 (`feat/model-capability-priors`) and pushed to the origin repository.
+
+### Live exact-head continuation — 2026-08-27 12:0x KST (arbitrary-weight remediation)
+
+GAP RESOLVED on PR #892 head `af9d667f…+fixups`:
+- The shipped `_BASELINE_PRIORS` table carried invented Beta pseudo-counts
+  ("alpha=10, beta=1…" style), violating the organization rule that no
+  weight may be arbitrary. Replaced with a measurement-typed derivation:
+  published Arena Elo and Artificial Analysis Quality Index are normalized
+  by each instrument's own median/MAD, averaged, squashed through the
+  logistic, and split across exactly the repository's existing Laplace
+  evidence budget (`PRIOR_EVIDENCE_BUDGET = BETA_PRIOR_SUCCESS_COUNT +
+  BETA_PRIOR_FAILURE_COUNT`). Mass is conserved: measured members never
+  receive more evidence than unmeasured ones. Unknown identifiers keep
+  the unchanged Laplace pair.
+- The uptime collector's invented `weight = 50.0` penalty was removed.
+  Each poll now folds one window of provider-measured availability into
+  equivalent Bernoulli mass (`successes += u/100`, failures`), so all
+  counts trace to polls; failure denominator = polls performed.
+- `ModelGroupRouter.update_prior()` was added so prior components can be
+  refreshed atomically while `success_count`/`failure_count` remain
+  bit-identical — telemetry can no longer masquerade as outcomes.
+- Collector previously called the nonexistent `update_prior`; it now has
+  a contract + tests, hardened HTTPS/percent-encoded fetch, full
+  docstrings, and injectable startup delay for deterministic tests.
+REMAINING GAP (follow-up loop): re-fit these priors against fast-mlsirm/
+TEPP calibrated quality latents before enabling benchmark priors on any
+revenue-serving route; until then their influence is capped at the same
+budget an unmeasured member already spends.
