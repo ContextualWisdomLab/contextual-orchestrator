@@ -5575,7 +5575,7 @@ def build_server(
                     except KeyError:
                         pass
                     else:
-                        raise RequestError(409, "model_group_exists", "model group already exists; use PATCH")
+                        raise RequestError(409, "model_group_exists", "A group with this name already exists. Select it, adjust its members, and save to update it.")
                     try:
                         created_group = orchestrator.set_model_group(group_name, body.get("member_agent_ids"))
                     except KeyError as exc:
