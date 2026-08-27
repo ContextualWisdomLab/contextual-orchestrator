@@ -6062,7 +6062,7 @@ def build_server(
                         include_trace = (
                             False
                             if tool_loop
-                            else self._trace_requested(body, "/v1/chat/completions")
+                            else include_trace
                         )
                         started_at = time.perf_counter()
                         if tool_loop:
