@@ -5956,12 +5956,6 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use chat without tools or response_format",
-                            )
                         tool_loop = bool(tools_list)
                         if (
                             tool_loop
@@ -5977,16 +5971,25 @@ def build_server(
                             tool_loop
                             and body.get("include_orchestration_trace") is True
                         ):
+                            if security.bearer_verifier is None:
+                                raise RequestError(
+                                    400,
+                                    "trace_unavailable",
+                                    "orchestration trace is unavailable for single-agent tool passthrough",
+                                )
                             raise RequestError(
                                 400,
-                                "trace_unavailable",
-                                "orchestration trace is unavailable for single-agent tool passthrough",
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use chat without tools or response_format",
                             )
-                        include_trace = (
-                            False
-                            if tool_loop
-                            else self._trace_requested(body, "/v1/chat/completions")
-                        )
+                        if include_trace:
+                            if security.bearer_verifier is not None:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use chat without tools or response_format",
+                                )
+                            self._authorize_trace_access()
                         started_at = time.perf_counter()
                         if tool_loop:
                             proxied = self._run(

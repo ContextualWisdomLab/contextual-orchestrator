@@ -66,7 +66,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-<<<<<<< HEAD
 - Provider/model failures no longer collapse into a generic `internal_error`.
   A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
   classifies every upstream HTTP status, network, TLS, and transport failure
@@ -88,11 +87,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   batched, routed, and conducted steps record `model`, `provider`, and
   `latency_ms` alongside usage so workflow runs answer which model served a
   step, how long it took, and what it cost.
-=======
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
-
->>>>>>> main
 - Mixed structured workflows now retain a cost-ledger row for calls whose
   provider omitted usage, using the existing token-counting fallback while
   preserving reported counts for the other calls in the same workflow.
