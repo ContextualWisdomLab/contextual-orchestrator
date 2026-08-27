@@ -66,6 +66,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Discover chat models from metadata-free OpenAI-compatible gateways. A
+  configured gateway whose `/v1/models` rows carry no modality/capability
+  metadata previously produced empty-capability chat rows that runtime
+  auto-discovery silently dropped, while embedding deployments that kept
+  richer `/model/info` evidence survived ("embedding discovers, chat does
+  not"). Transport-compatible identifiers now inherit the `chat`
+  capability, and `--auto-discover-model-agents` uses the same
+  chat-candidate rule as the serving bootstrap. (#868)
+- Accept `orchestrator/auto`, `orchestrator/free`, and the advertised
+  `contextual-orchestrator` gateway default on the structured chat surface:
+  a requested `response_format` is a preference (never a fail-closed tag
+  miss for an untagged-but-available pool), vision stays a hard
+  entitlement, and authorized `include_orchestration_trace` structured
+  requests now authorize trace purpose and audit the disclosure before
+  release, matching the plain chat gate. (#868)
+- Fuzz jobs install `-r requirements.lock -r fuzz/requirements-*.txt`
+  together; the fuzz hash-locks now pin `rpds-py`/`typing-extensions` to
+  the runtime lock so pip no longer fails with `ResolutionImpossible`
+  before any target runs. (#868)
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
 
