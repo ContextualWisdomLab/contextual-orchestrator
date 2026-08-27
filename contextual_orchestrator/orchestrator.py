@@ -3210,10 +3210,6 @@ class TaskOrchestrator:
         # resolve to a concrete synthesizer even without that tag.
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         response_format_requested = bool(chat_body.get("response_format"))
-        selection_tags = (
-            *required_tags,
-            *(("response_format",) if response_format_requested else ()),
-        )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         final_agent = self._requested_agent(requested_model)
@@ -3229,10 +3225,15 @@ class TaskOrchestrator:
                     ),
                 )
             except RuntimeError as exc:
-                if selection_tags:
+                if required_tags:
                     raise ValueError(
                         "no enabled model supports required tags: "
-                        + ", ".join(selection_tags)
+                        + ", ".join(required_tags)
+                    ) from exc
+                if response_format_requested:
+                    raise ValueError(
+                        "no enabled model can serve the requested response_format; "
+                        "the pool has no chat synthesizer"
                     ) from exc
                 raise
         elif any(tag not in final_agent.tags for tag in required_tags):
