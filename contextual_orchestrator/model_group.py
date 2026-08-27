@@ -125,6 +125,42 @@ class ModelGroupRouter:
             for member_id in member_ids:
                 self._members.pop(member_id, None)
 
+    def update_prior(
+        self,
+        member_id: str,
+        prior_alpha: float,
+        prior_beta: float,
+    ) -> None:
+        """Replace a member's prior evidence without touching outcomes.
+
+        Callers (benchmark initialization, telemetry collectors) own the
+        prior component; this ledger owns measured outcomes. The current
+        ``alpha``/``beta`` mass shifts by exactly the same delta as the
+        prior pair, so ``success_count``/``failure_count`` — the ledger's
+        observed-outcome accounting — remain bit-identical.
+
+        Args:
+            member_id: Ledger member to refresh.
+            prior_alpha: New prior pseudo-successes (finite, non-negative).
+            prior_beta: New prior pseudo-failures (finite, non-negative).
+
+        Raises:
+            ValueError: If the supplied components are not finite or negative.
+        """
+        for name, value in (("prior_alpha", prior_alpha), ("prior_beta", prior_beta)):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        with self._lock:
+            state = self._ensure_locked(member_id)
+            old_alpha = float(state.get("prior_alpha") or 0.0)
+            old_beta = float(state.get("prior_beta") or 0.0)
+            delta_alpha = float(prior_alpha) - old_alpha
+            delta_beta = float(prior_beta) - old_beta
+            state["prior_alpha"] = float(prior_alpha)
+            state["prior_beta"] = float(prior_beta)
+            state["alpha"] = float(state.get("alpha") or 0.0) + delta_alpha
+            state["beta"] = float(state.get("beta") or 0.0) + delta_beta
+
     def observe_success(
         self,
         member_id: str,
