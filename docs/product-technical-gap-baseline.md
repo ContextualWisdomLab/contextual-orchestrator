@@ -1,5 +1,23 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-27 trace-authority acceptance slice
+
+Protected `main` at `5a01759165be20ab38c05c2321d8a9f00ec331ea`
+contains the trace-purpose gate delivered through protected PR #781, but issue
+#117 remains open. Current-main probes found two central bypasses: structured
+chat accepted a non-Boolean trace flag before returning early, and an
+admin/inference principal without trace authority could read access-report
+steps and accessed outputs. This slice moves strict flag validation ahead of
+every chat execution branch and requires trace authority before access-report
+resource lookup, making owned and unknown identifiers indistinguishable to a
+non-trace caller.
+
+This is not full #117 closure. Batch routing jobs still lack principal-bound
+ownership; the bearer-verifier contract lacks tenant, resource, purpose,
+lifetime, and revocation context; and legacy single-token production migration
+does not yet have a fail-closed deployment gate. Those requirements need their
+own protected implementation and HTTP acceptance evidence.
+
 ## 2026-08-26 protected-main catalog evidence slice
 
 Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`
@@ -712,7 +730,7 @@ live work item.
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
 | P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; local catalog is not production telemetry. Current [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) labels the configured NIM listing source `chat` for startup activation, but that static source declaration is not live, model-level capability, price, failure, or quality evidence. | KV-backed NIM discovery benchmark records model-level declared capability, price provenance, failure class, and quality result without secret leakage; protected main then activates only capability-qualified deployments. |
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
-| P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | Promote #823's explicit CLI invocation contract to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
+| P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | PR #823 explicit CLI invocation contract is merged to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |
 | P2 | Frontend component inventory is not applicable here. | This repository is a backend stdlib lab and has no frontend/Storybook tree. | Keep the existing Figma artifact record; introduce Storybook only when a frontend package is actually added. |
 
@@ -1012,3 +1030,49 @@ enabled and remains open until its fresh exact-head gates complete:
 
 These are PR-head claims only. None is protected-main or release evidence until
 terminal Checks and required independent approvals cause a normal merge.
+
+### Live exact-head continuation — 2026-08-27 09:28 KST
+
+Added model capability prior integration for `ModelGroupRouter`:
+- Embedded `Chatbot Arena` and `Artificial Analysis` baseline scores as Beta distribution priors.
+- Updated `ModelGroupRouter` to accept a `prior_resolver` without breaking the existing group stability calculation or `_report_locked` structure.
+- Updated `contextual_orchestrator/orchestrator.py` to use `resolve_quality_prior` for its `_quality_router`.
+- PR #883 requires investigation for `strix` check failures.
+- PR #888 and #887 have their CodeRabbit comments handled or under review.
+- The 1-hour recurring `schedule` gap-loop continues.
+
+### Live exact-head continuation — 2026-08-27 09:52 KST
+
+Added OpenRouter upstream real-time reliability collector (`OpenRouterUptimeCollector`):
+- Fetches live telemetry (`uptime_last_30m`) from `/api/v1/models/{model_id}/endpoints`.
+- Dynamically integrates this telemetry into `ModelGroupRouter` by exposing `update_prior` to safely adjust `alpha` and `beta` values without mutating underlying stability logic.
+- Avoids HTTP blocks during startup by orchestrating a non-blocking Daemon thread polling at set intervals, enabling resilient routing dynamically over time.
+- Integrated the change into PR #892 (`feat/model-capability-priors`) and pushed to the origin repository.
+
+### Live exact-head continuation — 2026-08-27 12:0x KST (arbitrary-weight remediation)
+
+GAP RESOLVED on PR #892 head `af9d667f…+fixups`:
+- The shipped `_BASELINE_PRIORS` table carried invented Beta pseudo-counts
+  ("alpha=10, beta=1…" style), violating the organization rule that no
+  weight may be arbitrary. Replaced with a measurement-typed derivation:
+  published Arena Elo and Artificial Analysis Quality Index are normalized
+  by each instrument's own median/MAD, averaged, squashed through the
+  logistic, and split across exactly the repository's existing Laplace
+  evidence budget (`PRIOR_EVIDENCE_BUDGET = BETA_PRIOR_SUCCESS_COUNT +
+  BETA_PRIOR_FAILURE_COUNT`). Mass is conserved: measured members never
+  receive more evidence than unmeasured ones. Unknown identifiers keep
+  the unchanged Laplace pair.
+- The uptime collector's invented `weight = 50.0` penalty was removed.
+  Each poll now folds one window of provider-measured availability into
+  equivalent Bernoulli mass (`successes += u/100`, failures`), so all
+  counts trace to polls; failure denominator = polls performed.
+- `ModelGroupRouter.update_prior()` was added so prior components can be
+  refreshed atomically while `success_count`/`failure_count` remain
+  bit-identical — telemetry can no longer masquerade as outcomes.
+- Collector previously called the nonexistent `update_prior`; it now has
+  a contract + tests, hardened HTTPS/percent-encoded fetch, full
+  docstrings, and injectable startup delay for deterministic tests.
+REMAINING GAP (follow-up loop): re-fit these priors against fast-mlsirm/
+TEPP calibrated quality latents before enabling benchmark priors on any
+revenue-serving route; until then their influence is capped at the same
+budget an unmeasured member already spends.

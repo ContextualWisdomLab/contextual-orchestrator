@@ -17,6 +17,7 @@ from .model_discovery import (
     agent_id_for,
     discover_all_models,
     free_discovered_models,
+    openrouter_paid_inference_available,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
@@ -284,16 +285,39 @@ def _discover_models_command(argv: list[str]) -> None:
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate only models with explicit chat capability evidence."""
     discovered, _errors = discover_all_models()
+    openrouter_paid_available = openrouter_paid_inference_available()
     chat_models = [model for model in discovered if "chat" in model.capabilities]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
-        replace(agent_from_discovered(model), disabled=False)
+        replace(
+            agent_from_discovered(model),
+            disabled=(
+                model.provider_name == "openrouter"
+                and not model.is_free
+                and openrouter_paid_available is not True
+            ),
+        )
         for model in chat_models
         if agent_id_for(model) not in existing_ids
     ]
-    if not agents:
-        return {"added": [], "updated": []}
-    return orchestrator.sync_discovered_agents(agents)
+    result = (
+        orchestrator.sync_discovered_agents(agents)
+        if agents
+        else {"added": [], "updated": []}
+    )
+    has_real_runtime_agent = any(
+        not candidate.disabled
+        and not candidate.base_url.startswith("mock://")
+        and "bootstrap_seed" not in candidate.tags
+        for candidate in orchestrator.agents
+    )
+    for candidate in tuple(orchestrator.agents):
+        if has_real_runtime_agent and "bootstrap_seed" in candidate.tags:
+            orchestrator.patch_agent(
+                "default", candidate.id, {"status": "disabled"}
+            )
+            result["updated"].append(candidate.id)
+    return result
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -328,6 +352,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument(
+        "--rate-limit-requests",
+        type=_positive_int,
+        default=None,
+        help="Per-client requests allowed per fixed window (default: SecurityConfig's 60). "
+        "Size this above your measured peak concurrency — load tests and health "
+        "probes from one NAT egress share the same bucket.",
+    )
+    parser.add_argument(
+        "--rate-limit-window-seconds",
+        type=_positive_int,
+        default=None,
+        help="Fixed rate-limit window length in seconds (default: SecurityConfig's 60).",
+    )
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
     parser.add_argument(
@@ -453,6 +491,16 @@ def main(argv: list[str] | None = None) -> None:
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
                 admin_session_secure_cookie=not args.insecure_admin_session_cookie,
+                **(
+                    {}
+                    if args.rate_limit_requests is None
+                    else {"rate_limit_requests": args.rate_limit_requests}
+                ),
+                **(
+                    {}
+                    if args.rate_limit_window_seconds is None
+                    else {"rate_limit_window_seconds": args.rate_limit_window_seconds}
+                ),
             ),
             clearfolio_url=args.clearfolio_url,
             coordinator=CostRoutingCoordinator(

@@ -1,0 +1,9 @@
+desktop_overflow=0
+mobile_overflow=0
+mobile_view_visible=True
+sidebar_visible_mobile=False
+session_edge_text=Session required
+status_cells=['Active', 'Active', 'Active']
+models_scroll_width=560
+models_client_width=364
+models_scroll_left=196

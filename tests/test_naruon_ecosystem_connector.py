@@ -1,17 +1,16 @@
+from typing import Any
 """Ecosystem consumer contract tests for Naruon DOM-decomposition."""
 
-import json
 import threading
-import urllib.error
 import urllib.request
-from collections.abc import Iterator
-from http.server import HTTPServer
-
+import urllib.error
+import json
 import pytest
+from typing import Iterator
 
-from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.orchestrator import TaskOrchestrator, ModelAgent
 from contextual_orchestrator.server import SecurityConfig
-
+from http.server import HTTPServer
 
 @pytest.fixture
 def test_server() -> Iterator[tuple[HTTPServer, int, str]]:
@@ -32,7 +31,8 @@ def test_server() -> Iterator[tuple[HTTPServer, int, str]]:
 
 def test_naruon_structured_dom_decomposition_payload(test_server: tuple[HTTPServer, int, str]) -> None:
     """Naruon uses function calling and structured outputs to decompose emails."""
-    _, port, token = test_server
+    server, port, token = test_server
+    
     payload = {
         "model": "orchestrator/auto",
         "messages": [
@@ -67,20 +67,13 @@ def test_naruon_structured_dom_decomposition_payload(test_server: tuple[HTTPServ
     )
     
     try:
-        # The single mock agent is chat-compatible, so the orchestrator
-        # accepts and routes this payload end to end. The 200-with-choices
-        # outcome proves the structured request parsed cleanly; a gateway
-        # without any enabled model would answer "no enabled model is
-        # available" instead, which also proves parsing happened before
-        # routing failed.
+        # Since we use fake mock providers (or nothing) in this simple test server without real providers configured,
+        # we expect the orchestrator to fail to route or mock a response. We just want to ensure it parses the payload correctly.
         with urllib.request.urlopen(req) as response:
             body = json.loads(response.read().decode("utf-8"))
             assert "choices" in body
     except urllib.error.HTTPError as e:
         body = json.loads(e.read().decode("utf-8"))
-        assert e.code in (400, 503)
-        message = body["error"]["message"]
-        assert (
-            "no enabled" in message.lower()
-            or "provider execution failed" in message.lower()
-        )
+        # If no enabled model supports json_schema, it will return a 400. That proves it parsed the request.
+        assert e.code == 400
+        assert "no enabled model supports required tags" in body["error"]["message"] or "Provider execution failed" in body["error"]["message"]

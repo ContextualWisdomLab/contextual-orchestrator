@@ -198,7 +198,7 @@ def test_http_structured_image_rejects_auto_without_vision_as_client_error() -> 
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_valid_json_schema_response_format() -> None:
+def test_http_chat_fails_closed_when_provider_violates_valid_json_schema() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -213,13 +213,15 @@ def test_http_chat_accepts_valid_json_schema_response_format() -> None:
                         "schema": {
                             "type": "object",
                             "properties": {"amount": {"type": "number"}},
+                            "required": ["amount"],
                         },
                         "strict": True,
                     },
                 },
             },
         )
-        assert status == 200, body
+        assert status == 502, body
+        assert body["error"]["code"] == "invalid_structured_output"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -324,7 +326,7 @@ def test_http_chat_accepts_response_format_omitted() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_response_format_text()
     test_http_chat_accepts_response_format_json_object()
-    test_http_chat_accepts_valid_json_schema_response_format()
+    test_http_chat_fails_closed_when_provider_violates_valid_json_schema()
     test_http_chat_rejects_unknown_response_format_type()
     test_http_chat_rejects_json_object_with_sibling_keys()
     test_http_chat_rejects_json_schema_without_schema_body()
