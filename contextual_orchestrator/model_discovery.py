@@ -458,9 +458,21 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         return payload
     by_name: dict[str, list[dict[str, Any]]] = {}
     for detail in details:
-        if not isinstance(detail, dict) or not isinstance(detail.get("model_name"), str):
+        if not isinstance(detail, dict):
             continue
-        by_name.setdefault(detail["model_name"], []).append(detail)
+        model_name = detail.get("model_name")
+        names = set()
+        if isinstance(model_name, str):
+            names.add(model_name)
+        info = detail.get("model_info")
+        if isinstance(info, dict):
+            base_model = info.get("base_model")
+            if isinstance(base_model, str):
+                names.add(base_model)
+            if isinstance(info.get("id"), str):
+                names.add(info["id"])
+        for name in names:
+            by_name.setdefault(name, []).append(detail)
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str):
             continue
@@ -551,9 +563,9 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                     unit_prices.append((key, value))
             unit_price_maps.append(tuple(unit_prices))
             for key, values in privacy_values.items():
-                values.append(info.get(key))
+                values.append(info.get(key, params.get(key)))
             for key in ("privacy_policy_url", "terms_of_service_url"):
-                value = info.get(key)
+                value = info.get(key, params.get(key))
                 if (
                     isinstance(value, str)
                     and urlsplit(value).scheme == "https"
@@ -578,8 +590,17 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         if unit_price_maps and unit_price_maps[0] and len(set(unit_price_maps)) == 1:
             row["unit_pricing"] = dict(unit_price_maps[0])
         for key, values in privacy_values.items():
-            if values and all(isinstance(value, bool) for value in values) and len(set(values)) == 1:
-                row[key] = values[0]
+            parsed_values = []
+            for v in values:
+                if isinstance(v, bool):
+                    parsed_values.append(v)
+                elif isinstance(v, str):
+                    parsed_values.append(v.strip().casefold() == "true")
+                else:
+                    parsed_values.append(None)
+            
+            if parsed_values and all(isinstance(value, bool) for value in parsed_values) and len(set(parsed_values)) == 1:
+                row[key] = parsed_values[0]
         if policy_urls:
             row["privacy_policy_urls"] = sorted(policy_urls)
     return payload

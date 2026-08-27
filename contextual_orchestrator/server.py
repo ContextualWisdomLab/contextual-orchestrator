@@ -1328,12 +1328,12 @@ def _validate_completions_model(body: dict[str, Any]) -> str:
     tools/response_format passthrough (``proxy_completion``) matches the same
     pool model id as the orchestration path. Form/JS SDKs often pad model names.
     """
-    if "model" not in body:
+    model = body.get("model")
+    if model is None or (isinstance(model, str) and not model.strip()):
         body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
         return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
-    model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
@@ -2083,8 +2083,8 @@ def _validate_mode(mode: Any) -> str:
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
     model = body.get("model")
-    if model is not None and (not isinstance(model, str) or not model.strip()):
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if model is not None and not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
     required_strings = {
         "/v1/images/generations": ("prompt",),
         "/v1/videos": ("prompt",),
@@ -4473,12 +4473,12 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
     non-string values still fail closed. Strip + write back so passthrough pool
     matching sees the same id as form/JS padded names.
     """
-    if "model" not in body:
+    model = body.get("model")
+    if model is None or (isinstance(model, str) and not model.strip()):
         body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
         return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
-    model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
@@ -4610,7 +4610,8 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     is resolved by the orchestrator's explicit ``embedding`` capability pool;
     no consumer-side sentinel model is accepted.
     """
-    if body.get("model") is None:
+    model = body.get("model")
+    if model is None or (isinstance(model, str) and not model.strip()):
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4623,9 +4624,9 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
             ) from exc
         body["model"] = model
         return model
-    model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
