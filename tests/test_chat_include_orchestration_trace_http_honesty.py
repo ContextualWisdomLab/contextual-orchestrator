@@ -516,8 +516,8 @@ def test_http_chat_accepts_include_orchestration_trace_true() -> None:
         thread.join(timeout=5)
 
 
-def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> None:
-    """Structured synthesis preserves the same audited trace contract."""
+def test_http_structured_chat_rejects_disclosure_it_cannot_return() -> None:
+    """Structured synthesis fails closed under the trace-disclosure contract."""
     server, thread, port = _server()
     try:
         base = {
@@ -535,11 +535,10 @@ def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> No
         server.shutdown()
         thread.join(timeout=5)
 
-    assert status == hidden_status == 200
-    trace = disclosed["orchestration"]["trace"]
-    assert len(trace) >= 2
-    assert trace[-1]["role"] == "synthesizer"
-    assert "trace" not in hidden["orchestration"]
+    assert status == 400, disclosed
+    assert disclosed["error"]["code"] == "unsupported_trace_disclosure"
+    assert hidden_status == 200, hidden
+    assert "trace" not in hidden.get("orchestration", {})
 
 
 def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:
@@ -569,7 +568,7 @@ def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:
         thread.join(timeout=5)
 
     assert status == 400
-    assert body["error"]["code"] == "trace_unavailable"
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
 
 
 def test_http_chat_accepts_include_orchestration_trace_false() -> None:
