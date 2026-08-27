@@ -151,8 +151,12 @@ def test_unbounded_digit_content_length_is_rejected_and_connection_is_closed() -
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
-    assert b"HTTP/1.0 413 " in response
+    # The gateway now speaks HTTP/1.1 unconditionally (keep-alive), so the
+    # status line carries the exact version alongside the 413 rejection.
+    assert b"HTTP/1.1 413 " in response
     assert b"request_too_large" in response
+    # The framing guard must still terminate the connection, not just reject.
+    assert b"connection: close" in response.lower() or b"Connection: close" in response
 
 
 def test_short_body_is_rejected_after_peer_closes() -> None:
