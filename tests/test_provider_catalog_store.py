@@ -353,8 +353,10 @@ class _FakeCursor:
             if "FROM model_serving_tag AS mst" in statement
             else self.privacy_rows
             if "FROM model_policy_assessment AS mpa" in statement
+            else self.rows
+            if "SELECT model_name FROM provider_model" in statement
             else self.policy_source_rows
-            if "FROM model_policy_source AS mps" in statement
+            if "FROM model_policy_source" in statement
             else self.rows
         )
 
@@ -520,7 +522,7 @@ def test_postgres_privacy_evidence_is_parameterized_and_read_only() -> None:
     """PostgreSQL upserts grounded fields and reconstructs the accessor contract."""
     source = _source()
     assessment = _assessment(source)
-    write_connection = _FakeConnection()
+    write_connection = _FakeConnection(rows=[("model-a",)])
     store = PostgresProviderCatalogStore(
         "postgresql://catalog.example/db",
         connection_factory=lambda: write_connection,

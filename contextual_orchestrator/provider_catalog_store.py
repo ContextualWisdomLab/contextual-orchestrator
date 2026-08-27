@@ -897,6 +897,15 @@ class PostgresProviderCatalogStore:
         with self._connect() as connection:
             self._ensure_schema(connection)
             with connection.cursor() as cursor:
+                account_id = provider_account_id(source)
+                cursor.execute(
+                    "SELECT model_name FROM provider_model WHERE provider_account_id = %s",
+                    (account_id,)
+                )
+                known_models = {row[0] for row in cursor.fetchall()}
+                if any(item.subject_model not in known_models for item in normalized):
+                    raise ProviderCatalogError("privacy assessment model is not persisted")
+
                 for item in normalized:
                     cursor.execute(
                         "INSERT INTO model_policy_assessment ("
