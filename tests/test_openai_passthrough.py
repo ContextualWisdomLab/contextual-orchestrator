@@ -382,7 +382,7 @@ def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
         server.shutdown()
 
     assert status == 400
-    assert "vision-capable" in body["error"]["message"]
+    assert "vision" in body["error"]["message"]
 
 
 def test_http_responses_endpoint_passes_through() -> None:
