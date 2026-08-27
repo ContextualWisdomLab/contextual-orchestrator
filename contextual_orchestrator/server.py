@@ -6077,6 +6077,12 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        if explicit_trace:
+                            raise RequestError(
+                                400,
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use chat without tools or response_format",
+                            )
                         tool_loop = bool(tools_list)
                         if (
                             tool_loop
@@ -6149,10 +6155,6 @@ def build_server(
                                     )
                                 )
                         if include_trace and not tool_loop:
-                            # A granted trace is only disclosed to a caller with
-                            # trace purpose and only after the access is durably
-                            # audited, matching the plain chat disclosure gate.
-                            self._authorize_trace_access()
                             lineage = proxied.get("orchestration")
                             workflow_run_id = (
                                 lineage.get("workflow_run_id")
@@ -6165,7 +6167,6 @@ def build_server(
                                 )
                             workflow = orchestrator.get_workflow_run(workflow_run_id)
                             lineage["trace"] = workflow["trace"]
-                            self._audit_trace_disclosure("/v1/chat/completions")
                         orchestrator.record_analytics_event(
                             (
                                 "chat_completion_passthrough"
