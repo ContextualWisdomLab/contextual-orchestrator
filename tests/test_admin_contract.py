@@ -43,11 +43,21 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "prefers-reduced-motion: reduce" in ADMIN_HTML
     assert 'behavior: reducedMotion ? "auto" : "smooth"' in ADMIN_HTML
     assert 'id="statusFilter"' in ADMIN_HTML
-    assert 'option value="healthy" data-i18n="status_healthy"' in ADMIN_HTML
-    assert 'option value="degraded" data-i18n="status_degraded"' in ADMIN_HTML
+    assert 'option value="active" data-i18n="active_status"' in ADMIN_HTML
+    assert 'option value="disabled" data-i18n="status_disabled"' in ADMIN_HTML
     assert "statusFilter: document.querySelector" in ADMIN_HTML
     assert 'els.statusFilter.addEventListener("change", renderAgents)' in ADMIN_HTML
-    assert "function agentStatus(index)" in ADMIN_HTML
+    assert "function agentStatus(agent)" in ADMIN_HTML
+    assert 'agent.status === "disabled"' in ADMIN_HTML
+    assert ".map(agent => ({agent, status: agentStatus(agent)}))" in ADMIN_HTML
+    assert "index === 1" not in ADMIN_HTML
+    assert "button:focus-visible" in ADMIN_HTML
+    assert "button, input, select { min-height: 44px; }" in ADMIN_HTML
+    assert 'id="modelsTableScroll" tabindex="0" role="region"' in ADMIN_HTML
+    assert 'aria-describedby="modelsTableHint"' in ADMIN_HTML
+    assert ADMIN_TRANSLATIONS["en"]["models_table_scroll_hint"].endswith(
+        "review latency and success."
+    )
     assert "no_agents_match" in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == (
         "No models match these filters. Clear a filter to see more models."
@@ -55,6 +65,16 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert '{ pass: "ok", warn: "warning", fail: "failure" }[row.status]' in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["readiness_ok"] == "Pass"
     assert ADMIN_TRANSLATIONS["ko"]["readiness_failure"] == "실패"
+    assert ADMIN_TRANSLATIONS["en"]["readiness_summary_text"].startswith(
+        "Sales and commercial criteria passed:"
+    )
+    assert ADMIN_TRANSLATIONS["ko"]["readiness_summary_text"].startswith("판매 및 상용 기준 통과")
+    assert ADMIN_TRANSLATIONS["en"]["measurement_local_runtime_snapshot"] == "Measured on this server"
+    assert ADMIN_TRANSLATIONS["ko"]["measurement_local_runtime_snapshot"] == "이 서버에서 측정됨"
+    assert 'return t("measurement_local_runtime")' in ADMIN_HTML
+    assert 't("spend_no_price_action")' in ADMIN_HTML
+    assert "${escapeHtml(statusLabel(" in ADMIN_HTML
+    assert "<strong>${statusLabel(" not in ADMIN_HTML
     assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
     assert "viewAudit: document.querySelector" in ADMIN_HTML
     assert 'els.viewAudit.addEventListener("click", () => showView("audit"))' in ADMIN_HTML
@@ -98,6 +118,13 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'finally {\n        els.sessionToken.value = "";' in ADMIN_HTML
     assert 'headers: {"origin": window.location.origin}' not in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
+    assert ADMIN_TRANSLATIONS["en"]["session_action"] == (
+        "Session required — open Integrations to sign in"
+    )
+    assert 'id="sessionAction"' in ADMIN_HTML
+    assert "els.sessionAction.hidden = false" in ADMIN_HTML
+    assert "if (res.ok && els.sessionAction) els.sessionAction.hidden = false" in ADMIN_HTML
+    assert 'els.sessionAction?.addEventListener("click", () => showView("integrations"))' in ADMIN_HTML
     explanatory_keys = (
         "doc_viewer_desc",
         "doc_viewer_hint",

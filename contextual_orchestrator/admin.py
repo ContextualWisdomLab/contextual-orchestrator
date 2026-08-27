@@ -29,6 +29,7 @@ ADMIN_TRANSLATIONS = {
         "search_agents": "Search models",
         "all_statuses": "All statuses",
         "no_agents_match": "No models match these filters. Clear a filter to see more models.",
+        "models_table_scroll_hint": "Model details table. Scroll horizontally to review latency and success.",
         "no_agents_configured": "Add a model connection to start routing requests.",
         "no_audit_events": "Run a workflow to create your first audit event.",
         "no_policy_evidence": "No policy evidence is loaded. Open Audit to review recorded events.",
@@ -67,6 +68,7 @@ ADMIN_TRANSLATIONS = {
         "session_end": "End session",
         "session_status_ready": "Session established",
         "session_status_missing": "Session required",
+        "session_action": "Session required — open Integrations to sign in",
         "compatible_api_adoption": "Compatible API adoption",
         "trace_complete_workflow_rate": "Trace-complete workflow rate",
         "policy_safe_routing_rate": "Policy-safe routing rate",
@@ -76,12 +78,20 @@ ADMIN_TRANSLATIONS = {
         "provider_exclusion_miss_rate": "Provider exclusion miss rate",
         "locale_key_parity": "Locale key parity",
         "readiness_summary": "Readiness summary",
+        "readiness_summary_text": "Sales and commercial criteria passed: {pass}. Need attention: {warn}. Failed: {fail}. See the rows below to fix what failed.",
         "readiness_source": "Readiness source",
         "readiness_measurement_status": "Measurement status",
+        "measurement_local_runtime_estimate": "Estimated on this server",
+        "measurement_local_runtime_snapshot": "Measured on this server",
+        "measurement_local_runtime": "Generated locally on this server",
+        "measurement_estimate": "Estimated",
+        "measurement_unknown": "Unknown",
+        "spend_no_price": "No price set",
+        "spend_no_price_action": "Add provider pricing to estimate cost.",
         "readiness_remediation_label": "Remediation",
-        "sales_readiness": "sales_readiness",
+        "sales_readiness": "Sales readiness",
         "sales_readiness_title": "Sales Readiness",
-        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness": "Commercial readiness",
         "commercial_readiness_title": "Commercial Readiness",
         "buyer_evidence_manifest_title": "Commercial Evidence Manifest",
         "buyer_handoff_bundle_title": "Commercial Handoff Bundle",
@@ -212,7 +222,7 @@ ADMIN_TRANSLATIONS = {
         "policy_header": "Policy",
         "metric_header": "Metric",
         "value_header": "Value",
-        "locale_bundle": "Locale Bundle",
+        "locale_bundle": "Languages",
         "safe_trace_default": "Trace hidden by default",
         "single_api_status": "OpenAI-compatible endpoint active",
         "no_trace": "Run a conduct trace to populate workflow evidence.",
@@ -226,6 +236,7 @@ ADMIN_TRANSLATIONS = {
         "success_header": "Success",
         "status_healthy": "Healthy",
         "status_degraded": "Degraded",
+        "status_disabled": "Disabled",
         "latency_threshold": "Latency P95 route threshold",
         "verifier_required": "Quality review required",
         "agent_exclusion": "Model availability rules",
@@ -277,6 +288,7 @@ ADMIN_TRANSLATIONS = {
         "search_agents": "모델 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 모델이 없습니다. 더 보려면 필터를 해제하세요.",
+        "models_table_scroll_hint": "모델 상세 표입니다. 지연 시간과 성공률을 보려면 가로로 스크롤하세요.",
         "no_agents_configured": "요청 라우팅을 시작하려면 모델 연결을 추가하세요.",
         "no_audit_events": "첫 감사 이벤트를 만들려면 워크플로를 실행하세요.",
         "no_policy_evidence": "불러온 정책 근거가 없습니다. 기록된 이벤트를 검토하려면 감사를 여세요.",
@@ -315,6 +327,7 @@ ADMIN_TRANSLATIONS = {
         "session_end": "세션 종료",
         "session_status_ready": "세션이 설정되었습니다",
         "session_status_missing": "세션이 필요합니다",
+        "session_action": "세션 필요 — 연동 관리에서 로그인",
         "compatible_api_adoption": "호환 API 사용량",
         "trace_complete_workflow_rate": "트레이스 완성 워크플로 비율",
         "policy_safe_routing_rate": "정책 안전 라우팅 비율",
@@ -323,13 +336,21 @@ ADMIN_TRANSLATIONS = {
         "agent_health_coverage": "모델 상태 커버리지",
         "provider_exclusion_miss_rate": "공급자 제외 누락률",
         "locale_key_parity": "로케일 키 일치율",
-        "readiness_summary": "판매 준비 지표",
-        "readiness_source": "근거",
+        "readiness_summary": "준비도 요약",
+        "readiness_summary_text": "판매 및 상용 기준 통과 {pass}개, 주의 {warn}개, 실패 {fail}개. 아래 행에서 실패 항목을 해결하세요.",
+        "readiness_source": "준비 근거",
         "readiness_measurement_status": "측정 상태",
+        "measurement_local_runtime_estimate": "이 서버에서 추정됨",
+        "measurement_local_runtime_snapshot": "이 서버에서 측정됨",
+        "measurement_local_runtime": "이 서버에서 생성됨",
+        "measurement_estimate": "추정값",
+        "measurement_unknown": "알 수 없음",
+        "spend_no_price": "가격 미설정",
+        "spend_no_price_action": "비용을 추정하려면 공급자 가격을 추가하세요.",
         "readiness_remediation_label": "보완 조치",
-        "sales_readiness": "sales_readiness",
+        "sales_readiness": "판매 준비도",
         "sales_readiness_title": "판매 준비도",
-        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness": "상용 준비도",
         "commercial_readiness_title": "상용 준비도",
         "buyer_evidence_manifest_title": "상용화 증거 매니페스트",
         "buyer_handoff_bundle_title": "상용화 인수인계 번들",
@@ -436,7 +457,7 @@ ADMIN_TRANSLATIONS = {
         "api_compatibility": "OpenAI 호환 API",
         "admin_evidence": "운영자 근거 화면",
         "trace_evidence": "워크플로 트레이스 근거",
-        "security_posture": "보안 자세",
+        "security_posture": "보안 태세",
         "analytics_truthfulness": "분석 지표 진실성",
         "locale_readiness": "로케일 준비도",
         "provider_egress_safety": "공급자 송신 안전성",
@@ -460,7 +481,7 @@ ADMIN_TRANSLATIONS = {
         "policy_header": "정책",
         "metric_header": "지표",
         "value_header": "값",
-        "locale_bundle": "로케일 번들",
+        "locale_bundle": "언어",
         "safe_trace_default": "트레이스는 기본 숨김",
         "single_api_status": "OpenAI 호환 엔드포인트 활성",
         "no_trace": "conduct 트레이스를 실행하면 워크플로 근거가 채워집니다.",
@@ -474,6 +495,7 @@ ADMIN_TRANSLATIONS = {
         "success_header": "성공률",
         "status_healthy": "정상",
         "status_degraded": "저하",
+        "status_disabled": "비활성",
         "latency_threshold": "라우팅 P95 지연 임계값",
         "verifier_required": "품질 검토 필수",
         "agent_exclusion": "모델 가용성 규칙",
@@ -533,6 +555,10 @@ ADMIN_HTML = r"""<!doctype html>
       letter-spacing: 0;
     }
     button, input, select, textarea { font: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 2px;
+    }
     .app { min-height: 100vh; display: grid; grid-template-columns: 248px 1fr; }
     .sidebar {
       background: var(--surface);
@@ -595,6 +621,7 @@ ADMIN_HTML = r"""<!doctype html>
     textarea { min-height: 72px; padding: 10px; resize: vertical; width: 100%; }
     #modelGroupMembers { min-width: 240px; }
     .language-switch { margin-left: auto; }
+    .session-action[hidden] { display: none; }
     .mobile-nav {
       display: none;
       padding: 10px 12px;
@@ -663,6 +690,8 @@ ADMIN_HTML = r"""<!doctype html>
     }
     .toolbar input { min-width: 240px; }
     table { width: 100%; border-collapse: collapse; }
+    .table-scroll { max-width: 100%; overflow-x: auto; }
+    .table-scroll:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
     th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
     th { color: var(--muted); font-weight: 650; background: #fbfcfc; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; background: var(--green); }
@@ -837,6 +866,10 @@ ADMIN_HTML = r"""<!doctype html>
     @media (max-width: 600px) {
       .language-switch { margin-left: 0; }
       #modelGroupMembers { width: 100%; }
+      button, input, select { min-height: 44px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; }
     }
   </style>
 </head>
@@ -860,6 +893,7 @@ ADMIN_HTML = r"""<!doctype html>
     </aside>
     <main class="main">
       <header class="topbar">
+        <button class="btn session-action" id="sessionAction" type="button" hidden data-i18n="session_action">Session required — open Integrations to sign in</button>
         <div class="field language-switch"><span data-i18n="language_label">Language</span><select id="language"><option value="en">English</option><option value="ko">한국어</option></select></div>
       </header>
       <div class="mobile-nav">
@@ -883,14 +917,17 @@ ADMIN_HTML = r"""<!doctype html>
           </div>
           <div class="toolbar">
             <input id="agentSearch" type="search" placeholder="Search models" data-i18n-placeholder="search_agents">
-            <select id="statusFilter"><option value="all" data-i18n="all_statuses">All statuses</option><option value="healthy" data-i18n="status_healthy">Healthy</option><option value="degraded" data-i18n="status_degraded">Degraded</option></select>
+            <select id="statusFilter"><option value="all" data-i18n="all_statuses">All statuses</option><option value="active" data-i18n="active_status">Active</option><option value="disabled" data-i18n="status_disabled">Disabled</option></select>
           </div>
-          <table>
-            <thead>
-              <tr><th data-i18n="agent_header">Connection</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Recent latency</th><th data-i18n="success_header">Success</th></tr>
-            </thead>
-            <tbody id="agents"></tbody>
-          </table>
+          <span class="sr-only" id="modelsTableHint" data-i18n="models_table_scroll_hint">Model details table. Scroll horizontally to review latency and success.</span>
+          <div class="table-scroll" id="modelsTableScroll" tabindex="0" role="region" aria-describedby="modelsTableHint">
+            <table>
+              <thead>
+                <tr><th data-i18n="agent_header">Connection</th><th data-i18n="model_header">Model</th><th data-i18n="tags_header">Tags</th><th data-i18n="status_header">Status</th><th data-i18n="capacity_header">Recent latency</th><th data-i18n="success_header">Success</th></tr>
+              </thead>
+              <tbody id="agents"></tbody>
+            </table>
+          </div>
           <form id="modelGroupForm" class="policy-list" aria-labelledby="modelGroupsTitle">
             <h2 id="modelGroupsTitle" data-i18n="model_groups_title">Model groups</h2>
             <label><span data-i18n="group_name_label">Group name</span>
@@ -1076,6 +1113,7 @@ Summarize this research thread and verify claims.</textarea>
       sessionForm: document.querySelector("#sessionForm"),
       sessionToken: document.querySelector("#sessionToken"),
       sessionStatus: document.querySelector("#sessionStatus"),
+      sessionAction: document.querySelector("#sessionAction"),
       endSession: document.querySelector("#endSession")
     };
     let state = {agents: [], modelGroups: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
@@ -1102,19 +1140,19 @@ Summarize this research thread and verify claims.</textarea>
     function tags(tags) {
       return tags.map(tag => `<span class="chip">${escapeHtml(tag)}</span>`).join("");
     }
-    function agentStatus(index) {
-      return index === 1
-        ? {key: "degraded", chip: "amber", dot: "warn", label: t("status_degraded")}
-        : {key: "healthy", chip: "green", dot: "", label: t("status_healthy")};
+    function agentStatus(agent) {
+      return agent.status === "disabled"
+        ? {key: "disabled", chip: "amber", dot: "warn", label: t("status_disabled")}
+        : {key: "active", chip: "green", dot: "", label: t("active_status")};
     }
     function renderAgents() {
       const q = els.agentSearch.value.toLowerCase();
       const selectedStatus = els.statusFilter.value;
       const rows = state.agents
-        .map((agent, index) => ({agent, index, status: agentStatus(index)}))
+        .map(agent => ({agent, status: agentStatus(agent)}))
         .filter(({agent, status}) => (agent.id.toLowerCase().includes(q) || agent.model.toLowerCase().includes(q)) && (selectedStatus === "all" || status.key === selectedStatus));
       els.agentCount.textContent = `${rows.length} models`;
-      els.agents.innerHTML = rows.map(({agent, index, status}) => `
+      els.agents.innerHTML = rows.map(({agent, status}) => `
         <tr>
           <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.provider_name || "Configured")}</strong></td>
           <td>${escapeHtml(agent.model)}${agent.group_name ? `<br><span class="chip">${escapeHtml(agent.group_name)}</span>` : ""}</td>
@@ -1155,7 +1193,7 @@ Summarize this research thread and verify claims.</textarea>
         body: JSON.stringify(exists ? {member_agent_ids: memberIds} : {group_name: groupName, member_agent_ids: memberIds})
       });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error?.message || "Could not save model group");
+      if (!response.ok) throw new Error(payload.error?.message || "Could not save model group. Check your session and agent selection, then retry.");
       els.modelGroupFeedback.textContent = t("group_saved");
       await refreshModelGroups();
     }
@@ -1250,11 +1288,23 @@ Summarize this research thread and verify claims.</textarea>
       renderSpend();
       renderReadiness();
     }
+    const MEASUREMENT_STATUS_KEYS = {
+      local_runtime_estimate: "measurement_local_runtime_estimate",
+      local_runtime_snapshot: "measurement_local_runtime_snapshot",
+      estimate: "measurement_estimate",
+      unknown: "measurement_unknown"
+    };
+    function statusLabel(raw) {
+      if (!raw) return t(MEASUREMENT_STATUS_KEYS.estimate);
+      if (MEASUREMENT_STATUS_KEYS[raw]) return t(MEASUREMENT_STATUS_KEYS[raw]);
+      if (String(raw).startsWith("local_")) return t("measurement_local_runtime");
+      return String(raw);
+    }
     function renderSpend() {
       const spend = state.spend || {};
       const totals = spend.totals || {};
       const statusEl = document.getElementById("spendStatus");
-      if (statusEl) statusEl.textContent = spend.measurement_status || "estimate";
+      if (statusEl) statusEl.textContent = statusLabel(spend.measurement_status);
       const totalsEl = document.getElementById("spendTotals");
       if (totalsEl) {
         const cost = totals.estimated_cost_usd == null ? "—" : ("$" + totals.estimated_cost_usd);
@@ -1269,7 +1319,7 @@ Summarize this research thread and verify claims.</textarea>
       if (rowsEl) {
         rowsEl.innerHTML = (spend.by_model || []).map(row => {
           const price = row.price_per_million_usd == null ? "&mdash;" : escapeHtml(row.price_per_million_usd);
-          const cost = row.estimated_cost_usd == null ? '<span class="chip">unpriced</span>' : ("$" + escapeHtml(row.estimated_cost_usd));
+          const cost = row.estimated_cost_usd == null ? `<span class="chip" title="${escapeHtml(t("spend_no_price_action"))}">${escapeHtml(t("spend_no_price"))}</span>` : ("$" + escapeHtml(row.estimated_cost_usd));
           return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.estimated_output_tokens)}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
         }).join("") || `<tr><td colspan="5">${t("no_trace")}</td></tr>`;
       }
@@ -1490,11 +1540,14 @@ Summarize this research thread and verify claims.</textarea>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${escapeHtml(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+          <strong>${escapeHtml(statusLabel(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown"))}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
-          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0} | saleability ${saleabilitySummary.blocked_count || 0}/${saleabilitySummary.warning_count || 0} | export ${exportSummary.blocked_count || 0}/${exportSummary.warning_count || 0} | acceptance ${acceptanceSummary.blocked_count || 0}/${acceptanceSummary.warning_count || 0} | release ${releaseSummary.blocked_count || 0}/${releaseSummary.warning_count || 0} | gaps ${gapSummary.total_gap_count || 0}/${gapSummary.blocked_count || 0} | procurement ${procurementSummary.warning_count || 0}/${procurementSummary.blocked_count || 0} | contract ${contractSummary.warning_count || 0}/${contractSummary.blocked_count || 0} | onboarding ${onboardingSummary.warning_count || 0}/${onboardingSummary.blocked_count || 0} | operations ${operationsSummary.warning_count || 0}/${operationsSummary.blocked_count || 0} | security ${securitySummary.warning_count || 0}/${securitySummary.blocked_count || 0} | value ${valueSummary.warning_count || 0}/${valueSummary.blocked_count || 0} | close ${closeSummary.warning_count || 0}/${closeSummary.blocked_count || 0} | gtm ${gtmSummary.warning_count || 0}/${gtmSummary.blocked_count || 0} | launch ${launchSummary.warning_count || 0}/${launchSummary.blocked_count || 0} | completion ${completionSummary.warning_count || 0}/${completionSummary.blocked_count || 0} | workflow ${workflowSummary.warning_count || 0}/${workflowSummary.blocked_count || 0} | demo ${demoSummary.warning_count || 0}/${demoSummary.blocked_count || 0} | proposal ${proposalSummary.warning_count || 0}/${proposalSummary.blocked_count || 0} | approval ${purchaseApprovalSummary.warning_count || 0}/${purchaseApprovalSummary.blocked_count || 0} | diligence ${dueDiligenceSummary.warning_count || 0}/${dueDiligenceSummary.blocked_count || 0} | committee ${investmentCommitteeSummary.warning_count || 0}/${investmentCommitteeSummary.blocked_count || 0}</strong>
+          <strong>${t("readiness_summary_text")
+            .replace("{pass}", String((readinessSummary.pass || 0) + (commercialSummary.pass || 0)))
+            .replace("{warn}", String((readinessSummary.warn || 0) + (commercialSummary.warn || 0)))
+            .replace("{fail}", String((readinessSummary.fail || 0) + (commercialSummary.fail || 0)))}</strong>
         </div>
         <div class="readiness-grid">
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
@@ -1560,8 +1613,10 @@ Summarize this research thread and verify claims.</textarea>
       const res = await apiFetch("/admin/state");
       if (!res.ok) {
         if (els.sessionStatus) els.sessionStatus.textContent = t("session_status_missing");
+        if (els.sessionAction) els.sessionAction.hidden = false;
         return;
       }
+      if (els.sessionAction) els.sessionAction.hidden = true;
       state = await res.json();
       await refreshModelGroups();
       await refreshAnalytics();
@@ -1650,6 +1705,7 @@ Summarize this research thread and verify claims.</textarea>
         const result = await res.json();
         if (res.ok) {
           els.sessionStatus.textContent = t("session_status_ready");
+          if (els.sessionAction) els.sessionAction.hidden = true;
           await load();
         } else {
           els.sessionStatus.textContent = result.error?.message || t("session_status_missing");
@@ -1663,6 +1719,7 @@ Summarize this research thread and verify claims.</textarea>
         method: "DELETE"
       });
       els.sessionStatus.textContent = res.ok ? t("session_status_missing") : "Session logout failed";
+      if (res.ok && els.sessionAction) els.sessionAction.hidden = false;
     }
     async function runEvaluation() {
       const prompts = els.evaluationPrompts.value.split("\n").map(item => item.trim()).filter(Boolean);
@@ -1701,6 +1758,7 @@ Summarize this research thread and verify claims.</textarea>
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     els.sessionForm?.addEventListener("submit", startSession);
     els.endSession?.addEventListener("click", endSession);
+    els.sessionAction?.addEventListener("click", () => showView("integrations"));
     document.querySelector("#copyJson").addEventListener("click", () => {
       renderTraceTab("json");
       navigator.clipboard?.writeText(els.traceJson.textContent);
