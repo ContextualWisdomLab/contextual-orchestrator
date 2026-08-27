@@ -16,8 +16,9 @@ into separate products.
 Figma Code Connect is not used for discovery, metadata, code generation, or
 artifact creation.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without concrete failure remain non-blocking.
+Product evidence remains inspectable, but the release-authority gate is
+fail-closed for missing, stale, queued, synthetic, or predecessor-head
+governance evidence.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 the repository as one deployable product until a second product, independent
@@ -45,10 +46,13 @@ necessary.
   `commercial_gap_register_open`, or `commercial_gap_register_blocked`;
 - `measurement_status`: `local_commercial_gap_register`;
 - `gap_summary`: total gap count, production gap count, buyer-specific gap
-  count, blocked count, and `review_process_is_blocker=false`;
+  count, blocked count, and release-authority blocker count;
 - `gap_items`: owner/action rows with `gap_name`, `gap_type`, `gap_status`,
   `owner`, `reviewer`, `sources`, `source_evidence_type`, `current_evidence`,
   `required_input`, and `is_blocker`;
+- `release_authorization`: the same fail-closed authority result used by the
+  release candidate, so procurement and contract consumers retain the
+  protected-head blocker;
 - `concrete_blockers`: security, API contract, document, product, or Code
   Connect failures;
 - `related_runtime_reports`: release, acceptance, export, saleability, handoff,
@@ -64,6 +68,11 @@ necessary.
 | `buyer_input_required` | Buyer-specific legal, procurement, ROI, deployment, or data-processing context must be supplied before buyer-specific claims. |
 | `blocked` | A concrete security, API contract, document, product, or Code Connect failure blocks commercial release. |
 
+`commercial_gap_register_blocked` also includes a missing or failing release-
+authority gate. That governance blocker is reported in `gap_summary` and
+`related_runtime_reports`; it does not become a synthetic `gap_item`. Individual
+`gap_status=blocked` rows remain reserved for concrete product blockers.
+
 ## KRW 2B Commercial Gap Register
 
 The register is acceptable for buyer review when:
@@ -72,7 +81,8 @@ The register is acceptable for buyer review when:
 - all external release gaps have owner, source, required input, and status;
 - `proposed_until_production` is classified as `production_input_required`;
 - `proposed_until_buyer_specific` is classified as `buyer_input_required`;
-- review-process delay is not counted as a product blocker;
+- missing release authority is an explicit blocker even when the product gap
+  rows remain useful for buyer action;
 - library split remains deferred until a real extraction trigger exists.
 
 ## Plugin Traceability
