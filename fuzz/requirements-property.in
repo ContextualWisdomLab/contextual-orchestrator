@@ -4,4 +4,8 @@ hypothesis>=6.100
 pytest
 cryptography>=43.0
 jsonschema>=4.26.0
-typing-extensions==4.16.0; python_full_version < "3.13"
+typing-extensions==4.15.0; python_full_version < "3.13"
+
+# rpds-py is pinned to match requirements.lock so the combined
+# -r requirements.lock -r fuzz/requirements-*.txt install resolves.
+rpds-py==0.30.0
