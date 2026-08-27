@@ -25,6 +25,7 @@ from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
+    ProviderResponseError,
     TaskOrchestrator,
     _coerce_input_text,
     _new_chat_completion_id,
@@ -5833,6 +5834,30 @@ def build_server(
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
                         tool_loop = bool(tools_list)
+                        if (
+                            tool_loop
+                            and "include_orchestration_trace" in body
+                            and type(body["include_orchestration_trace"]) is not bool
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_include_orchestration_trace",
+                                "include_orchestration_trace must be a boolean",
+                            )
+                        if (
+                            tool_loop
+                            and body.get("include_orchestration_trace") is True
+                        ):
+                            raise RequestError(
+                                400,
+                                "trace_unavailable",
+                                "orchestration trace is unavailable for single-agent tool passthrough",
+                            )
+                        include_trace = (
+                            False
+                            if tool_loop
+                            else self._trace_requested(body, "/v1/chat/completions")
+                        )
                         started_at = time.perf_counter()
                         if tool_loop:
                             proxied = self._run(
@@ -5879,13 +5904,21 @@ def build_server(
                                         provider_request=body,
                                     )
                                 )
+                        if include_trace and not tool_loop:
+                            lineage = proxied.get("orchestration")
+                            workflow_run_id = (
+                                lineage.get("workflow_run_id")
+                                if isinstance(lineage, dict)
+                                else None
+                            )
+                            if not isinstance(workflow_run_id, str):
+                                raise RuntimeError(
+                                    "structured completion omitted workflow lineage"
+                                )
+                            workflow = orchestrator.get_workflow_run(workflow_run_id)
+                            lineage["trace"] = workflow["trace"]
                         orchestrator.record_analytics_event(
                             (
-                                # Plain tools passthrough vs conducted-evidence
-                                # + synthesis: the structured path runs a full
-                                # evidence workflow before synthesis, so it is
-                                # reported under its own conducted label rather
-                                # than the passthrough one.
                                 "chat_completion_passthrough"
                                 if tool_loop
                                 else "chat_completion_conducted"
@@ -5897,7 +5930,11 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
-                        self._send(proxied)
+                        self._send(
+                            proxied
+                            if tool_loop
+                            else _response_payload(proxied, include_trace)
+                        )
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
@@ -6500,7 +6537,7 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    self._send(proxied)
+                    self._send(_response_payload(proxied, include_trace=False))
                     return
 
                 if path == "/admin/simulate":
@@ -6547,6 +6584,12 @@ def build_server(
                 )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
+            except ProviderResponseError:
+                self._send_error(
+                    502,
+                    "invalid_structured_output",
+                    "The selected model could not satisfy the requested response schema.",
+                )
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:

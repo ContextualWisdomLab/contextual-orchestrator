@@ -166,6 +166,46 @@ def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tool_passthrough_rejects_non_boolean_trace_flag() -> None:
+    """Tool passthrough must not bypass authorization-sensitive type checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "trace string"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+                "include_orchestration_trace": "yes",
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_include_orchestration_trace"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tool_passthrough_rejects_null_trace_flag() -> None:
+    """Tool passthrough treats explicit null as an invalid trace request."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "trace null"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+                "include_orchestration_trace": None,
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_include_orchestration_trace"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_include_orchestration_trace_null() -> None:
     """Trace disclosure is a strict authorization-sensitive JSON boolean."""
     server, thread, port = _server()
@@ -202,6 +242,62 @@ def test_http_chat_accepts_include_orchestration_trace_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> None:
+    """Structured synthesis preserves the same audited trace contract."""
+    server, thread, port = _server()
+    try:
+        base = {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "structured trace"}],
+            "response_format": {"type": "json_object"},
+        }
+        status, disclosed = _post(
+            port, {**base, "include_orchestration_trace": True}
+        )
+        hidden_status, hidden = _post(
+            port, {**base, "include_orchestration_trace": False}
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == hidden_status == 200
+    trace = disclosed["orchestration"]["trace"]
+    assert len(trace) >= 2
+    assert trace[-1]["role"] == "synthesizer"
+    assert "trace" not in hidden["orchestration"]
+
+
+def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:
+    """A granted trace audit cannot exist without a disclosed workflow trace."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "use a tool"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_value",
+                            "description": "Read one value.",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "include_orchestration_trace": True,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400
+    assert body["error"]["code"] == "trace_unavailable"
 
 
 def test_http_chat_accepts_include_orchestration_trace_false() -> None:

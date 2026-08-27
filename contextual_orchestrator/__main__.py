@@ -17,6 +17,7 @@ from .model_discovery import (
     agent_id_for,
     discover_all_models,
     free_discovered_models,
+    openrouter_paid_inference_available,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
@@ -284,16 +285,39 @@ def _discover_models_command(argv: list[str]) -> None:
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate only models with explicit chat capability evidence."""
     discovered, _errors = discover_all_models()
+    openrouter_paid_available = openrouter_paid_inference_available()
     chat_models = [model for model in discovered if "chat" in model.capabilities]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
-        replace(agent_from_discovered(model), disabled=False)
+        replace(
+            agent_from_discovered(model),
+            disabled=(
+                model.provider_name == "openrouter"
+                and not model.is_free
+                and openrouter_paid_available is not True
+            ),
+        )
         for model in chat_models
         if agent_id_for(model) not in existing_ids
     ]
-    if not agents:
-        return {"added": [], "updated": []}
-    return orchestrator.sync_discovered_agents(agents)
+    result = (
+        orchestrator.sync_discovered_agents(agents)
+        if agents
+        else {"added": [], "updated": []}
+    )
+    has_real_runtime_agent = any(
+        not candidate.disabled
+        and not candidate.base_url.startswith("mock://")
+        and "bootstrap_seed" not in candidate.tags
+        for candidate in orchestrator.agents
+    )
+    for candidate in tuple(orchestrator.agents):
+        if has_real_runtime_agent and "bootstrap_seed" in candidate.tags:
+            orchestrator.patch_agent(
+                "default", candidate.id, {"status": "disabled"}
+            )
+            result["updated"].append(candidate.id)
+    return result
 
 
 def main(argv: list[str] | None = None) -> None:

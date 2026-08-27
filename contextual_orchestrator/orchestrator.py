@@ -32,6 +32,8 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+from jsonschema.validators import validator_for
+
 from .chat_capability import (
     is_chat_compatible_model_id,
     is_general_chat_agent_model_id,
@@ -122,6 +124,29 @@ class BudgetExceededError(RuntimeError):
 
 class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
+
+
+def _structured_output_error(
+    content: str, response_format: object
+) -> str | None:
+    """Return a bounded contract error for strict JSON Schema output."""
+    if not isinstance(response_format, Mapping) or response_format.get("type") != "json_schema":
+        return None
+    specification = response_format.get("json_schema")
+    schema = specification.get("schema") if isinstance(specification, Mapping) else None
+    if not isinstance(schema, Mapping):
+        return "schema_missing"
+    try:
+        instance = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return "invalid_json"
+    validator_type = validator_for(schema)
+    try:
+        validator_type.check_schema(schema)
+        validator_type(schema).validate(instance)
+    except Exception:  # noqa: BLE001 - untrusted schema/output boundary
+        return "schema_violation"
+    return None
 
 
 def estimate_tokens(text: str) -> int:
@@ -1754,6 +1779,15 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        response_format = payload.get("response_format")
+        if response_format is None and isinstance(payload.get("text"), dict):
+            response_format = payload["text"].get("format")
+        mock_content = (
+            "{}"
+            if isinstance(response_format, dict)
+            and str(response_format.get("type", "")).strip().lower() == "json_schema"
+            else f"[{agent.id}] chat-mock"
+        )
         echoed = {
             key: payload[key]
             for key in (
@@ -1780,7 +1814,7 @@ class ModelClient:
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                        "content": [{"type": "output_text", "text": mock_content}],
                     }
                 ],
                 "echo": echoed,
@@ -1792,7 +1826,7 @@ class ModelClient:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "message": {"role": "assistant", "content": mock_content},
                     "finish_reason": "stop",
                 }
             ],
@@ -3159,6 +3193,10 @@ class TaskOrchestrator:
             raise ValueError("structured completion requires non-empty messages")
         task = self._latest_user_text(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        selection_tags = (
+            *required_tags,
+            *(("response_format",) if chat_body.get("response_format") else ()),
+        )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         final_agent = self._requested_agent(requested_model)
@@ -3167,13 +3205,16 @@ class TaskOrchestrator:
                 final_agent = self._select_agent(
                     task,
                     "synthesizer",
-                    required_tags=required_tags,
+                    required_tags=selection_tags,
                     free_only=free_only,
                 )
             except RuntimeError as exc:
-                if not required_tags:
-                    raise
-                raise ValueError("no enabled vision-capable model is available") from exc
+                if selection_tags:
+                    raise ValueError(
+                        "no enabled model supports required tags: "
+                        + ", ".join(selection_tags)
+                    ) from exc
+                raise
         elif any(tag not in final_agent.tags for tag in required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
@@ -3279,32 +3320,29 @@ class TaskOrchestrator:
         # Single-provider by design: no cross-provider failover on this
         # conducted synthesis call (see the docstring above) — only the plain
         # virtual passthrough / virtual tools paths fail over across providers.
-        raw = self.client.proxy_send(final_agent, endpoint, upstream)
-        echo = raw.get("echo")
-        if isinstance(echo, dict):
-            if response_request:
-                original_instructions = body.get("instructions")
-                if isinstance(original_instructions, str) and original_instructions.strip():
-                    echo["instructions"] = original_instructions
-                else:
-                    echo.pop("instructions", None)
-            elif "messages" in echo:
-                echo["messages"] = copy.deepcopy(messages)
-        synthesis_output = ""
-        if response_request:
-            synthesis_output = raw.get("output_text")
-            if not isinstance(synthesis_output, str):
-                synthesis_output = "".join(
+        try:
+            raw = self.client.proxy_send(final_agent, endpoint, upstream)
+        except Exception:
+            self._record_failure(final_agent.id)
+            if final_agent.group_name:
+                self._group_router.observe_failure(final_agent.id)
+            raise
+        def provider_output(response: Mapping[str, Any]) -> str:
+            if not response_request:
+                try:
+                    return ModelClient._response_content(final_agent, response)
+                except RuntimeError:
+                    return ""
+            output = response.get("output_text")
+            if isinstance(output, str):
+                return output
+            return "".join(
                     _responses_text(item.get("content"))
-                    for item in raw.get("output", [])
+                    for item in response.get("output", [])
                     if isinstance(item, dict) and item.get("type") == "message"
                 )
-            raw.setdefault("output_text", synthesis_output)
-        else:
-            try:
-                synthesis_output = ModelClient._response_content(final_agent, raw)
-            except RuntimeError:
-                pass
+
+        synthesis_output = provider_output(raw)
         synthesis_step: dict[str, Any] = {
             "id": len(workflow["trace"]),
             "role": "synthesizer",
@@ -3318,8 +3356,96 @@ class TaskOrchestrator:
             synthesis_step["usage"] = _canonical_provider_usage(
                 raw["usage"], responses=response_request
             )
+        repair_step: dict[str, Any] | None = None
+        response_format = chat_body.get("response_format")
+        contract_error = _structured_output_error(synthesis_output, response_format)
+        if contract_error == "schema_missing":
+            raise ProviderResponseError(
+                "response_format.json_schema is missing a schema"
+            )
+        if contract_error is not None:
+            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                [*workflow["trace"], synthesis_step]
+            )
+            self._raise_if_spend_budget_exceeded(
+                additional_output_tokens=in_flight_tokens,
+                additional_cost_usd=in_flight_cost,
+            )
+            repair_upstream = copy.deepcopy(upstream)
+            repair_instruction = (
+                "The prior synthesis violated the caller's strict JSON Schema "
+                f"({contract_error}). Regenerate the complete answer and return only "
+                "JSON that satisfies the supplied response_format."
+            )
+            if response_request:
+                current = repair_upstream.get("instructions")
+                repair_upstream["instructions"] = (
+                    f"{current}\n\n{repair_instruction}"
+                    if isinstance(current, str) and current
+                    else repair_instruction
+                )
+            else:
+                repair_messages = repair_upstream.get("messages")
+                if not isinstance(repair_messages, list):
+                    raise ProviderResponseError("structured synthesis omitted messages")
+                repair_upstream["messages"] = [
+                    *repair_messages,
+                    {"role": "system", "content": repair_instruction},
+                ]
+            repair_started = time.perf_counter()
+            try:
+                repaired = self.client.proxy_send(final_agent, endpoint, repair_upstream)
+            except Exception:
+                self._record_failure(final_agent.id)
+                if final_agent.group_name:
+                    self._group_router.observe_failure(final_agent.id)
+                raise
+            repaired_output = provider_output(repaired)
+            if _structured_output_error(repaired_output, response_format) is not None:
+                self._record_failure(final_agent.id)
+                if final_agent.group_name:
+                    self._group_router.observe_failure(final_agent.id)
+                raise ProviderResponseError(
+                    "structured synthesis and repair violated response_format"
+                )
+            repair_step = {
+                "id": synthesis_step["id"] + 1,
+                "role": "repair",
+                "agent_id": final_agent.id,
+                "subtask": "Strict JSON Schema repair",
+                "access": [synthesis_step["id"]],
+                "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
+                "output": repaired_output,
+            }
+            if isinstance(repaired.get("usage"), dict):
+                repair_step["usage"] = _canonical_provider_usage(
+                    repaired["usage"], responses=response_request
+                )
+            raw = repaired
+            synthesis_output = repaired_output
+        self._record_success(final_agent.id)
+        if final_agent.group_name:
+            self._group_router.observe_success(
+                final_agent.id, time.perf_counter() - synthesis_started
+            )
+        if response_request:
+            raw.setdefault("output_text", synthesis_output)
+        echo = raw.get("echo")
+        if isinstance(echo, dict):
+            if response_request:
+                original_instructions = body.get("instructions")
+                if isinstance(original_instructions, str) and original_instructions.strip():
+                    echo["instructions"] = original_instructions
+                else:
+                    echo.pop("instructions", None)
+            elif "messages" in echo:
+                echo["messages"] = copy.deepcopy(messages)
         workflow_run_id = f"run_{uuid.uuid4().hex}"
-        trace = [*workflow["trace"], synthesis_step]
+        trace = [
+            *workflow["trace"],
+            synthesis_step,
+            *([repair_step] if repair_step is not None else []),
+        ]
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
@@ -3334,7 +3460,7 @@ class TaskOrchestrator:
                 "verification": workflow.get("verification"),
             }
         )
-        self._workflow_runs[workflow_run_id] = record
+        self._replace_workflow_run(record)
         self._run_order.appendleft(workflow_run_id)
         if self._store is not None:
             self._store.save("workflow_run", workflow_run_id, record)
