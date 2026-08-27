@@ -263,6 +263,41 @@ OPENAPI_SPEC = {
                 ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}}}),
             )
         },
+        "/v1/videos/{video_job_id}": {
+            "get": {
+                "operationId": "get_video",
+                "summary": "Check video generation status",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "video_job_id", "in": "path", "required": True,
+                    "schema": {"type": "string"},
+                }],
+                "responses": {
+                    "200": {"description": "Video job status"},
+                    "404": {"description": "Video job not found"},
+                    "503": {"description": "Owning provider is unavailable"},
+                },
+            }
+        },
+        "/v1/videos/{video_job_id}/content": {
+            "get": {
+                "operationId": "download_video",
+                "summary": "Download a completed video",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "video_job_id", "in": "path", "required": True,
+                    "schema": {"type": "string"},
+                }],
+                "responses": {
+                    "200": {
+                        "description": "Video content",
+                        "content": {"video/mp4": {"schema": {"type": "string", "format": "binary"}}},
+                    },
+                    "404": {"description": "Video job not found"},
+                    "503": {"description": "Owning provider is unavailable"},
+                },
+            }
+        },
         "/v1/responses": {
             "post": {
                 "operationId": "create_response",

@@ -27,7 +27,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
@@ -1728,6 +1728,36 @@ class ModelClient:
         with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
             return response.read(), response.headers.get_content_type()
 
+    def proxy_get_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
+        """Retrieve provider JSON from the exact agent that owns an async job."""
+        if agent.base_url.startswith("mock://"):
+            return {"id": endpoint.rsplit("/", 1)[-1], "status": "completed"}
+        return self._batch_json(  # pragma: no cover - real provider integration
+            agent,
+            "GET",
+            f"/{endpoint.lstrip('/')}",
+            destination=self._validate_provider(agent),
+            max_response_bytes=max_response_bytes,
+        )
+
+    def proxy_get_bytes(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> tuple[bytes, str]:
+        """Retrieve provider media from the exact agent that owns an async job."""
+        if agent.base_url.startswith("mock://"):
+            return b"mock video", "video/mp4"
+        api_key = _provider_credential(agent)  # pragma: no cover
+        headers = {}  # pragma: no cover
+        if api_key:  # pragma: no cover
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(  # pragma: no cover
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            headers=headers,
+            method="GET",
+        )
+        with self._open_provider(  # pragma: no cover
+            request, self._validate_provider(agent)
+        ) as response:
+            return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
+
     def _send_raw_with_retry(
         self,
         agent: ModelAgent,
@@ -2062,6 +2092,7 @@ class ModelClient:
         path: str,
         payload: dict[str, Any] | None = None,
         destination: ProviderDestination | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
@@ -2074,7 +2105,23 @@ class ModelClient:
             method=method,
         )
         with self._open_provider(request, destination) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
+            return json.loads(raw.decode("utf-8"))
+
+    @staticmethod
+    def _read_bounded_response(response: Any, max_bytes: int) -> bytes:
+        """Read at most ``max_bytes`` and fail closed on oversized provider data."""
+        declared = response.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > max_bytes:
+                    raise ProviderResponseError("provider response exceeds the configured limit")
+            except ValueError as exc:
+                raise ProviderResponseError("provider returned an invalid content length") from exc
+        body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ProviderResponseError("provider response exceeds the configured limit")
+        return body
 
     def _batch_raw(self, agent: ModelAgent, path: str, destination: ProviderDestination | None = None) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
@@ -4354,7 +4401,6 @@ class TaskOrchestrator:
         trace_rows: list[dict[str, Any]] = []
         answer = ""
         served_id = ""
-        usage: dict[str, Any] | None = None
         verification: dict[str, Any] = {
             "accepted": False,
             "reason": "no candidate attempted",
@@ -5250,12 +5296,17 @@ class TaskOrchestrator:
         capability: str,
         endpoint: str,
         binary: bool = False,
+        selection_sink: Callable[[ModelAgent, Any], Any] | None = None,
     ) -> dict[str, Any] | tuple[bytes, str]:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
         race_members = self._equivalent_race_members(candidates, capability=capability)
-        if race_members:
+        # Async video submission creates provider-side work that cannot be
+        # raced safely without loser cancellation: every accepted loser would
+        # become an unowned, billable job.  A selection sink marks this
+        # ownership-producing path, so use measured sequential failover below.
+        if race_members and selection_sink is None:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
                 raise ValueError(
                     "immediate_race endpoint count exceeds the supported concurrency capacity"
@@ -5338,6 +5389,12 @@ class TaskOrchestrator:
                 last_error = exc
                 self._group_router.observe_failure(agent.id)
                 continue
+            if selection_sink is not None:
+                selected_result = selection_sink(agent, result)
+                self._group_router.observe_success(
+                    agent.id, time.perf_counter() - started_at
+                )
+                return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
         raise RuntimeError(f"all {capability} providers failed") from last_error

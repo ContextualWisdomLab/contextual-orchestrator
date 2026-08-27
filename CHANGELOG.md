@@ -12,14 +12,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-<<<<<<< HEAD
 - Fail-closed commercial release authorization bound to a signed, exact-head
   GitHub evidence snapshot, propagated through every downstream commercial
   readiness report while keeping local product evidence inspectable.
-=======
+- Provider-affine asynchronous video jobs now return an opaque gateway id and
+  keep status polling and content download bound to the exact provider agent
+  that accepted the submission (ADR 0036).
 - A fail-closed, transactional evidence boundary for the optional NVIDIA NIM
   benchmark with immutable task/scorer identities and complete provenance.
->>>>>>> main
 - Bounded first-valid-completion racing for operator-declared equivalent model
   group endpoints across text and media capabilities, with fail-closed contract
   comparison and winner/cancellation provenance.
@@ -72,9 +72,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Accept function-tool descriptions up to the existing bounded request-body
+  limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
-
 - Mixed structured workflows now retain a cost-ledger row for calls whose
   provider omitted usage, using the existing token-counting fallback while
   preserving reported counts for the other calls in the same workflow.

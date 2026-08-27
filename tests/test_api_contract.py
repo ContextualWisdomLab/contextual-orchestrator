@@ -44,6 +44,8 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "/v1/responses",
         "/v1/batch/embeddings",
         "/v1/batch/embeddings/{batch_id}",
+        "/v1/videos/{video_job_id}",
+        "/v1/videos/{video_job_id}/content",
     }
     assert expected_paths <= OPENAPI_SPEC["paths"].keys()
     assert "security" not in OPENAPI_SPEC["paths"]["/healthz"]["get"]
