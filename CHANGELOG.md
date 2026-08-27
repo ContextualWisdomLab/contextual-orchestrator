@@ -12,6 +12,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- A fail-closed, transactional evidence boundary for the optional NVIDIA NIM
+  benchmark with immutable task/scorer identities and complete provenance.
 - Bounded first-valid-completion racing for operator-declared equivalent model
   group endpoints across text and media capabilities, with fail-closed contract
   comparison and winner/cancellation provenance.
@@ -34,6 +36,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `docs/doctoring/measured-routing-evidence.md`.
 - Product & technical gap baseline (`docs/product-technical-gap-baseline.md`)
   indexing buyer-visible gaps against open PRs/issues with update protocol.
+- Reproducible k6 end-to-end concurrency coverage with a synthetic delayed
+  provider, simultaneous liveness traffic, and exact baseline/candidate
+  measurements.
 - Citation-backed `docs/adr` set: APA 7th references on the tool-execution fallback policy, plus accepted control-plane, cost-aware sync-versus-batch, and MSA-leaf composition ADRs, indexed from `docs/adr/README.md`.
 - Structured tool failure categories, stable fallback actions, and public
   adapter exceptions.
@@ -61,6 +66,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+<<<<<<< HEAD
 - Provider/model failures no longer collapse into a generic `internal_error`.
   A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
   classifies every upstream HTTP status, network, TLS, and transport failure
@@ -82,6 +88,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   batched, routed, and conducted steps record `model`, `provider`, and
   `latency_ms` alongside usage so workflow runs answer which model served a
   step, how long it took, and what it cost.
+=======
+- Validate orchestration-trace requests before every chat execution branch and
+  require trace-purpose authorization before access-report lookup.
+
+>>>>>>> main
 - Mixed structured workflows now retain a cost-ledger row for calls whose
   provider omitted usage, using the existing token-counting fallback while
   preserving reported counts for the other calls in the same workflow.
@@ -92,6 +103,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Make per-request budget checks constant time while preserving exact parity
   with full spend analytics across persisted, replaced, estimated, and
   provider-reported workflow runs.
+- Bound inactive HTTP/1.1 request reads to the configured rate-limit window so
+  slow clients cannot retain unbounded request threads.
 - Reject missing profiles, blank `profile_version`, and fractional seeds.
   Snapshot hashing now fails closed on extra or missing roles. The
   production-default gate returns false on junk reports and on
@@ -100,6 +113,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Web requests now use the native `SOMAXCONN` listen backlog and HTTP/1.1
+  persistent connections, while the existing per-request daemon threading and
+  explicit run-slot admission keep slow provider I/O from blocking liveness.
 - Agent invocation now retries explicitly idempotent transient tool failures with bounded exponential backoff within a per-agent budget.
 - A shared four-attempt ceiling now bounds the configured same-agent tool retry budget.
 - Fail-closed tool decisions now have dedicated JSON and SSE error contracts, and preserve the observed failure kind in secret-free audit evidence.
@@ -112,6 +128,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Security
 
+- HTTP/1.1 responses now close the connection when authentication, rate
+  limiting, media-type validation, or another boundary rejects a request
+  before its declared body is consumed, preventing response-stream desync.
 - Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
 - Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
 - Worker-agent pool boundaries are enforced beside object lookup so a

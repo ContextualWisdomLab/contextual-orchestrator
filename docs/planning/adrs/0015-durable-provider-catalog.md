@@ -63,6 +63,22 @@ excludes obvious embedding, reranking, speech, image, moderation, safety, and
 realtime transports. They are never used to infer reasoning, verification,
 coding, vision, or provider-native effort capabilities. Those require explicit
 catalog or measured evidence under the gateway-owned policy.
+Provider-declared `supported_parameters=response_format` is retained as the
+`response_format` serving tag. Virtual structured synthesis requires that tag
+when selecting from an automatically discovered pool; unknown support does not
+become presumed support. An explicitly requested operator-managed model remains
+the operator's transport contract.
+When live discovery activates a real chat model, only agents explicitly tagged
+`bootstrap_seed` are retired. A `mock://` transport alone is not proof that an
+agent is disposable; operator-configured mock agents remain in the declared
+pool unless the operator disables them.
+Catalog presence is also not spend admission. At runtime startup, OpenRouter's
+authenticated credits contract supplies `total_credits` and `total_usage`.
+Paid OpenRouter models remain individually discoverable but disabled unless
+their exact difference is strictly positive; catalog-declared free models stay
+eligible. Missing, malformed, or non-finite credit evidence never fabricates
+paid capacity. Other providers remain unchanged until they publish an
+equivalent machine-readable balance contract.
 
 ## Consequences
 
@@ -70,6 +86,8 @@ catalog or measured evidence under the gateway-owned policy.
 - NVIDIA primary and secondary keys are independent provider accounts.
 - One provider outage does not erase other providers or its own last-known-good set.
 - Unknown price remains unknown rather than becoming fabricated zero cost.
+- A listed paid OpenRouter model cannot enter routing when its provider attests
+  zero or negative remaining credit.
 - The protected hourly workflow can persist catalog metadata without claiming
   that its ephemeral runner has activated a durable agent-pool database.
 - Long-running deployments may separately synchronize selected catalog rows into
@@ -91,3 +109,6 @@ controls for information systems and organizations* (NIST Special Publication
 National Institute of Standards and Technology. (2024). *Artificial
 intelligence risk management framework: Generative artificial intelligence
 profile* (NIST AI 600-1). https://doi.org/10.6028/NIST.AI.600-1
+
+OpenRouter. (n.d.). *Get remaining credits*. Retrieved August 27, 2026, from
+https://openrouter.ai/docs/api/api-reference/credits/get-credits

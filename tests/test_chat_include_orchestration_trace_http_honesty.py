@@ -25,9 +25,15 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, payload: dict, token: str = _TEST_AUTH_TOKEN) -> tuple[int, dict]:
+def _post(
+    port: int,
+    payload: dict,
+    token: str = _TEST_AUTH_TOKEN,
+    *,
+    path: str = "/v1/chat/completions",
+) -> tuple[int, dict]:
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/chat/completions",
+        f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -35,6 +41,18 @@ def _post(port: int, payload: dict, token: str = _TEST_AUTH_TOKEN) -> tuple[int,
             "connection": "close",
         },
         method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _get(port: int, path: str, token: str) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        headers={"authorization": f"Bearer {token}", "connection": "close"},
     )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -116,7 +134,7 @@ def test_trace_access_is_audited_before_response_release() -> None:
     workflow_index = next(
         index for index, event in enumerate(events) if event["event_type"] == "workflow_run_created"
     )
-    assert access_index < workflow_index
+    assert workflow_index < access_index
 
 
 def test_trace_is_not_released_when_audit_persistence_fails() -> None:
@@ -124,8 +142,12 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
         lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
     )
 
-    def fail_audit(_event_type: str, _detail: dict) -> None:
-        raise OSError("audit store unavailable")
+    append_audit_event = orchestrator._append_audit_event
+
+    def fail_audit(event_type: str, detail: dict, **kwargs: object) -> None:
+        if event_type == "orchestration_trace_access_granted":
+            raise OSError("audit store unavailable")
+        append_audit_event(event_type, detail, **kwargs)
 
     orchestrator._append_audit_event = fail_audit  # type: ignore[method-assign]
     try:
@@ -144,6 +166,10 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
     assert status == 503
     assert body["error"]["code"] == "trace_audit_unavailable"
     assert "orchestration" not in body
+    assert not any(
+        event["event_name"] == "chat_completion_requested"
+        for event in orchestrator._analytics_events
+    )
 
 
 def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
@@ -161,6 +187,46 @@ def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
         blob = json.dumps(body)
         assert "invalid_include_orchestration_trace" in blob
         assert "boolean" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tool_passthrough_rejects_non_boolean_trace_flag() -> None:
+    """Tool passthrough must not bypass authorization-sensitive type checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "trace string"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+                "include_orchestration_trace": "yes",
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_include_orchestration_trace"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tool_passthrough_rejects_null_trace_flag() -> None:
+    """Tool passthrough treats explicit null as an invalid trace request."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "trace null"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+                "include_orchestration_trace": None,
+            },
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_include_orchestration_trace"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -185,6 +251,252 @@ def test_http_chat_rejects_include_orchestration_trace_null() -> None:
         thread.join(timeout=5)
 
 
+def test_structured_chat_cannot_bypass_trace_flag_validation() -> None:
+    """Validate the trace flag before structured chat can return early."""
+    server, thread, port = _server()
+    try:
+        for invalid in ("false", 1, None, [], {}):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "return JSON"}],
+                    "response_format": {"type": "json_object"},
+                    "include_orchestration_trace": invalid,
+                },
+            )
+            assert status == 400, (invalid, body)
+            assert body["error"]["code"] == "invalid_include_orchestration_trace"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_structured_chat_rejects_trace_disclosure_it_cannot_return() -> None:
+    """Tell callers to use a chat shape that can return trace details."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400, body
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
+def test_structured_chat_ignores_server_trace_default_when_flag_is_omitted() -> None:
+    """A server default must not turn an ordinary structured request into an opt-in."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope == "inference"
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 200, body
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
+def test_fast_route_stream_rejects_explicit_trace_before_provider_work() -> None:
+    """Direct Chat streaming cannot silently discard an explicit trace request."""
+    server, thread, port, _orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400, body
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
+
+
+def test_fast_route_stream_ignores_server_trace_default_when_flag_is_omitted() -> None:
+    """An ordinary direct stream remains available to an inference-only caller."""
+    server, thread, port, _orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_INFERENCE_TOKEN and scope == "inference"
+    )
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            }
+        ).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_INFERENCE_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+            assert b"data:" in response.read()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_tool_chat_rejects_trace_disclosure_it_cannot_return() -> None:
+    """Do not silently ignore a trace request on the tool passthrough path."""
+    server, thread, port, _orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "use tool"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400, body
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
+
+
+def test_access_report_disclosure_fails_closed_when_audit_fails() -> None:
+    """Do not release accessed-output evidence without durable trace audit."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace", "admin"}
+    )
+    try:
+        status, created = _post(
+            port,
+            {
+                "prompt_text": "create report",
+                "run_mode": "conduct",
+                "include_orchestration_trace": False,
+            },
+            token=_TEST_TRACE_TOKEN,
+            path="/api/v1/workflow_runs",
+        )
+        assert status == 201, created
+        workflow_run_id = created["workflow_run_id"]
+        append_audit_event = orchestrator._append_audit_event
+
+        def fail_trace_audit(event_type: str, detail: dict, **kwargs: object) -> None:
+            if event_type == "orchestration_trace_access_granted":
+                raise OSError("audit store unavailable")
+            append_audit_event(event_type, detail, **kwargs)
+
+        orchestrator._append_audit_event = fail_trace_audit  # type: ignore[method-assign]
+        status, body = _get(
+            port,
+            f"/api/v1/access_reports/{workflow_run_id}",
+            _TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 503, body
+    assert body["error"]["code"] == "trace_audit_unavailable"
+
+
+def test_invalid_chat_does_not_audit_trace_disclosure() -> None:
+    """Do not record a grant when request validation prevents disclosure."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, _body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": "not-an-array",
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
+def test_batched_chat_does_not_audit_trace_disclosure() -> None:
+    """A 202 job handle is not a trace disclosure."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "later"}],
+                "routing": {"latency_tolerant": True},
+                "include_orchestration_trace": True,
+            },
+            token=_TEST_TRACE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 202, body
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
 def test_http_chat_accepts_include_orchestration_trace_true() -> None:
     server, thread, port = _server()
     try:
@@ -202,6 +514,62 @@ def test_http_chat_accepts_include_orchestration_trace_true() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> None:
+    """Structured synthesis preserves the same audited trace contract."""
+    server, thread, port = _server()
+    try:
+        base = {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "structured trace"}],
+            "response_format": {"type": "json_object"},
+        }
+        status, disclosed = _post(
+            port, {**base, "include_orchestration_trace": True}
+        )
+        hidden_status, hidden = _post(
+            port, {**base, "include_orchestration_trace": False}
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == hidden_status == 200
+    trace = disclosed["orchestration"]["trace"]
+    assert len(trace) >= 2
+    assert trace[-1]["role"] == "synthesizer"
+    assert "trace" not in hidden["orchestration"]
+
+
+def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:
+    """A granted trace audit cannot exist without a disclosed workflow trace."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "use a tool"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "read_value",
+                            "description": "Read one value.",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "include_orchestration_trace": True,
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400
+    assert body["error"]["code"] == "trace_unavailable"
 
 
 def test_http_chat_accepts_include_orchestration_trace_false() -> None:
@@ -245,6 +613,7 @@ if __name__ == "__main__":
     test_trace_is_not_released_when_audit_persistence_fails()
     test_http_chat_rejects_include_orchestration_trace_non_boolean()
     test_http_chat_rejects_include_orchestration_trace_null()
+    test_structured_chat_cannot_bypass_trace_flag_validation()
     test_http_chat_accepts_include_orchestration_trace_true()
     test_http_chat_accepts_include_orchestration_trace_false()
     test_http_chat_accepts_include_orchestration_trace_omitted()

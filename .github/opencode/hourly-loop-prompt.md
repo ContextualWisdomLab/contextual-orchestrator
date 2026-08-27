@@ -17,14 +17,16 @@ heads as authority rather than transferring evidence from an older head.
    fork PRs require a separate secret-free review workflow. For every listed PR:
    a. Read reviewer comments (OpenCode, Devin, CodeRabbit, Strix, Noema, humans) and fix
       valid findings on the branch; push fixes.
-   b. Re-check GitHub Checks. Retry transient provider/rate-limit failures
-      once before investigating.
+   b. Re-check GitHub Checks. For transient provider/rate-limit failures, obey
+      `Retry-After` or the provider's accepted bounded retry policy. If neither
+      is available, record the missing evidence instead of inventing a retry count.
    c. Immediately re-fetch the exact head. Merge normally only when every
       required Check is terminal-success, every thread is resolved, and the
       protected rules' independent exact-head approvals are present. Never
       self-approve, dismiss a valid review, force-push, or use an admin bypass.
-   d. Move to the next open PR. Do not force-push; other agents may have
-      pushed concurrently — pull/rebase instead and respect their commits.
+   d. Move to the next open PR. Other agents may have pushed concurrently:
+      re-fetch before writing or pushing, preserve their intentional changes,
+      and integrate with a normal merge. Never force-push or rewrite their commits.
 
 2. Failing checks on main or scheduled workflows: trace logs to root cause and
    open a focused fix PR (one concern per PR).
@@ -36,6 +38,8 @@ heads as authority rather than transferring evidence from an older head.
 
 Rules:
 - Keep each change minimal and reviewable; stack dependent PRs when natural.
+- Delete existing code, tests, or documentation only with a clear redundancy or
+  root-cause rationale and after verifying that no supported consumer needs it.
 - Never expose internal implementation boundaries in customer-facing copy. Every
   explanation must identify the customer's next useful action.
 - Follow AGENTS.md governance: KV credentials (never os.getenv at runtime),
@@ -49,3 +53,6 @@ Rules:
 - Do not invent routing weights, heuristics, or rules of thumb. Preserve measured
   provider evidence and paper-grounded calibration; record missing evidence as a
   gap instead of guessing.
+- Do not implement mathematical, psychometric, vector, linear-algebra, matrix, or
+  LLM-token arithmetic in Python. Rust is authoritative for those computations;
+  Python may only orchestrate and serialize their results.
