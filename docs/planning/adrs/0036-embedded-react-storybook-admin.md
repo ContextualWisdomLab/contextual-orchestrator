@@ -1,4 +1,13 @@
-# 36. Embedded React and Storybook Admin
+---
+id: "0036"
+title: "Embed a React and Storybook admin interface"
+status: accepted
+date: 2026-08-27
+deciders:
+  - "repository maintainer"
+---
+
+# ADR 0036: Embedded React and Storybook Admin
 
 Date: 2026-08-27
 
