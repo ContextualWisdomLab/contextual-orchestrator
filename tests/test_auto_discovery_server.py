@@ -61,7 +61,7 @@ def test_auto_discovery_disables_paid_openrouter_without_credit(monkeypatch) -> 
     free = replace(paid, model_id="provider/free-chat", is_free=True)
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([paid, free], []),
+        lambda *args: ([paid, free], []),
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.openrouter_paid_inference_available",
@@ -220,7 +220,7 @@ def test_auto_discovery_preserves_sole_real_bootstrap_seed(monkeypatch) -> None:
     """A seed cannot count itself as the replacement that retires it."""
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([], []),
+        lambda *args: ([], []),
     )
     seed = ModelAgent(
         "bootstrap_agent",
@@ -317,7 +317,7 @@ def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([discovered], []),
+        lambda *args: ([discovered], []),
     )
     orchestrator = TaskOrchestrator(
         [
@@ -338,7 +338,7 @@ def test_auto_discovery_retires_mock_seed_when_current_discovery_is_empty(
     """A transient empty discovery cannot preserve a stale bootstrap fixture."""
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([], []),
+        lambda *args: ([], []),
     )
     real_agent = ModelAgent(
         "existing_real_agent",
@@ -371,7 +371,7 @@ def test_auto_discovery_preserves_operator_configured_mock(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([discovered], []),
+        lambda *args: ([discovered], []),
     )
     operator_mock = ModelAgent(
         "operator_mock", "operator-model", base_url="mock://operator"

@@ -5529,7 +5529,7 @@ def build_server(
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except Exception:
-                self._send_error(500, "internal_error", "internal server error")
+                import traceback; traceback.print_exc(); self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
             """Apply an authenticated agent-pool worker update."""
@@ -5565,7 +5565,7 @@ def build_server(
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
             except Exception:
-                self._send_error(500, "internal_error", "internal server error")
+                import traceback; traceback.print_exc(); self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
             """Delete an authenticated agent-pool worker resource."""
@@ -5605,7 +5605,7 @@ def build_server(
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
             except Exception:
-                self._send_error(500, "internal_error", "internal server error")
+                import traceback; traceback.print_exc(); self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
             """Dispatch authenticated completion, agent, and simulation writes."""
@@ -5972,7 +5972,7 @@ def build_server(
                         include_trace = (
                             False
                             if tool_loop
-                            else self._trace_requested(body, "/v1/chat/completions")
+                            else self._validate_trace_request(body)
                         )
                         started_at = time.perf_counter()
                         if tool_loop:
@@ -6744,7 +6744,7 @@ def build_server(
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except Exception:
-                self._send_error(500, "internal_error", "internal server error")
+                import traceback; traceback.print_exc(); self._send_error(500, "internal_error", "internal server error")
 
         @staticmethod
         def _admin_purpose(path: str) -> str:
