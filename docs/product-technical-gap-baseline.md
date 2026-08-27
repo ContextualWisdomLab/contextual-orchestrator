@@ -1022,3 +1022,11 @@ Added model capability prior integration for `ModelGroupRouter`:
 - PR #883 requires investigation for `strix` check failures.
 - PR #888 and #887 have their CodeRabbit comments handled or under review.
 - The 1-hour recurring `schedule` gap-loop continues.
+
+### Live exact-head continuation — 2026-08-27 09:52 KST
+
+Added OpenRouter upstream real-time reliability collector (`OpenRouterUptimeCollector`):
+- Fetches live telemetry (`uptime_last_30m`) from `/api/v1/models/{model_id}/endpoints`.
+- Dynamically integrates this telemetry into `ModelGroupRouter` by exposing `update_prior` to safely adjust `alpha` and `beta` values without mutating underlying stability logic.
+- Avoids HTTP blocks during startup by orchestrating a non-blocking Daemon thread polling at set intervals, enabling resilient routing dynamically over time.
+- Integrated the change into PR #892 (`feat/model-capability-priors`) and pushed to the origin repository.
