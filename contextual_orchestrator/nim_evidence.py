@@ -202,7 +202,7 @@ def publish_artifact_set(
     with _publication_lock(final):
         _recover_publication(final)
         staging = final.parent / f".{final.name}.staging-{uuid.uuid4().hex}"
-        staging.mkdir(mode=0o777)
+        staging.mkdir(mode=0o700)
         final_mode = stat.S_IMODE(final.stat().st_mode) if final.exists() else None
         backup: Path | None = None
         try:

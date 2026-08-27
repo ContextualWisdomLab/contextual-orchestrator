@@ -122,7 +122,7 @@ def test_complete_set_replaces_prior_set_and_rejects_partial_set(
     finally:
         os.umask(previous_umask)
     assert fresh.is_dir()
-    assert fresh.stat().st_mode & 0o777 == 0o750
+    assert fresh.stat().st_mode & 0o777 == 0o700
 
 
 def test_successful_replacement_preserves_mode_and_ignores_backup_cleanup_failure(
@@ -319,7 +319,8 @@ def test_publication_rejects_unsafe_or_unopenable_lock(
     real_open = os.open
 
     def fail_lock_open(path: str | os.PathLike[str], *args: object) -> int:
-        if Path(path) == lock:
+        p = Path(path)
+        if p.parent.resolve() / p.name == lock.parent.resolve() / lock.name:
             raise OSError("simulated lock failure")
         return real_open(path, *args)  # type: ignore[arg-type]
 
@@ -337,7 +338,8 @@ def test_unremovable_crash_staging_fails_closed(
     real_rmtree = shutil.rmtree
 
     def fail_abandoned(path: str | os.PathLike[str]) -> None:
-        if Path(path) == abandoned:
+        p = Path(path)
+        if p.parent.resolve() / p.name == abandoned.parent.resolve() / abandoned.name:
             raise OSError("simulated staging cleanup failure")
         real_rmtree(path)
 
