@@ -25,6 +25,7 @@ from fuzz.targets import (
     exercise_reasoning_effort_profile,
     exercise_redaction,
     exercise_request_body,
+    exercise_structured_output_error,
 )
 
 # Keep per-test wall time small so the suite stays cheap in CI.
@@ -130,6 +131,12 @@ def test_orchestration_on_arbitrary_prompt(prompt: str, mode: str) -> None:
 @given(st.text(max_size=4096))
 def test_model_judge_parser_rejects_or_validates_arbitrary_text(reply: str) -> None:
     exercise_model_judge_reply(reply)
+
+
+@_SETTINGS
+@given(st.text(max_size=4096), _json_values)
+def test_structured_output_validation_never_crashes(content: str, schema: object) -> None:
+    exercise_structured_output_error(content, schema)
 
 
 @_SETTINGS

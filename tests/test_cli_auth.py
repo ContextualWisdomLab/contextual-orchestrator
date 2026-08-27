@@ -102,6 +102,8 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
         (["--max-concurrent-runs", "0"], "positive integer"),
         (["--max-concurrent-runs", "65"], "1..64"),
         (["--max-body-bytes", "0"], "positive integer"),
+        (["--rate-limit-requests", "0"], "positive integer"),
+        (["--rate-limit-window-seconds", "-1"], "positive integer"),
         (["--chat-template-args", "[]"], "JSON object"),
         (["--chat-template-args", "null"], "JSON object"),
         (["--chat-template-args", "{"], "valid JSON object"),
