@@ -12,6 +12,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- A fail-closed, transactional evidence boundary for the optional NVIDIA NIM
+  benchmark with immutable task/scorer identities and complete provenance.
 - Bounded first-valid-completion racing for operator-declared equivalent model
   group endpoints across text and media capabilities, with fail-closed contract
   comparison and winner/cancellation provenance.
