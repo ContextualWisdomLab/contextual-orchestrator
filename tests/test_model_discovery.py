@@ -239,6 +239,57 @@ def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
     assert "architecture" not in merged["data"][0]
 
 
+def test_openai_bare_list_promotes_transport_compatible_ids_to_chat() -> None:
+    """A metadata-free listing still discovers chat, never embedding siblings.
+
+    A generic OpenAI-compatible gateway (e.g. LiteLLM) often returns only an
+    ``id`` per row. The identifier that passes the ordinary chat transport gate
+    must receive the same ``chat`` capability the rest of the pool advertises;
+    otherwise runtime auto-discovery silently drops chat deployments while
+    embedding deployments that happen to carry richer metadata survive.
+    """
+    discovered = _parse_openai_compatible(
+        {"data": [
+            {"id": "gpt-4o"},
+            {"id": "claude-3-5-sonnet"},
+            {"id": "text-embedding-3-large"},
+        ]},
+        OPENAI_SOURCE,
+    )
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["gpt-4o"].capabilities == ("chat",)
+    assert by_id["claude-3-5-sonnet"].capabilities == ("chat",)
+    assert "text-embedding-3-large" not in by_id
+
+
+def test_openai_parse_preserves_explicit_capability_evidence() -> None:
+    """A metadata-bearing listing keeps its provider-declared capabilities."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "chat-model-xl",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                    },
+                },
+                {
+                    "id": "rerank-model",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["rerank"],
+                    },
+                },
+            ]
+        },
+        OPENAI_SOURCE,
+    )
+    by_id = {model.model_id: model for model in discovered}
+    assert "chat" in by_id["chat-model-xl"].capabilities
+    assert by_id["rerank-model"].capabilities == ("rerank",)
+
+
 def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
     payload = {
         "data": [

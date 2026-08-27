@@ -21,6 +21,7 @@ from .model_discovery import (
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
+    is_discovered_chat_candidate,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_bootstrap_discovered_agents,
@@ -369,10 +370,18 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover and activate only models with explicit chat capability evidence."""
+    """Discover and activate chat-capable models, preserving free/ZDR evidence.
+
+    A model is a chat candidate when a provider explicitly tags ``chat`` or
+    when it carries no capability metadata at all (a bare OpenAI-compatible or
+    LiteLLM listing) but still passes the ordinary chat transport gate — see
+    :func:`model_discovery.is_discovered_chat_candidate`. Splitting that rule
+    here would silently drop bare chat deployments whose embedding sibling
+    happens to carry richer metadata.
+    """
     discovered, _errors = discover_all_models(_runtime_discovery_sources(orchestrator))
     openrouter_paid_available = openrouter_paid_inference_available()
-    chat_models = [model for model in discovered if "chat" in model.capabilities]
+    chat_models = [model for model in discovered if is_discovered_chat_candidate(model)]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
         replace(

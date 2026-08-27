@@ -48,6 +48,49 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert "bootstrap_agent" in result["updated"]
 
 
+def test_auto_discovery_activates_bare_chat_but_not_embedding_ids(monkeypatch) -> None:
+    """A metadata-free gateway listing still activates chat deployments.
+
+    Mirrors the user-facing report: on a bare OpenAI-compatible gateway
+    (``LLM_GATEWAY_API_URL`` + ``LLM_GATEWAY_API_KEY``) whose /model/info
+    merge leaves chat rows without capability evidence, chat models must be
+    activated while embedding-named models stay out of the routing pool.
+    """
+    bare_chat = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="gpt-chat-7x",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://llm-gateway-dev.example/v1",
+        auth_scheme="Bearer",
+        capabilities=(),
+    )
+    bare_embedding = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="text-embedding-5",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://llm-gateway-dev.example/v1",
+        auth_scheme="Bearer",
+        capabilities=(),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args: ([bare_chat, bare_embedding], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+    result = _auto_discover_runtime_agents(orchestrator)
+    assert result["added"] == ["configured_gateway_gpt_chat_7x"]
+    agents = orchestrator.agents
+    assert any(agent.id == "configured_gateway_gpt_chat_7x" for agent in agents)
+    assert all(
+        agent.model != "text-embedding-5" for agent in agents
+    )
+
+
 def test_auto_discovery_disables_paid_openrouter_without_credit(monkeypatch) -> None:
     """Catalog availability cannot promote an unaffordable paid deployment."""
     paid = DiscoveredModel(
