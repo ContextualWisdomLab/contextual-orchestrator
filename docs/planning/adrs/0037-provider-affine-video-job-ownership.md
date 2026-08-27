@@ -1,5 +1,5 @@
 ---
-id: "0036"
+id: "0037"
 title: "Preserve provider ownership for asynchronous video jobs"
 status: accepted
 proposed_date: "2026-08-26"
