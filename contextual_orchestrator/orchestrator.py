@@ -39,6 +39,7 @@ from .chat_capability import (
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .model_group import ModelGroupRouter, canonical_group_name
+from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .telemetry import inject_trace_context, traced
@@ -2806,6 +2807,13 @@ class TaskOrchestrator:
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
+
+        self._openrouter_collector = OpenRouterUptimeCollector(
+            self.candidates,
+            self._group_router,
+            self._quality_router,
+        )
+        self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
         # task text and agent metadata, plus strict triage verdicts keyed by
         # content hash. Bounds are operational memory limits, never weights.
@@ -2890,6 +2898,8 @@ class TaskOrchestrator:
 
     def close(self) -> None:
         """Release optional durable resources owned by this orchestrator."""
+        if hasattr(self, "_openrouter_collector") and self._openrouter_collector:
+            self._openrouter_collector.stop()
         if self._pool_store is not None:
             self._pool_store.close()
         if self._store is not None:
