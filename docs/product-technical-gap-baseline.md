@@ -3,15 +3,15 @@
 ## 2026-08-27 bare-gateway discovery and virtual-model acceptance slice
 
 The user-facing report was reproduced as a code path, not an environment
-quirk: with `LLM_GATEWAY_API_URL=https://llm-gateway-dev.hyosungitx.com` +
-`LLM_GATEWAY_API_KEY` in bootstrap transport, plain OpenAI-compatible
-gateways (e.g. a LiteLLM proxy) whose `/v1/models` rows carry no modality
-metadata produced `DiscoveredModel` rows with **empty** capabilities for
-chat deployments, while embedding deployments that happen to carry richer
-`/model/info` evidence kept an `embedding` capability. Empty-capability
-chat rows were then guaranteed to be dropped by the runtime activation
-filter (`"chat" in model.capabilities`), which is exactly "embedding
-discovers, chat does not".
+quirk: with the configured-gateway bootstrap transport
+(`LLM_GATEWAY_API_URL` + `LLM_GATEWAY_API_KEY`) pointing at a
+plain OpenAI-compatible gateway (e.g. a LiteLLM proxy) whose `/v1/models`
+rows carry no modality metadata produced `DiscoveredModel` rows with
+**empty** capabilities for chat deployments, while embedding deployments
+that happen to carry richer `/model/info` evidence kept an `embedding`
+capability. Empty-capability chat rows were then guaranteed to be dropped
+by the runtime activation filter (`"chat" in model.capabilities`), which
+is exactly "embedding discovers, chat does not".
 
 Closure in PR #868 (`fix/gateway-default-chat-model` core slice):
 
@@ -59,7 +59,7 @@ This document serves as the baseline for the Contextual Orchestrator (an enterpr
 
 ### Gap Analysis (Product)
 1. **Dynamic Model Discovery & Standard API Routing**:
-   - *Current*: `llm-gateway-dev.hyosungitx.com` with API keys resolves embeddings, but other models (chat, multimodal) fail discovery.
+   - *Current*: A configured OpenAI-compatible gateway with API keys resolves embeddings, but other models (chat, multimodal) fail discovery.
    - *Root cause (closed in PR #868)*: plain OpenAI-compatible listing rows without capability metadata were parsed with empty capabilities and then dropped by the runtime chat-activation filter; endpoint embedding rows kept richer metadata and survived.
    - *Target*: Seamless dynamic model discovery for `orchestrator/auto`, `orchestrator/free`, and omitted models. Paid vs free model discovery fully automated regardless of provider or custom gateway endpoint. Full OpenAPI/RESTful standard compliance.
    - *ZDR Discovery*: OpenRouter and configured gateways discover ZDR models (paid and free) and parse privacy policies for automated compliance.
