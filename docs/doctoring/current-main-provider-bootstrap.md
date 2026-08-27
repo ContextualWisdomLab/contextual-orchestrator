@@ -51,6 +51,10 @@ cheapest incompatible model. Surviving rows receive only generic serving tags:
 infers reasoning, verification, coding, vision, or provider-native effort support
 from a model name. Those capabilities require explicit provider/catalog evidence or
 measured evaluation and are negotiated by the ordinary runtime policy.
+OpenRouter's explicit `supported_parameters=response_format` catalog field is
+retained as a structured-output capability tag. The structured auto route uses
+only a synthesizer carrying that evidence and fails closed when none exists;
+model names are never used to infer support.
 
 The bootstrap pool is provider-diverse before it is cost-ordered. Missing price is
 `unknown`, not zero. This avoids treating a provider such as Bytez, whose public

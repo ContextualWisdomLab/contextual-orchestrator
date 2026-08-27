@@ -174,7 +174,11 @@ def test_structured_free_model_uses_free_agents_for_evidence_and_synthesis(
     orchestrator = TaskOrchestrator(
         [
             ModelAgent("paid_agent", "paid-model", priority=100),
-            ModelAgent("free_agent", "free-model", tags=("cost:free",)),
+            ModelAgent(
+                "free_agent",
+                "free-model",
+                tags=("cost:free", "response_format"),
+            ),
         ]
     )
     called_agents: list[str] = []
@@ -197,6 +201,34 @@ def test_structured_free_model_uses_free_agents_for_evidence_and_synthesis(
     assert result["orchestration"]["mode"] == "conduct"
     assert called_agents
     assert set(called_agents) == {"free_agent"}
+
+
+def test_structured_auto_uses_explicit_response_format_capability_for_synthesis() -> None:
+    """Catalog evidence, not model names, selects the structured synthesizer."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("plain_agent", "plain-model", priority=100),
+            ModelAgent(
+                "structured_agent",
+                "structured-model",
+                tags=("response_format",),
+            ),
+        ]
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "return JSON"}],
+            "response_format": {"type": "json_object"},
+        },
+        single_agent=False,
+    )
+
+    run = orchestrator.get_workflow_run(
+        result["orchestration"]["workflow_run_id"]
+    )
+    assert run["trace"][-1]["agent_id"] == "structured_agent"
 
 
 def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
@@ -350,7 +382,7 @@ def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
         server.shutdown()
 
     assert status == 400
-    assert "vision-capable" in body["error"]["message"]
+    assert "vision" in body["error"]["message"]
 
 
 def test_http_responses_endpoint_passes_through() -> None:

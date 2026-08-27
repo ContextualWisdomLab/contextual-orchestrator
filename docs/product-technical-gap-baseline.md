@@ -1,172 +1,53 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-27 04:38 KST live queue evidence
+## 2026-08-27 trace-authority acceptance slice
 
-Protected `main` remains exact commit
-`5a01759165be20ab38c05c2321d8a9f00ec331ea`. This refresh is limited to
-observable exact-head state. A local run, a requested retry, or an unpushed
-repair is recorded as work in progress and is not promoted to hosted or
-protected-main evidence.
+Protected `main` at `5a01759165be20ab38c05c2321d8a9f00ec331ea`
+contains the trace-purpose gate delivered through protected PR #781, but issue
+#117 remains open. Current-main probes found two central bypasses: structured
+chat accepted a non-Boolean trace flag before returning early, and an
+admin/inference principal without trace authority could read access-report
+steps and accessed outputs. This slice moves strict flag validation ahead of
+every chat execution branch and requires trace authority before access-report
+resource lookup, making owned and unknown identifiers indistinguishable to a
+non-trace caller.
 
-The current queue heads are #888
-`ffadebefd118a6c02b93d3a97d0d5e61129c74e7`, #889
-`a310ce09e523b5d42899f6091fc93391ad5152ac`, #890
-`7a7054a5414a04475cef3695354673494e42bd11`, #880
-`ab591be259c49f56746a11ae2b99b0b2aae2f475`, #879
-`be6972c43cbf6506121633f9a3880c2c9567137c`, #857
-`0aec4a543a684e3bdb0545749bfac187a7364248`, #876
-`73a5510f099742003f7242b6f2c55e10f8ff9dab`, and #849
-`ede33b5d4c23070f2d5ee961acf7bd7ee03fabf0`. No current head has an
-independent approval.
+This is not full #117 closure. Batch routing jobs still lack principal-bound
+ownership; the bearer-verifier contract lacks tenant, resource, purpose,
+lifetime, and revocation context; and legacy single-token production migration
+does not yet have a fail-closed deployment gate. Those requirements need their
+own protected implementation and HTTP acceptance evidence.
 
-`#888` has focused exact-head evidence of `40 passed`, official full-suite
-evidence of `2363 passed in 754.32s`, and zero unresolved review threads. Its
-Strix job failed, OpenCode remains pending, and independent approval is absent.
-`#889` has exact-head local evidence of `2385 passed in 806.69s`,
-100% statement/branch coverage for its release-authority evaluator and
-collector (`28 passed`), `21` focused downstream-chain tests, and all eight
-review threads resolved. Its Strix job failed and qualifying independent
-approval is absent, so the successful jobs are regression evidence rather than
-protected merge authority. #890 moved to `7a7054a5` with the reviewed
-read-only publication-mode repair. Its current exact-head focused evidence is
-`16 passed`, zero review threads are unresolved, and every completed required
-job except Strix is successful. Earlier full-suite results belong to the prior
-head and are not transferred to this one. A protected-main `strix-scan`
-repository dispatch for this exact head is queued as run `33006163284` to test
-the newly protected OpenRouter fallback; queued evidence is not a clean scan or
-merge authority. #880 is this
-baseline refresh at exact head `ab591be2`; its required hosted jobs remain
-queued and approval is absent. Normal auto-merge remains enabled.
+## 2026-08-26 protected-main catalog evidence slice
 
-`#879` now carries the review-driven telemetry and bounded finish-reason repair at
-`be6972c4`; its `139` focused tests and official exact-head full suite (`2383
-passed in 826.26s`) passed, and all 31 review threads are resolved. Remaining
-hosted jobs and independent approval are still authoritative delivery gates.
-`#857` is remotely at `0aec4a54`, where the concurrent change records queued
-batch health and verifies the generated native wheel with hash enforcement.
-Agent-local integration preserves that intent together with the HTTP response
-flush repair, but exact-head diagnostic/full tests remain in progress; no local
-or stale-head result is promoted to delivery evidence. #849
-and #876 retain successful exact-head
-full/security evidence but a failed Strix result. Their exact-head retries also
-failed closed after NVIDIA NIM returned `429`/`410` and the OpenAI fallback
-reported exhausted credit; zero findings before provider exhaustion are not a
-clean scan. Auto-merge remains enabled for #849 and #876 without bypass.
+Protected `main` is `56a898b85654f5c8468e3d8448d93120b24bd269`
+after the normal #851 merge. The exact open queue was re-read at #880
+`da9f4ab0`, #879 `ed0690e3`, #876 `4da38a05`, #869 `fe7b248e`, #868
+`28e0fdbd`, #858 `b0b67286`, #857 `77fd4369`, and #849 `7abf1b89`.
+Those branches cover provider errors and telemetry, CI runtime installation,
+this baseline's broader refresh, Zen bootstrap, gateway aliases, customer copy,
+provider-backed embeddings, and asynchronous HTTP capacity. None delivers the
+operator-visible refresh timestamps and stable success/failure evidence required
+by accepted ADR 0015.
 
-The buyer gaps behind [issue #86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86)
-and [issue #103](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/103)
-remain open. #86 still requires KV-backed live NVIDIA NIM capability,
-cost-provenance, failure-class, and quality evidence. #889 implements #103's
-signed fail-closed exact-head authority validation, active-ruleset required
-checks/reviews/last-push exclusion, complete findings inventory, and consistent
-authority propagation through the commercial readiness chain. #103 remains
-open for the central `.github` immutable authority-artifact producer and GRC
-archive/control mapping. Queue activity and local test results do not close
-either acceptance gap.
+The highest-leverage independently implementable customer gap is therefore
+provider-catalog freshness evidence. The durable catalog already records exact
+per-account refresh status, bounded error code, counts, and UTC instants, but
+the bootstrap JSON omitted those fields. Operators consequently could not tell
+a live catalog from last-known-good recovery without querying the database.
+This slice exposes only the current bootstrap's secret-free refresh evidence;
+it does not infer provider/model policy, calculate a freshness threshold, or
+claim that an unknown price is zero. The acceptance contract is: each attempted
+registered account emits its stable account id, status, observed/eligible
+counts, allowlisted error code, and UTC start/finish instants; previous runs in
+a reused store are not duplicated in the current report; secrets and raw
+provider diagnostics remain absent.
 
-Central [`.github#1357`](https://github.com/ContextualWisdomLab/.github/pull/1357)
-normally squash-merged as protected-main commit
-`31e5f5337d8a8d844c456fe03f123c51b62416c9`. Its NVIDIA exhaustion chain now
-routes through `openrouter/free` before the existing direct-OpenAI fallback,
-preserves the downscoped status-publication permission, and keeps provider or
-incomplete-scan outcomes fail-closed. The merge head passed the exact-head path
-policy and `28` focused fallback contracts with no unresolved review thread.
-Its pre-merge Strix run still used the then-protected legacy chain and failed
-closed after NVIDIA `429`, retired-model `410`, and OpenAI quota `429`; that
-failure is not relabeled as success. Run `33006163284` is the first exact target
-dispatch using the newly protected chain and remains queued. The temporary
-trusted-main smoke compatibility marker remains a cleanup Gap until the updated
-smoke is the only supported protected contract.
-
-The local hourly LaunchAgent remains registered with `StartInterval=3600`, but
-the currently loaded job reports `runs = 0` and `last exit code = (never
-exited)`. Registration therefore proves scheduling configuration only, not a
-successful hourly development run. Its live prompt now explicitly requires
-Compose-backed asynchronous web verification, k6 concurrency/latency/error-rate
-evidence, measured bottleneck repair, customer-actionable copy, and screenshot
-inspection for changed UI.
-
-## 2026-08-27 02:03 KST protected-main and exact-head queue evidence
-
-Protected `main` is exact commit
-`5a01759165be20ab38c05c2321d8a9f00ec331ea`. It contains the normal protected
-merges of [PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
-at `56a898b85654f5c8468e3d8448d93120b24bd269` and
-[PR #881](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/881)
-at `5a01759165be20ab38c05c2321d8a9f00ec331ea`. Their source heads are
-`d49846d5c8deca55c60315a8fbb461ecdebf67eb` and
-`4acfe477014d56fbe76a2cd9db9ebd91552d0079`, respectively. The #851 source
-head now has terminal successful full-suite and security jobs, but its Strix
-job failed. The #881 source head has terminal successful full-suite, security,
-and OpenCode jobs, while Strix failed. These facts
-prove protected delivery of the bounded code changes; they do not convert
-failed review automation into successful review evidence.
-
-[PR #851](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/851)
-closed [issue #102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102)
-and [issue #846](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/846).
-Operator-declared equivalent endpoints can race through bounded execution while
-preserving modality validation, deadline/cancellation outcomes, provider-call
-usage and cost provenance, and the shared retry/circuit boundary. The same
-merge delivers constant-time spend accounting, provider-diverse virtual-model
-failover, conducted structured responses, per-call generated-workflow budget
-checkpoints, and configured local output limits without mutating caller-owned
-requests. These claims are bounded to the exact merge above; production
-provider quotas and deployment-specific capacity remain separate acceptance
-evidence.
-
-PR #881 closes the bounded operator-visible catalog-evidence gap: refresh output
-now includes stable account identity, outcome, observed and eligible counts,
-allowlisted error code, and UTC start/finish instants without secrets or raw
-provider diagnostics. It does not infer a freshness threshold, provider/model
-equivalence, or zero cost from missing price evidence.
-
-The open queue was re-read at exact heads #888 `6a67e5e7`, #887 `5e07bc6e`,
-`#883` `0175df2e`, #880 `0d716b93`, #879 `f2c444aa`, #876 `73a5510f`,
-`#868` `fd0cd254`, #858
-`09f5f194`, #857 `4da93814`, and #849 `ede33b5d`. PR #869 was closed unmerged because #868
-preserves its OpenCode Zen workflow transport and unique-passphrase validation;
-no check or review evidence transfers between those heads. The queue covers
-the unsupported local tool-description cap, video job ownership, this baseline,
-provider errors, pinned OpenCode runtime,
-gateway aliases and discovery, customer copy, provider-backed embeddings, and
-asynchronous HTTP capacity, and trace-authority parity. Each requires its
-current exact-head review and required checks before normal protected merge.
-
-At this snapshot, #876 has terminal successful full-suite, security, Noema,
-and focused OpenCode bootstrap evidence; its coverage-evidence job remains
-queued and Strix remains in progress. #883 and #879 have newly attached hosted
-jobs, but those jobs remain queued. #887 and #880 expose only successful
-third-party review statuses so far; absent required hosted jobs are not success
-evidence. #883's unchanged exact head completed the official local suite with
-`2372 passed in 685.59s`, has zero unresolved threads, and has normal
-auto-merge re-enabled; its hosted jobs and independent approval remain required.
-`#868` has focused `actionlint` and fuzz evidence while replacement review and
-hosted jobs attach. No local, queued, running, or absent job is promoted to
-protected delivery evidence.
-
-`#888` centralizes strict orchestration-trace flag validation before structured
-Chat early returns and requires trace-purpose authority for access reports. Its
-exact head passes the official local suite (`2355 passed in 675.35s`) and has
-zero unresolved threads, but hosted checks and independent review remain
-required. Issue #117 intentionally remains open for batch ownership,
-context-rich token authorization, and single-token migration; this bounded
-slice does not overstate closure.
-
-PR #886 was closed unmerged after exact comparison with #887 and the current
-official OpenAI schemas. Those schemas define function descriptions as strings
-but do not establish the gateway's former 1,024-character maximum. #887 removes
-only that unsupported local restriction while retaining the bounded request and
-structural tool validation; #886's system-message indirection would instead
-change caller message semantics. No #886 evidence transfers to #887.
-
-Remaining acceptance gaps are deployment evidence, not invented policy:
-repeat the checked-in k6 workload through production TLS and real provider
-quotas; run a successful post-merge provider-catalog refresh using the durable
-KV; prove OpenCode Zen and OpenRouter free/cost discovery from that refresh;
-and verify all eight capability routes plus OpenAI Responses reasoning-summary
-stream cancellation at the deployed boundary. Durable multi-replica routing
-observations still require an accepted retention model before implementation.
+Remaining larger gaps stay unchanged: durable multi-replica routing observations
+need an accepted retention/decay decision; video jobs need a normalized durable
+ownership/lifecycle contract; and verified answer-token streaming needs a
+cancellable asynchronous dependency graph. Implementing any of those without
+their missing decisions would invent policy rather than close a bounded gap.
 
 ## 2026-08-26 11:46 KST exact-head queue snapshot
 
@@ -179,7 +60,7 @@ protected merge. #855 and #851 have terminal successful required jobs; the
 other heads have queued review or security jobs. Queue delay is not treated as
 success or bypass authority.
 
-`#856` adds the operator-configurable request-body ceiling and validates direct
+#856 adds the operator-configurable request-body ceiling and validates direct
 `SecurityConfig` construction, including rejection of Boolean and non-integer
 limits. Its full exact tree exposed only the stale legacy-table assertion
 already repaired by #855; the stacked repair leaves its replacement Checks
@@ -192,10 +73,10 @@ evidence, not protected-main delivery.
 
 Protected `main` remains `762f7a345b1d8c82584023a7ff05b4660d628cab`.
 The open queue was re-read at exact heads #855 `f2e66db7`, #851 `d42172b3`,
-`#850` `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845 `24219ace`,
+#850 `dd88b69e`, #849 `6103806a`, #848 `d0d5439d`, #845 `24219ace`,
 and #834 `e563920a`. Auto-merge is enabled without bypass on every PR.
 The shared stale-table contract is stacked onto #845, #848, #849, and #850;
-`#849` also makes the documented k6 traffic compatible with its isolated rate
+#849 also makes the documented k6 traffic compatible with its isolated rate
 limit and validates programmatic request budgets, while #848 now rejects every
 duplicate front-matter or heading identifier declaration. Their replacement
 hosted checks and independent exact-head reviews remain required.
@@ -652,7 +533,7 @@ current heads. Hosted terminal success does not replace the required approval.
 ### Protected auto-merge continuation — 2026-08-22 01:50 KST
 
 Normal squash auto-merge is enabled for #804, #803, #765, #807, #806, and
-`#809` at their exact heads. GitHub reports each as `blocked` until required
+#809 at their exact heads. GitHub reports each as `blocked` until required
 reviews and hosted gates are satisfied; this does not bypass any protection.
 Downstream #817 remains unqueued for merge until root #804 advances.
 
@@ -753,11 +634,11 @@ including reviews, unresolved threads, and required checks.
 governance-audit durability repair is `5c6670cb`, with 6 active workflows out
 of 29 and no failure; #804's ADR reconciliation is `d8a34558`, with 31
 terminal exact-head check runs and no failure in this refresh.
-`#818` is `083316fc`, with one active replacement check out of 29 after the
+#818 is `083316fc`, with one active replacement check out of 29 after the
 session-correlation repair. New #824 is `a4219151`, with six active checks out
 of 28 for the locked local-test entrypoint. #820 (`9cae444a`) has 30 terminal
 exact-head runs with no failure. Those results are only partial gate evidence:
-`#803`, #818, and #824 are explicitly `REVIEW_REQUIRED`, and every PR needs its
+#803, #818, and #824 are explicitly `REVIEW_REQUIRED`, and every PR needs its
 own fresh independent approvals, resolved-thread evidence, and required
 terminal workflows before a normal protected merge. No PR is described here as
 merge-ready while any of those facts are missing or unverified.
@@ -849,8 +730,8 @@ live work item.
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
 | P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; local catalog is not production telemetry. Current [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) labels the configured NIM listing source `chat` for startup activation, but that static source declaration is not live, model-level capability, price, failure, or quality evidence. | KV-backed NIM discovery benchmark records model-level declared capability, price provenance, failure class, and quality result without secret leakage; protected main then activates only capability-qualified deployments. |
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
-| P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | Promote #823's explicit CLI invocation contract to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
-| P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | Add a minimal OpenAI-compatible connector contract test for a real consumer or defer extraction with a documented trigger; do not split speculatively. |
+| P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | PR #823 explicit CLI invocation contract is merged to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
+| P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |
 | P2 | Frontend component inventory is not applicable here. | This repository is a backend stdlib lab and has no frontend/Storybook tree. | Keep the existing Figma artifact record; introduce Storybook only when a frontend package is actually added. |
 
 ## 7. Delivery gates
@@ -1120,7 +1001,7 @@ the risk of publishing version `0.2.0` before its implementation. It also
 restores the pre-existing tool-fallback changelog entries and synchronizes the
 lockfile package version.
 
-`#834` is now exact head `6f494131774f38b78bdc3b104451e2133edb5318`,
+#834 is now exact head `6f494131774f38b78bdc3b104451e2133edb5318`,
 tree `52fdbdcb96bbe0a7617a4573e9c01cd5355db350`. That exact release-candidate
 tree passed the complete local suite (`1612 passed in 724.94s`) and produced
 both the `0.2.0` sdist and wheel. Protected-main publication remains unproven:
@@ -1149,3 +1030,49 @@ enabled and remains open until its fresh exact-head gates complete:
 
 These are PR-head claims only. None is protected-main or release evidence until
 terminal Checks and required independent approvals cause a normal merge.
+
+### Live exact-head continuation — 2026-08-27 09:28 KST
+
+Added model capability prior integration for `ModelGroupRouter`:
+- Embedded `Chatbot Arena` and `Artificial Analysis` baseline scores as Beta distribution priors.
+- Updated `ModelGroupRouter` to accept a `prior_resolver` without breaking the existing group stability calculation or `_report_locked` structure.
+- Updated `contextual_orchestrator/orchestrator.py` to use `resolve_quality_prior` for its `_quality_router`.
+- PR #883 requires investigation for `strix` check failures.
+- PR #888 and #887 have their CodeRabbit comments handled or under review.
+- The 1-hour recurring `schedule` gap-loop continues.
+
+### Live exact-head continuation — 2026-08-27 09:52 KST
+
+Added OpenRouter upstream real-time reliability collector (`OpenRouterUptimeCollector`):
+- Fetches live telemetry (`uptime_last_30m`) from `/api/v1/models/{model_id}/endpoints`.
+- Dynamically integrates this telemetry into `ModelGroupRouter` by exposing `update_prior` to safely adjust `alpha` and `beta` values without mutating underlying stability logic.
+- Avoids HTTP blocks during startup by orchestrating a non-blocking Daemon thread polling at set intervals, enabling resilient routing dynamically over time.
+- Integrated the change into PR #892 (`feat/model-capability-priors`) and pushed to the origin repository.
+
+### Live exact-head continuation — 2026-08-27 12:0x KST (arbitrary-weight remediation)
+
+GAP RESOLVED on PR #892 head `af9d667f…+fixups`:
+- The shipped `_BASELINE_PRIORS` table carried invented Beta pseudo-counts
+  ("alpha=10, beta=1…" style), violating the organization rule that no
+  weight may be arbitrary. Replaced with a measurement-typed derivation:
+  published Arena Elo and Artificial Analysis Quality Index are normalized
+  by each instrument's own median/MAD, averaged, squashed through the
+  logistic, and split across exactly the repository's existing Laplace
+  evidence budget (`PRIOR_EVIDENCE_BUDGET = BETA_PRIOR_SUCCESS_COUNT +
+  BETA_PRIOR_FAILURE_COUNT`). Mass is conserved: measured members never
+  receive more evidence than unmeasured ones. Unknown identifiers keep
+  the unchanged Laplace pair.
+- The uptime collector's invented `weight = 50.0` penalty was removed.
+  Each poll now folds one window of provider-measured availability into
+  equivalent Bernoulli mass (`successes += u/100`, failures`), so all
+  counts trace to polls; failure denominator = polls performed.
+- `ModelGroupRouter.update_prior()` was added so prior components can be
+  refreshed atomically while `success_count`/`failure_count` remain
+  bit-identical — telemetry can no longer masquerade as outcomes.
+- Collector previously called the nonexistent `update_prior`; it now has
+  a contract + tests, hardened HTTPS/percent-encoded fetch, full
+  docstrings, and injectable startup delay for deterministic tests.
+REMAINING GAP (follow-up loop): re-fit these priors against fast-mlsirm/
+TEPP calibrated quality latents before enabling benchmark priors on any
+revenue-serving route; until then their influence is capped at the same
+budget an unmeasured member already spends.

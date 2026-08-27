@@ -21,6 +21,11 @@ retrieval, and trace-enabled workflow/evaluation reads require the verified
 `trace` purpose scope. The server records a metadata-only audit event before
 releasing the response and never trusts a caller-supplied purpose header.
 
+Chat validates the trace flag before selecting structured, tool, streaming, or
+ordinary execution, so no early-return path can weaken the request contract.
+Access reports always require the trace purpose because their accessed-output
+lists are trace evidence even when general trace exposure is disabled.
+
 When `include_orchestration_trace` is present it must be a JSON boolean;
 `null`, strings, numbers, arrays, and objects are rejected. Omission follows
 the explicit server default.
@@ -40,6 +45,10 @@ purpose because it has no verified trace claim.
 - the audit event is written before the trace response path proceeds and
   contains no prompt, output, credential, or PII value;
 - audit failure returns a generic `503` instead of releasing the trace.
+
+Issue #117 remains open: batch jobs still need principal-bound ownership, the
+authorization adapter still needs tenant/resource/lifetime context, and legacy
+single-token production migration still needs a fail-closed deployment gate.
 
 ## Research grounding
 
