@@ -66,6 +66,47 @@ def test_http_chat_accepts_mode_route() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_omitted_model_defaults_to_gateway_virtual_model() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "messages": [{"role": "user", "content": "say hi"}],
+                "mode": "route",
+            },
+        )
+        assert status == 200, body
+        assert body.get("model") == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_null_model() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": None,
+                "messages": [{"role": "user", "content": "say hi"}],
+                "mode": "route",
+            },
+        )
+        assert status == 400, body
+        assert "invalid_model" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_accepts_orchestration_mode_auto() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -163,6 +204,8 @@ def test_http_chat_rejects_mode_non_string() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_mode_route()
+    test_http_chat_omitted_model_defaults_to_gateway_virtual_model()
+    test_http_chat_rejects_null_model()
     test_http_chat_accepts_orchestration_mode_auto()
     test_http_chat_rejects_invalid_mode()
     test_http_chat_rejects_mode_non_string()

@@ -17,6 +17,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
     RequestError,
     SecurityConfig,
+    _validate_chat_model,
     _validate_completions_model,
     _validate_embeddings_model,
     _validate_responses_model,
@@ -63,6 +64,7 @@ def _server():
 
 def test_unit_model_strip_writeback() -> None:
     for validate in (
+        _validate_chat_model,
         _validate_completions_model,
         _validate_responses_model,
         _validate_embeddings_model,
@@ -73,15 +75,18 @@ def test_unit_model_strip_writeback() -> None:
 
 
 def test_text_model_omission_selects_gateway_default() -> None:
-    """Omitting a text model uses auto routing, never a provider-specific guess."""
-    for validate in (_validate_completions_model, _validate_responses_model):
-        body: dict = {}
-        assert validate(body) == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
-        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    """Chat omits to the public gateway id; Responses omits to orchestrator/auto."""
+    chat_body: dict = {}
+    responses_body: dict = {}
+
+    assert _validate_chat_model(chat_body) == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    assert chat_body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    assert _validate_responses_model(responses_body) == TaskOrchestrator.AUTO_MODEL
+    assert responses_body["model"] == TaskOrchestrator.AUTO_MODEL
 
 
 def test_text_model_rejects_explicit_null() -> None:
-    for validate in (_validate_completions_model, _validate_responses_model):
+    for validate in (_validate_chat_model, _validate_completions_model, _validate_responses_model):
         with pytest.raises(RequestError) as error:
             validate({"model": None})
         assert error.value.code == "invalid_model"
@@ -89,6 +94,7 @@ def test_text_model_rejects_explicit_null() -> None:
 
 def test_unit_model_rejects_blank() -> None:
     for validate in (
+        _validate_chat_model,
         _validate_completions_model,
         _validate_responses_model,
         _validate_embeddings_model,

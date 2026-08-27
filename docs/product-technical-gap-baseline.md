@@ -1,5 +1,31 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-27 omitted-model and virtual-id contract slice
+
+The prior local `commercial-loop-20260826` worktree contained an omitted-model
+repair that was not yet covered by PR #868 head `d37569835b1944075b66dd259d6738a8f4052927`.
+That repair was reconciled into the live PR branch without changing the open
+privacy-discovery or trace-authorization contracts. The exact contract on the
+new head is now:
+
+1. `/v1/chat/completions` omits to the advertised virtual gateway id
+   `contextual-orchestrator`.
+2. `/v1/responses` omits to `orchestrator/auto`, preserving the orchestrated
+   path instead of pretending a concrete deployment was named.
+3. Explicit JSON `null` still fails closed on both text surfaces; omission and
+   explicit null are no longer conflated.
+4. `orchestrator/free` remains explicit-only; no omitted-model path can
+   silently downgrade into a free-only request.
+
+Focused exact-head verification on Thursday, August 27, 2026 used `uv run`
+from the clean PR worktree:
+`tests/test_chat_orchestration_mode_http_honesty.py`,
+`tests/test_responses_model_required_http_honesty.py`,
+`tests/test_model_strip_writeback_http_honesty.py`, and
+`tests/test_orchestrated_responses_stream.py` all passed (`43 passed in
+18.49s`). This is branch evidence only and does not replace protected hosted
+checks or independent review.
+
 ## 2026-08-27 bare-gateway discovery and virtual-model acceptance slice
 
 The user-facing report was reproduced as a code path, not an environment

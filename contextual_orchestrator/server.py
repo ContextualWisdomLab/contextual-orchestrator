@@ -1378,6 +1378,33 @@ def _validate_completions_model(body: dict[str, Any]) -> str:
     body["model"] = model
     return model
 
+
+def _validate_chat_model(body: dict[str, Any]) -> str:
+    """Validate or default the Chat Completions model.
+
+    Chat exposes the advertised gateway deployment id as its omitted-model
+    default. Explicit JSON ``null`` is not omission and still fails closed so
+    callers cannot accidentally request the default while believing they named a
+    concrete deployment.
+    """
+    model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
 def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
     """Legacy Completions ``max_tokens`` — positive integer capped at 1_048_576."""
     if "max_tokens" not in body:
@@ -4513,8 +4540,8 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
                 "invalid_model",
                 "model must be a string when present; omit the field to use the default",
             )
-        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
-        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        body["model"] = TaskOrchestrator.AUTO_MODEL
+        return TaskOrchestrator.AUTO_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -5868,7 +5895,7 @@ def build_server(
                         max_tokens = _validate_chat_max_completion_tokens(body)
                     else:
                         max_tokens = _validate_completions_max_tokens(body)
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     if "store" in body:
                         _validate_completions_store(body)
@@ -6047,7 +6074,7 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.

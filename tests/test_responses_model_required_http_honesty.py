@@ -1,4 +1,4 @@
-"""Responses API model selection honesty over HTTP."""
+"""Responses API omitted-model default and explicit model validation over HTTP."""
 
 from __future__ import annotations
 
@@ -53,7 +53,18 @@ def test_http_responses_defaults_missing_model() -> None:
     try:
         status, body = _post(port, {"input": "hello"})
         assert status == 200, body
-        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        assert body["model"] == TaskOrchestrator.AUTO_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_null_model() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, {"model": None, "input": "hello"})
+        assert status == 400, body
+        assert "invalid_model" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -109,6 +120,7 @@ def test_http_responses_accepts_pool_model() -> None:
 
 if __name__ == "__main__":
     test_http_responses_defaults_missing_model()
+    test_http_responses_rejects_null_model()
     test_http_responses_rejects_empty_model()
     test_http_responses_rejects_non_string_model()
     test_http_responses_rejects_overlong_model()
