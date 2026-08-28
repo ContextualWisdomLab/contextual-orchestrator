@@ -1,22 +1,22 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 11:06 KST exact-head PR remediation slice
+## 2026-08-28 11:18 KST exact-head PR remediation slice
 
-Protected `main` is `8d5924f8`. PR #879 now points at `e6d9e937` after
-merging this main and fixing provider-failure classification for `None`,
-binary passthrough, and authenticated structured-trace auditing; its exact
-merged tree passed **2515 tests**, while hosted Strix and the full-suite gate
-remain pending. PR #868 now points at `7b408aee` after merging this main and
-fixing non-string completion-model validation plus the gateway-default
-constant path; its focused model/HTTP regression set passed **28 tests**,
-while hosted Atheris and the full-suite gate remain pending. Both are
-`MERGEABLE` but `BLOCKED` without an independent approval, so neither is
-claimed as protected-main delivery.
+Protected `main` is `8d5924f8`. PR #879 remains at `e6d9e937`: its exact tree
+passed **2515 tests**, but the required Strix job failed closed because every
+configured provider was unavailable (OpenAI `insufficient_quota`, NVIDIA 429,
+and OpenRouter 502); no code finding was reported. PR #868 is now at the
+externally advanced exact head `262c6d87`; its predecessor remediation passed
+the focused model/HTTP regression set, but that proof is not promoted to the
+new head until the current hosted checks finish. Both are `MERGEABLE` but
+`BLOCKED` without an independent approval, so neither is claimed as
+protected-main delivery.
 
-PR #857 remains at `0aec4a54`, `CONFLICTING`, and `REVIEW_REQUIRED`: its long
-stacked embedding branch diverges from current main across runtime, tests,
-documentation, and lockfiles. The attempted current-main merge was aborted
-without a push; no branch evidence is promoted to protected-main evidence.
+PR #857 is now at externally advanced head `b2aedb7b`, `MERGEABLE`, and
+`REVIEW_REQUIRED`, with its full suite, Atheris, and Strix checks still
+pending. The earlier local merge attempt at `0aec4a54` was aborted without a
+push; no stale branch evidence is promoted to protected-main evidence. The
+docs-only recording PR is #900 at `16254dd3`; its full suite is still pending.
 The existing hourly OpenCode maintenance workflow remains the single
 scheduled loop (`23 * * * *` UTC); no duplicate scheduler was added.
 
