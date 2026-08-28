@@ -19,8 +19,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import _responses_to_chat_payload  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    _responses_to_chat_payload,
+)
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    build_server,
+    responses_sse_body,
+)
 
 
 def _build() -> TaskOrchestrator:
@@ -292,6 +299,71 @@ def _serve() -> tuple[object, int, str]:
     server = build_server(_build(), port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1], token
+
+
+def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
+    """Provider-size exhaustion remains an OpenAI-compatible 413 at the gateway."""
+    class RejectingClient(ModelClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            raise urllib.error.HTTPError(
+                "https://provider.example/v1", 413, "too large", None, None
+            )
+
+        proxy_send = proxy_send_once
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                provider_name="primary",
+                tags=("response_format",),
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                provider_name="fallback",
+                tags=("response_format",),
+            ),
+        ],
+        client=RejectingClient(),  # type: ignore[arg-type]
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [
+            {
+                "id": 0,
+                "role": "worker",
+                "agent_id": "primary_agent",
+                "subtask": "Evidence",
+                "access": [],
+                "output": "evidence",
+            }
+        ],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+    token = "passthrough_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large request"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 413
+    assert body["error"]["code"] == "request_too_large"
+    assert body["error_message"] == "request body exceeds every eligible provider limit"
 
 
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:

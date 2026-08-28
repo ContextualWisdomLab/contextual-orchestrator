@@ -76,7 +76,7 @@ from .reasoning_effort_profile import (
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
-_PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410})
+_PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
@@ -125,6 +125,10 @@ class BudgetExceededError(RuntimeError):
 
 class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
+
+
+class ProviderRequestTooLargeError(RuntimeError):
+    """Raised after every eligible provider rejects a request body with HTTP 413."""
 
 
 def _structured_output_error(
@@ -990,6 +994,8 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         if current is None or id(current) in seen:
             return False
         seen.add(id(current))
+        if isinstance(current, ProviderRequestTooLargeError):
+            return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and current.code
@@ -1357,6 +1363,8 @@ class ModelClient:
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
+        if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 413:
+            raise ProviderRequestTooLargeError("provider request body is too large") from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
         raise RuntimeError(f"provider {agent.id} request failed") from None
@@ -1780,6 +1788,8 @@ class ModelClient:
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
+        if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 413:
+            raise ProviderRequestTooLargeError("provider request body is too large") from None
         if not allow_transient_retries and last_error is not None:
             raise last_error
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
@@ -3185,6 +3195,7 @@ class TaskOrchestrator:
             seen_providers.add(provider_key)
             candidates.append(candidate)
         last_error: Exception | None = None
+        every_failure_was_request_too_large = True
         for candidate in candidates:
             started_at = time.perf_counter()
             candidate_payload = dict(upstream)
@@ -3202,8 +3213,16 @@ class TaskOrchestrator:
                 if not _is_passthrough_failover_error(exc):
                     raise
                 last_error = exc
-                self._record_failure(candidate.id)
-                if candidate.group_name:
+                request_too_large = isinstance(exc, ProviderRequestTooLargeError) or (
+                    isinstance(exc, urllib.error.HTTPError) and exc.code == 413
+                )
+                every_failure_was_request_too_large = (
+                    every_failure_was_request_too_large
+                    and request_too_large
+                )
+                if not request_too_large:
+                    self._record_failure(candidate.id)
+                if candidate.group_name and not request_too_large:
                     self._group_router.observe_failure(candidate.id)
                 continue
             self._record_success(candidate.id)
@@ -3212,6 +3231,10 @@ class TaskOrchestrator:
                     candidate.id, time.perf_counter() - started_at
                 )
             return result
+        if last_error is not None and every_failure_was_request_too_large:
+            raise ProviderRequestTooLargeError(
+                "request body exceeds every eligible provider limit"
+            ) from None
         raise RuntimeError(
             f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
         ) from last_error
@@ -3225,14 +3248,10 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Conduct evidence work, then preserve the caller's provider contract.
 
-        Structured synthesis here is INTENTIONALLY single-provider: the final
-        synthesized response is produced by exactly one selected synthesizer
-        agent with no cross-provider retry loop. Cross-provider failover is a
-        property of the plain virtual passthrough / virtual tools paths only
-        (see ``proxy_completion``), where a raw request can be replayed on a
-        different provider without changing its meaning; replaying a conducted
-        synthesis would mix evidence and attribution across providers, so it
-        stays single-shot and fails closed instead.
+        The final provider-shaped response is produced by one synthesizer. A
+        virtual selector may advance to another eligible provider only after an
+        HTTP 413 proves that the prior provider rejected the request before
+        generation; other synthesis failures remain single-shot and fail closed.
         """
         response_request = endpoint == "responses"
         chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
@@ -3358,21 +3377,74 @@ class TaskOrchestrator:
                 }
             )
         active_profile = effort_profile or self._role_effort_profile("synthesizer")
-        if active_profile is not None:
-            upstream = self.client.apply_effort_profile(
+        virtual_model = requested_model in {
+            None,
+            "contextual-orchestrator",
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
+        allowed_agent_ids = (
+            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            if free_only
+            else ({candidate.id for candidate in self.agents} if virtual_model else None)
+        )
+        synthesis_candidates = (
+            self._failover_candidates(
                 final_agent,
-                upstream,
-                active_profile,
+                task,
+                "synthesizer",
+                required_tags=selection_tags,
+                allowed_agent_ids=allowed_agent_ids,
             )
+            if virtual_model
+            else [final_agent]
+        )
+
+        def send_synthesis(
+            payload: dict[str, Any],
+        ) -> tuple[dict[str, Any], ModelAgent]:
+            """Send once per eligible provider, advancing only after a proven 413 rejection."""
+            seen_providers: set[str] = set()
+            for candidate in synthesis_candidates:
+                provider_key = (
+                    f"provider:{candidate.provider_name.casefold()}"
+                    if candidate.provider_name.strip()
+                    else f"endpoint:{candidate.base_url.rstrip('/').casefold()}"
+                )
+                if provider_key in seen_providers:
+                    continue
+                seen_providers.add(provider_key)
+                candidate_payload = {**payload, "model": candidate.model}
+                if active_profile is not None:
+                    candidate_payload = self.client.apply_effort_profile(
+                        candidate, candidate_payload, active_profile
+                    )
+                try:
+                    send = self.client.proxy_send
+                    if virtual_model:
+                        send_once = getattr(self.client, "proxy_send_once", None)
+                        if callable(send_once):
+                            send = send_once
+                    return send(candidate, endpoint, candidate_payload), candidate
+                except (ProviderRequestTooLargeError, urllib.error.HTTPError) as exc:
+                    request_too_large = isinstance(
+                        exc, ProviderRequestTooLargeError
+                    ) or (isinstance(exc, urllib.error.HTTPError) and exc.code == 413)
+                    if not request_too_large or not virtual_model:
+                        raise
+            raise ProviderRequestTooLargeError(
+                "request body exceeds every eligible provider limit"
+            )
+
         synthesis_started = time.perf_counter()
-        # Single-provider by design: no cross-provider failover on this
-        # conducted synthesis call (see the docstring above) — only the plain
-        # virtual passthrough / virtual tools paths fail over across providers.
         try:
-            raw = self.client.proxy_send(final_agent, endpoint, upstream)
-        except Exception:
-            self._record_failure(final_agent.id)
-            if final_agent.group_name:
+            raw, final_agent = send_synthesis(upstream)
+        except Exception as exc:
+            if not isinstance(exc, ProviderRequestTooLargeError):
+                self._record_failure(final_agent.id)
+            if final_agent.group_name and not isinstance(
+                exc, ProviderRequestTooLargeError
+            ):
                 self._group_router.observe_failure(final_agent.id)
             raise
         def provider_output(response: Mapping[str, Any]) -> str:
@@ -3442,10 +3514,13 @@ class TaskOrchestrator:
                 ]
             repair_started = time.perf_counter()
             try:
-                repaired = self.client.proxy_send(final_agent, endpoint, repair_upstream)
-            except Exception:
-                self._record_failure(final_agent.id)
-                if final_agent.group_name:
+                repaired, final_agent = send_synthesis(repair_upstream)
+            except Exception as exc:
+                if not isinstance(exc, ProviderRequestTooLargeError):
+                    self._record_failure(final_agent.id)
+                if final_agent.group_name and not isinstance(
+                    exc, ProviderRequestTooLargeError
+                ):
                     self._group_router.observe_failure(final_agent.id)
                 raise
             repaired_output = provider_output(repaired)
@@ -5493,6 +5568,7 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        every_failure_was_request_too_large = True
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -5505,6 +5581,9 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                 except Exception as exc:
+                    if isinstance(exc, ProviderRequestTooLargeError):
+                        break
+                    every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
@@ -5553,6 +5632,10 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
+        if every_failure_was_request_too_large:
+            raise ProviderRequestTooLargeError(
+                "request body exceeds every eligible provider limit"
+            )
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(

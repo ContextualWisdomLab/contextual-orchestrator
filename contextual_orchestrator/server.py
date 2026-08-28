@@ -27,6 +27,7 @@ from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
+    ProviderRequestTooLargeError,
     ProviderResponseError,
     TaskOrchestrator,
     _coerce_input_text,
@@ -6823,6 +6824,8 @@ def build_server(
                     TOOL_FALLBACK_STOPPED_MESSAGE,
                     _tool_fallback_error_detail(exc),
                 )
+            except ProviderRequestTooLargeError as exc:
+                self._send_error(413, "request_too_large", str(exc))
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except ProviderResponseError:

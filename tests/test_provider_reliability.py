@@ -25,6 +25,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
+    ProviderRequestTooLargeError,
     ProviderResponseError,
     is_transient_error,
 )
@@ -317,6 +318,29 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert row["served_agent_id"] == "backup_worker"
     assert row["failover_from"] == "primary_worker"
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
+
+
+def test_route_advances_on_413_and_preserves_exhausted_size_error() -> None:
+    """Plain orchestrated chat uses another model, then returns 413 only on exhaustion."""
+    orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
+    original_chat = client.chat
+
+    def size_limited_chat(agent, messages, temperature=0.2):
+        if agent.id == "primary_worker":
+            client.calls.append(agent.id)
+            raise ProviderRequestTooLargeError("provider request body is too large")
+        return original_chat(agent, messages, temperature)
+
+    client.chat = size_limited_chat  # type: ignore[method-assign]
+    result = orchestrator.route_once([{"role": "user", "content": "large request"}])
+    assert result["trace"][0]["served_agent_id"] == "backup_worker"
+
+    def all_too_large(agent, messages, temperature=0.2):
+        raise ProviderRequestTooLargeError("provider request body is too large")
+
+    client.chat = all_too_large  # type: ignore[method-assign]
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.route_once([{"role": "user", "content": "large request"}])
 
 
 def test_structural_provider_response_stops_before_tool_failover() -> None:

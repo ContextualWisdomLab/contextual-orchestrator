@@ -15,7 +15,10 @@ from contextual_orchestrator import (
     ReasoningEffortProfile,
     TaskOrchestrator,
 )
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import (
+    ModelClient,
+    ProviderRequestTooLargeError,
+)
 
 
 class SequencedProxyClient:
@@ -68,7 +71,7 @@ def _build(client: SequencedProxyClient) -> TaskOrchestrator:
     )
 
 
-@pytest.mark.parametrize("status", [404, 410, 429, 503])
+@pytest.mark.parametrize("status", [404, 410, 413, 429, 503])
 def test_virtual_passthrough_advances_once_and_preserves_request(status: int) -> None:
     """Adaptive requests advance once on transient or stale-model failures."""
     client = SequencedProxyClient(
@@ -94,7 +97,7 @@ def test_virtual_passthrough_advances_once_and_preserves_request(status: int) ->
     assert client.calls[1][1]["stream"] is False
 
 
-@pytest.mark.parametrize("status", [404, 429])
+@pytest.mark.parametrize("status", [404, 413, 429])
 def test_explicit_model_never_fails_over(status: int) -> None:
     """A concrete model selection remains sticky even when its provider fails."""
     failure = _http_error(status)
@@ -136,6 +139,106 @@ def test_virtual_model_names_use_provider_failover(model: str) -> None:
 
     assert result["model"] == "fallback-model"
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+def test_orchestrated_structured_synthesis_advances_on_413(model: str) -> None:
+    """Conducted synthesis retains AUTO/FREE eligibility when a provider rejects size."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(413),
+            "fallback_agent": {
+                "model": "fallback-model",
+                "choices": [{"message": {"content": "{}"}}],
+            },
+        }
+    )
+    free_tag = ("cost:free",) if model == TaskOrchestrator.FREE_MODEL else ()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                priority=10,
+                provider_name="primary",
+                tags=("response_format", *free_tag),
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                priority=1,
+                provider_name="fallback",
+                tags=("response_format", *free_tag),
+            ),
+        ],
+        client=client,
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [
+            {
+                "id": 0,
+                "role": "worker",
+                "agent_id": "primary_agent",
+                "subtask": "Evidence",
+                "access": [],
+                "output": "evidence",
+            }
+        ],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "large structured request"}],
+            "response_format": {"type": "json_object"},
+        },
+        single_agent=False,
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
+def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> None:
+    """Exhausted 413 routing remains a client-visible size error, not HTTP 500."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(413),
+            "fallback_agent": _http_error(413),
+        }
+    )
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        _build(client).proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large request"}],
+            }
+        )
+
+
+def test_mixed_failures_are_not_misreported_as_all_candidates_too_large() -> None:
+    """A final 413 cannot erase an earlier provider outage from exhaustion evidence."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(503),
+            "fallback_agent": _http_error(413),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="all 2 candidate agents failed"):
+        _build(client).proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large request"}],
+            }
+        )
 
 
 def test_auto_virtual_model_fails_over_across_model_groups() -> None:
