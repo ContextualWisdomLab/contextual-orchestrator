@@ -62,6 +62,7 @@ class _Gateway:
         self.calls.append({"messages": messages, "format": response_format, "surface": api_surface, "model": model_name})
         return {
             "answer": self.answers[assignment_ref],
+            "served_agent_id": f"served/{assignment_ref}",
             "model": "mock-rater",
             "provider": "mock-provider",
             "provider_version": "mock-v1",
@@ -69,7 +70,13 @@ class _Gateway:
         }
 
 
-def _request(*, response_format: str = "json_schema", api_surface: str = "chat.completions") -> CefrLanguageObservationRequest:
+def _request(
+    *,
+    response_format: str = "json_schema",
+    api_surface: str = "chat.completions",
+    workflow_settings: dict[str, Any] | None = None,
+    assigned_model_name: str | None = None,
+) -> CefrLanguageObservationRequest:
     return CefrLanguageObservationRequest(
         task_ref="task/revision-1",
         rubric_ref="rubric/revision-1",
@@ -77,12 +84,14 @@ def _request(*, response_format: str = "json_schema", api_surface: str = "chat.c
         category_anchor_refs=("anchor/1", "anchor/2"),
         evidence_reference_ids=("evidence/audio-1", "evidence/transcript-1"),
         rater_assignments=(
-            CefrRaterAssignment("rater/b", "llm-family-b", "v2"),
-            CefrRaterAssignment("rater/a", "human-calibration-family", "v1"),
+            CefrRaterAssignment("rater/b", "llm-family-b", "v2", assigned_model_name),
+            CefrRaterAssignment("rater/a", "human-calibration-family", "v1", assigned_model_name),
         ),
         prompt_revision="prompt/revision-1",
         replay_id="replay/1",
-        workflow_settings={"reasoning_effort": "medium", "max_output_tokens": 300},
+        workflow_settings=workflow_settings
+        if workflow_settings is not None
+        else {"reasoning_effort": "medium", "max_output_tokens": 300},
         response_format=response_format,
         api_surface=api_surface,
     )
@@ -91,31 +100,27 @@ def _request(*, response_format: str = "json_schema", api_surface: str = "chat.c
 def _answer(category: str = "anchor/2", *, uncertainty: str = "low") -> str:
     return json.dumps(
         {
-            "criterion_observation": {
-                "criterion_ref": "writing/coherence",
-                "category_anchor_ref": category,
-                "evidence_reference_ids": ["evidence/transcript-1"],
-                "status": "observed",
-                "uncertainty": uncertainty,
-                "review_signals": [],
-                "reason_code": None,
-            }
+            "criterion_ref": "writing/coherence",
+            "category_anchor_ref": category,
+            "evidence_reference_ids": ["evidence/transcript-1"],
+            "status": "observed",
+            "uncertainty": uncertainty,
+            "review_signals": [],
+            "reason_code": None,
         }
     )
 
 
-def _abstention() -> str:
+def _abstention(*, uncertainty: str = "low") -> str:
     return json.dumps(
         {
-            "criterion_observation": {
-                "criterion_ref": "writing/coherence",
-                "category_anchor_ref": None,
-                "evidence_reference_ids": [],
-                "status": "abstained",
-                "uncertainty": "high",
-                "review_signals": [],
-                "reason_code": "insufficient_evidence",
-            }
+            "criterion_ref": "writing/coherence",
+            "category_anchor_ref": None,
+            "evidence_reference_ids": [],
+            "status": "abstained",
+            "uncertainty": uncertainty,
+            "review_signals": [],
+            "reason_code": "insufficient_evidence",
         }
     )
 
@@ -137,8 +142,14 @@ def test_independent_raters_are_sorted_blind_and_return_no_final_level() -> None
 
     assert [value["assignment_ref"] for value in result["observations"]] == ["rater/a", "rater/b"]
     assert result["human_review"] == {"required": False, "reason_codes": []}
+    assert result["panel_size"] == 2
+    assert result["observed_count"] == 2
+    assert result["incomplete_count"] == 0
+    assert result["disagreement_count"] == 0
     assert result["request_replay_identity"] == request.replay_identity
     assert len(contract.observations) == 2
+    assert {value["served_agent_id"] for value in result["observations"]} == {"served/rater/a", "served/rater/b"}
+    assert all("rater_provenance" in value for value in contract.observations)
     for call in gateway.calls:
         prompt = call["messages"][1]["content"]
         assert "candidate" not in prompt
@@ -200,11 +211,12 @@ def test_disagreement_and_high_uncertainty_route_to_human_review() -> None:
 
     assert result["human_review"]["required"] is True
     assert result["human_review"]["reason_codes"] == ["disagreement", "uncertain"]
+    assert result["disagreement_count"] == 1
 
 
 def test_duplicate_json_is_failed_without_provider_text_leaking() -> None:
     request = _request()
-    duplicate = '{"criterion_observation":{"criterion_ref":"writing/coherence","criterion_ref":"leak-me"}}'
+    duplicate = '{"criterion_ref":"writing/coherence","criterion_ref":"leak-me"}'
     gateway = _Gateway({"rater/a": duplicate, "rater/b": _answer()})
     result = observe_language_response_criteria(request, gateway, _Contract())
 
@@ -213,6 +225,7 @@ def test_duplicate_json_is_failed_without_provider_text_leaking() -> None:
     assert failed["criterion_observation"] is None
     assert "leak-me" not in json.dumps(result)
     assert result["human_review"]["required"] is True
+    assert result["incomplete_count"] == 1
 
 
 def test_verifier_failure_preserves_successful_parse_state() -> None:
@@ -226,12 +239,37 @@ def test_verifier_failure_preserves_successful_parse_state() -> None:
     assert failed["failure_code"] == "unsupported_evidence"
 
 
+def test_served_model_must_match_an_explicit_rater_assignment() -> None:
+    request = _request(assigned_model_name="assigned-model")
+    gateway = _Gateway({"rater/a": _answer(), "rater/b": _answer()})
+    result = observe_language_response_criteria(request, gateway, _Contract())
+
+    assert all(value["failure_code"] == "rater_assignment_mismatch" for value in result["observations"])
+
+
 def test_abstention_does_not_count_as_category_disagreement() -> None:
     request = _request()
     gateway = _Gateway({"rater/a": _abstention(), "rater/b": _answer()})
     result = observe_language_response_criteria(request, gateway, _Contract())
 
     assert "disagreement" not in result["human_review"]["reason_codes"]
+    assert "incomplete_observation_panel" in result["human_review"]["reason_codes"]
+    assert result["observed_count"] == 1
+    assert result["incomplete_count"] == 1
+
+
+def test_workflow_settings_are_deeply_immutable_and_serializable() -> None:
+    settings = {"nested": {"limit": 1}, "items": ["a"]}
+    request = _request(workflow_settings=settings)
+    settings["nested"]["limit"] = 99
+    settings["items"].append("b")
+
+    assert request.workflow_settings["nested"]["limit"] == 1
+    assert request.workflow_settings["items"] == ("a",)
+    assert request.to_contract_payload()["workflow_settings"] == {
+        "nested": {"limit": 1},
+        "items": ["a"],
+    }
 
 
 def test_request_rejects_duplicate_or_missing_opaque_references() -> None:

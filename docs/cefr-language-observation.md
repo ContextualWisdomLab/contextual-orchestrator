@@ -27,8 +27,9 @@ not copied into the request trace or returned artifact.
    auto-discovered agent and sends the request through the existing KV-backed
    gateway. No direct provider transport is available in this module.
 4. Chat Completions and Responses `json_object` or strict `json_schema` formats
-   are accepted. Duplicate keys, undeclared anchors/evidence, malformed JSON,
-   and unsupported shapes are rejected.
+   are accepted. The provider returns one bare criterion-observation object;
+   duplicate keys, undeclared anchors/evidence, malformed JSON, and unsupported
+   shapes are rejected.
 5. Only criterion observations and evidence-reference ids are returned. The
    response schema has no CEFR-level, score, placement, certification, or
    psychometric-result field.

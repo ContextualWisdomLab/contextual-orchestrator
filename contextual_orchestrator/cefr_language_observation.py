@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 import hashlib
 import json
-from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from .orchestrator import (
@@ -86,6 +87,24 @@ def _references(values: Sequence[str], field: str) -> tuple[str, ...]:
     return normalized
 
 
+def _freeze_json(value: Any) -> Any:
+    """Return a recursively immutable copy of JSON-compatible data."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    """Return a mutable JSON-compatible copy of an immutable snapshot."""
+    if isinstance(value, Mapping):
+        return {key: _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True)
 class CefrRaterAssignment:
     """One independently blinded rater assignment, without candidate identity."""
@@ -142,14 +161,21 @@ class CefrLanguageObservationRequest:
             raise CefrObservationError("unsupported_api_surface", "api_surface must be chat.completions or responses")
         if not isinstance(self.workflow_settings, Mapping):
             raise CefrObservationError("invalid_workflow_settings", "workflow_settings must be an object")
-        settings = dict(self.workflow_settings)
         try:
-            encoded = json.dumps(settings, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-        except (TypeError, ValueError, RecursionError) as exc:
+            encoded_text = json.dumps(
+                dict(self.workflow_settings),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+            settings = json.loads(encoded_text)
+            encoded = encoded_text.encode()
+        except (TypeError, ValueError, RecursionError, OverflowError) as exc:
             raise CefrObservationError("invalid_workflow_settings", "workflow_settings must be JSON-compatible") from exc
         if len(encoded) > MAX_CEFR_SETTINGS_BYTES:
             raise CefrObservationError("resource_limit", "workflow_settings exceeds the bounded size")
-        object.__setattr__(self, "workflow_settings", settings)
+        object.__setattr__(self, "workflow_settings", _freeze_json(settings))
 
     @property
     def replay_identity(self) -> str:
@@ -171,7 +197,7 @@ class CefrLanguageObservationRequest:
             "rater_assignment_refs": [value.assignment_ref for value in self.rater_assignments],
             "prompt_revision": self.prompt_revision,
             "replay_id": self.replay_id,
-            "workflow_settings": dict(self.workflow_settings),
+            "workflow_settings": _thaw_json(self.workflow_settings),
         }
 
 
@@ -355,12 +381,9 @@ def _parse_json(answer: Any) -> dict[str, Any]:
         parsed = json.loads(answer, object_pairs_hook=reject_duplicate_keys)
     except (json.JSONDecodeError, RecursionError, TypeError):
         raise CefrObservationError("malformed_json", "rater response is not valid JSON") from None
-    if not isinstance(parsed, dict) or set(parsed) != {"criterion_observation"}:
+    if not isinstance(parsed, dict) or set(parsed) != set(_OBSERVATION_SCHEMA["properties"]):
         raise CefrObservationError("malformed_json", "rater response has an unsupported shape")
-    value = parsed["criterion_observation"]
-    if not isinstance(value, dict):
-        raise CefrObservationError("malformed_json", "criterion_observation must be an object")
-    return value
+    return parsed
 
 
 def _normalize_observation(value: Mapping[str, Any], request: CefrLanguageObservationRequest) -> dict[str, Any]:
@@ -428,11 +451,13 @@ def _observe_one(
         "rater_family": assignment.rater_family,
         "rater_version": assignment.rater_version,
         "prompt_revision": request.prompt_revision,
-        "workflow_settings": dict(request.workflow_settings),
+        "workflow_settings": _thaw_json(request.workflow_settings),
         "model": None,
         "provider": None,
         "provider_version": None,
         "usage": None,
+        "served_agent_id": None,
+        "rater_provenance": None,
         "criterion_observation": None,
         "parse_state": "not_attempted",
         "verifier_state": "not_run",
@@ -450,6 +475,21 @@ def _observe_one(
         for key in ("model", "provider", "provider_version"):
             if isinstance(response.get(key), str):
                 base[key] = response[key]
+        served_agent_id = response.get("served_agent_id")
+        if type(served_agent_id) is not str or not served_agent_id.strip():
+            raise CefrObservationError("provider_error", "gateway omitted the served agent identity")
+        base["served_agent_id"] = served_agent_id.strip()
+        if assignment.model_name is not None and response.get("model") != assignment.model_name:
+            raise CefrObservationError("rater_assignment_mismatch", "gateway served a different model than assigned")
+        base["rater_provenance"] = {
+            "assignment_ref": assignment.assignment_ref,
+            "rater_family": assignment.rater_family,
+            "rater_version": assignment.rater_version,
+            "served_agent_id": base["served_agent_id"],
+            "model": base["model"],
+            "provider": base["provider"],
+            "provider_version": base["provider_version"],
+        }
         base["usage"] = _safe_usage(response.get("usage"))
         base["parse_state"] = "received"
         parsed = _parse_json(response.get("answer"))
@@ -460,6 +500,7 @@ def _observe_one(
                 "contract_id": request.contract_id,
                 "fast_mlsirm_contract_version": request.fast_mlsirm_contract_version,
                 "request_replay_identity": request.replay_identity,
+                "rater_provenance": base["rater_provenance"],
                 "observation": observation,
             }
         )
@@ -520,12 +561,6 @@ def observe_language_response_criteria(
         with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
             observations = list(executor.map(lambda assignment: _observe_one(request, assignment, gateway, contract_adapter), request.rater_assignments))
     observations.sort(key=lambda value: value["assignment_ref"])
-    categories = {
-        value["criterion_observation"]["category_anchor_ref"]
-        for value in observations
-        if value["criterion_observation"] is not None
-        and value["criterion_observation"]["category_anchor_ref"] is not None
-    }
     review_reasons = {
         value["failure_code"]
         for value in observations
@@ -534,19 +569,41 @@ def observe_language_response_criteria(
     for value in observations:
         observation = value["criterion_observation"]
         if observation is None:
+            review_reasons.add("incomplete_observation_panel")
             continue
+        if observation["status"] == "abstained":
+            review_reasons.add("incomplete_observation_panel")
         review_reasons.update(observation["review_signals"])
         if observation["uncertainty"] == "high":
             review_reasons.add("uncertain")
-    if len(categories) > 1:
+    observed_categories = [
+        value["criterion_observation"]["category_anchor_ref"]
+        for value in observations
+        if value["criterion_observation"] is not None
+        and value["criterion_observation"]["status"] == "observed"
+    ]
+    disagreement_count = sum(
+        left != right
+        for index, left in enumerate(observed_categories)
+        for right in observed_categories[index + 1 :]
+    )
+    if disagreement_count:
         review_reasons.add("disagreement")
-    if any(value["criterion_observation"] is None for value in observations):
-        review_reasons.add("incomplete_observation_panel")
+    observed_count = sum(
+        value["criterion_observation"] is not None
+        and value["criterion_observation"]["status"] == "observed"
+        for value in observations
+    )
+    incomplete_count = len(observations) - observed_count
     return {
         "contract_id": request.contract_id,
         "fast_mlsirm_contract_version": request.fast_mlsirm_contract_version,
         "criterion_ref": request.criterion_ref,
         "request_replay_identity": request.replay_identity,
+        "panel_size": len(observations),
+        "observed_count": observed_count,
+        "incomplete_count": incomplete_count,
+        "disagreement_count": disagreement_count,
         "observations": observations,
         "human_review": {
             "required": bool(review_reasons),
