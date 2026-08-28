@@ -1,5 +1,22 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-29 legacy single-token production gate
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The current implementation branch
+adds a fail-closed `--production` CLI gate: server startup must choose split
+admin/inference credentials, and the insecure admin-session cookie option is
+rejected. Canonical `compose.yaml` now seeds those two names into the KV from
+separate stdin-only secrets. Single-token mode remains available for explicit
+local development, while split static credentials still do not grant the
+separate trace purpose without a verified external adapter. Branch evidence is
+local focused CLI/Compose/authorization coverage only until normal protected
+review, Checks, and approval gates complete.
+
+The remaining issue #117 gap is the external authorization adapter's
+tenant/resource/purpose/lifetime context; PR #909 separately carries batch
+routing ownership and is not protected-main evidence here.
+
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 
 Protected `main` briefly carried a merge-order regression from PR #891 merged

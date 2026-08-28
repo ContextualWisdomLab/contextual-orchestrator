@@ -8,6 +8,8 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.__main__ import _resolve_auth_token, main
@@ -81,6 +83,54 @@ def test_key_only_split_tokens_select_split_mode() -> None:
         assert security.inference_token == expected_value
     finally:
         set_backend(None)
+
+
+@pytest.mark.parametrize("guard", ["--production", "--allow-public-bind"])
+def test_production_guards_reject_single_token_mode(guard: str) -> None:
+    stderr = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "--serve", guard, "--auth-token", "token"],
+        ),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("production/public bind must reject a single bearer")
+    assert "single-token mode is local-only" in stderr.getvalue()
+
+
+def test_production_mode_rejects_insecure_admin_cookie() -> None:
+    stderr = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--production",
+                "--admin-token",
+                "admin",
+                "--inference-token",
+                "inference",
+                "--insecure-admin-session-cookie",
+            ],
+        ),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("production mode must reject insecure cookies")
+    assert "cannot use --insecure-admin-session-cookie" in stderr.getvalue()
 
 
 def test_main_accepts_explicit_argv_without_mutating_process_arguments() -> None:

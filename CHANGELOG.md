@@ -28,6 +28,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   deprecated aliases so existing integrations can migrate without disruption.
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
+- A fail-closed `--production` authentication gate that rejects legacy
+  single-token startup and insecure admin-session cookies; canonical Compose
+  now bootstraps separate admin/inference KV credentials.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and
   `COMPLEX_HINTS` keyword tables are deleted; ordering is now
   eligibility contracts -> declaration priority/capability fit/cosine

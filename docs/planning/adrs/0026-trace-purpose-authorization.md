@@ -32,8 +32,11 @@ the explicit server default.
 
 The injected `bearer_verifier(token, scope)` is the production boundary for
 OIDC/Keyverse claims. Static single-token mode permits the local development
-escape hatch; split static admin/inference mode fails closed for the trace
-purpose because it has no verified trace claim.
+escape hatch only. The CLI `--production` gate requires split static
+admin/inference credentials (or a deployment-specific external verifier), so a
+legacy single token cannot silently become a production trace credential; split
+static admin/inference mode otherwise fails closed for the trace purpose because
+it has no verified trace claim.
 
 ## Acceptance evidence
 
@@ -46,9 +49,10 @@ purpose because it has no verified trace claim.
   contains no prompt, output, credential, or PII value;
 - audit failure returns a generic `503` instead of releasing the trace.
 
-Issue #117 remains open: batch jobs still need principal-bound ownership, the
-authorization adapter still needs tenant/resource/lifetime context, and legacy
-single-token production migration still needs a fail-closed deployment gate.
+Issue #117 remains open: batch jobs need their protected-main integration, and
+the authorization adapter still needs tenant/resource/lifetime context. The
+legacy single-token production migration is now guarded in the CLI and
+canonical Compose path; its explicit local escape hatch remains documented.
 
 ## Research grounding
 
