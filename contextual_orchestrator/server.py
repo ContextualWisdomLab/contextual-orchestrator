@@ -29,6 +29,7 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     ProviderRequestTooLargeError,
     ProviderResponseError,
+    ModelAgent,
     TaskOrchestrator,
     _coerce_input_text,
     _new_chat_completion_id,
@@ -5792,6 +5793,8 @@ def build_server(
                         ) from exc
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
+                    except ProviderRequestTooLargeError as exc:
+                        raise RequestError(413, "request_too_large", str(exc)) from exc
                     except RuntimeError as exc:
                         raise RequestError(
                             503,

@@ -507,6 +507,29 @@ def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty(
     )
 
 
+def test_capability_request_size_exhaustion_returns_http_413() -> None:
+    """Capability routes keep oversized upstream requests as client errors."""
+    agent = ModelAgent("image_member", "provider/image", tags=("image",), group_name="image_group")
+    orchestrator = TaskOrchestrator([agent])
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post_error(
+            server.server_address[1],
+            "/v1/images/generations",
+            {"model": "image-group", "prompt": "large image"},
+        )
+        assert status == 413
+        assert body["error"]["code"] == "request_too_large"
+    finally:
+        server.shutdown()
+
+
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("paid_video", "provider/paid", tags=("video",), priority=100),
