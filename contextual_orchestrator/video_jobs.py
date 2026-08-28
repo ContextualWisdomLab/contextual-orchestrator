@@ -78,7 +78,7 @@ class VideoJobRegistry:
         self._legacy_owners = job_registry.mapping(
             "video_job_owners", decode=lambda raw: VideoJobOwner(**raw)
         )
-        self._legacy_usage_lock = threading.Lock()
+        self._usage_lock = threading.Lock()
 
     def register(
         self,
@@ -204,7 +204,7 @@ class VideoJobRegistry:
                 return owner
             # Preserve the old payload shape until its configured retention
             # expires; new submissions never write this denormalized mapping.
-            with self._legacy_usage_lock:
+            with self._usage_lock:
                 current = self._legacy_owners[owner.gateway_job_id]
                 if current.provider_usage is not None:
                     return current
@@ -238,10 +238,11 @@ class VideoJobRegistry:
         if callable(setter):
             setter(gateway_job_id, usage)
             return
-        # ponytail: plain dict fallback has no compare-and-set; the established
-        # standalone registry is process-local, so this read/write is sufficient.
-        if self._usages.get(gateway_job_id) is None:
-            self._usages[gateway_job_id] = usage
+        # ponytail: plain dict fallback has no compare-and-set; this process-local
+        # lock serializes its threaded request path. Valkey uses hsetnx above.
+        with self._usage_lock:
+            if self._usages.get(gateway_job_id) is None:
+                self._usages[gateway_job_id] = usage
 
     @staticmethod
     def _provider_usage(document: dict[str, Any]) -> dict[str, int] | None:
