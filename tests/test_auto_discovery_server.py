@@ -87,6 +87,15 @@ def test_configured_gateway_blank_seed_expands_to_exact_catalog_models(
             assert agent.model in {"catalog-chat-alpha", "catalog-chat-beta"}
             return '{"ok":true}'
 
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del endpoint
+            assert agent.model in {"catalog-chat-alpha", "catalog-chat-beta"}
+            assert body["response_format"] == {"type": "json_object"}
+            return {
+                "choices": [{"message": {"content": '{"ok":true}'}}],
+                "model": agent.model,
+            }
+
     discovered = [
         DiscoveredModel(
             provider_name="configured_gateway",

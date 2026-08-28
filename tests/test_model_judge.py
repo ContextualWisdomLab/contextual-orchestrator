@@ -864,6 +864,97 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
     assert _structured_output_error('{"input_count":6}', response_format) == "schema_violation"
 
 
+def test_json_object_contract_rejects_non_object_json() -> None:
+    """json_object requires a complete JSON object, not merely valid JSON."""
+    response_format = {"type": "json_object"}
+    assert _structured_output_error('{"ready":true}', response_format) is None
+    assert _structured_output_error("not json", response_format) == "invalid_json"
+    assert _structured_output_error("[]", response_format) == "not_json_object"
+
+
+def test_structured_final_agent_uses_endpoint_scoped_admitted_set() -> None:
+    """A preferred but unready agent cannot bypass the measured endpoint set."""
+
+    class StructuredProxy(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.agent_ids: list[str] = []
+
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del endpoint, body
+            self.agent_ids.append(agent.id)
+            return {
+                "choices": [{"message": {"content": '{"ready":true}'}}],
+                "model": agent.model,
+            }
+
+    client = StructuredProxy()
+    agents = [
+        ModelAgent("agent_a", "model-a", base_url="https://a.example/v1"),
+        ModelAgent("agent_b", "model-b", base_url="https://b.example/v1"),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=client)
+    checked_at = time.monotonic()
+    orchestrator._structured_readiness = {
+        "agent_a": {"status": "not_ready", "checked_at": checked_at},
+        "agent_b": {"status": "ready", "checked_at": checked_at},
+    }
+    with (
+        orchestrator.routing_endpoint_scope(
+            "https://b.example/v1", orchestrator.AUTO_MODEL
+        ),
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": orchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert client.agent_ids == ["agent_b"]
+    assert result["choices"][0]["message"]["content"] == '{"ready":true}'
+
+
+def test_structured_final_agent_fails_closed_without_admitted_candidate() -> None:
+    """Empty measured readiness remains typed admission deferral."""
+    agent = ModelAgent("agent_a", "model-a", base_url="https://a.example/v1")
+    orchestrator = TaskOrchestrator([agent], client=ModelClient())
+    with pytest.raises(NoViableAgentError):
+        orchestrator.proxy_completion(
+            {
+                "model": orchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+
+def test_structured_explicit_model_must_be_admitted() -> None:
+    """An explicit model cannot bypass contradictory readiness evidence."""
+    agents = [
+        ModelAgent("agent_a", "model-a", base_url="https://a.example/v1"),
+        ModelAgent("agent_b", "model-b", base_url="https://b.example/v1"),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=ModelClient())
+    orchestrator._structured_readiness = {
+        "agent_a": {"status": "not_ready", "checked_at": time.monotonic()},
+        "agent_b": {"status": "ready", "checked_at": time.monotonic()},
+    }
+    with pytest.raises(NoViableAgentError):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-a",
+                "messages": [{"role": "user", "content": "synthetic"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+
 def test_structured_synthesis_failure_updates_provider_health() -> None:
     """A failed final provider is excluded by the existing circuit policy."""
     orchestrator, _ = _orch("unused")

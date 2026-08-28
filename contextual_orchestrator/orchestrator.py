@@ -264,8 +264,16 @@ def validate_json_schema_contract(schema: dict[str, Any]) -> None:
 def _structured_output_error(
     content: str, response_format: object
 ) -> str | None:
-    """Return a bounded contract error for strict JSON Schema output."""
-    if not isinstance(response_format, Mapping) or response_format.get("type") != "json_schema":
+    """Return a bounded contract error for JSON-object or JSON-Schema output."""
+    if not isinstance(response_format, Mapping):
+        return None
+    if response_format.get("type") == "json_object":
+        try:
+            instance = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return "invalid_json"
+        return None if isinstance(instance, dict) else "not_json_object"
+    if response_format.get("type") != "json_schema":
         return None
     specification = response_format.get("json_schema")
     schema = specification.get("schema") if isinstance(specification, Mapping) else None
@@ -2221,7 +2229,8 @@ class ModelClient:
         mock_content = (
             "{}"
             if isinstance(response_format, dict)
-            and str(response_format.get("type", "")).strip().lower() == "json_schema"
+            and str(response_format.get("type", "")).strip().lower()
+            in {"json_object", "json_schema"}
             else f"[{agent.id}] chat-mock"
         )
         echoed = {
@@ -3816,9 +3825,18 @@ class TaskOrchestrator:
         # resolve to a concrete synthesizer even without that tag.
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         response_format_requested = bool(chat_body.get("response_format"))
+        structured_admitted = (
+            self._structured_admitted_agent_ids()
+            if response_format_requested
+            else None
+        )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         final_agent = self._requested_agent(requested_model)
+        if structured_admitted is not None and not structured_admitted:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
         if final_agent is None:
             try:
                 final_agent = self._select_agent(
@@ -3829,6 +3847,11 @@ class TaskOrchestrator:
                     prefer_tags=(
                         (("response_format",) if response_format_requested else ())
                     ),
+                    allowed_agent_ids=(
+                        set(structured_admitted)
+                        if structured_admitted is not None
+                        else None
+                    ),
                 )
             except RuntimeError as exc:
                 if required_tags:
@@ -3837,11 +3860,16 @@ class TaskOrchestrator:
                         + ", ".join(required_tags)
                     ) from exc
                 if response_format_requested:
-                    raise ValueError(
-                        "no enabled model can serve the requested response_format; "
-                        "the pool has no chat synthesizer"
-                    ) from exc
+                    raise NoViableAgentError(
+                        retry_after_seconds=max(
+                            1, math.ceil(self.circuit_reset_seconds)
+                        )
+                    ) from None
                 raise
+        elif structured_admitted is not None and final_agent.id not in structured_admitted:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            )
         elif any(tag not in final_agent.tags for tag in required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
@@ -3951,6 +3979,8 @@ class TaskOrchestrator:
             raw = self.client.proxy_send(final_agent, endpoint, upstream)
         except Exception:
             self._record_failure(final_agent.id)
+            if response_format_requested:
+                self._record_structured_not_ready(final_agent.id)
             if final_agent.group_name:
                 self._group_router.observe_failure(final_agent.id)
             raise
@@ -4000,7 +4030,7 @@ class TaskOrchestrator:
             )
             repair_upstream = copy.deepcopy(upstream)
             repair_instruction = (
-                "The prior synthesis violated the caller's strict JSON Schema "
+                "The prior synthesis violated the caller's structured-output contract "
                 f"({contract_error}). Regenerate the complete answer and return only "
                 "JSON that satisfies the supplied response_format."
             )
@@ -4024,12 +4054,16 @@ class TaskOrchestrator:
                 repaired = self.client.proxy_send(final_agent, endpoint, repair_upstream)
             except Exception:
                 self._record_failure(final_agent.id)
+                if response_format_requested:
+                    self._record_structured_not_ready(final_agent.id)
                 if final_agent.group_name:
                     self._group_router.observe_failure(final_agent.id)
                 raise
             repaired_output = provider_output(repaired)
             if _structured_output_error(repaired_output, response_format) is not None:
                 self._record_failure(final_agent.id)
+                if response_format_requested:
+                    self._record_structured_not_ready(final_agent.id)
                 if final_agent.group_name:
                     self._group_router.observe_failure(final_agent.id)
                 raise ProviderResponseError(
@@ -4293,7 +4327,7 @@ class TaskOrchestrator:
     def probe_structured_workflow(
         self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT
     ) -> dict[str, Any]:
-        """Exercise the same multi-step structured workflow with a minimal valid schema."""
+        """Exercise internal schema work and the final JSON-object transport."""
         probe_timeout = _validate_provider_probe_timeout(timeout)
         deadline = time.monotonic() + probe_timeout
         schema = {
@@ -4313,6 +4347,21 @@ class TaskOrchestrator:
                     model_name=self.AUTO_MODEL,
                 )
                 self._repair_structured_answer([], synthesis["answer"], schema, frozenset({agent.id}))
+                remaining = deadline - time.monotonic()
+                if remaining < 0.1:
+                    raise RequestDeadlineExceeded("request deadline exceeded")
+                transport = self.client.probe_structured(
+                    agent, timeout=min(probe_timeout, remaining)
+                )
+                if transport.get("status") != "ready":
+                    return {
+                        "agent_id": agent.id,
+                        "status": "not_ready",
+                        "error_type": str(
+                            transport.get("error_type", "ProviderResponseError")
+                        ),
+                        "failure_code": "json_object_transport_not_ready",
+                    }
         except RequestDeadlineExceeded:
             raise
         except Exception as exc:
@@ -6012,6 +6061,7 @@ class TaskOrchestrator:
         free_only: bool = False,
         required_tags: tuple[str, ...] = (),
         prefer_tags: tuple[str, ...] = (),
+        allowed_agent_ids: set[str] | None = None,
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
@@ -6030,6 +6080,7 @@ class TaskOrchestrator:
             )
             if is_general_chat_agent_model_id(agent.model)
             and all(tag in agent.tags for tag in required_tags)
+            and (allowed_agent_ids is None or agent.id in allowed_agent_ids)
         ]
         if prefer_tags and ranked:
             preferred = [

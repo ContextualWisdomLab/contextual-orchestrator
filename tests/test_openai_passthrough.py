@@ -190,13 +190,19 @@ def test_structured_validation_rejects_nested_partial_json() -> None:
     ) is None
 
 
-def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() -> None:
+def test_structured_readiness_measures_schema_workflow_and_json_object_transport() -> None:
     calls: list[str] = []
     saw_schema_instruction = False
+    native_formats: list[dict[str, object]] = []
 
-    class PlainOnly(ModelClient):
+    class FullStructuredContract(ModelClient):
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
-            raise AssertionError("readiness must not use native response_format")
+            del endpoint
+            native_formats.append(body["response_format"])
+            return {
+                "choices": [{"message": {"content": '{"ok":true}'}}],
+                "model": agent.model,
+            }
 
         def chat(self, agent, messages, **kwargs):  # type: ignore[override]
             nonlocal saw_schema_instruction
@@ -210,12 +216,44 @@ def test_structured_readiness_uses_minimal_schema_workflow_not_native_surface() 
 
     unprobed = ModelAgent("unprobed_primary", "mock")
     agent = ModelAgent("plain_only", "mock")
-    result = TaskOrchestrator([unprobed, agent], client=PlainOnly()).probe_structured_workflow(agent)
+    result = TaskOrchestrator(
+        [unprobed, agent], client=FullStructuredContract()
+    ).probe_structured_workflow(agent)
 
     assert result["status"] == "ready"
     assert len(calls) > 1
     assert set(calls) == {"plain_only"}
     assert saw_schema_instruction
+    assert native_formats[-1] == {"type": "json_object"}
+    assert any(
+        response_format.get("type") == "json_schema"
+        for response_format in native_formats[:-1]
+    )
+
+
+def test_structured_readiness_rejects_missing_json_object_transport() -> None:
+    """Internal schema success cannot admit a broken final transport."""
+
+    class MissingJsonObjectTransport(ModelClient):
+        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
+            del agent, endpoint, body
+            raise RuntimeError("synthetic transport failure")
+
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            return '{"ok":true}'
+
+    agent = ModelAgent("schema_only", "mock")
+    result = TaskOrchestrator(
+        [agent], client=MissingJsonObjectTransport()
+    ).probe_structured_workflow(agent)
+
+    assert result == {
+        "agent_id": "schema_only",
+        "status": "not_ready",
+        "error_type": "RuntimeError",
+        "failure_code": "json_object_transport_not_ready",
+    }
 
 
 def test_json_schema_contract_accepts_nullable_enum_and_rejects_unknown_keyword() -> None:
