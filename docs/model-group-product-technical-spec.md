@@ -61,8 +61,10 @@ failover; see `docs/doctoring/equivalent-endpoint-racing.md`.
   inference.
 - The current success-per-second member order is not a distinct-model quality
   router. Quality/cost routing requires calibrated evaluation and ablation.
-- A synchronous video submission does not prove provider-affine polling or durable
-  result ownership; that remains a production Gap.
+- Asynchronous video submission returns an opaque gateway resource whose status
+  and content reads stay bound to the accepting provider account. New ownership
+  and measured-usage records are normalized inside the existing job-registry
+  boundary; Valkey is still required for restart and replica durability.
 
 ## TRD
 
@@ -108,8 +110,28 @@ classDiagram
     +agent_id: text
     +group_name: text
   }
+  class VideoJobRecord {
+    +gateway_job_id: text
+    +provider_job_id: text
+    +agent_id: text
+    +owner_id: text
+    +submitted_at: integer
+  }
+  class VideoJobUsage {
+    +gateway_job_id: text
+    +prompt_tokens: integer
+    +completion_tokens: integer
+    +observed_at: integer
+  }
+  class VideoJobLifecycle {
+    +gateway_job_id: text
+    +provider_status: text
+    +observed_at: integer
+  }
   ModelGroup "1" --> "0..*" ModelGroupMember
   AgentPool "1" --> "0..1" ModelGroupMember
+  VideoJobRecord "1" --> "0..1" VideoJobUsage
+  VideoJobRecord "1" --> "0..1" VideoJobLifecycle
 ```
 
 `model_group_member.agent_id` is both its primary key and a foreign key, so one
@@ -143,9 +165,11 @@ transactionally into these relations.
 - Touch targets, responsive layout, typography/color tokens, navigation, form
   validation, performance, and accessibility remain governed by the existing
   Admin design system and regression contracts.
-- Multi-replica observation durability, video job ownership, and opt-in spend-
-  capped live canaries remain explicitly tracked in
-  `docs/product-technical-gap-baseline.md`.
+- Multi-replica routing observation calibration, cancellable conducted-answer
+  streaming, and opt-in spend-capped live canaries remain explicitly tracked in
+  `docs/product-technical-gap-baseline.md`. Video job durability still depends
+  on the configured shared job registry; standalone mode makes no durability
+  claim.
 
 ## Evidence and limits
 

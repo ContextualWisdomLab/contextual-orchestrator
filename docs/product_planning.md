@@ -25,6 +25,7 @@ Enterprise teams want the benefit of collective model intelligence without makin
 4. Traceability is the core enterprise differentiator. Every workflow run needs role, subtask, worker, access list, verifier outcome, and final synthesis evidence.
 5. Compliance is runtime evidence, not a static checkbox. Provider exclusions and access-list exposure should sit next to the run that used them.
 6. i18n is part of operability. English and Korean labels should ship as first-class locale bundles because global platform and compliance teams review the same evidence.
+7. Asynchronous video is an owned resource, not a repeatable model selection. The gateway must keep provider-affine follow-up and opaque client identity visible in its API contract.
 
 ## Personas And Jobs
 
@@ -67,3 +68,4 @@ Enterprise teams want the benefit of collective model intelligence without makin
 - Local runtime analytics are clearly labeled as process-local evidence and not production telemetry.
 - Sales readiness is reported as local enterprise-pilot evidence with pass/warn/fail remediation, not as a production compliance certificate.
 - Commercial readiness is reported as high-value buyer due-diligence evidence with a KRW 2,000,000,000 target value caveat, not as a sale guarantee.
+- Video job follow-up is provider-affine and opaque to callers; standalone in-process mode is not presented as durable deployment evidence.

@@ -68,6 +68,11 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.video_jobs.VideoJobRegistry`: provider-affine async
+  video resources. New submissions join immutable `video_job_records` with an
+  optional first-complete `video_job_usages` row and latest
+  `video_job_lifecycles` row; legacy owner payloads are only a compatibility
+  read path. Provider status is observed, never inferred.
 - `ResponsiveThreadingHTTPServer`: I/O-bound provider waits run in independent
   daemon request threads, the accept queue uses the operating system's native
   `SOMAXCONN`, and fixed-length responses use HTTP/1.1 persistent connections.

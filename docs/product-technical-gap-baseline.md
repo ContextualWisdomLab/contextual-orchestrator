@@ -1,5 +1,24 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-29 normalized video job resource slice
+
+Protected `main` at `b21645116b352967e50fc497b87eb745b9cc8c61` already contains
+PR #883's provider-affine video follow-up contract: the client receives an
+opaque gateway id, and polling/content reads use the exact accepting provider
+agent. This candidate slice closes the remaining representation gap for new
+submissions by separating immutable ownership in `video_job_records` from the
+first complete usage observation in `video_job_usages` and latest observed
+provider status in `video_job_lifecycles`, while retaining the
+existing `video_job_owners` shape only for legacy compatibility. The registry's
+existing Valkey configuration remains the only restart/multi-replica durability claim;
+standalone mode remains process-local. No provider status is inferred and no
+new retention policy is introduced.
+
+The next unclosed customer-visible gap is cancellable answer-token streaming
+for conducted workflows. It requires an asynchronous dependency graph that can
+cancel or safely drain dependent provider work; this slice does not fabricate
+partial answers before verification and synthesis.
+
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 
 Protected `main` briefly carried a merge-order regression from PR #891 merged
