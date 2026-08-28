@@ -3271,6 +3271,7 @@ class TaskOrchestrator:
         contract.
         """
         normalized_endpoint = endpoint.strip("/")
+        api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
             normalized_endpoint == "responses"
             or any(
@@ -3358,7 +3359,9 @@ class TaskOrchestrator:
             if isinstance(file_replicas, dict):
                 upstream = _bind_provider_file_ids(upstream, file_replicas, agent.id)
             if effort_profile is not None:
-                upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+                upstream = self.client.apply_effort_profile(
+                    agent, upstream, effort_profile, api_surface=api_surface
+                )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
             try:
@@ -3439,7 +3442,10 @@ class TaskOrchestrator:
                 )
             if effort_profile is not None:
                 candidate_payload = self.client.apply_effort_profile(
-                    candidate, candidate_payload, effort_profile
+                    candidate,
+                    candidate_payload,
+                    effort_profile,
+                    api_surface=api_surface,
                 )
             try:
                 send_once = getattr(self.client, "proxy_send_once", None)
@@ -3489,6 +3495,7 @@ class TaskOrchestrator:
         generation; other synthesis failures remain single-shot and fail closed.
         """
         response_request = endpoint == "responses"
+        api_surface = "responses" if response_request else "chat.completions"
         chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
         messages = chat_body.get("messages")
         if not isinstance(messages, list) or not messages:
@@ -3714,7 +3721,10 @@ class TaskOrchestrator:
                     )
                 if active_profile is not None:
                     candidate_payload = self.client.apply_effort_profile(
-                        candidate, candidate_payload, active_profile
+                        candidate,
+                        candidate_payload,
+                        active_profile,
+                        api_surface=api_surface,
                     )
                 try:
                     send = self.client.proxy_send
