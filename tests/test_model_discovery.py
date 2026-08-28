@@ -547,6 +547,26 @@ def test_non_text_model_does_not_gain_structured_response_capability() -> None:
     assert discovered[0].capabilities == ("image",)
 
 
+def test_non_text_model_does_not_gain_chat_from_chat_like_identifier() -> None:
+    """Explicit non-text outputs win over heuristic chat-name recovery."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "provider/chat-image-only",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["image"],
+                    },
+                }
+            ]
+        },
+        OPENAI_SOURCE,
+    )
+
+    assert discovered[0].capabilities == ("image",)
+
+
 def test_discovery_treats_null_modality_arrays_as_unspecified() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     with patch(

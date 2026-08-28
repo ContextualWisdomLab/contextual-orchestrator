@@ -773,15 +773,15 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         )
         # A generic OpenAI-compatible listing often carries no modality or
         # capability metadata for its chat deployments (e.g. a LiteLLM proxy
-        # whose /model/info rows are incomplete or heterogeneous). The
-        # identifier that already passes the ordinary chat transport gate is
-        # chat-capable whatever its metadata says: give it the same ``chat``
-        # capability the rest of the pool advertises so runtime auto-discovery
-        # and serving bootstrap do not silently exclude chat deployments whose
-        # embedding sibling happens to carry richer metadata. Non-chat ids
-        # (embedding, rerank, transcription, ...) never pass the gate, so this
-        # never labels an endpoint-only model as chat.
-        if is_general_chat_agent_model_id(model_id) and "chat" not in capabilities:
+        # whose /model/info rows are incomplete or heterogeneous). Recover the
+        # ordinary chat capability for metadata-free or explicit text-output
+        # rows, but do not override explicit non-text modality evidence with a
+        # positive chat claim inferred only from the model name.
+        if (
+            is_general_chat_agent_model_id(model_id)
+            and "chat" not in capabilities
+            and (not outputs or "text" in outputs)
+        ):
             capabilities = ("chat", *capabilities)
         prompt_price = _price_per_1k(pricing.get("prompt"))
         completion_price = _price_per_1k(pricing.get("completion"))
