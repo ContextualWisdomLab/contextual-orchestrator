@@ -1,5 +1,30 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-29 03:23 KST exact-head protected-queue snapshot
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The open protected queue has
+eight PRs. Every PR below is `MERGEABLE` but still blocked by protected review
+requirements; all have zero unresolved threads and zero qualifying approvals
+on the exact head. No bypass was used.
+
+| PR | Exact head | Current protected evidence |
+| ---: | --- | --- |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `31059a6b383912fcdf0bac42afa237ff5796b6a4` | `BLOCKED`; ordinary/security checks pass, Atheris passes, Full and Strix run, OpenCode fails closed |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `8a1654ead5a23e985c9bf1d6d500602283f05ab8` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security and Full/Atheris checks pass, OpenCode fails closed |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `ec17d4e0b77fe10c8087c587cb748d4027fe4d0f` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `ea183e72be3a2d2ae8ad6229a0212bc5b8ec9bf6` | `BLOCKED/REVIEW_REQUIRED`; Full is queued, Atheris/Python/Noema run, earlier ordinary/security checks pass |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `57ec66351c1ca37910650d5ad77e6bdbdc79be51` | `BEHIND/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `5c5c077b272c41c8042cb2e42fec33b0da633612` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode fails closed; this documentation commit will advance its self-referential head |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `bf6fbb7d372922088bd075b395543b325d91ed78` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode fails closed |
+
+The OpenCode and Strix failures are hosted provider-gate outcomes, not local
+passing evidence. #901's exact head also keeps authenticated OpenRouter
+discovery in the serving pool while retaining the public ZDR endpoint as
+privacy evidence; its focused provider/discovery/bootstrap/review validation
+is `90 passed` locally.
+
 ## 2026-08-29 01:14 KST exact-head protected-queue snapshot
 
 Protected `main` remains
