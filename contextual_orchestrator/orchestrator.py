@@ -4588,7 +4588,7 @@ class TaskOrchestrator:
             if attempt_served_id != candidate.id:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
-            answer, served_id, usage = attempt_answer, attempt_served_id, attempt_usage
+            answer, served_id = attempt_answer, attempt_served_id
             verification = self._realtime_route_judge(
                 text=text,
                 answer=answer,
