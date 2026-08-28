@@ -32,6 +32,7 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+import certifi
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
 from jsonschema.validators import validator_for
 
@@ -55,6 +56,7 @@ from .pii_protection import (
     is_encrypted_detail,
     load_pii_encryptor,
 )
+
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -72,6 +74,75 @@ from .reasoning_effort_profile import (
     snapshot_role_effort_catalog,
 )
 from .token_counting import RustCl100kPacker
+
+
+_REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
+    "contextual_orchestrator_request_endpoint_agent_ids", default=None
+)
+_REQUEST_ENDPOINT_IDENTITY: ContextVar[str | None] = ContextVar(
+    "contextual_orchestrator_request_endpoint_identity", default=None
+)
+
+
+class EndpointUnavailableError(ValueError):
+    """The requested configured endpoint cannot serve this request."""
+
+
+def normalize_endpoint_selector(value: str) -> str:
+    """Normalize an endpoint selector without ever using it as transport input."""
+    parsed = urlparse(value)
+    scheme = parsed.scheme.casefold()
+    try:
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise EndpointUnavailableError("endpoint_unavailable") from exc
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username
+        or parsed.password
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise EndpointUnavailableError("endpoint_unavailable")
+    host = hostname.casefold()
+    if ":" in host:
+        host = f"[{host}]"
+    if port is not None and port != (443 if scheme == "https" else 80):
+        host = f"{host}:{port}"
+    path = parsed.path.rstrip("/").removesuffix("/v1")
+    return urlunsplit(
+        (scheme, host, path, "", "")
+    )
+
+
+def _configured_endpoint_matches(value: str, normalized: str) -> bool:
+    """Return exact normalized equality for one already-configured transport."""
+    try:
+        return normalize_endpoint_selector(value) == normalized
+    except EndpointUnavailableError:
+        return False
+
+
+def _agent_matches_request_endpoint(agent: "ModelAgent") -> bool:
+    """Revalidate both agent id and configured endpoint for the active request."""
+    endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+    endpoint_identity = _REQUEST_ENDPOINT_IDENTITY.get()
+    if endpoint_ids is None or endpoint_identity is None:
+        return endpoint_ids is None and endpoint_identity is None
+    return agent.id in endpoint_ids and _configured_endpoint_matches(
+        agent.base_url, endpoint_identity
+    )
+
+
+def _request_endpoint_partition() -> str:
+    """Return a non-reversible cache partition for the configured endpoint."""
+    identity = _REQUEST_ENDPOINT_IDENTITY.get()
+    if identity is None:
+        return "endpoint:auto"
+    return "endpoint:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -1227,7 +1298,9 @@ class ModelClient:
                 return ssl.create_default_context(cafile=ca_bundle)
             except OSError as exc:
                 raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
-        return ssl.create_default_context()
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        return context
 
     @staticmethod
     def _normalize_allowed_provider_hosts(hosts: Iterable[str] | None) -> frozenset[str]:
@@ -3177,6 +3250,11 @@ class TaskOrchestrator:
         "synthesizer": ("writing", "reasoning", "planning"),
         "embedding": ("embedding",),
     }
+    #: Gateway-default virtual model name advertised on ``/v1/models`` and
+    #: accepted by every inference endpoint as orchestrator-owned auto
+    #: selection. Kept beside :data:`AUTO_MODEL` because both are virtual ids:
+    #: neither maps to a concrete agent until routing resolves one.
+    GATEWAY_DEFAULT_MODEL = "contextual-orchestrator"
     AUTO_MODEL = "orchestrator/auto"
     FREE_MODEL = "orchestrator/free"
 
@@ -3456,12 +3534,19 @@ class TaskOrchestrator:
         an arbitrary wall-clock freshness heuristic is intentionally absent.
         """
         with self._provider_readiness_lock:
-            return frozenset(
+            admitted = frozenset(
                 agent.id
                 for agent in self.agents
                 if agent.base_url.startswith("mock://")
                 or self._structured_readiness.get(agent.id, {}).get("status") == "ready"
             )
+        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+        if endpoint_ids is None:
+            return admitted
+        current = {
+            agent.id for agent in self.agents if _agent_matches_request_endpoint(agent)
+        }
+        return admitted.intersection(current)
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
@@ -3580,7 +3665,7 @@ class TaskOrchestrator:
         upstream["stream"] = False
         if requested_model not in (
             None,
-            "contextual-orchestrator",
+            self.GATEWAY_DEFAULT_MODEL,
             self.AUTO_MODEL,
             self.FREE_MODEL,
         ):
@@ -3721,11 +3806,16 @@ class TaskOrchestrator:
         if not isinstance(messages, list) or not messages:
             raise ValueError("structured completion requires non-empty messages")
         task = self._latest_user_text(messages)
+        # Vision is a hard entitling capability the request payload cannot
+        # grant, so it stays a required tag. ``response_format`` is a gateway
+        # contract that any general chat synthesizer can honor because the
+        # provider payload itself carries the format: prefer a deployment that
+        # advertises it, but never fail closed merely because the pool does not
+        # tag it. Missing format filtering is therefore a 400, not a 500 or a
+        # silent fallback. Deferred (virtual/gateway-default) model names must
+        # resolve to a concrete synthesizer even without that tag.
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
-        selection_tags = (
-            *required_tags,
-            *(("response_format",) if chat_body.get("response_format") else ()),
-        )
+        response_format_requested = bool(chat_body.get("response_format"))
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         final_agent = self._requested_agent(requested_model)
@@ -3734,14 +3824,22 @@ class TaskOrchestrator:
                 final_agent = self._select_agent(
                     task,
                     "synthesizer",
-                    required_tags=selection_tags,
+                    required_tags=required_tags,
                     free_only=free_only,
+                    prefer_tags=(
+                        (("response_format",) if response_format_requested else ())
+                    ),
                 )
             except RuntimeError as exc:
-                if selection_tags:
+                if required_tags:
                     raise ValueError(
                         "no enabled model supports required tags: "
-                        + ", ".join(selection_tags)
+                        + ", ".join(required_tags)
+                    ) from exc
+                if response_format_requested:
+                    raise ValueError(
+                        "no enabled model can serve the requested response_format; "
+                        "the pool has no chat synthesizer"
                     ) from exc
                 raise
         elif any(tag not in final_agent.tags for tag in required_tags):
@@ -3755,7 +3853,7 @@ class TaskOrchestrator:
         self._raise_if_spend_budget_exceeded()
         workflow = self.conduct(
             messages,
-            model_name=self.FREE_MODEL if free_only else "contextual-orchestrator",
+            model_name=self.FREE_MODEL if free_only else self.GATEWAY_DEFAULT_MODEL,
         )
         in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -4228,15 +4326,55 @@ class TaskOrchestrator:
             self._request_failed_agents.reset(failed_token)
         return {"agent_id": agent.id, "status": "ready"}
 
+    @contextmanager
+    def routing_endpoint_scope(self, endpoint: str | None, requested_model: Any):
+        """Constrain this request to agents whose configured endpoint matches exactly."""
+        if endpoint is None:
+            yield
+            return
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise EndpointUnavailableError("endpoint_unavailable")
+        normalized = normalize_endpoint_selector(endpoint.strip())
+        matching = frozenset(
+            agent.id
+            for agent in self.agents
+            if _configured_endpoint_matches(agent.base_url, normalized)
+        )
+        if not matching:
+            raise EndpointUnavailableError("endpoint_unavailable")
+        if requested_model not in {
+            None,
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        } and not any(
+            agent.id in matching and agent.model == requested_model
+            for agent in self.agents
+        ):
+            raise EndpointUnavailableError("endpoint_unavailable")
+        ids_token = _REQUEST_ENDPOINT_AGENT_IDS.set(matching)
+        identity_token = _REQUEST_ENDPOINT_IDENTITY.set(normalized)
+        try:
+            yield
+        finally:
+            _REQUEST_ENDPOINT_IDENTITY.reset(identity_token)
+            _REQUEST_ENDPOINT_AGENT_IDS.reset(ids_token)
+
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
-            "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL
+            self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL
         }:
             return None
         if type(requested_model) is not str or not requested_model:
             raise ValueError("requested model must be a configured non-empty string")
-        matches = [candidate for candidate in self.candidates if candidate.model == requested_model]
+        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+        matches = [
+            candidate
+            for candidate in self.candidates
+            if candidate.model == requested_model
+            and (endpoint_ids is None or _agent_matches_request_endpoint(candidate))
+        ]
         if not matches:
             try:
                 requested_group = canonical_group_name(requested_model)
@@ -4258,7 +4396,7 @@ class TaskOrchestrator:
         mode: str = "auto",
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
@@ -4324,13 +4462,13 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         ):
@@ -4341,14 +4479,14 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str = "auto",
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
         return mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         )
@@ -4358,7 +4496,7 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         workflow_run_id: str | None = None,
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         owner_id: str | None = None,
     ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
@@ -4438,7 +4576,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> str:
         snapshot = getattr(self.client, "request_settings_snapshot", None)
@@ -4449,12 +4587,18 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
+        endpoint_partition = _request_endpoint_partition()
+        combined_partition = (
+            endpoint_partition
+            if cache_partition is None
+            else f"{cache_partition}|{endpoint_partition}"
+        )
         return build_response_cache_key(
             messages,
             mode,
             model=model_name,
             parameters=parameters,
-            partition=cache_partition,
+            partition=combined_partition,
         )
 
     def run(
@@ -4464,7 +4608,7 @@ class TaskOrchestrator:
         workflow_run_id: str | None = None,
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
         owner_id: str | None = None,
     ) -> dict[str, Any]:
@@ -5091,7 +5235,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace.
 
@@ -5149,7 +5293,7 @@ class TaskOrchestrator:
             if attempt_served_id != candidate.id:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
-            answer, served_id, usage = attempt_answer, attempt_served_id, attempt_usage
+            answer, served_id = attempt_answer, attempt_served_id
             verification = self._realtime_route_judge(
                 text=text,
                 answer=answer,
@@ -5243,7 +5387,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         progress: Any = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
@@ -5285,7 +5429,7 @@ class TaskOrchestrator:
             if message.get("role") == "system" and isinstance(message.get("content"), str)
         )
         plan_source = "template"
-        if model_name not in {"contextual-orchestrator", self.AUTO_MODEL}:
+        if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
             steps = self._plan(task, model_name=model_name)
         elif self.policy.workflow_planning == "generated":
             try:
@@ -5460,10 +5604,12 @@ class TaskOrchestrator:
         back to the fixed template — a bad plan must never break the request.
         """
         planner = self._select_agent(task, "thinker")
+        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
             if is_general_chat_agent_model_id(agent.model)
+            and (endpoint_ids is None or _agent_matches_request_endpoint(agent))
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -5495,7 +5641,12 @@ class TaskOrchestrator:
         raw_steps = data.get("steps")
         if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
             raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
-        known_agents = {agent.id: agent for agent in self.agents}
+        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+        known_agents = {
+            agent.id: agent
+            for agent in self.agents
+            if endpoint_ids is None or _agent_matches_request_endpoint(agent)
+        }
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
             if int(item.get("id", -1)) != index:
@@ -5520,7 +5671,7 @@ class TaskOrchestrator:
         return steps
 
     def _plan(
-        self, task: str, *, model_name: str = "contextual-orchestrator"
+        self, task: str, *, model_name: str = GATEWAY_DEFAULT_MODEL
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
         free_only = model_name == self.FREE_MODEL
@@ -5592,6 +5743,9 @@ class TaskOrchestrator:
             and (not chat_only or is_general_chat_agent_model_id(agent.model))
             and all(tag in agent.tags for tag in required_tags)
         ]
+        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+        if endpoint_ids is not None:
+            candidates = [agent for agent in candidates if _agent_matches_request_endpoint(agent)]
         admitted = self._request_admitted_agents.get()
         if admitted is not None:
             candidates = [agent for agent in candidates if agent.id in admitted]
@@ -5707,7 +5861,10 @@ class TaskOrchestrator:
 
     def _embed_cached(self, text: str) -> list[float] | None:
         """Embedding vector for text via the configured embedding member; None on failure."""
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        endpoint_scope = _request_endpoint_partition()
+        digest = hashlib.sha256(
+            f"{endpoint_scope}\x1f{text}".encode("utf-8")
+        ).hexdigest()
         with self._evidence_lock:
             cached = self._task_vector_cache.get(digest)
         if cached is not None:
@@ -5729,7 +5886,13 @@ class TaskOrchestrator:
     def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
         """Cached embedding of one agent's operator-declared metadata document."""
         fingerprint = hashlib.sha256(
-            "\x1f".join([agent.id, self._agent_descriptor_text(agent)]).encode("utf-8")
+            "\x1f".join(
+                [
+                    _request_endpoint_partition(),
+                    agent.id,
+                    self._agent_descriptor_text(agent),
+                ]
+            ).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._descriptor_vector_cache.get(fingerprint)
@@ -5795,7 +5958,14 @@ class TaskOrchestrator:
         assurance; an absent triage agent degrades to the direct path because
         no evidence source exists at all. Verdicts are cached by content hash.
         """
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        endpoint_scope = _request_endpoint_partition()
+        digest = hashlib.sha256(
+            json.dumps(
+                {"text": text, "endpoint_partition": endpoint_scope},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
         with self._evidence_lock:
             cached = self._triage_cache.get(digest)
         if cached is not None:
@@ -5813,7 +5983,12 @@ class TaskOrchestrator:
         except RuntimeError:
             candidates = []
         if not candidates:
-            candidates = list(self.agents)
+            endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+            candidates = [
+                agent
+                for agent in self.agents
+                if endpoint_ids is None or _agent_matches_request_endpoint(agent)
+            ]
         if not candidates:
             return False
         triage_agent = candidates[0]
@@ -5836,13 +6011,17 @@ class TaskOrchestrator:
         *,
         free_only: bool = False,
         required_tags: tuple[str, ...] = (),
+        prefer_tags: tuple[str, ...] = (),
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
         excluded by the capability contract enforced by
         :func:`is_general_chat_agent_model_id`; this is an endpoint-compatibility
-        gate, not a task-keyword heuristic.
+        gate, not a task-keyword heuristic. ``required_tags`` must all be present
+        (hard entitlements); ``prefer_tags`` only influence tie-breaking when a
+        candidate already carries them, so a pool that does not advertise an
+        optional gateway capability still resolves.
         """
         ranked = [
             agent
@@ -5852,6 +6031,14 @@ class TaskOrchestrator:
             if is_general_chat_agent_model_id(agent.model)
             and all(tag in agent.tags for tag in required_tags)
         ]
+        if prefer_tags and ranked:
+            preferred = [
+                agent
+                for agent in ranked
+                if all(tag in agent.tags for tag in prefer_tags)
+            ]
+            if preferred:
+                ranked = preferred
         if not ranked:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         selected = ranked[0]
@@ -6249,6 +6436,8 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        bounded_provider_response_failures = 0
+        last_provider_response_error: ProviderResponseError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -6274,6 +6463,10 @@ class TaskOrchestrator:
                     if isinstance(exc, ToolFallbackStoppedError):
                         raise
                     if isinstance(exc, ProviderResponseError):
+                        bounded_provider_response_failures += 1
+                        last_provider_response_error = exc
+                        decision = classify_tool_failure(exc)
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
                         failed_agents = self._request_failed_agents.get()
                         if failed_agents is not None:
@@ -6330,6 +6523,11 @@ class TaskOrchestrator:
             raise NoViableAgentError(
                 retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
             )
+        if (
+            last_provider_response_error is not None
+            and bounded_provider_response_failures == len(candidates)
+        ):
+            raise last_provider_response_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
@@ -6425,7 +6623,7 @@ class TaskOrchestrator:
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
-            if agent.id == agent_id:
+            if agent.id == agent_id and _agent_matches_request_endpoint(agent):
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
 
@@ -6705,7 +6903,7 @@ class TaskOrchestrator:
         created = 1_700_000_000  # stable epoch so list responses are deterministic
         data: list[dict[str, Any]] = [
             {
-                "id": "contextual-orchestrator",
+                "id": self.GATEWAY_DEFAULT_MODEL,
                 "object": "model",
                 "created": created,
                 "owned_by": "contextual-orchestrator",

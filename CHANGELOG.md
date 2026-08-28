@@ -74,6 +74,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Runtime auto-discovery now applies the configured provider-host allowlist to
+  both the serving client and model-catalog source, expands an allowlisted
+  blank gateway seed into its exact discovered model agents, and records only
+  bounded reason codes when that source is unavailable.
 - Route embedding batches through configured remote embedding agents instead
   of returning the standalone deterministic vector.
 - Accept function-tool descriptions up to the existing bounded request-body

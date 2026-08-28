@@ -67,6 +67,17 @@ def test_catalog_sync_leak_guard_matches_secret_normalization() -> None:
     assert "os.environ[name] and os.environ[name] in report" not in workflow
 
 
+def test_catalog_sync_supplies_the_complete_provider_inventory() -> None:
+    """Workflow inputs, report validation, and leak guard cover every provider."""
+    workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(
+        encoding="utf-8"
+    )
+
+    for credential_name in PROVIDER_CREDENTIAL_NAMES:
+        assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
+        assert f"'{credential_name}'," in workflow
+
+
 def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() -> None:
     """Scheduled discovery must run without falsely claiming durable storage."""
     workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(
@@ -78,6 +89,7 @@ def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() ->
     assert "KV DSN and passphrase must be configured together" in workflow
     assert "RUN_SCOPED_KV_DSN=postgresql://" in workflow
     assert 'export CONTEXTUAL_ORCHESTRATOR_KV_DSN="${RUN_SCOPED_KV_DSN}"' in workflow
+    assert 'print(f"::add-mask::{passphrase}")' in workflow
 
 
 if __name__ == "__main__":  # pragma: no cover

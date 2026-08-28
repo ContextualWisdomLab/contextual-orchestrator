@@ -8,17 +8,25 @@ remains in the ordinary orchestrator.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from decimal import Decimal
 import hashlib
 import math
 import re
 import threading
 import uuid
-from typing import Callable, Mapping, Protocol, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
 
-from .model_discovery import DiscoveredModel, ProviderModelSource
+from .model_discovery import (
+    UNIT_PRICE_DIMENSIONS,
+    DiscoveredModel,
+    ModelUnitPrice,
+    ProviderModelSource,
+)
+
+if TYPE_CHECKING:
+    from .privacy_policy_analysis import PrivacyPolicyAssessment
 
 
 PROVIDER_CATALOG_SCHEMA_SQL = """
@@ -57,6 +65,36 @@ CREATE TABLE IF NOT EXISTS model_serving_tag (
         REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
     tag_name text NOT NULL,
     PRIMARY KEY (provider_model_id, tag_name)
+);
+
+CREATE TABLE IF NOT EXISTS model_unit_price (
+    provider_model_id text NOT NULL
+        REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
+    price_dimension text NOT NULL,
+    unit_price numeric NOT NULL CHECK (unit_price >= 0),
+    currency_code text NOT NULL,
+    PRIMARY KEY (provider_model_id, price_dimension)
+);
+
+CREATE TABLE IF NOT EXISTS model_policy_source (
+    provider_model_id text NOT NULL
+        REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
+    policy_source_url text NOT NULL,
+    PRIMARY KEY (provider_model_id, policy_source_url)
+);
+
+CREATE TABLE IF NOT EXISTS model_policy_assessment (
+    provider_model_id text NOT NULL
+        REFERENCES provider_model(provider_model_id) ON DELETE CASCADE,
+    policy_source_url text NOT NULL,
+    zero_data_retention_available boolean,
+    supports_no_training boolean,
+    supports_no_prompt_retention boolean,
+    verified_quote text NOT NULL,
+    analyzer_provider text NOT NULL,
+    analyzer_model text NOT NULL,
+    observed_at timestamptz NOT NULL,
+    PRIMARY KEY (provider_model_id, policy_source_url)
 );
 
 CREATE TABLE IF NOT EXISTS catalog_refresh_run (
@@ -129,6 +167,21 @@ class ProviderCatalogStore(Protocol):
         source: ProviderModelSource,
     ) -> list[DiscoveredModel]:
         """Return enabled, serving-eligible last-known-good models."""
+        ...
+
+    def record_privacy_assessment_success(
+        self,
+        source: ProviderModelSource,
+        assessments: Sequence["PrivacyPolicyAssessment"],
+    ) -> None:
+        """Atomically replace successful subject/source assessments."""
+        ...
+
+    def privacy_assessments(
+        self,
+        source: ProviderModelSource,
+    ) -> tuple["PrivacyPolicyAssessment", ...]:
+        """Return persisted grounded privacy evidence without secret values."""
         ...
 
     def refresh_evidence(self) -> tuple[CatalogRefreshEvidence, ...]:
@@ -247,6 +300,12 @@ def normalize_discovered_model(
         or model.credential_name != source.credential_name
     ):
         raise ProviderCatalogError("provider model belongs to a different account")
+    unit_prices = tuple(
+        ModelUnitPrice(item.dimension, price, _normalize_currency(item.currency_code))
+        for item in model.unit_prices
+        if item.dimension in UNIT_PRICE_DIMENSIONS
+        and (price := _normalize_price(item.price)) is not None
+    )
     return DiscoveredModel(
         provider_name=source.provider_name,
         model_id=name,
@@ -258,10 +317,15 @@ def normalize_discovered_model(
             model.completion_price_per_1k
         ),
         currency_code=_normalize_currency(model.currency_code),
+        unit_prices=unit_prices,
         capabilities=tuple(model.capabilities),
         input_modalities=tuple(model.input_modalities),
         output_modalities=tuple(model.output_modalities),
         is_free=bool(model.is_free),
+        supports_zero_data_retention=model.supports_zero_data_retention,
+        supports_no_training=model.supports_no_training,
+        supports_no_prompt_retention=model.supports_no_prompt_retention,
+        privacy_policy_urls=tuple(model.privacy_policy_urls),
     )
 
 
@@ -286,7 +350,18 @@ def _restore_model_semantics(
         prompt_price_per_1k=model.prompt_price_per_1k,
         completion_price_per_1k=model.completion_price_per_1k,
         currency_code=model.currency_code,
+        unit_prices=model.unit_prices,
         is_free="cost:free" in normalized,
+        supports_zero_data_retention=(
+            True if "privacy:zdr" in normalized else False if "privacy:no_zdr" in normalized else None
+        ),
+        supports_no_training=(
+            True if "privacy:no_training" in normalized else False if "privacy:training_only" in normalized else None
+        ),
+        supports_no_prompt_retention=(
+            True if "privacy:no_retention" in normalized else False if "privacy:retention_only" in normalized else None
+        ),
+        privacy_policy_urls=tuple(model.privacy_policy_urls),
     )
 
 
@@ -302,6 +377,32 @@ def _deduplicate_models(
     return result
 
 
+def _normalize_privacy_assessments(
+    source: ProviderModelSource,
+    assessments: Sequence["PrivacyPolicyAssessment"],
+) -> tuple["PrivacyPolicyAssessment", ...]:
+    """Validate account-local grounded evidence and deduplicate subject/source rows."""
+    unique: dict[tuple[str, str], "PrivacyPolicyAssessment"] = {}
+    for assessment in assessments:
+        if (
+            assessment.subject_provider != source.provider_name
+            or assessment.subject_credential != source.credential_name
+        ):
+            raise ProviderCatalogError("privacy assessment belongs to a different account")
+        if not assessment.subject_model.strip() or not assessment.source_url.strip():
+            raise ProviderCatalogError("privacy assessment identity is incomplete")
+        if not assessment.evidence_quote.strip():
+            raise ProviderCatalogError("privacy assessment quote is empty")
+        if not assessment.analyzer_provider.strip() or not assessment.analyzer_model.strip():
+            raise ProviderCatalogError("privacy assessment analyzer identity is incomplete")
+        if assessment.observed_at.tzinfo is None:
+            raise ProviderCatalogError("privacy assessment timestamp must be timezone-aware")
+        unique[(assessment.subject_model, assessment.source_url)] = assessment
+    if not unique:
+        raise ProviderCatalogError("successful privacy assessment cannot be empty")
+    return tuple(unique[key] for key in sorted(unique))
+
+
 class InMemoryProviderCatalogStore:
     """Thread-safe deterministic provider catalog for tests and standalone use."""
 
@@ -311,6 +412,7 @@ class InMemoryProviderCatalogStore:
         self._eligible: dict[str, set[str]] = {}
         self._tags: dict[tuple[str, str], tuple[str, ...]] = {}
         self._refreshes: list[CatalogRefreshEvidence] = []
+        self._privacy: dict[tuple[str, str, str], "PrivacyPolicyAssessment"] = {}
         self._lock = threading.RLock()
 
     @property
@@ -337,6 +439,16 @@ class InMemoryProviderCatalogStore:
             self._accounts[account_id] = source
             self._models[account_id] = normalized
             self._eligible[account_id] = eligible
+            current_policy_sources = {
+                (model_name, policy_source_url)
+                for model_name, model in normalized.items()
+                for policy_source_url in model.privacy_policy_urls
+            }
+            self._privacy = {
+                key: value
+                for key, value in self._privacy.items()
+                if key[0] != account_id or key[1:] in current_policy_sources
+            }
             for key in [key for key in self._tags if key[0] == account_id]:
                 del self._tags[key]
             for model_name in eligible:
@@ -404,6 +516,36 @@ class InMemoryProviderCatalogStore:
         """Return persisted generic serving tags for one model."""
         with self._lock:
             return self._tags.get((provider_account_id(source), model_name), ())
+
+    def record_privacy_assessment_success(
+        self,
+        source: ProviderModelSource,
+        assessments: Sequence["PrivacyPolicyAssessment"],
+    ) -> None:
+        """Atomically replace successful in-memory subject/source evidence."""
+        normalized = _normalize_privacy_assessments(source, assessments)
+        account_id = provider_account_id(source)
+        with self._lock:
+            known_models = self._models.get(account_id, {})
+            if any(item.subject_model not in known_models for item in normalized):
+                raise ProviderCatalogError("privacy assessment model is not persisted")
+            updated = dict(self._privacy)
+            for item in normalized:
+                updated[(account_id, item.subject_model, item.source_url)] = item
+            self._privacy = updated
+
+    def privacy_assessments(
+        self,
+        source: ProviderModelSource,
+    ) -> tuple["PrivacyPolicyAssessment", ...]:
+        """Return deterministic persisted in-memory privacy evidence."""
+        account_id = provider_account_id(source)
+        with self._lock:
+            return tuple(
+                self._privacy[key]
+                for key in sorted(self._privacy)
+                if key[0] == account_id
+            )
 
     def refresh_evidence(self) -> tuple[CatalogRefreshEvidence, ...]:
         """Return immutable refresh evidence in insertion order."""
@@ -519,6 +661,18 @@ class PostgresProviderCatalogStore:
                     "WHERE provider_account_id = %s)",
                     (account_id,),
                 )
+                cursor.execute(
+                    "DELETE FROM model_unit_price WHERE provider_model_id IN ("
+                    "SELECT provider_model_id FROM provider_model "
+                    "WHERE provider_account_id = %s)",
+                    (account_id,),
+                )
+                cursor.execute(
+                    "DELETE FROM model_policy_source WHERE provider_model_id IN ("
+                    "SELECT provider_model_id FROM provider_model "
+                    "WHERE provider_account_id = %s)",
+                    (account_id,),
+                )
                 for model_name, model in normalized.items():
                     model_row_id = provider_model_id(source, model_name)
                     cursor.execute(
@@ -556,6 +710,31 @@ class PostgresProviderCatalogStore:
                                 "VALUES (%s, %s) ON CONFLICT DO NOTHING",
                                 (model_row_id, tag),
                             )
+                    for policy_source_url in dict.fromkeys(model.privacy_policy_urls):
+                        cursor.execute(
+                            "INSERT INTO model_policy_source "
+                            "(provider_model_id, policy_source_url) "
+                            "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                            (model_row_id, policy_source_url),
+                        )
+                    for unit_price in model.unit_prices:
+                        cursor.execute(
+                            "INSERT INTO model_unit_price (provider_model_id, price_dimension, "
+                            "unit_price, currency_code) VALUES (%s, %s, %s, %s)",
+                            (model_row_id, unit_price.dimension, unit_price.price, unit_price.currency_code),
+                        )
+                cursor.execute(
+                    "DELETE FROM model_policy_assessment AS mpa "
+                    "WHERE mpa.provider_model_id IN ("
+                    "SELECT pm.provider_model_id FROM provider_model AS pm "
+                    "WHERE pm.provider_account_id = %s AND ("
+                    "pm.enabled_flag = false OR NOT EXISTS ("
+                    "SELECT 1 FROM model_policy_source AS mps "
+                    "WHERE mps.provider_model_id = pm.provider_model_id "
+                    "AND mps.policy_source_url = "
+                    "mpa.policy_source_url)))",
+                    (account_id,),
+                )
                 finished_at = _now()
                 cursor.execute(
                     "INSERT INTO catalog_refresh_run ("
@@ -660,9 +839,38 @@ class PostgresProviderCatalogStore:
                     (account_id,),
                 )
                 tag_rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT pm.model_name, mps.policy_source_url "
+                    "FROM model_policy_source AS mps "
+                    "JOIN provider_model AS pm ON pm.provider_model_id = mps.provider_model_id "
+                    "WHERE pm.provider_account_id = %s "
+                    "ORDER BY pm.model_name, mps.policy_source_url",
+                    (account_id,),
+                )
+                policy_source_rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT pm.model_name, mup.price_dimension, mup.unit_price, mup.currency_code "
+                    "FROM model_unit_price AS mup JOIN provider_model AS pm "
+                    "ON pm.provider_model_id = mup.provider_model_id "
+                    "WHERE pm.provider_account_id = %s ORDER BY pm.model_name, mup.price_dimension",
+                    (account_id,),
+                )
+                unit_price_rows = cursor.fetchall()
         tags_by_model: dict[str, list[str]] = {}
         for model_name, tag_name in tag_rows:
             tags_by_model.setdefault(model_name, []).append(tag_name)
+        policy_sources_by_model: dict[str, list[str]] = {}
+        for model_name, policy_source_url in policy_source_rows:
+            policy_sources_by_model.setdefault(model_name, []).append(
+                policy_source_url
+            )
+        unit_prices_by_model: dict[str, list[ModelUnitPrice]] = {}
+        for model_name, dimension, price, currency in unit_price_rows:
+            normalized_price = _normalize_price(price)
+            if normalized_price is not None:
+                unit_prices_by_model.setdefault(model_name, []).append(
+                    ModelUnitPrice(dimension, normalized_price, _normalize_currency(currency))
+                )
         return [
             _restore_model_semantics(DiscoveredModel(
                 provider_name=source.provider_name,
@@ -673,9 +881,101 @@ class PostgresProviderCatalogStore:
                 prompt_price_per_1k=_normalize_price(row[3]),
                 completion_price_per_1k=_normalize_price(row[4]),
                 currency_code=_normalize_currency(row[5]),
+                unit_prices=tuple(unit_prices_by_model.get(row[0], ())),
+                privacy_policy_urls=tuple(policy_sources_by_model.get(row[0], ())),
             ), tags_by_model.get(row[0], ()))
             for row in rows
         ]
+
+    def record_privacy_assessment_success(
+        self,
+        source: ProviderModelSource,
+        assessments: Sequence["PrivacyPolicyAssessment"],
+    ) -> None:
+        """Atomically upsert successful PostgreSQL subject/source evidence."""
+        normalized = _normalize_privacy_assessments(source, assessments)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                account_id = provider_account_id(source)
+                cursor.execute(
+                    "SELECT model_name FROM provider_model WHERE provider_account_id = %s",
+                    (account_id,)
+                )
+                known_models = {row[0] for row in cursor.fetchall()}
+                if any(item.subject_model not in known_models for item in normalized):
+                    raise ProviderCatalogError("privacy assessment model is not persisted")
+
+                for item in normalized:
+                    cursor.execute(
+                        "INSERT INTO model_policy_assessment ("
+                        "provider_model_id, policy_source_url, "
+                        "zero_data_retention_available, supports_no_training, "
+                        "supports_no_prompt_retention, verified_quote, "
+                        "analyzer_provider, analyzer_model, observed_at"
+                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (provider_model_id, policy_source_url) DO UPDATE SET "
+                        "zero_data_retention_available = EXCLUDED.zero_data_retention_available, "
+                        "supports_no_training = EXCLUDED.supports_no_training, "
+                        "supports_no_prompt_retention = EXCLUDED.supports_no_prompt_retention, "
+                        "verified_quote = EXCLUDED.verified_quote, "
+                        "analyzer_provider = EXCLUDED.analyzer_provider, "
+                        "analyzer_model = EXCLUDED.analyzer_model, "
+                        "observed_at = EXCLUDED.observed_at",
+                        (
+                            provider_model_id(source, item.subject_model),
+                            item.source_url,
+                            item.zero_data_retention_available,
+                            item.supports_no_training,
+                            item.supports_no_prompt_retention,
+                            item.evidence_quote,
+                            item.analyzer_provider,
+                            item.analyzer_model,
+                            item.observed_at,
+                        ),
+                    )
+            connection.commit()
+
+    def privacy_assessments(
+        self,
+        source: ProviderModelSource,
+    ) -> tuple["PrivacyPolicyAssessment", ...]:
+        """Read deterministic grounded privacy evidence for one provider account."""
+        from .privacy_policy_analysis import PrivacyPolicyAssessment
+
+        account_id = provider_account_id(source)
+        with self._connect() as connection:
+            self._ensure_schema(connection)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pm.model_name, mpa.policy_source_url, "
+                    "mpa.zero_data_retention_available, mpa.supports_no_training, "
+                    "mpa.supports_no_prompt_retention, mpa.verified_quote, "
+                    "mpa.analyzer_provider, mpa.analyzer_model, mpa.observed_at "
+                    "FROM model_policy_assessment AS mpa "
+                    "JOIN provider_model AS pm "
+                    "ON pm.provider_model_id = mpa.provider_model_id "
+                    "WHERE pm.provider_account_id = %s "
+                    "ORDER BY pm.model_name, mpa.policy_source_url",
+                    (account_id,),
+                )
+                rows = cursor.fetchall()
+        return tuple(
+            PrivacyPolicyAssessment(
+                subject_provider=source.provider_name,
+                subject_credential=source.credential_name,
+                subject_model=row[0],
+                source_url=row[1],
+                zero_data_retention_available=row[2],
+                supports_no_training=row[3],
+                supports_no_prompt_retention=row[4],
+                evidence_quote=row[5],
+                analyzer_provider=row[6],
+                analyzer_model=row[7],
+                observed_at=row[8],
+            )
+            for row in rows
+        )
 
     def refresh_evidence(self) -> tuple[CatalogRefreshEvidence, ...]:
         """Return evidence emitted by this store instance."""

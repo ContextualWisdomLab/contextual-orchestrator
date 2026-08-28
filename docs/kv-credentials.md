@@ -35,6 +35,76 @@ The orchestrator resolves an agent's provider key through this seam only:
 Mock agents (`base_url` starting with `mock://`) early-return before any
 credential logic and stay keyless.
 
+### Wardnet policy-document boundary
+
+Privacy-policy analysis never resolves or connects to an arbitrary policy host
+inside contextual-orchestrator. Register `WARDNET_API_URL` and
+`WARDNET_ADMIN_TOKEN` in the same KV registry. The discovery command sends each
+bounded policy URL to Wardnet's authenticated `/api/outbound/fetch` endpoint;
+Wardnet owns public-destination policy, DNS pinning, redirects, and response
+limits. Contextual-orchestrator accepts only the returned bounded textual body,
+then asks an already-discovered ZDR-capable model for strict structured analysis.
+If either Wardnet credential, a grounded quote, or a ZDR analysis route is
+missing, policy-derived fields remain unknown.
+
+For JavaScript-rendered policies, install the `policy-browser` extra and
+register an authenticated Camoufox MCP Streamable HTTP endpoint and
+`WARDNET_EGRESS_PROXY_URL`. Wardnet must approve the URL first, and every
+Camoufox tab receives the authenticated Wardnet proxy using its dedicated token
+from KV. Deploy Camoufox with Wardnet as its UDP/TCP container DNS resolver,
+and block direct web or external-DNS egress; the proxy and resolver are
+complementary controls. Camofox browser 2.4.7 does not expose a checked-in
+Firefox `network.trr.mode=5` setting, so do not claim that encrypted DNS itself
+is disabled. The sealed network still prevents it from becoming a direct
+bypass: any HTTPS request, including one to a DoH service, must use Wardnet's
+authenticated, destination-checked CONNECT path. Discovery falls back to
+Wardnet's static response if MCP or the proxy is unavailable.
+
+The optional `compose.camoufox-wardnet.yaml` overlay makes this boundary
+deployable with `compose.yaml`. It pins Camofox MCP 1.15.0 (including the 1.13.2
+inbound-authentication fix), Camofox browser 2.4.7, and an immutable Wardnet
+revision. The browser joins only Docker `internal` networks, has no published
+port, and uses Wardnet's fixed address as its port-53 resolver. Wardnet alone is
+dual-homed for upstream DNS and HTTPS, so browser subprocesses cannot reach
+external DNS or TCP 80/443 without Wardnet.
+
+Start the overlay after registering matching KV values and supplying its
+dedicated deployment secrets plus Wardnet's PostgreSQL URL. Because Wardnet
+binds non-loopback interfaces in this profile, the URL must use `postgres://`
+or `postgresql://` and explicitly select `sslmode=require`, `verify-ca`, or
+`verify-full`; an omitted mode or `sslmode=disable` fails startup. This must be
+an external PostgreSQL endpoint whose certificate validates against Wardnet's
+built-in Mozilla roots. The plaintext development PostgreSQL service in
+`compose.yaml` is not Wardnet's production control plane and cannot satisfy
+this prerequisite:
+
+```bash
+docker compose -f compose.yaml -f compose.camoufox-wardnet.yaml up -d
+```
+
+Register `WARDNET_EGRESS_PROXY_URL` as `http://172.30.0.2:8080` and
+`CAMOUFOX_MCP_URL` as `http://camofox-mcp:8080/mcp`. Use the same dedicated
+token values exposed to the corresponding containers. The browser has no
+general egress route, so encrypted DNS cannot bypass Wardnet's CONNECT policy;
+this does not assert that the browser refuses all DoH requests.
+The browser release currently publishes a Linux AMD64 manifest, so the overlay
+declares that platform explicitly; ARM hosts require Docker's AMD64 emulation.
+
+```bash
+printf '%s' 'http://127.0.0.1:8080' | python -m contextual_orchestrator \
+  register-credential --name WARDNET_API_URL --value-stdin
+printf '%s' "$WARDNET_ADMIN_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name WARDNET_ADMIN_TOKEN --value-stdin
+printf '%s' 'http://wardnet:8080' | python -m contextual_orchestrator \
+  register-credential --name WARDNET_EGRESS_PROXY_URL --value-stdin
+printf '%s' "$WARDNET_EGRESS_PROXY_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name WARDNET_EGRESS_PROXY_TOKEN --value-stdin
+printf '%s' 'http://127.0.0.1:9377/mcp' | python -m contextual_orchestrator \
+  register-credential --name CAMOUFOX_MCP_URL --value-stdin
+printf '%s' "$CAMOUFOX_MCP_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name CAMOUFOX_MCP_TOKEN --value-stdin
+```
+
 ### Agent credential naming
 
 `ModelAgent` gained a `credential_key` field (default `"OPENAI_API_KEY"`) that
@@ -202,7 +272,7 @@ confidential-client secret placement remain deployment-controller operations.
 Once a provider's credential is registered in the KV, `contextual_orchestrator`
 can discover that provider's available models and turn them into agent-pool
 candidates automatically — no hand-written `agents.json` entry required.
-`contextual_orchestrator/model_discovery.py` covers five providers out of the
+`contextual_orchestrator/model_discovery.py` covers six providers out of the
 box, all resolved through `get_credential` (never fabricated, never read from
 `os.getenv`):
 
@@ -213,12 +283,24 @@ box, all resolved through `get_credential` (never fabricated, never read from
 | NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
 | NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
 | Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+| Configured OpenAI-compatible gateway | `LLM_GATEWAY_API_KEY` | `Bearer <token>` |
+
+For a configured gateway, the one-shot discovery/bootstrap boundary accepts
+`LLM_GATEWAY_API_URL` (or the equivalent `LLM_GATEWAY_URL`) only when its HTTPS
+host is listed in `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`. It promotes
+`LLM_GATEWAY_API_KEY` into the KV before discovery; provider requests and normal
+runtime routing then read the key only from KV. The full capability catalog and
+model-info pricing remain visible, while `--free-only` selects only structured
+zero-price evidence.
+When serving the persisted agents, pass the same host with
+`--allowed-provider-host`; startup discovery reads this injected runtime policy
+and never re-reads or promotes gateway environment values.
 
 Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
 `auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
 doesn't use the OpenAI-compatible default.
 
-Register any subset of the five keys, then discover:
+Register any subset of the provider keys, then discover:
 
 ```bash
 echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator \
@@ -228,7 +310,7 @@ python -m contextual_orchestrator discover-models --agents-db state/pool.db
 ```
 
 A provider with nothing registered is silently skipped — registering one key
-or all five both work. `discover-models` prints a JSON report
+or all six both work. `discover-models` prints a JSON report
 (`discovered_count`, `priced_count`, `providers_with_errors`, and each
 `{provider, model, agent_id}` found) and, with `--agents-db`, persists the
 discovered agents into the same sqlite agent-pool file `--serve --agents-db`

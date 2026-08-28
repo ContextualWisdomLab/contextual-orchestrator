@@ -27,11 +27,13 @@ from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
+    EndpointUnavailableError,
     MAX_LOCAL_CONCURRENCY,
     NoViableAgentError,
     RequestDeadlineExceeded,
     ProviderResponseError,
     TaskOrchestrator,
+    normalize_endpoint_selector,
     _validate_provider_probe_timeout,
     _coerce_input_text,
     _new_chat_completion_id,
@@ -1400,15 +1402,54 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     return value
 
 def _validate_completions_model(body: dict[str, Any]) -> str:
-    """Legacy Completions ``model`` — required non-empty string (OpenAI parity).
+    """Validate or default the chat/completions model.
 
-    Incidental leading/trailing whitespace is stripped and written back so
-    tools/response_format passthrough (``proxy_completion``) matches the same
-    pool model id as the orchestration path. Form/JS SDKs often pad model names.
+    An omitted ``model`` selects the advertised gateway default so clients do
+    not have to know any deployment name. Explicit JSON null or a blank string
+    are client mistakes, not omissions, and still fail closed (400). Leading
+    and trailing whitespace is stripped and written back so tools/response_format
+    passthrough (``proxy_completion``) matches the same pool model id as the
+    orchestration path; form/JS SDKs often pad model names.
     """
-    if "model" not in body:
-        raise RequestError(400, "invalid_model", "model is required")
     model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
+
+def _validate_chat_model(body: dict[str, Any]) -> str:
+    """Validate or default the Chat Completions model.
+
+    Chat exposes the advertised gateway deployment id as its omitted-model
+    default. Explicit JSON ``null`` is not omission and still fails closed so
+    callers cannot accidentally request the default while believing they named a
+    concrete deployment.
+    """
+    model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -2160,8 +2201,8 @@ def _validate_mode(mode: Any) -> str:
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
     model = body.get("model")
-    if model is not None and (not isinstance(model, str) or not model.strip()):
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if model is not None and not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
     required_strings = {
         "/v1/images/generations": ("prompt",),
         "/v1/videos": ("prompt",),
@@ -2199,15 +2240,27 @@ def _require_pool_model(
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
+    Virtual orchestrator-owned ids (:data:`TaskOrchestrator.GATEWAY_DEFAULT_MODEL`,
+    :data:`TaskOrchestrator.AUTO_MODEL`, :data:`TaskOrchestrator.FREE_MODEL`)
+    resolve through routing instead of an exact agent match — the gateway
+    default and auto behave identically (orchestrator-owned auto selection),
+    while the free id additionally requires a zero-cost agent. With a
+    ``required_capability`` the virtual ids resolve to a concrete capable agent
+    model because capability callers need a real deployment to forward to.
     """
     agents = [
         agent
         for agent in (getattr(orchestrator, "agents", None) or [])
         if not getattr(agent, "disabled", False)
     ]
-    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+    virtual_ids = {
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        TaskOrchestrator.AUTO_MODEL,
+        TaskOrchestrator.FREE_MODEL,
+    }
+    if model_name in virtual_ids:
         if required_capability is None:
-            if model_name == TaskOrchestrator.AUTO_MODEL:
+            if model_name != TaskOrchestrator.FREE_MODEL:
                 if agents:
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
@@ -2972,7 +3025,9 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     return cleaned or None
 
 
-def _validate_routing(routing: Any) -> dict[str, Any] | None:
+def _validate_routing(
+    routing: Any, *, allow_endpoint: bool = False
+) -> dict[str, Any] | None:
     """OpenAI-adjacent routing hints for sync vs batch channel selection.
 
     Fail closed on shape so callers cannot smuggle non-boolean latency flags or
@@ -2983,7 +3038,10 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(routing, dict):
         raise RequestError(400, "invalid_routing", "routing must be an object")
-    unknown = sorted(set(routing) - {"channel", "latency_tolerant", "priority"})
+    allowed = {"channel", "latency_tolerant", "priority"}
+    if allow_endpoint:
+        allowed.add("endpoint")
+    unknown = sorted(set(routing) - allowed)
     if unknown:
         raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
     channel = routing.get("channel")
@@ -3027,7 +3085,52 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         priority = routing.get("priority")
         if isinstance(priority, str) and priority.strip():
             cleaned["priority"] = priority.strip().lower()
+    if "endpoint" in routing:
+        endpoint = routing.get("endpoint")
+        if not isinstance(endpoint, str) or not endpoint.strip():
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            )
+        try:
+            normalize_endpoint_selector(endpoint.strip())
+        except EndpointUnavailableError:
+            raise RequestError(
+                400, "endpoint_unavailable", "routing.endpoint is unavailable"
+            ) from None
+        cleaned["endpoint"] = endpoint.strip()
+    if "endpoint" in cleaned and (
+        cleaned.get("channel") == "batch"
+        or cleaned.get("latency_tolerant") is True
+    ):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.endpoint cannot be combined with deferred batch routing",
+        )
+    if "endpoint" in cleaned:
+        # Endpoint identity is request-local and is deliberately absent from
+        # BatchRequest persistence.  Force the effective policy channel to
+        # synchronous before priority or token thresholds can defer the work
+        # and lose the selected data-residency boundary.
+        cleaned["channel"] = "sync"
     return cleaned if cleaned else {}
+
+
+def _run_with_routing_endpoint(
+    orchestrator: TaskOrchestrator,
+    routing: Mapping[str, Any] | None,
+    model_name: Any,
+    operation: Callable[[], Any],
+) -> Any:
+    """Run one request inside an exact configured-endpoint candidate scope."""
+    endpoint = routing.get("endpoint") if routing else None
+    try:
+        with orchestrator.routing_endpoint_scope(endpoint, model_name):
+            return operation()
+    except EndpointUnavailableError as exc:
+        raise RequestError(
+            400, "endpoint_unavailable", "routing.endpoint is unavailable"
+        ) from exc
 
 
 def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
@@ -3035,7 +3138,7 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = body.get("model", "contextual-orchestrator")
+    default_model = body.get("model", TaskOrchestrator.GATEWAY_DEFAULT_MODEL)
     if not isinstance(default_model, str) or not default_model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     default_model = default_model.strip()
@@ -4529,16 +4632,23 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 
 
 def _validate_responses_model(body: dict[str, Any]) -> str:
-    """Responses API ``model`` — required non-empty string ≤256 chars.
+    """Validate or default the Responses API model.
 
-    OpenAI requires model on Responses. Missing/empty/non-string values fail
-    closed so clients cannot hit passthrough with an implicit mock default and
-    believe a named deployment was selected. Strip + write back so
-    ``proxy_completion`` pool match sees the same id as form/JS padded names.
+    An omitted model selects the advertised gateway default. Explicit JSON
+    null or empty/whitespace strings are client mistakes, not omissions, and
+    fail closed (400). Non-string values also fail closed. Strip + write back
+    so passthrough pool matching sees the same id as form/JS padded names.
     """
     model = body.get("model")
     if model is None:
-        raise RequestError(400, "invalid_model", "model is required on /v1/responses")
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.AUTO_MODEL
+        return TaskOrchestrator.AUTO_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -4672,7 +4782,8 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     is resolved by the orchestrator's explicit ``embedding`` capability pool;
     no consumer-side sentinel model is accepted.
     """
-    if body.get("model") is None:
+    model = body.get("model")
+    if model is None:
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4685,8 +4796,10 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
             ) from exc
         body["model"] = model
         return model
-    model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
+
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
     if len(model) > 256:
@@ -4781,7 +4894,7 @@ def _openai_embeddings_response(
     return {
         "object": "list",
         "data": data,
-        "model": model or document.get("model") or "contextual-orchestrator",
+        "model": model or document.get("model") or TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
         "usage": {
             "prompt_tokens": total_tokens,
             "total_tokens": total_tokens,
@@ -6054,7 +6167,7 @@ def build_server(
                         max_tokens = _validate_chat_max_completion_tokens(body)
                     else:
                         max_tokens = _validate_completions_max_tokens(body)
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     if "store" in body:
                         _validate_completions_store(body)
@@ -6096,16 +6209,21 @@ def build_server(
                         frequency_penalty=frequency_penalty,
                         request_deadline_monotonic=request_deadline,
                     ):
-                        result = self._run(lambda: coordinator.complete(
-                            messages,
-                            mode="route",
-                            attribution=attribution,
-                            hints=routing,
-                            model_name=model_name,
-                            workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass,
-                            cache_partition=cache_partition,
-                        ))
+                        result = _run_with_routing_endpoint(
+                            orchestrator,
+                            routing,
+                            model_name,
+                            lambda: self._run(lambda: coordinator.complete(
+                                messages,
+                                mode="route",
+                                attribution=attribution,
+                                hints=routing,
+                                model_name=model_name,
+                                workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                cache_bypass=cache_bypass,
+                                cache_partition=cache_partition,
+                            )),
+                        )
                     # Batch-channel Completions return a job handle (202), not a
                     # text_completion body — match chat Completions honesty so
                     # clients never receive a 500 on a valid batch routing hint.
@@ -6234,7 +6352,7 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
@@ -6289,7 +6407,9 @@ def build_server(
                                     "invalid_request",
                                     "streaming is not supported for orchestrated json_schema responses",
                                 )
-                            structured_routing = _validate_routing(body.get("routing"))
+                            structured_routing = _validate_routing(
+                                body.get("routing"), allow_endpoint=True
+                            )
                             if structured_routing and (
                                 structured_routing.get("channel") == "batch"
                                 or structured_routing.get("latency_tolerant") is True
@@ -6315,13 +6435,18 @@ def build_server(
                                 frequency_penalty=frequency_penalty,
                                 request_deadline_monotonic=request_deadline,
                             ):
-                                result = self._run(lambda: coordinator.complete_structured(
-                                    messages,
-                                    response_format=response_format,
-                                    attribution=attribution,
-                                    model_name=requested_model,
-                                    workflow_run_id=f"run_{uuid.uuid4().hex}",
-                                ))
+                                result = _run_with_routing_endpoint(
+                                    orchestrator,
+                                    structured_routing,
+                                    requested_model,
+                                    lambda: self._run(lambda: coordinator.complete_structured(
+                                        messages,
+                                        response_format=response_format,
+                                        attribution=attribution,
+                                        model_name=requested_model,
+                                        workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                    )),
+                                )
                             orchestrator.record_analytics_event("chat_completion_structured", {
                                 "endpoint_path": "/v1/chat/completions",
                                 "actor_scope": "inference",
@@ -6363,19 +6488,29 @@ def build_server(
                         )
                         started_at = time.perf_counter()
                         if tool_loop:
+                            tool_routing = _validate_routing(
+                                body.get("routing"), allow_endpoint=True
+                            )
                             with orchestrator.client.request_settings(
                                 request_deadline_monotonic=request_deadline
                             ):
-                                proxied = self._run(
-                                    lambda: orchestrator.proxy_completion(
-                                        body,
-                                        endpoint="chat/completions",
-                                        single_agent=True,
-                                    )
+                                proxied = _run_with_routing_endpoint(
+                                    orchestrator,
+                                    tool_routing,
+                                    body.get("model"),
+                                    lambda: self._run(
+                                        lambda: orchestrator.proxy_completion(
+                                            body,
+                                            endpoint="chat/completions",
+                                            single_agent=True,
+                                        )
+                                    ),
                                 )
                         else:
                             structured_messages = _validate_messages(body.get("messages"))
-                            structured_routing = _validate_routing(body.get("routing"))
+                            structured_routing = _validate_routing(
+                                body.get("routing"), allow_endpoint=True
+                            )
                             if structured_routing and (
                                 structured_routing.get("channel") == "batch"
                                 or structured_routing.get("latency_tolerant") is True
@@ -6401,15 +6536,20 @@ def build_server(
                                 frequency_penalty=frequency_penalty,
                                 request_deadline_monotonic=request_deadline,
                             ):
-                                proxied = self._run(
-                                    lambda: coordinator.complete(
-                                        structured_messages,
-                                        mode="conduct",
-                                        attribution=structured_attribution,
-                                        hints=structured_routing,
-                                        model_name=body["model"],
-                                        provider_request=body,
-                                    )
+                                proxied = _run_with_routing_endpoint(
+                                    orchestrator,
+                                    structured_routing,
+                                    body["model"],
+                                    lambda: self._run(
+                                        lambda: coordinator.complete(
+                                            structured_messages,
+                                            mode="conduct",
+                                            attribution=structured_attribution,
+                                            hints=structured_routing,
+                                            model_name=body["model"],
+                                            provider_request=body,
+                                        )
+                                    ),
                                 )
                         if include_trace and not tool_loop:
                             lineage = proxied.get("orchestration")
@@ -6445,8 +6585,17 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
                     route_stream = bool(
-                        stream and orchestrator.would_route(messages, mode, model_name)
+                        stream
+                        and _run_with_routing_endpoint(
+                            orchestrator,
+                            routing,
+                            model_name,
+                            lambda: orchestrator.would_route(messages, mode, model_name),
+                        )
                     )
                     if route_stream:
                         if explicit_trace:
@@ -6460,9 +6609,8 @@ def build_server(
                         self._authorize_trace_access()
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
-                    routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the buyer selected on the chat Completions path.
+                    # which deployment the caller selected on the chat Completions path.
                     # The pool was validated before the structured/passthrough
                     # branch so every chat shape shares the same client-error contract.
                     attribution = dict(attribution or {})
@@ -6490,7 +6638,14 @@ def build_server(
                         request_deadline_monotonic=request_deadline,
                     ):
                         if route_stream:
-                            self._stream_route_completion(orchestrator, security, messages, model_name)
+                            _run_with_routing_endpoint(
+                                orchestrator,
+                                routing,
+                                model_name,
+                                lambda: self._stream_route_completion(
+                                    orchestrator, security, messages, model_name
+                                ),
+                            )
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
                                 {
@@ -6503,16 +6658,21 @@ def build_server(
                                 },
                             )
                             return
-                        result = self._run(lambda: coordinator.complete(
-                            messages,
-                            mode=mode,
-                            attribution=attribution,
-                            hints=routing,
-                            model_name=model_name,
-                            workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            cache_bypass=cache_bypass,
-                            cache_partition=cache_partition,
-                        ))
+                        result = _run_with_routing_endpoint(
+                            orchestrator,
+                            routing,
+                            model_name,
+                            lambda: self._run(lambda: coordinator.complete(
+                                messages,
+                                mode=mode,
+                                attribution=attribution,
+                                hints=routing,
+                                model_name=model_name,
+                                workflow_run_id=f"run_{uuid.uuid4().hex}",
+                                cache_bypass=cache_bypass,
+                                cache_partition=cache_partition,
+                            )),
+                        )
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
@@ -6565,8 +6725,8 @@ def build_server(
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
+                    routing = _validate_routing(body.get("routing"))
                     if "routing" in body:
-                        routing = _validate_routing(body.get("routing"))
                         # Sync embeddings has no batch channel job plane.
                         if routing and routing.get("channel") == "batch":
                             raise RequestError(
@@ -6935,8 +7095,10 @@ def build_server(
                         _validate_openai_metadata(body)
                     if "attribution" in body:
                         _validate_attribution(body.get("attribution"))
+                    routing = _validate_routing(
+                        body.get("routing"), allow_endpoint=True
+                    )
                     if "routing" in body:
-                        routing = _validate_routing(body.get("routing"))
                         # Responses passthrough has no batch channel plane yet.
                         if routing and routing.get("channel") == "batch":
                             raise RequestError(
@@ -6972,14 +7134,20 @@ def build_server(
                             message="stream must be a boolean",
                         ))
                         if stream and model_name not in {
-                            TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
                         }:
                             raise RequestError(
                                 400,
                                 "invalid_stream",
-                                "stream is not supported for this model on /v1/responses; use orchestrator/auto or orchestrator/free",
+                                "stream is not supported for this model on /v1/responses; use the gateway default, orchestrator/auto, or orchestrator/free",
                             )
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    }:
                         _require_pool_model(orchestrator, model_name)
                         if body.get("tools"):
                             raise RequestError(
@@ -7011,8 +7179,13 @@ def build_server(
                             with orchestrator.client.request_settings(
                                 request_deadline_monotonic=request_deadline
                             ):
-                                stream_succeeded, stream_status_code = self._stream_orchestrated_response(
-                                    orchestrator, security, messages, model_name
+                                stream_succeeded, stream_status_code = _run_with_routing_endpoint(
+                                    orchestrator,
+                                    routing,
+                                    model_name,
+                                    lambda: self._stream_orchestrated_response(
+                                        orchestrator, security, messages, model_name
+                                    ),
                                 )
                         else:
                             stream_succeeded = True
@@ -7020,10 +7193,15 @@ def build_server(
                             with orchestrator.client.request_settings(
                                 request_deadline_monotonic=request_deadline
                             ):
-                                result = self._run(
-                                    lambda: orchestrator.complete(
-                                        messages, mode="auto", model_name=model_name
-                                    )
+                                result = _run_with_routing_endpoint(
+                                    orchestrator,
+                                    routing,
+                                    model_name,
+                                    lambda: self._run(
+                                        lambda: orchestrator.complete(
+                                            messages, mode="auto", model_name=model_name
+                                        )
+                                    ),
                                 )
                             summaries = [
                                 _REASONING_STAGE_SUMMARIES.get(step.get("role"), "Processing the request.")
@@ -7058,12 +7236,17 @@ def build_server(
                         with orchestrator.client.request_settings(
                             request_deadline_monotonic=request_deadline
                         ):
-                            proxied = self._run(
-                                lambda: orchestrator.proxy_completion(
-                                    body,
-                                    endpoint="responses",
-                                    single_agent=True,
-                                )
+                            proxied = _run_with_routing_endpoint(
+                                orchestrator,
+                                routing,
+                                body.get("model"),
+                                lambda: self._run(
+                                    lambda: orchestrator.proxy_completion(
+                                        body,
+                                        endpoint="responses",
+                                        single_agent=True,
+                                    )
+                                ),
                             )
                     else:
                         responses_messages = _responses_to_chat_payload(body)["messages"]
@@ -7095,16 +7278,21 @@ def build_server(
                             frequency_penalty=body.get("frequency_penalty"),
                             request_deadline_monotonic=request_deadline,
                         ):
-                            proxied = self._run(
-                                lambda: coordinator.complete(
-                                    responses_messages,
-                                    mode="conduct",
-                                    attribution=responses_attribution,
-                                    hints=_validate_routing(body.get("routing")),
-                                    model_name=body["model"],
-                                    provider_request=body,
-                                    provider_endpoint="responses",
-                                )
+                            proxied = _run_with_routing_endpoint(
+                                orchestrator,
+                                routing,
+                                body["model"],
+                                lambda: self._run(
+                                    lambda: coordinator.complete(
+                                        responses_messages,
+                                        mode="conduct",
+                                        attribution=responses_attribution,
+                                        hints=routing,
+                                        model_name=body["model"],
+                                        provider_request=body,
+                                        provider_endpoint="responses",
+                                    )
+                                ),
                             )
                     orchestrator.record_analytics_event(
                         (

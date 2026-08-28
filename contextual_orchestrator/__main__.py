@@ -13,10 +13,15 @@ from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
+    CONFIGURED_GATEWAY_CREDENTIAL_NAME,
+    PROVIDER_MODEL_SOURCES,
+    ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
+    configured_gateway_source,
     discover_all_models,
     free_discovered_models,
+    is_discovered_chat_candidate,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_bootstrap_discovered_agents,
@@ -27,7 +32,12 @@ from .orchestrator import (
     ModelAgent,
     ModelClient,
     TaskOrchestrator,
+    _configured_endpoint_matches,
     load_agents,
+    normalize_endpoint_selector,
+)
+from .privacy_policy_analysis import (
+    analyze_discovered_privacy_policies,
 )
 from .server import SecurityConfig, serve
 
@@ -91,6 +101,24 @@ def _json_object(value: str) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise argparse.ArgumentTypeError("JSON object required")
     return parsed
+
+
+def _configured_provider_hosts() -> list[str] | None:
+    """Return the deployment allowlist used by both serving and discovery.
+
+    ``configured_gateway_source`` deliberately refuses a runtime source unless
+    its host is allowlisted.  The HTTP client already accepts the same
+    deployment setting, so CLI startup must pass it into ``ModelClient`` rather
+    than silently discarding it and leaving a blank bootstrap agent unexpanded.
+    """
+    hosts = [
+        host.strip()
+        for host in os.environ.get(
+            "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", ""
+        ).split(",")
+        if host.strip()
+    ]
+    return hosts or None
 
 
 def _resolve_auth_token(explicit: str, credential_name: str) -> str:
@@ -208,13 +236,62 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _bootstrap_discovery_sources() -> tuple[ProviderModelSource, ...]:
+    """Promote a configured gateway secret to KV and return discovery sources."""
+    source = configured_gateway_source(os.environ)
+    if source is None:
+        return PROVIDER_MODEL_SOURCES
+    secret = os.environ.get(CONFIGURED_GATEWAY_CREDENTIAL_NAME, "")
+    if secret.strip():
+        register_credential(CONFIGURED_GATEWAY_CREDENTIAL_NAME, secret.strip())
+    return (*PROVIDER_MODEL_SOURCES, source)
+
+
+def _runtime_discovery_sources(
+    orchestrator: TaskOrchestrator,
+) -> tuple[ProviderModelSource, ...]:
+    """Build runtime sources only from injected pool config and preseeded KV."""
+    sources = list(PROVIDER_MODEL_SOURCES)
+    allowed_hosts = ",".join(sorted(orchestrator.client.allowed_provider_hosts))
+    seen: set[tuple[str, str]] = set()
+    for agent in orchestrator.candidates:
+        if agent.provider_name != "configured_gateway":
+            continue
+        try:
+            source = configured_gateway_source(
+                {
+                    "LLM_GATEWAY_API_URL": agent.base_url,
+                    "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": allowed_hosts,
+                }
+            )
+        except ValueError:
+            orchestrator.record_analytics_event(
+                "configured_gateway_discovery_unavailable",
+                {"reason_code": "source_not_allowlisted"},
+            )
+            continue
+        if source is None:
+            continue
+        if get_credential(source.credential_name) is None:
+            orchestrator.record_analytics_event(
+                "configured_gateway_discovery_unavailable",
+                {"reason_code": "credential_unavailable"},
+            )
+            continue
+        identity = (source.list_url, source.credential_name)
+        if identity not in seen:
+            sources.append(source)
+            seen.add(identity)
+    return tuple(sources)
+
+
 def _discover_models_command(argv: list[str]) -> None:
     """Query every provider with a KV-registered credential and report the models found.
 
-    Never fabricates a credential: a provider with nothing registered in the KV
-    (see ``register-credential``) is silently skipped, so running this after
-    registering a subset of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY /
-    NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY still works.
+    Providers without a KV credential are skipped. The sole bootstrap exception
+    is an explicitly configured gateway: this one-shot command promotes its
+    allowlisted URL and API key from bootstrap transport into the KV before
+    discovery. Runtime auto-discovery never reads that environment transport.
     """
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
@@ -239,11 +316,26 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Report only models whose structured provider/catalog price metadata is entirely zero; "
         "unknown or name-implied prices remain excluded, while the full report keeps every model.",
     )
+    parser.add_argument(
+        "--analyze-privacy-policies",
+        action="store_true",
+        help=(
+            "Crawl declared policy sources and run a model-backed privacy assessment; "
+            "this opt-in action may incur provider charges."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
-    discovered, errors = discover_all_models()
+    try:
+        sources = _bootstrap_discovery_sources()
+    except ValueError as exc:
+        parser.error(str(exc))
+    discovered, errors = discover_all_models(sources)
+    privacy_assessments = []
+    if args.analyze_privacy_policies:
+        discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
     free_models = free_discovered_models(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
@@ -264,8 +356,18 @@ def _discover_models_command(argv: list[str]) -> None:
     report = {
         "discovered_count": len(reported),
         "free_tier_count": len(free_models),
+        "free_data_privacy": {
+            status: sum(1 for model in free_models if (
+                "supported" if model.supports_zero_data_retention is True else
+                "unsupported" if model.supports_zero_data_retention is False else "unknown"
+            ) == status)
+            for status in ("supported", "unsupported", "unknown")
+        },
         "priced_count": priced_count,
         "providers_with_errors": sorted({error.provider_name for error in errors}),
+        "privacy_policy_analysis": [
+            assessment.as_dict() for assessment in privacy_assessments
+        ],
         "enabled_agent_ids": enabled_agent_ids,
         "models": [
             {
@@ -273,6 +375,21 @@ def _discover_models_command(argv: list[str]) -> None:
                 "model": model.model_id,
                 "agent_id": agent_id_for(model),
                 "is_free": model.is_free,
+                "data_privacy": {
+                    "zero_data_retention": (
+                        "supported" if model.supports_zero_data_retention is True else
+                        "unsupported" if model.supports_zero_data_retention is False else "unknown"
+                    ),
+                    "no_training": (
+                        "supported" if model.supports_no_training is True else
+                        "unsupported" if model.supports_no_training is False else "unknown"
+                    ),
+                    "no_prompt_retention": (
+                        "supported" if model.supports_no_prompt_retention is True else
+                        "unsupported" if model.supports_no_prompt_retention is False else "unknown"
+                    ),
+                    "policy_sources": list(model.privacy_policy_urls),
+                },
             }
             for model in reported
         ],
@@ -283,14 +400,23 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Activate models carrying explicit provider-declared runtime capabilities."""
-    discovered, _errors = discover_all_models()
-    capable_models = [
+    """Discover and activate chat-capable models, preserving free/ZDR evidence."""
+    discovered, errors = discover_all_models(_runtime_discovery_sources(orchestrator))
+    for error in errors:
+        orchestrator.record_analytics_event(
+            "provider_model_discovery_failed",
+            {
+                "provider_name": error.provider_name,
+                "reason_code": error.error_code,
+            },
+        )
+    openrouter_paid_available = openrouter_paid_inference_available()
+    chat_models = [model for model in discovered if is_discovered_chat_candidate(model)]
+    runtime_models = [
         model
         for model in discovered
-        if {"chat", "embedding"}.intersection(model.capabilities)
+        if model in chat_models or "embedding" in model.capabilities
     ]
-    openrouter_paid_available = openrouter_paid_inference_available()
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
         replace(
@@ -301,7 +427,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 and openrouter_paid_available is not True
             ),
         )
-        for model in capable_models
+        for model in runtime_models
         if agent_id_for(model) not in existing_ids
     ]
     result = (
@@ -309,6 +435,27 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         if agents
         else {"added": [], "updated": []}
     )
+    if any(model.provider_name == "configured_gateway" for model in chat_models):
+        for agent in tuple(orchestrator.candidates):
+            try:
+                normalized_seed_endpoint = normalize_endpoint_selector(agent.base_url)
+            except ValueError:
+                continue
+            if (
+                agent.provider_name == "configured_gateway"
+                and not agent.model.strip()
+                and any(
+                    candidate.id != agent.id
+                    and candidate.provider_name == "configured_gateway"
+                    and bool(candidate.model.strip())
+                    and _configured_endpoint_matches(
+                        candidate.base_url, normalized_seed_endpoint
+                    )
+                    and not candidate.disabled
+                    for candidate in orchestrator.candidates
+                )
+            ):
+                orchestrator.remove_agent("default", agent.id)
     has_real_runtime_agent = any(
         not candidate.disabled
         and not candidate.base_url.startswith("mock://")
@@ -316,7 +463,15 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for candidate in orchestrator.agents
     )
     for candidate in tuple(orchestrator.agents):
-        if has_real_runtime_agent and "bootstrap_seed" in candidate.tags:
+        configured_gateway_seed = (
+            candidate.provider_name == "configured_gateway"
+            and not candidate.model.strip()
+        )
+        if (
+            has_real_runtime_agent
+            and "bootstrap_seed" in candidate.tags
+            and not configured_gateway_seed
+        ):
             orchestrator.patch_agent(
                 "default", candidate.id, {"status": "disabled"}
             )
@@ -431,7 +586,11 @@ def main(argv: list[str] | None = None) -> None:
         max_output_tokens=args.max_output_tokens,
         local_concurrency=args.local_concurrency,
         chat_template_args=args.chat_template_args,
-        allowed_provider_hosts=args.allowed_provider_hosts,
+        allowed_provider_hosts=(
+            args.allowed_provider_hosts
+            if args.allowed_provider_hosts is not None
+            else _configured_provider_hosts()
+        ),
     )
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),

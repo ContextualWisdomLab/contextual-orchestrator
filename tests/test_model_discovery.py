@@ -25,9 +25,14 @@ from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
+    ModelUnitPrice,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _merge_configured_gateway_metadata,
+    _merge_openrouter_provider_privacy,
+    _merge_openrouter_zdr_metadata,
     _price_per_1k,
+    _parse_openai_compatible,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -38,6 +43,333 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+
+
+def test_openrouter_zdr_metadata_covers_paid_and_free_models() -> None:
+    payload = {"data": [{"id": "paid/private"}, {"id": "free/training"}]}
+
+    merged = _merge_openrouter_zdr_metadata(
+        payload, {"data": [{"model_id": "paid/private"}]}
+    )
+
+    assert [row["supports_zero_data_retention"] for row in merged["data"]] == [True, False]
+
+
+def test_openrouter_empty_zdr_inventory_keeps_support_unknown() -> None:
+    payload = {"data": [{"id": "paid/private"}]}
+
+    merged = _merge_openrouter_zdr_metadata(payload, {"data": []})
+
+    assert "supports_zero_data_retention" not in merged["data"][0]
+
+
+def test_openrouter_provider_privacy_preserves_terms_and_withholds_mixed_claims() -> None:
+    payload = {"data": [{"id": "free/model"}]}
+    providers = {
+        "data": [
+            {
+                "slug": "private",
+                "dataPolicy": {
+                    "training": False,
+                    "retainsPrompts": False,
+                    "privacyPolicyURL": "https://private.example/privacy",
+                },
+            },
+            {
+                "slug": "training",
+                "dataPolicy": {
+                    "training": True,
+                    "retainsPrompts": True,
+                    "termsOfServiceURL": "https://training.example/terms",
+                },
+            },
+        ]
+    }
+
+    merged = _merge_openrouter_provider_privacy(
+        payload,
+        providers,
+        {"free/model": {"endpoints": [{"tag": "private"}, {"tag": "training"}]}},
+    )
+
+    assert merged["data"][0] == {
+        "id": "free/model",
+        "privacy_policy_urls": [
+            "https://private.example/privacy",
+            "https://training.example/terms",
+        ],
+    }
+
+
+def test_openrouter_provider_privacy_requires_complete_safe_consensus() -> None:
+    payload = {"data": [{"id": "free/model"}]}
+    providers = {
+        "data": [
+            {
+                "slug": "private",
+                "dataPolicy": {"training": False, "retainsPrompts": False},
+            }
+        ]
+    }
+
+    merged = _merge_openrouter_provider_privacy(
+        payload,
+        providers,
+        {"free/model": {"endpoints": [{"tag": "private"}]}},
+    )
+
+    assert merged["data"][0]["supports_no_training"] is True
+    assert merged["data"][0]["supports_no_prompt_retention"] is True
+
+
+def test_configured_gateway_withholds_conflicting_or_incomplete_prices() -> None:
+    """Logical-model pricing requires complete consensus across deployments."""
+    payload = {
+        "data": [
+            {
+                "id": "shared-model",
+                "pricing": {"prompt": 0, "completion": 0},
+                "architecture": {"output_modalities": ["text", "embedding"]},
+            }
+        ]
+    }
+    metadata = {
+        "data": [
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                    "supports_no_training": True,
+                },
+            },
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "input_cost_per_token": {"invalid": True},
+                    "output_cost_per_token": 0.000002,
+                    "supports_no_training": False,
+                },
+            },
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert "pricing" not in merged["data"][0]
+    assert "supports_no_training" not in merged["data"][0]
+    assert merged["data"][0]["architecture"]["output_modalities"] == ["text"]
+
+
+def test_configured_gateway_preserves_consensus_privacy_evidence() -> None:
+    payload = {"data": [{"id": "free-model"}]}
+    detail = {
+        "model_name": "free-model",
+        "model_info": {
+            "mode": "chat",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+            "supports_zero_data_retention": True,
+            "supports_no_training": True,
+            "supports_no_prompt_retention": True,
+            "privacy_policy_url": "https://provider.example/privacy",
+        },
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, {"data": [detail, detail]})
+
+    assert merged["data"][0]["supports_zero_data_retention"] is True
+    assert merged["data"][0]["supports_no_training"] is True
+    assert merged["data"][0]["supports_no_prompt_retention"] is True
+    assert merged["data"][0]["privacy_policy_urls"] == [
+        "https://provider.example/privacy"
+    ]
+
+
+def test_configured_gateway_keeps_ambiguous_privacy_strings_unknown() -> None:
+    """Only explicit boolean strings can become provider privacy evidence."""
+    payload = {"data": [{"id": "chat-model"}]}
+    metadata = {
+        "data": [
+            {
+                "model_name": "chat-model",
+                "model_info": {"supports_zero_data_retention": "unknown"},
+            }
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert "supports_zero_data_retention" not in merged["data"][0]
+
+
+def test_configured_gateway_preserves_only_consensus_unit_prices() -> None:
+    """Official non-token units survive only whole-deployment consensus."""
+    payload = {"data": [{"id": "image-model"}, {"id": "mixed-model"}]}
+    agreed = {"model_name": "image-model", "model_info": {
+        "mode": "image_generation", "output_cost_per_image": 0.04,
+        "output_cost_per_second": 0.01,
+    }}
+    metadata = {"data": [agreed, agreed,
+        {"model_name": "mixed-model", "model_info": {"mode": "video_generation", "output_cost_per_video_per_second": 0.2}},
+        {"model_name": "mixed-model", "model_info": {"mode": "video_generation", "output_cost_per_video_per_second": 0.3}},
+    ]}
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert merged["data"][0]["unit_pricing"] == {
+        "output_cost_per_image": 0.04, "output_cost_per_second": 0.01,
+    }
+    assert "unit_pricing" not in merged["data"][1]
+
+    source = ProviderModelSource(
+        provider_name="gateway", credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("image",),
+    )
+    discovered = _parse_openai_compatible(merged, source)
+    assert discovered[0].unit_prices == (
+        ModelUnitPrice("output_cost_per_image", 0.04),
+        ModelUnitPrice("output_cost_per_second", 0.01),
+    )
+
+
+def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
+    payload = {
+        "data": [
+            {
+                "id": "shared-model",
+                "architecture": {"output_modalities": ["text", "embedding"]},
+            }
+        ]
+    }
+    metadata = {
+        "data": [
+            {"model_name": "shared-model", "model_info": {"mode": "chat"}},
+            {"model_name": "shared-model", "model_info": {"mode": "embedding"}},
+        ]
+    }
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+    assert "architecture" not in merged["data"][0]
+
+
+def test_openai_bare_list_promotes_transport_compatible_ids_to_chat() -> None:
+    """A metadata-free listing still discovers chat, never embedding siblings.
+
+    A generic OpenAI-compatible gateway (e.g. LiteLLM) often returns only an
+    ``id`` per row. The identifier that passes the ordinary chat transport gate
+    must receive the same ``chat`` capability the rest of the pool advertises;
+    otherwise runtime auto-discovery silently drops chat deployments while
+    embedding deployments that happen to carry richer metadata survive.
+    """
+    discovered = _parse_openai_compatible(
+        {"data": [
+            {"id": "gpt-4o"},
+            {"id": "claude-3-5-sonnet"},
+            {"id": "text-embedding-3-large"},
+        ]},
+        OPENAI_SOURCE,
+    )
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["gpt-4o"].capabilities == ("chat",)
+    assert by_id["claude-3-5-sonnet"].capabilities == ("chat",)
+    assert "text-embedding-3-large" not in by_id
+
+
+def test_openai_parse_preserves_explicit_capability_evidence() -> None:
+    """A metadata-bearing listing keeps its provider-declared capabilities."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "chat-model-xl",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                    },
+                },
+                {
+                    "id": "rerank-model",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["rerank"],
+                    },
+                },
+            ]
+        },
+        OPENAI_SOURCE,
+    )
+    by_id = {model.model_id: model for model in discovered}
+    assert "chat" in by_id["chat-model-xl"].capabilities
+    assert by_id["rerank-model"].capabilities == ("rerank",)
+
+
+def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
+    payload = {
+        "data": [
+            {"id": "responses-model"},
+            {"id": "completion-model"},
+            {"id": "embedding-model"},
+            {"id": "image-model"},
+            {"id": "speech-model"},
+            {"id": "transcription-model"},
+            {"id": "video-model"},
+            {"id": "rerank-model"},
+            {"id": "moderation-model"},
+        ]
+    }
+    metadata = {
+        "data": [
+            {"model_name": "responses-model", "model_info": {"mode": "responses"}},
+            {
+                "model_name": "completion-model",
+                "model_info": {"mode": "completion"},
+            },
+            {
+                "model_name": "embedding-model",
+                "model_info": {"mode": "embedding"},
+            },
+            {
+                "model_name": "image-model",
+                "model_info": {"mode": "image_generation"},
+            },
+            {"model_name": "speech-model", "model_info": {"mode": "audio_speech"}},
+            {
+                "model_name": "transcription-model",
+                "model_info": {"mode": "audio_transcription"},
+            },
+            {
+                "model_name": "video-model",
+                "model_info": {
+                    "mode": "video_generation",
+                    "supported_modalities": ["text", "image"],
+                    "supported_output_modalities": ["video"],
+                },
+            },
+            {"model_name": "rerank-model", "model_info": {"mode": "rerank"}},
+            {
+                "model_name": "moderation-model",
+                "model_info": {"mode": "moderation"},
+            },
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert [row["architecture"] for row in merged["data"]] == [
+        {"input_modalities": ["text"], "output_modalities": ["text", "responses"]},
+        {"input_modalities": ["text"], "output_modalities": ["text", "completion"]},
+        {"input_modalities": ["text"], "output_modalities": ["embedding"]},
+        {"input_modalities": ["text"], "output_modalities": ["image"]},
+        {"input_modalities": ["text"], "output_modalities": ["speech"]},
+        {"input_modalities": ["audio"], "output_modalities": ["transcription"]},
+        {"input_modalities": ["text", "image"], "output_modalities": ["video"]},
+        {"input_modalities": ["text"], "output_modalities": ["rerank"]},
+        {"input_modalities": [], "output_modalities": ["moderation"]},
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -192,6 +524,22 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
 
 
+def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_json",
+        side_effect=[
+            {"data": [{"id": "free/model", "pricing": {"prompt": "0", "completion": "0"}}]},
+            {"data": []},
+            urllib.error.URLError("provider policy unavailable"),
+        ],
+    ), patch(
+        "contextual_orchestrator.model_discovery._openrouter_free_model_endpoints"
+    ) as endpoint_fetch:
+        discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert [model.model_id for model in discovered] == ["free/model"]
+    endpoint_fetch.assert_not_called()
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:
     """A provider parameter alone cannot make an image-only model a synthesizer."""
     register_credential("OPENROUTER_API_KEY", "sk-router")
@@ -212,6 +560,26 @@ def test_non_text_model_does_not_gain_structured_response_capability() -> None:
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
+
+    assert discovered[0].capabilities == ("image",)
+
+
+def test_non_text_model_does_not_gain_chat_from_chat_like_identifier() -> None:
+    """Explicit non-text outputs win over heuristic chat-name recovery."""
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "provider/chat-image-only",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["image"],
+                    },
+                }
+            ]
+        },
+        OPENAI_SOURCE,
+    )
 
     assert discovered[0].capabilities == ("image",)
 
@@ -492,6 +860,25 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
     assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
 
 
+def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
+    """Every persistence path receives the same provider-declared privacy tags."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        supports_zero_data_retention=True,
+        supports_no_training=True,
+        supports_no_prompt_retention=False,
+    )
+
+    assert {
+        "privacy:zdr",
+        "privacy:no_training",
+        "privacy:retention_only",
+    } <= set(agent_from_discovered(discovered).tags)
 def test_response_format_metadata_does_not_make_non_chat_model_eligible() -> None:
     discovered = DiscoveredModel(
         provider_name="openai",

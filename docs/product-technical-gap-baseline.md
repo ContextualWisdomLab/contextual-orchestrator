@@ -1,3 +1,132 @@
+# Contextual Orchestrator: Product & Technical Gap Baseline
+
+## 2026-08-27 omitted-model and virtual-id contract slice
+
+The prior local `commercial-loop-20260826` worktree contained an omitted-model
+repair that was not yet covered by PR #868 head `d37569835b1944075b66dd259d6738a8f4052927`.
+That repair was reconciled into the live PR branch without changing the open
+privacy-discovery or trace-authorization contracts. The exact contract on the
+new head is now:
+
+1. `/v1/chat/completions` omits to the advertised virtual gateway id
+   `contextual-orchestrator`.
+2. `/v1/responses` omits to `orchestrator/auto`, preserving the orchestrated
+   path instead of pretending a concrete deployment was named.
+3. Explicit JSON `null` still fails closed on both text surfaces; omission and
+   explicit null are no longer conflated.
+4. `orchestrator/free` remains explicit-only; no omitted-model path can
+   silently downgrade into a free-only request.
+
+Focused exact-head verification on Thursday, August 27, 2026 used `uv run`
+from the clean PR worktree:
+`tests/test_chat_orchestration_mode_http_honesty.py`,
+`tests/test_responses_model_required_http_honesty.py`,
+`tests/test_model_strip_writeback_http_honesty.py`, and
+`tests/test_orchestrated_responses_stream.py` all passed (`43 passed in
+18.49s`). This is branch evidence only and does not replace protected hosted
+checks or independent review.
+
+## 2026-08-27 bare-gateway discovery and virtual-model acceptance slice
+
+The user-facing report was reproduced as a code path, not an environment
+quirk: with the configured-gateway bootstrap transport
+(`LLM_GATEWAY_API_URL` + `LLM_GATEWAY_API_KEY`) pointing at a
+plain OpenAI-compatible gateway (e.g. a LiteLLM proxy) whose `/v1/models`
+rows carry no modality metadata produced `DiscoveredModel` rows with
+**empty** capabilities for chat deployments, while embedding deployments
+that happen to carry richer `/model/info` evidence kept an `embedding`
+capability. Empty-capability chat rows were then guaranteed to be dropped
+by the runtime activation filter (`"chat" in model.capabilities`), which
+is exactly "embedding discovers, chat does not".
+
+Closure in PR #868 (`fix/gateway-default-chat-model` core slice):
+
+1. `_parse_openai_compatible`: an identifier that passes the ordinary chat
+   transport gate (`is_general_chat_agent_model_id`) now receives the
+   `chat` capability, so a bare gateway list discovers usable chat models.
+   Endpoint-only ids (embedding/rerank/transcription/...) never pass that
+   gate, so no non-chat model is mislabeled.
+2. `_auto_discover_runtime_agents` activates candidates with the same
+   `is_discovered_chat_candidate` rule the serving bootstrap uses, so the
+   two entry points agree on bare-listing evidence.
+3. Structured chat trace disclosure path is restored (authorized callers
+   receive the disclosed workflow trace; tool passthrough reports
+   `trace_unavailable`), and `response_format` is a preference that can
+   never fail-closed purely because a pool lacks the tag, while vision
+   stays a hard entitlement.
+4. `orchestrator/auto`, `orchestrator/free`, and the advertised
+   `contextual-orchestrator` default resolve to a concrete synthesizer on
+   every structured surface; omitted-model and null/blank-model semantics
+   now differ honestly (omission defaults; explicit null/blank fails
+   closed).
+5. ZDR discovery already marks both paid and free models on OpenRouter
+   (`endpoints/zdr`) and configured gateways (`/model/info` consensus);
+   no ZDR regression introduced.
+
+Evidence: full suite `2483 passed, 1 skipped` locally and the hosted
+"Full unit and contract suite" green on the exact head; focused suites
+green. Non-critical CI only: fuzz hash-locks were aligned
+(`rpds-py`/`typing-extensions`) with `requirements.lock`; the Strix
+security-run provider was externally unavailable at one point (rate limit,
+token cap, or connection) and is re-run on dispatch — not a code
+defect.
+
+Remaining gap: the durable catalog still lacks operator-visible
+per-refresh status on every consumed config; follow-up leaves ZDR
+position for a metadata-freshness slice.
+
+## 1. Executive Summary
+This document serves as the baseline for the Contextual Orchestrator (an enterprise-grade LLM model orchestration gateway). To achieve a tier-one enterprise valuation (targeting the $20B+ market for AI infrastructure and governance), we must bridge the gap between our current state and a fully auditable, highly concurrent, standard-compliant SaaS gateway.
+
+## 2. Product Requirements Document (PRD) Gaps
+### Target Buyer & Value Proposition
+- **Enterprise AI Platform Teams & SOC**: Require high throughput, lowest latency, and absolute data privacy compliance (CSAP, SOC2, HIPAA).
+- **Core Value**: Token-cost optimization + performance + upstream load balancing with strict PII protection and Role-Based Access Control (RBAC).
+
+### Gap Analysis (Product)
+1. **Dynamic Model Discovery & Standard API Routing**:
+   - *Current*: A configured OpenAI-compatible gateway with API keys resolves embeddings, but other models (chat, multimodal) fail discovery.
+   - *Root cause (closed in PR #868)*: plain OpenAI-compatible listing rows without capability metadata were parsed with empty capabilities and then dropped by the runtime chat-activation filter; endpoint embedding rows kept richer metadata and survived.
+   - *Target*: Seamless dynamic model discovery for `orchestrator/auto`, `orchestrator/free`, and omitted models. Paid vs free model discovery fully automated regardless of provider or custom gateway endpoint. Full OpenAPI/RESTful standard compliance.
+   - *ZDR Discovery*: OpenRouter and configured gateways discover ZDR models (paid and free) and parse privacy policies for automated compliance.
+2. **PII Masking vs Business Continuity**:
+   - *Current*: PII masking disrupts downstream workflows if over-aggressive.
+   - *Target*: Context-aware differential privacy and entity resolution masking that preserves structural integrity without destroying analytical value (ADR 0027, 0028).
+3. **Advanced Scheduling & Reasoning (Fugu/Conductor/TRINITY)**:
+   - *Current*: Basic LiteLLM routing parity.
+   - *Target*: Test-time compute allocation based on reasoning effort ablation. Dynamic multi-agent routing based on task complexity. True $\theta$ ablations using equal-budget profiling are needed to map `lite` vs `full` vs `pro` execution.
+
+## 3. Technical Requirements Document (TRD) Gaps
+### Gap Analysis (Technical)
+1. **Concurrency and Scaling**:
+   - *Current*: Python GIL limitations (Multithreading issues).
+   - *Target*: Asynchronous full-duplex non-blocking I/O. Use Python 3.14 for GIL improvements, but core vector/routing arithmetic must be migrated to **Rust**. `k6` end-to-end load tests required to prove concurrent connections.
+2. **Database & Persistence**:
+   - *Current*: May have unstructured locking or missing 3NF.
+   - *Target*: Strict 3NF database schema with `snake_case` naming. Read/Write replica split. Hot partition mitigation. Use strict `UPSERT` semantics.
+3. **Math & Psychometrics Engine**:
+   - *Current*: Python-based math.
+   - *Target*: All tensor, vector, embedding chunking, token sizing, and psychometric models (TEPP, fast-mlsirm) must be computed in **Rust with GPU+CPU multithreading**. Use empirically validated weights (not arbitrary heuristics). Atomistic fallacy prevention via multilevel/temporal modeling.
+4. **Embedding Chunking & Omni-modal**:
+   - *Current*: Flat chunks.
+   - *Target*: Semantic boundary chunking (DOM nodes, paragraph, sender/receiver). Multimodal embedding (Base64 image text extraction, object detection). Add seamless audio/video routing natively.
+5. **Security & Compliance**:
+   - *Current*: Basic auth.
+   - *Target*: CSAP, SOC 2 compliance. Formalize gateway trust boundary with WAF/IDS (`wardnet`). 100% test coverage (unit, contract, edge cases). 100% docstring coverage.
+
+## 4. Ecosystem Integration Gaps
+- **fast-mlsirm & Psychometrics**: Time-aware modeling and multi-level / multi-membership models are not natively integrated in routing decisions.
+- **naruon**: PIM/DOM decomposition graphs from `naruon` are not directly queryable via our model's tool calls yet.
+
+## 5. Action Plan & Roadmap (Loop Strategy)
+1. **Fix Discovery (Immediate)**: Ensure omitted model, `orchestrator/auto`, and `orchestrator/free` semantics are correct.
+2. **Rust Migration (Q3)**: Extract vector math, token counting, and ML routing to a Rust extension.
+3. **Database Audit (Q3)**: Review Core ERD. Rename all non-snake_case objects. Add UPSERT paths.
+4. **k6 Load Test (Q3)**: Prove lock-free asynchronous operations.
+5. **Documentation**: APA 7th citations required for routing strategies.
+
+*Note: All architectural changes must cite relevant literature in APA 7th format. Scheduled for hourly updates.*
+
 # Product and Technical Gap Baseline
 
 > Accelerator boundary: [ADR 0006](adr/0006-native-accelerator-runtime-boundaries.md)

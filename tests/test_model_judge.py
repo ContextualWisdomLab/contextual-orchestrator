@@ -753,7 +753,7 @@ def test_route_provider_failure_does_not_poison_structured_readiness() -> None:
     )
     orchestrator = TaskOrchestrator([agent], client=FailingClient(max_retries=0))
 
-    with pytest.raises(RuntimeError, match="all 1 candidate agents failed"):
+    with pytest.raises(ProviderResponseError, match="provider response unavailable"):
         orchestrator.complete(
             [{"role": "user", "content": "answer directly"}], mode="route"
         )
