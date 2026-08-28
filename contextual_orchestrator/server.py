@@ -2176,11 +2176,12 @@ def _require_pool_model(
             capability_agents = orchestrator._capability_agents(required_capability)
         except RuntimeError:
             capability_agents = []
+        capability_agents = [agent for agent in capability_agents if zdr_allowed(agent)]
         if model_name == TaskOrchestrator.FREE_MODEL:
             capability_agents = [
                 agent
                 for agent in capability_agents
-                if zdr_allowed(agent) and orchestrator._is_free_agent(agent)
+                if orchestrator._is_free_agent(agent)
             ]
         if capability_agents:
             return capability_agents[0].model

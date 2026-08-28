@@ -223,6 +223,21 @@ def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
         )
 
 
+def test_virtual_capability_auto_rejects_non_zdr_pool() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",))]
+    )
+
+    with orchestrator.request_policy(True), pytest.raises(
+        RequestError, match="no enabled embedding model"
+    ) as raised:
+        _require_pool_model(
+            orchestrator, TaskOrchestrator.AUTO_MODEL, required_capability="embedding"
+        )
+
+    assert raised.value.status == 400
+
+
 def test_virtual_text_models_require_an_enabled_eligible_pool() -> None:
     """AUTO and FREE fail as client errors before an empty pool reaches routing."""
     empty = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")])

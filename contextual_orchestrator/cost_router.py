@@ -289,11 +289,12 @@ class CostRoutingCoordinator:
             }
             race_token = self._race_usage_context.set(race_context)
             try:
-                provider_response = self.orchestrator.proxy_completion(
-                    provider_request,
-                    endpoint=provider_endpoint,
-                    single_agent=False,
-                )
+                with self.orchestrator.request_policy(zdr_only):
+                    provider_response = self.orchestrator.proxy_completion(
+                        provider_request,
+                        endpoint=provider_endpoint,
+                        single_agent=False,
+                    )
                 lineage = provider_response.get("orchestration")
                 if isinstance(lineage, dict) and isinstance(
                     lineage.get("workflow_run_id"), str
@@ -415,7 +416,8 @@ class CostRoutingCoordinator:
         }
         race_token = self._race_usage_context.set(race_context)
         try:
-            result = self.orchestrator.run(messages, **run_kwargs)
+            with self.orchestrator.request_policy(zdr_only):
+                result = self.orchestrator.run(messages, **run_kwargs)
             if isinstance(result.get("workflow_run_id"), str):
                 race_context["workflow_run_id"] = result["workflow_run_id"]
             race_context["workflow_ready"] = True

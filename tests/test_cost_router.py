@@ -86,6 +86,59 @@ def test_sync_completion_preserves_provider_reported_usage() -> None:
     assert record["measurement_status"] == "measured"
 
 
+def test_sync_completion_scopes_zdr_policy_to_direct_run() -> None:
+    coordinator = _coordinator()
+    agent = coordinator.orchestrator.agents[0]
+    observed: list[bool] = []
+
+    def run(*_args, **_kwargs):
+        observed.append(coordinator.orchestrator._zdr_agent_allowed(agent))
+        return {
+            "workflow_run_id": "run_direct_zdr",
+            "mode": "route",
+            "answer": "answer",
+            "trace": [{"agent_id": agent.id, "output": "answer"}],
+        }
+
+    coordinator.orchestrator.run = run  # type: ignore[method-assign]
+    coordinator.complete(
+        [{"role": "user", "content": "private request"}],
+        mode="route",
+        zdr_only=True,
+    )
+
+    assert observed == [False]
+
+
+def test_provider_completion_scopes_zdr_policy_to_direct_proxy() -> None:
+    coordinator = _coordinator()
+    agent = coordinator.orchestrator.agents[0]
+    observed: list[bool] = []
+
+    def proxy_completion(*_args, **_kwargs):
+        observed.append(coordinator.orchestrator._zdr_agent_allowed(agent))
+        return {
+            "model": agent.model,
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "orchestration": {"workflow_run_id": "run_proxy_zdr"},
+        }
+
+    coordinator.orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    coordinator.orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_proxy_zdr",
+        "mode": "route",
+        "answer": "answer",
+        "trace": [],
+    }
+    coordinator.complete(
+        [{"role": "user", "content": "private provider request"}],
+        provider_request={"model": agent.model, "messages": []},
+        zdr_only=True,
+    )
+
+    assert observed == [False]
+
+
 def test_sync_empty_trace_preserves_top_level_provider_usage() -> None:
     """An empty trace still records measured usage returned by the provider run."""
     coordinator = _coordinator()
