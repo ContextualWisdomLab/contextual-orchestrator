@@ -2168,10 +2168,13 @@ def _coerce_message_content_text(content: Any) -> str:
 
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
-    """Load model agent definitions from an agents JSON file."""
+    """Load model agent definitions from an object- or list-shaped JSON file."""
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
-    return [ModelAgent.from_dict(item) for item in data["agents"]]
+    items = data.get("agents") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise ValueError("agents JSON must contain a list of agent definitions")
+    return [ModelAgent.from_dict(item) for item in items]
 
 
 class _AgentPoolStore:

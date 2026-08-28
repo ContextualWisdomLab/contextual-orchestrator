@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import ModelAgent, TaskOrchestrator, load_agents
 from contextual_orchestrator.model_group import ModelGroupRouter, canonical_group_name
 
 
@@ -74,6 +76,16 @@ def test_group_reassignment_discards_old_group_measurements() -> None:
     orchestrator.patch_agent("default", member.id, {"group_name": "different_group"})
 
     assert orchestrator._group_router.member_report(member.id)["success_count"] == 0
+
+
+def test_load_agents_accepts_sidecar_list_catalog(tmp_path) -> None:
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps([{"id": "catalog_agent", "model": "catalog-model"}]),
+        encoding="utf-8",
+    )
+
+    assert [agent.model for agent in load_agents(str(catalog))] == ["catalog-model"]
 
 
 def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> None:
