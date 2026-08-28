@@ -1239,18 +1239,27 @@ class ModelClient:
         agent: ModelAgent,
         payload: dict[str, Any],
         profile: ReasoningEffortProfile | None,
+        *,
+        api_surface: str = "chat.completions",
     ) -> dict[str, Any]:
         """Apply an opt-in profile while proving provider support before egress."""
+        if api_surface not in {"chat.completions", "responses"}:
+            raise ValueError("api_surface must be chat.completions or responses")
         supports = (
             agent.reasoning_effort_supported is True
             or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
         )
-        return apply_request_profile(
+        applied = apply_request_profile(
             payload,
             profile,
             supports_reasoning_effort=supports,
             default_max_output_tokens=self.max_output_tokens,
         )
+        if api_surface == "responses":
+            applied["max_output_tokens"] = applied.pop("max_tokens")
+            if "reasoning_effort" in applied:
+                applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
+        return applied
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.

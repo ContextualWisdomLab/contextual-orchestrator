@@ -14,6 +14,7 @@ from contextual_orchestrator import (
     CefrObservationError,
     CefrRaterAssignment,
     ModelAgent,
+    ReasoningEffortProfile,
     TaskOrchestrator,
     TaskOrchestratorCefrGateway,
     observe_language_response_criteria,
@@ -179,7 +180,9 @@ def test_supported_structured_surfaces_are_forwarded(response_format: str, api_s
 def test_responses_json_schema_format_includes_required_type() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("rater_agent", "mock-rater", tags=("response_format",), base_url="mock://local"),
-    ])
+    ], role_effort_catalog={
+        "judge": ReasoningEffortProfile(reasoning_effort="low", max_output_tokens=123),
+    })
     observed: dict[str, Any] = {}
 
     def proxy_send(agent: ModelAgent, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -202,6 +205,10 @@ def test_responses_json_schema_format_includes_required_type() -> None:
         "schema": {},
         "strict": True,
     }
+    assert observed["payload"]["max_output_tokens"] == 123
+    assert "max_tokens" not in observed["payload"]
+    assert observed["payload"]["reasoning"] == {"effort": "low"}
+    assert "reasoning_effort" not in observed["payload"]
 
 
 def test_disagreement_and_high_uncertainty_route_to_human_review() -> None:

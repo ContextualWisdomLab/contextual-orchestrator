@@ -282,7 +282,9 @@ class TaskOrchestratorCefrGateway:
             raise CefrObservationError("unsupported_api_surface", "unsupported API surface")
         profile = self.orchestrator._role_effort_profile("judge")
         if profile is not None:
-            payload = self.orchestrator.client.apply_effort_profile(agent, payload, profile)
+            payload = self.orchestrator.client.apply_effort_profile(
+                agent, payload, profile, api_surface=api_surface
+            )
         response = self.orchestrator.client.proxy_send(agent, endpoint, payload)
         answer = _response_text(agent, response, api_surface)
         usage = _safe_usage(response.get("usage")) if isinstance(response, Mapping) else None
