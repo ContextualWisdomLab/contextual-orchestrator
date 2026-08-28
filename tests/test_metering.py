@@ -235,8 +235,8 @@ def test_billing_export_flush_uses_record_id_lookup() -> None:
     )
 
 
-def test_async_billing_export_rejects_caller_owned_sqlite_transaction() -> None:
-    """The background writer must not bill from an unobservable transaction."""
+def test_async_billing_export_preserves_caller_owned_sqlite_transaction() -> None:
+    """A caller transaction persists before export and never bills a rollback."""
     connection = sqlite3.connect(":memory:", check_same_thread=False)
     store = SqlLedgerStore(connection, paramstyle="qmark")
     sink = _RecordingUsageSink()
@@ -257,11 +257,87 @@ def test_async_billing_export_rejects_caller_owned_sqlite_transaction() -> None:
         completion_tokens=1,
         usage_record_id="usage_async_rolled_back",
     )
+    assert store.query()[0]["usage_record_id"] == "usage_async_rolled_back"
     connection.rollback()
     assert ledger.flush(timeout=5) is True
     assert sink.ids == []
     assert store.query() == []
     assert ledger.telemetry_health()["records_dropped"] == 1
+
+    connection.execute("BEGIN")
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_async_committed",
+    )
+    assert sink.ids == []
+    connection.commit()
+    assert ledger.flush(timeout=5) is True
+    assert sink.ids == ["usage_async_committed"]
+    assert ledger.telemetry_health()["records_stored"] == 1
+
+
+def test_async_billing_export_does_not_race_new_transaction() -> None:
+    """A transaction opened after enqueue must defer export until it settles."""
+    class _RaceBackend:
+        def __init__(self) -> None:
+            self.append_started = threading.Event()
+            self.release_append = threading.Event()
+            self.open_transaction = False
+            self.rows: list[UsageRecord] = []
+            self.pending: list[UsageRecord] = []
+
+        def append(self, record: UsageRecord) -> bool:
+            self.append_started.set()
+            assert self.release_append.wait(timeout=5)
+            (self.pending if self.open_transaction else self.rows).append(record)
+            return True
+
+        def has_open_transaction(self) -> bool:
+            return self.open_transaction
+
+        def existing_usage_record_ids(self, usage_record_ids: list[str]) -> set[str]:
+            return {
+                record.usage_record_id
+                for record in self.rows
+                if record.usage_record_id in usage_record_ids
+            }
+
+        def query(self, start=None, end=None):
+            del start, end
+            return [record.as_dict() for record in self.rows]
+
+        def rollback(self) -> None:
+            self.pending.clear()
+            self.open_transaction = False
+
+    backend = _RaceBackend()
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(
+        price_book,
+        store=backend,
+        non_blocking_store=True,
+        usage_sink=sink,
+    )
+
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_async_raced_rollback",
+    )
+    assert backend.append_started.wait(timeout=5)
+    backend.open_transaction = True
+    backend.release_append.set()
+    assert ledger.flush(timeout=5) is True
+    backend.rollback()
+    assert ledger.flush(timeout=5) is True
+    assert sink.ids == []
 
 
 def test_inline_health_counts_concurrent_export_failures() -> None:

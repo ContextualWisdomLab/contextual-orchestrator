@@ -444,8 +444,8 @@ def _emit_usage_event(
 class NonBlockingLedgerStore:
     """Ledger store wrapper that keeps persistence out of the request path.
 
-    A billing-backed wrapper rejects an already-open caller transaction because
-    a background worker cannot observe its eventual commit safely.
+    An already-open caller transaction is written synchronously so a background
+    worker cannot race its eventual commit or discard the usage record.
     """
 
     def __init__(
@@ -462,6 +462,8 @@ class NonBlockingLedgerStore:
         self._telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
         self._usage_record_sink = usage_record_sink
         self._queue: queue.Queue[UsageRecord] = queue.Queue(maxsize=queue_size)
+        self._deferred_usage_exports: List[UsageRecord] = []
+        self._deferred_usage_exports_lock = threading.Lock()
         self._health = UsageTelemetryHealth()
         self._lock = threading.Lock()
         self._worker = threading.Thread(
@@ -475,20 +477,22 @@ class NonBlockingLedgerStore:
         """Queue a record for background persistence without blocking."""
         has_open_transaction = getattr(self.backend, "has_open_transaction", None)
         if (
-            self._usage_record_sink is not None
-            and callable(has_open_transaction)
-            and has_open_transaction()
+            callable(has_open_transaction) and has_open_transaction()
         ):
-            self._mark("records_dropped", error_type="caller_transaction")
+            accepted = self.backend.append(record) is not False
+            if not accepted:
+                return False
+            self._mark("records_accepted")
+            with self._deferred_usage_exports_lock:
+                self._deferred_usage_exports.append(record)
             _emit_usage_event(
                 self._telemetry_sink,
                 UsageTelemetryEvent.from_record(
                     record,
-                    export_state="dropped",
-                    error_type="caller_transaction",
+                    export_state="queued",
                 ),
             )
-            return False
+            return True
         try:
             self._queue.put_nowait(record)
         except queue.Full:
@@ -520,6 +524,34 @@ class NonBlockingLedgerStore:
             if deadline is not None and time.monotonic() >= deadline:
                 return False
             time.sleep(0.01)
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if callable(has_open_transaction) and has_open_transaction():
+            return True
+        with self._deferred_usage_exports_lock:
+            pending = self._deferred_usage_exports
+            self._deferred_usage_exports = []
+        if not pending:
+            return True
+        lookup = getattr(self.backend, "existing_usage_record_ids", None)
+        if callable(lookup):
+            persisted_ids = set(lookup([record.usage_record_id for record in pending]))
+        else:
+            persisted_ids = {
+                row.get("usage_record_id") for row in self.backend.query(None, None)
+            }
+        for record in pending:
+            if record.usage_record_id in persisted_ids:
+                self._record_stored(record)
+            else:
+                self._mark("records_dropped", error_type="caller_transaction_rollback")
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="caller_transaction_rollback",
+                    ),
+                )
         return True
 
     def telemetry_health(self) -> Dict[str, Any]:
@@ -551,6 +583,15 @@ class NonBlockingLedgerStore:
                 self._queue.task_done()
 
     def _record_stored(self, record: UsageRecord) -> None:
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if (
+            self._usage_record_sink is not None
+            and callable(has_open_transaction)
+            and has_open_transaction()
+        ):
+            with self._deferred_usage_exports_lock:
+                self._deferred_usage_exports.append(record)
+            return
         self._mark("records_stored")
         _emit_usage_event(
             self._telemetry_sink,
