@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 20:16 KST exact-head protected-queue snapshot
+## 2026-08-28 21:35 KST exact-head protected-queue snapshot
 
 Protected `main` is `8d5924f8f7582ece18a6f43d6a5fffcb6a0a9c9f`. No merge is
 claimed from this snapshot. The open queue was re-read against that base and
@@ -17,18 +17,27 @@ also fails closed after three bounded HTTP 500 `internal_error` responses from
 this is provider/backend evidence, not a source finding or bypass authority.
 
 PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
-at `7661ada20140788046e5fd51eea5696ccb8e148d` has passing ordinary hosted
-checks and Devin review, while its current-head OpenCode check fails and Strix
-remains pending. PR [#907](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/907)
-at `41d7110d0f2553f4fabb3fdfb06a4b8ff0cc984a` is stacked on #857; it has no
-check-runs because its base is non-default, so `CLEAN` is not merge evidence.
-Its Devin review is informational with no additional defect. The shared batch
-embedding fixture is byte-identical with the current naruon consumer fixture.
+at `0654bd15630bee3e1d9d9978f90d8f6fb0a6e5e4` has passing ordinary, security,
+coverage, Noema, and Devin checks, while Full/Atheris remain in progress and
+OpenCode fails for lack of a current-head authenticated verdict. It has no
+qualifying independent approval. PR
+[#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908)
+at `0e4b6b0f540e29f0e8d6f449caf847c112a15d06` adds canonical ledger usage
+export; its ordinary/security checks pass, Full/Atheris and CodeRabbit remain
+pending, and OpenCode fails without a current-head authenticated verdict.
+The previously stacked PR #907 is merged into #857. The shared batch embedding
+fixture is byte-identical with the current naruon consumer fixture.
 
 PR [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905)
-at `9094e7341f9ba972edd8ab7bf36a87c922e7827a` has terminal ordinary, security,
+at `50ad4880d8811cb0dca14e4191cf10b9ec4a9d94` has terminal ordinary, security,
 fuzz, coverage, Noema, Strix, and Devin checks; OpenCode fails because no
-authenticated current-head verdict exists, and CodeRabbit is rate-limited.
+authenticated current-head verdict exists. PR #857 at
+`d1afcd3763b925195d6c4303ef5004d92c0d94cf` has 2,707 local tests passed and
+one optional test skipped; hosted Full/Atheris pass, Strix remains in progress,
+dependency-review failed on an HTTP 502 from GitHub's dependency graph
+service, and OpenCode lacks a current-head authenticated verdict. Its
+principal-bound batch/embedding ownership slice is therefore not merge-claimed;
+independent approval remains required.
 PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
 at `511956c274109a89af49193d1e6c78260dd2c1eb` has passing ordinary, security,
 fuzz, and coverage checks, but OpenCode lacks a current-head verdict and Strix
@@ -37,15 +46,15 @@ independent approval.
 
 | PR | Exact head | Base / current gate state |
 | ---: | --- | --- |
-| [#907](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/907) | `41d7110d0f2553f4fabb3fdfb06a4b8ff0cc984a` | stacked on #857; `CLEAN`, no check-runs, no independent approval |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `0e4b6b0f540e29f0e8d6f449caf847c112a15d06` | `BLOCKED`; Full/Atheris/CodeRabbit pending, OpenCode fail, no independent approval |
 | [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `2cc89dfb655921b9722b17c33c49ff6fc4b9063e` | `BLOCKED`; OpenCode fail, Strix provider failure, no independent approval |
-| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `9094e7341f9ba972edd8ab7bf36a87c922e7827a` | `BLOCKED`, `REVIEW_REQUIRED`; ordinary checks and Strix/Devin pass, OpenCode fail |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `50ad4880d8811cb0dca14e4191cf10b9ec4a9d94` | `BLOCKED`, `REVIEW_REQUIRED`; ordinary checks and Strix/Devin pass, OpenCode fail |
 | [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904) | `038e9d348ca7a1220dcf2155b86ba8650ce06cb9` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode fail |
 | [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `57ec66351c1ca37910650d5ad77e6bdbdc79be51` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode/Strix fail closed |
-| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `7661ada20140788046e5fd51eea5696ccb8e148d` | `BLOCKED`; OpenCode fail, Strix pending, no independent approval |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `0654bd15630bee3e1d9d9978f90d8f6fb0a6e5e4` | `BLOCKED`; Full/Atheris pending, OpenCode fail, no independent approval |
 | [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `2b1829a81ea79e012480c680a7ef5683dc13c3bc` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode/Strix fail closed |
 | [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `511956c274109a89af49193d1e6c78260dd2c1eb` | `BLOCKED`, `REVIEW_REQUIRED`; ordinary checks pass, OpenCode fail, Strix provider failure |
-| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `804819535e49644f4e38152222d7d82be6da1289` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode fail |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `d1afcd3763b925195d6c4303ef5004d92c0d94cf` | `BLOCKED`, `REVIEW_REQUIRED`; Strix pending, dependency-review HTTP 502, OpenCode fail |
 
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 
