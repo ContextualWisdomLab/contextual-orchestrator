@@ -142,6 +142,34 @@ def test_router_preserves_updated_priors_during_refresh(tmp_path) -> None:
     assert report["failure_count"] == 0
 
 
+def test_router_serializes_store_operations_with_memory_updates() -> None:
+    class _LockCheckingStore:
+        router: ModelGroupRouter | None = None
+
+        def _assert_router_locked(self) -> None:
+            assert self.router is not None and self.router._lock.locked()
+
+        def append(self, *args, **kwargs) -> None:
+            self._assert_router_locked()
+
+        def load(self, ledger_name: str) -> list:
+            self._assert_router_locked()
+            return []
+
+        def delete_members(self, ledger_name: str, member_ids) -> None:
+            self._assert_router_locked()
+
+    store = _LockCheckingStore()
+    router = ModelGroupRouter(observation_store=store)
+    store.router = router
+    router.register_member("member_a")
+    router.observe_success("member_a", 0.2)
+    router.observe_failure("member_a")
+    router.refresh()
+    router.reset_members({"member_a"})
+    router.forget_members(set())
+
+
 def test_measured_member_order_refreshes_each_ledger_once(tmp_path, monkeypatch) -> None:
     agents = [
         ModelAgent("member_a", "mock-a", group_name="shared_model"),

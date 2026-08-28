@@ -141,21 +141,19 @@ class ModelGroupRouter:
 
     def forget_members(self, keep_member_ids: set[str]) -> None:
         """Drop ledger rows for members that left every group."""
-        removed: set[str]
         with self._lock:
             removed = set(self._members) - keep_member_ids
-        if self._observation_store is not None:
-            self._observation_store.delete_members(self._ledger_name, removed)
-        with self._lock:
+            if self._observation_store is not None:
+                self._observation_store.delete_members(self._ledger_name, removed)
             for member_id in list(self._members):
                 if member_id not in keep_member_ids:
                     del self._members[member_id]
 
     def reset_members(self, member_ids: set[str]) -> None:
         """Discard measurements whose group context changed."""
-        if self._observation_store is not None:
-            self._observation_store.delete_members(self._ledger_name, member_ids)
         with self._lock:
+            if self._observation_store is not None:
+                self._observation_store.delete_members(self._ledger_name, member_ids)
             for member_id in member_ids:
                 self._members.pop(member_id, None)
 
@@ -229,20 +227,20 @@ class ModelGroupRouter:
             raise ValueError("output_tokens must be representable as a finite float") from None
         if throughput_sample is not None and not math.isfinite(throughput_sample):
             raise ValueError("output_tokens must be representable as a finite float")
-        self._persist_observation(
-            member_id,
-            success=True,
-            latency_seconds=latency,
-            output_tokens=output_tokens,
-        )
         with self._lock:
+            self._persist_observation(
+                member_id,
+                success=True,
+                latency_seconds=latency,
+                output_tokens=output_tokens,
+            )
             state = self._ensure_locked(member_id)
             self._apply_success_locked(state, clamped, throughput_sample)
 
     def observe_failure(self, member_id: str) -> None:
         """Record one failed attempt (stability evidence only; no latency)."""
-        self._persist_observation(member_id, success=False)
         with self._lock:
+            self._persist_observation(member_id, success=False)
             state = self._ensure_locked(member_id)
             self._apply_failure_locked(state)
 
@@ -274,8 +272,8 @@ class ModelGroupRouter:
         """Reload current-window observations from the shared store."""
         if self._observation_store is None:
             return
-        observations = self._observation_store.load(self._ledger_name)
         with self._lock:
+            observations = self._observation_store.load(self._ledger_name)
             # ponytail: replay the bounded window for cross-process correctness;
             # add a sequence cursor only after measured fleet load requires it.
             member_ids = tuple(self._members)
