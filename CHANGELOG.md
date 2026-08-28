@@ -72,6 +72,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Provider/model failures no longer collapse into a generic `internal_error`.
+  A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
+  classifies every upstream HTTP status, network, TLS, and transport failure
+  into OpenAI-compatible error codes (`rate_limit_exceeded`,
+  `authentication_error`, `model_not_found`, `provider_timeout`, ...) with the
+  client status, retryability, and one bounded redacted message (CWE-209).
+  Chat, passthrough, stream, and batch transports all surface the classified
+  cause; a fully-failed agent pool surfaces the final classified failure
+  after measured failover instead of an opaque collapse. Server error
+  payloads carry actionable next-step guidance per failure family.
+- Telemetry spans now carry concrete GenAI semantic-convention evidence:
+  `gen_ai.usage.input_tokens/output_tokens/total_tokens` from provider-reported
+  counts, served `gen_ai.response.model`, `gen_ai.response.finish_reasons`,
+  request latency, and classified `error.type` plus upstream status on
+  failures — replacing exception-class-only error labels. Chat, streaming,
+  and passthrough responses share this evidence path, and finish-reason arrays
+  are bounded to the OpenTelemetry default span-attribute budget.
+- Orchestration traces now include per-step telemetry evidence: streamed,
+  batched, routed, and conducted steps record `model`, `provider`, and
+  `latency_ms` alongside usage so workflow runs answer which model served a
+  step, how long it took, and what it cost.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Treat a provider's explicit 1,024-character tool-description rejection as a

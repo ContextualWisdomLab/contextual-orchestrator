@@ -44,6 +44,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
+from .provider_errors import ProviderUpstreamError
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -618,6 +619,36 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
         "error_message": error_message,
         "error_detail": detail,
     }
+
+
+_PROVIDER_FAILURE_GUIDANCE: dict[str, str] = {
+    "invalid_request_error": "Adjust the request parameters and retry.",
+    "authentication_error": "Verify the credential registered for this model in the credential registry.",
+    "payment_required": "Add payment capacity to the provider account that serves this model.",
+    "permission_error": "Request provider access for this model from the operator.",
+    "model_not_found": "Check the model id against the provider's model list and retry with a valid one.",
+    "request_too_large": "Reduce the request size (shorter input or lower max tokens).",
+    "rate_limit_exceeded": "Retry after a short delay; the provider is throttling this model.",
+    "conflict": "Resolve the conflicting in-flight operation before retrying.",
+    "provider_timeout": "The provider accepted but did not finish in time; retrying may succeed.",
+    "provider_connection_error": "The provider was unreachable; check network reachability before retrying.",
+    "tls_failure": "A transport-layer security error interrupted the provider connection; retrying may succeed.",
+    "tls_verification_failed": "Verify the provider endpoint certificate chain before retrying.",
+    "api_error": "The provider reported an internal failure; retrying may succeed.",
+    "service_unavailable": "The provider is temporarily unavailable; retry after a short delay.",
+}
+
+
+def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
+    """Build one caller-actionable sentence for a classified upstream failure.
+
+    The message names which model/agent failed and what to do next; it never
+    echoes raw provider diagnostics beyond the bounded redacted sentence.
+    """
+    guidance = _PROVIDER_FAILURE_GUIDANCE.get(
+        exc.error_code, "Review the request or contact the operator."
+    )
+    return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -5732,6 +5763,13 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -5768,6 +5806,13 @@ def build_server(
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -6342,12 +6387,6 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use chat without tools or response_format",
-                            )
                         tool_loop = bool(tools_list)
                         if (
                             tool_loop
@@ -6363,16 +6402,26 @@ def build_server(
                             tool_loop
                             and body.get("include_orchestration_trace") is True
                         ):
+                            if security.bearer_verifier is None:
+                                raise RequestError(
+                                    400,
+                                    "trace_unavailable",
+                                    "orchestration trace is unavailable for single-agent tool passthrough",
+                                )
                             raise RequestError(
                                 400,
-                                "trace_unavailable",
-                                "orchestration trace is unavailable for single-agent tool passthrough",
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use chat without tools or response_format",
                             )
-                        include_trace = (
-                            False
-                            if tool_loop
-                            else include_trace
-                        )
+                        include_trace = False if tool_loop else include_trace
+                        if include_trace:
+                            if security.bearer_verifier is not None:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use chat without tools or response_format",
+                                )
+                            self._authorize_trace_access()
                         started_at = time.perf_counter()
                         if tool_loop:
                             proxied = self._run(
@@ -6432,6 +6481,7 @@ def build_server(
                                 )
                             workflow = orchestrator.get_workflow_run(workflow_run_id)
                             lineage["trace"] = workflow["trace"]
+                            self._audit_trace_disclosure("/v1/chat/completions")
                         orchestrator.record_analytics_event(
                             (
                                 "chat_completion_passthrough"
@@ -7145,6 +7195,13 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -7548,6 +7605,19 @@ def build_server(
                         )
                 except ConnectionAbortedError:
                     raise
+                except ProviderUpstreamError as exc:
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": _error_payload(
+                            exc.error_code,
+                            _provider_upstream_message(exc),
+                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                        )["error"],
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     failed = {
                         **created_response,
@@ -7664,6 +7734,18 @@ def build_server(
                         TOOL_FALLBACK_STOPPED_CODE,
                         TOOL_FALLBACK_STOPPED_MESSAGE,
                         detail,
+                    )
+                    if not self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
+                except ProviderUpstreamError as exc:
+                    payload = _error_payload(
+                        exc.error_code,
+                        _provider_upstream_message(exc),
+                        {"request_id": uuid.uuid4().hex, **exc.detail},
                     )
                     if not self._write_sse(
                         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
