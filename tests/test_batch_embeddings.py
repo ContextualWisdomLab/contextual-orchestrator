@@ -156,6 +156,7 @@ def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
         # ledger prices the priced provider/model above (non-zero cost).
         payload = {
             "model": request["model"],
+            "zdr_only": request["zdr_only"],
             "endpoint": request["endpoint"],
             "inputs": request["inputs"],
             "metadata": {**request["metadata"], "provider": "acme-provider"},
