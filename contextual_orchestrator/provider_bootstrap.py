@@ -177,7 +177,7 @@ def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
     Models that survive retain only explicit provider/catalog capability and
     cost evidence in addition to the generic chat-serving tags.
     """
-    return is_general_chat_agent_model_id(model.model_id)
+    return not model.evidence_only and is_general_chat_agent_model_id(model.model_id)
 
 
 def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:

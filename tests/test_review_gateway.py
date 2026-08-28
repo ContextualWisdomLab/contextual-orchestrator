@@ -30,7 +30,14 @@ def _fresh_backend():
         set_backend(None)
 
 
-def _discovered(provider: str, model: str, credential: str, price: float) -> DiscoveredModel:
+def _discovered(
+    provider: str,
+    model: str,
+    credential: str,
+    price: float,
+    *,
+    evidence_only: bool = False,
+) -> DiscoveredModel:
     """Build one deterministic discovered chat candidate for the tests."""
     return DiscoveredModel(
         provider_name=provider,
@@ -40,6 +47,7 @@ def _discovered(provider: str, model: str, credential: str, price: float) -> Dis
         auth_scheme="Bearer",
         prompt_price_per_1k=price,
         completion_price_per_1k=price,
+        evidence_only=evidence_only,
     )
 
 
@@ -47,7 +55,7 @@ def test_build_review_orchestrator_registers_all_provider_credentials(monkeypatc
     """The bootstrap registers every configured provider key before discovery."""
     discovered = [
         _discovered("openai", "gpt-review", "OPENAI_API_KEY", 0.01),
-        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY", 0.02),
+        _discovered("openrouter", "router-review", "OPENROUTER_API_KEY", 0.02, evidence_only=True),
         _discovered("nvidia_nim", "nim-review", "NVIDIA_NIM_API_KEY", 0.03),
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
@@ -68,7 +76,7 @@ def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch
     """Cost-ranked discovery remains the routing order after agent construction."""
     discovered = [
         _discovered("openai", "expensive_review", "OPENAI_API_KEY", 2.0),
-        _discovered("openrouter", "cheap_review", "OPENROUTER_API_KEY", 0.01),
+        _discovered("openrouter", "cheap_review", "OPENROUTER_API_KEY", 0.01, evidence_only=True),
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
@@ -77,14 +85,14 @@ def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch
         max_agents=2,
     )
 
-    assert orchestrator._select_agent("review this change", "worker").model == "cheap_review"
+    assert orchestrator._select_agent("review this change", "worker").model == "expensive_review"
 
 
 def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
     """The gateway uses independent provider families before duplicate providers."""
     discovered = [
-        _discovered("openrouter", "cheap_first", "OPENROUTER_API_KEY", 0.01),
-        _discovered("openrouter", "cheap_second", "OPENROUTER_API_KEY", 0.02),
+        _discovered("openrouter", "cheap_first", "OPENROUTER_API_KEY", 0.01, evidence_only=True),
+        _discovered("openrouter", "cheap_second", "OPENROUTER_API_KEY", 0.02, evidence_only=True),
         _discovered("openai", "independent_review", "OPENAI_API_KEY", 1.0),
     ]
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
@@ -94,10 +102,24 @@ def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
         max_agents=2,
     )
 
-    assert [agent.model for agent in orchestrator.agents] == [
-        "cheap_first",
-        "independent_review",
+    assert [agent.model for agent in orchestrator.agents] == ["independent_review"]
+
+
+def test_build_review_orchestrator_never_routes_evidence_only_models(monkeypatch):
+    """OpenRouter catalog rows are evidence, never review upstreams."""
+    discovered = [
+        _discovered(
+            "openrouter",
+            "router-review",
+            "OPENROUTER_API_KEY",
+            0.01,
+            evidence_only=True,
+        )
     ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    with pytest.raises(NotConfigured, match="general chat models"):
+        review_gateway.build_review_orchestrator({"OPENROUTER_API_KEY": "router-secret"})
 
 
 def test_build_review_orchestrator_excludes_endpoint_only_models(monkeypatch):

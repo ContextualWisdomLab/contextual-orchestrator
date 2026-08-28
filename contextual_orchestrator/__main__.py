@@ -18,7 +18,6 @@ from .model_discovery import (
     agent_id_for,
     discover_all_models,
     free_discovered_models,
-    openrouter_paid_inference_available,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
@@ -286,12 +285,12 @@ def _discover_models_command(argv: list[str]) -> None:
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate models accepted by the shared chat contract."""
     discovered, _errors = discover_all_models()
-    openrouter_paid_available = openrouter_paid_inference_available()
     chat_models = [
         model
         for model in discovered
         if (
-            (not model.output_modalities or "text" in model.output_modalities)
+            not model.evidence_only
+            and (not model.output_modalities or "text" in model.output_modalities)
             and set(model.capabilities) <= _GENERAL_CHAT_CAPABILITIES
             and is_general_chat_agent_model_id(model.model_id)
         )
@@ -300,11 +299,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     agents = [
         replace(
             agent_from_discovered(model),
-            disabled=(
-                model.provider_name == "openrouter"
-                and not model.is_free
-                and openrouter_paid_available is not True
-            ),
+            disabled=False,
         )
         for model in chat_models
         if agent_id_for(model) not in existing_ids

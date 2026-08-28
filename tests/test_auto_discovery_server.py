@@ -1,7 +1,5 @@
 """Server-startup model discovery activates discovered runtime agents."""
 
-from dataclasses import replace
-
 from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
@@ -46,34 +44,29 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert "bootstrap_agent" in result["updated"]
 
 
-def test_auto_discovery_disables_paid_openrouter_without_credit(monkeypatch) -> None:
-    """Catalog availability cannot promote an unaffordable paid deployment."""
-    paid = DiscoveredModel(
+def test_auto_discovery_never_routes_evidence_only_openrouter_rows(monkeypatch) -> None:
+    """OpenRouter catalog rows remain evidence-only during runtime discovery."""
+    router_row = DiscoveredModel(
         provider_name="openrouter",
-        model_id="provider/paid-chat",
+        model_id="provider/router-chat",
         credential_name="OPENROUTER_API_KEY",
         chat_base_url="https://openrouter.ai/api/v1",
         auth_scheme="Bearer",
         capabilities=("chat", "response_format"),
+        evidence_only=True,
     )
-    free = replace(paid, model_id="provider/free-chat", is_free=True)
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda: ([paid, free], []),
-    )
-    monkeypatch.setattr(
-        "contextual_orchestrator.__main__.openrouter_paid_inference_available",
-        lambda: False,
+        lambda: ([router_row], []),
     )
     orchestrator = TaskOrchestrator(
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
     )
 
-    _auto_discover_runtime_agents(orchestrator)
+    result = _auto_discover_runtime_agents(orchestrator)
 
-    by_model = {agent.model: agent for agent in orchestrator.candidates}
-    assert by_model[paid.model_id].disabled is True
-    assert by_model[free.model_id].disabled is False
+    assert result == {"added": [], "updated": []}
+    assert [agent.id for agent in orchestrator.candidates] == ["bootstrap_agent"]
 
 
 def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> None:
