@@ -84,7 +84,6 @@ OPENROUTER_SOURCE = ProviderModelSource(
     list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
     chat_base_url="https://openrouter.ai/api/v1",
     capabilities=("chat",),
-    evidence_only=True,
 )
 
 BYTEZ_SOURCE = ProviderModelSource(
@@ -350,7 +349,7 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
-    assert sources["openrouter"].evidence_only is True
+    assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
@@ -459,7 +458,7 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", True),
     ]
 
@@ -490,7 +489,7 @@ def test_discover_all_models_matches_a_unique_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", True),
     ]
 
@@ -528,7 +527,7 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
