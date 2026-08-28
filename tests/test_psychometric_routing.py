@@ -68,6 +68,7 @@ def test_contextual_fast_mlsirm_evidence_precedes_static_coldstart_order(monkeyp
         "ranked_evidence",
         lambda agent_ids, prompt, vector: [("quality_first", 0.91)],
     )
+    monkeypatch.setattr(orchestrator._psychometric_router, "has_observations", lambda: True)
 
     ranked = orchestrator._ranked_agents(
         "user request", "worker", prompt_context='[{"role":"system","content":"policy"}]'
@@ -78,6 +79,34 @@ def test_contextual_fast_mlsirm_evidence_precedes_static_coldstart_order(monkeyp
         "static_first",
         "unmeasured_agent",
     ]
+
+
+def test_contextual_evidence_never_promotes_a_role_excluded_agent(monkeypatch) -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("eligible_agent", "model-a", priority=1),
+            ModelAgent(
+                "excluded_agent",
+                "model-b",
+                priority=100,
+                provider_exclusions=("worker",),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        orchestrator._psychometric_router, "has_observations", lambda: True
+    )
+    monkeypatch.setattr(
+        orchestrator._psychometric_router,
+        "ranked_evidence",
+        lambda agent_ids, prompt, vector: [(agent_ids[-1], 0.99)],
+    )
+
+    ranked = orchestrator._ranked_agents(
+        "request", "worker", prompt_context="system/user"
+    )
+
+    assert [agent.id for agent in ranked] == ["eligible_agent", "excluded_agent"]
 
 
 def test_contextual_fast_mlsirm_evidence_orders_every_post_413_candidate(monkeypatch) -> None:
@@ -94,6 +123,7 @@ def test_contextual_fast_mlsirm_evidence_orders_every_post_413_candidate(monkeyp
         "ranked_evidence",
         lambda agent_ids, prompt, vector: [("quality_backup", 0.88)],
     )
+    monkeypatch.setattr(orchestrator._psychometric_router, "has_observations", lambda: True)
 
     ranked = orchestrator._failover_candidates(
         orchestrator._agent("primary_agent"),

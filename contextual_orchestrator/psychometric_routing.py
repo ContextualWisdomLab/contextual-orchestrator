@@ -110,6 +110,11 @@ class PsychometricRoutingEvidence:
             ]
             return sorted(scored, key=lambda item: (-item[1], item[0]))
 
+    def has_observations(self) -> bool:
+        """Return whether embedding/fit work can affect a ranking."""
+        with self._lock:
+            return bool(self._responses)
+
     def records(self) -> list[dict[str, object]]:
         """Return prompt-free observations suitable for durable state storage."""
         with self._lock:

@@ -5244,8 +5244,11 @@ class TaskOrchestrator:
         )
         eligible = [agent for agent in static if role not in agent.provider_exclusions]
         excluded = [agent for agent in static if role in agent.provider_exclusions]
-        ordered = self._refine_partition(eligible, role) + self._refine_partition(excluded, role)
-        return self._psychometric_order(ordered, prompt_context)
+        return self._psychometric_order(
+            self._refine_partition(eligible, role), prompt_context
+        ) + self._psychometric_order(
+            self._refine_partition(excluded, role), prompt_context
+        )
 
     def _refine_partition(self, partition: list[ModelAgent], role: str) -> list[ModelAgent]:
         """Group-refine one role-partition with measured intra-group ordering."""
@@ -5286,7 +5289,11 @@ class TaskOrchestrator:
         self, candidates: list[ModelAgent], prompt_context: str | None
     ) -> list[ModelAgent]:
         """Put fast-MLSIRM-evidenced candidates before ordinary measured order."""
-        if not prompt_context or len(candidates) < 2:
+        if (
+            not prompt_context
+            or len(candidates) < 2
+            or not self._psychometric_router.has_observations()
+        ):
             return candidates
         evidence = self._psychometric_router.ranked_evidence(
             [candidate.id for candidate in candidates],
