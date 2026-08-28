@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import json
 import socket
 import urllib.error
 from copy import deepcopy
@@ -48,9 +50,10 @@ class SequencedProxyClient:
         return ModelClient().apply_effort_profile(agent, payload, profile)
 
 
-def _http_error(status: int) -> urllib.error.HTTPError:
+def _http_error(status: int, body: dict[str, Any] | None = None) -> urllib.error.HTTPError:
     """Build a provider-shaped HTTP failure."""
-    return urllib.error.HTTPError("https://provider.example/v1", status, "failed", None, None)
+    response_body = io.BytesIO(json.dumps(body).encode("utf-8")) if body is not None else None
+    return urllib.error.HTTPError("https://provider.example/v1", status, "failed", None, response_body)
 
 
 def _build(client: SequencedProxyClient) -> TaskOrchestrator:
@@ -224,6 +227,43 @@ def test_non_transient_error_is_not_replayed() -> None:
 
     assert caught.value is failure
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_virtual_passthrough_fails_over_on_provider_tool_description_limit() -> None:
+    """A provider-only tool limit advances the caller's request to the next provider."""
+    failure = _http_error(
+        400,
+        {
+            "error": {
+                "code": "invalid_tools",
+                "message": "each tool.function.description must be at most 1024 characters",
+            }
+        },
+    )
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect", "description": "x" * 1025}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
 
 
 def test_wrapped_transient_error_can_fail_over() -> None:

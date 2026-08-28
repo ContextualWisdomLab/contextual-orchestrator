@@ -78,6 +78,9 @@ ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
+_PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
+    "each tool.function.description must be at most 1024 characters"
+)
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
@@ -595,6 +598,32 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     return result
 
 
+def _is_provider_tool_description_limit_error(error: urllib.error.HTTPError) -> bool:
+    """Recognize the provider capability error that is safe to fail over."""
+    if error.code != 400:
+        return False
+    cache_key = "_contextual_orchestrator_tool_description_limit"
+    cached = getattr(error, cache_key, None)
+    if isinstance(cached, bool):
+        return cached
+    try:
+        payload = json.loads(error.read(65536).decode("utf-8"))
+    except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        result = False
+    else:
+        details = payload.get("error") if isinstance(payload, dict) else None
+        result = (
+            isinstance(details, dict)
+            and details.get("code") == "invalid_tools"
+            and details.get("message") == _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE
+        )
+    try:
+        setattr(error, cache_key, result)
+    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
+        pass
+    return result
+
+
 def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
     """Convert the provider's terminal tool-stop contract to the public safe error."""
     decision = classify_tool_failure(
@@ -995,6 +1024,11 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
             isinstance(current, urllib.error.HTTPError)
             and current.code
             in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+        ):
+            return True
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and _is_provider_tool_description_limit_error(current)
         ):
             return True
         if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
