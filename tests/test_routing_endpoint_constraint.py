@@ -7,6 +7,7 @@ import threading
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import pytest
 
@@ -31,12 +32,26 @@ class _RecordingClient(ModelClient):
         self.agent_ids.append(agent.id)
         return json.dumps({"workflow_required": False})
 
+    def embed(self, agent: ModelAgent, texts: list[str]) -> list[list[float]]:  # type: ignore[override]
+        self.agent_ids.append(agent.id)
+        return [[1.0, 0.0] for _text in texts]
+
 
 def _orchestrator() -> TaskOrchestrator:
     return TaskOrchestrator(
         [
-            ModelAgent("agent_a", "model-a", base_url="https://a.example/v1"),
-            ModelAgent("agent_b", "model-b", base_url="https://b.example/v1"),
+            ModelAgent(
+                "agent_a",
+                "model-a",
+                base_url="https://a.example/v1",
+                tags=("embedding",),
+            ),
+            ModelAgent(
+                "agent_b",
+                "model-b",
+                base_url="https://b.example/v1",
+                tags=("embedding",),
+            ),
         ],
         client=_RecordingClient(),
         cache_ttl=60,
@@ -147,6 +162,58 @@ def test_endpoint_is_rejected_on_unrelated_surfaces() -> None:
     assert exc_info.value.code == "invalid_routing"
 
 
+@pytest.mark.parametrize(
+    "deferred_hint",
+    [{"channel": "batch"}, {"latency_tolerant": True}],
+)
+def test_endpoint_cannot_be_dropped_into_deferred_chat_work(
+    deferred_hint: dict,
+) -> None:
+    with pytest.raises(RequestError) as exc_info:
+        _validate_routing(
+            {"endpoint": "https://a.example", **deferred_hint},
+            allow_endpoint=True,
+        )
+    assert exc_info.value.code == "invalid_routing"
+
+
+def test_same_agent_id_cannot_escape_after_endpoint_reconfiguration() -> None:
+    orchestrator = _orchestrator()
+    original = orchestrator.agents[0]
+    with orchestrator.routing_endpoint_scope(
+        "https://a.example", "contextual-orchestrator"
+    ):
+        replacement = replace(original, base_url="https://b.example/v1")
+        orchestrator.agents[0] = replacement
+        orchestrator.candidates[0] = replacement
+        with pytest.raises(RuntimeError, match="no chat-compatible agent"):
+            orchestrator._ranked_agents("task", "worker")
+        with pytest.raises(KeyError):
+            orchestrator._agent("agent_a")
+
+
+def test_same_agent_id_endpoint_change_partitions_every_evidence_cache() -> None:
+    orchestrator = _orchestrator()
+    agent = orchestrator.agents[0]
+    messages = [{"role": "user", "content": "same"}]
+    with orchestrator.routing_endpoint_scope("https://a.example", "contextual-orchestrator"):
+        cache_a = orchestrator._cache_key(messages, "route")
+        orchestrator._triage_workflow_required("same")
+        orchestrator._descriptor_vector_cached(agent)
+
+    replacement = replace(agent, base_url="https://c.example/v1")
+    orchestrator.agents[0] = replacement
+    orchestrator.candidates[0] = replacement
+    with orchestrator.routing_endpoint_scope("https://c.example", "contextual-orchestrator"):
+        cache_c = orchestrator._cache_key(messages, "route")
+        orchestrator._triage_workflow_required("same")
+        orchestrator._descriptor_vector_cached(replacement)
+
+    assert cache_a != cache_c
+    assert len(orchestrator._triage_cache) == 2
+    assert len(orchestrator._descriptor_vector_cache) == 2
+
+
 def _post_json(server: object, path: str, body: dict) -> tuple[int, dict]:
     """Post one synthetic OpenAI-compatible request to the in-process server."""
     port = server.server_address[1]  # type: ignore[attr-defined]
@@ -164,6 +231,42 @@ def _post_json(server: object, path: str, body: dict) -> tuple[int, dict]:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read())
+
+
+@pytest.mark.parametrize(
+    "deferred_hint",
+    [{"channel": "batch"}, {"latency_tolerant": True}],
+)
+def test_http_chat_rejects_endpoint_with_deferred_routing(
+    deferred_hint: dict,
+) -> None:
+    orchestrator = _orchestrator()
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _post_json(
+            server,
+            "/v1/chat/completions",
+            {
+                "model": "contextual-orchestrator",
+                "messages": [{"role": "user", "content": "answer"}],
+                "routing": {
+                    "endpoint": "https://a.example",
+                    **deferred_hint,
+                },
+            },
+        )
+        assert status == 400
+        assert document["error"]["code"] == "invalid_routing"
+        assert not orchestrator.client.agent_ids
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 @pytest.mark.parametrize(

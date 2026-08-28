@@ -15,7 +15,6 @@ import socket
 import struct
 import threading
 import time
-import traceback
 import urllib.error
 import urllib.parse
 from typing import Any, Callable, Mapping
@@ -3099,6 +3098,15 @@ def _validate_routing(
                 400, "endpoint_unavailable", "routing.endpoint is unavailable"
             ) from None
         cleaned["endpoint"] = endpoint.strip()
+    if "endpoint" in cleaned and (
+        cleaned.get("channel") == "batch"
+        or cleaned.get("latency_tolerant") is True
+    ):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.endpoint cannot be combined with deferred batch routing",
+        )
     return cleaned if cleaned else {}
 
 
@@ -5821,7 +5829,6 @@ def build_server(
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except Exception:
-                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
@@ -5858,7 +5865,6 @@ def build_server(
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
             except Exception:
-                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
@@ -5899,7 +5905,6 @@ def build_server(
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
             except Exception:
-                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
@@ -7385,7 +7390,6 @@ def build_server(
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except Exception:
-                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         @staticmethod

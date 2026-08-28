@@ -79,6 +79,9 @@ from .token_counting import RustCl100kPacker
 _REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
     "contextual_orchestrator_request_endpoint_agent_ids", default=None
 )
+_REQUEST_ENDPOINT_IDENTITY: ContextVar[str | None] = ContextVar(
+    "contextual_orchestrator_request_endpoint_identity", default=None
+)
 
 
 class EndpointUnavailableError(ValueError):
@@ -121,6 +124,25 @@ def _configured_endpoint_matches(value: str, normalized: str) -> bool:
         return normalize_endpoint_selector(value) == normalized
     except EndpointUnavailableError:
         return False
+
+
+def _agent_matches_request_endpoint(agent: "ModelAgent") -> bool:
+    """Revalidate both agent id and configured endpoint for the active request."""
+    endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
+    endpoint_identity = _REQUEST_ENDPOINT_IDENTITY.get()
+    if endpoint_ids is None or endpoint_identity is None:
+        return endpoint_ids is None and endpoint_identity is None
+    return agent.id in endpoint_ids and _configured_endpoint_matches(
+        agent.base_url, endpoint_identity
+    )
+
+
+def _request_endpoint_partition() -> str:
+    """Return a non-reversible cache partition for the configured endpoint."""
+    identity = _REQUEST_ENDPOINT_IDENTITY.get()
+    if identity is None:
+        return "endpoint:auto"
+    return "endpoint:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -3519,7 +3541,12 @@ class TaskOrchestrator:
                 or self._structured_readiness.get(agent.id, {}).get("status") == "ready"
             )
         endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-        return admitted if endpoint_ids is None else admitted.intersection(endpoint_ids)
+        if endpoint_ids is None:
+            return admitted
+        current = {
+            agent.id for agent in self.agents if _agent_matches_request_endpoint(agent)
+        }
+        return admitted.intersection(current)
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
@@ -4325,11 +4352,13 @@ class TaskOrchestrator:
             for agent in self.agents
         ):
             raise EndpointUnavailableError("endpoint_unavailable")
-        token = _REQUEST_ENDPOINT_AGENT_IDS.set(matching)
+        ids_token = _REQUEST_ENDPOINT_AGENT_IDS.set(matching)
+        identity_token = _REQUEST_ENDPOINT_IDENTITY.set(normalized)
         try:
             yield
         finally:
-            _REQUEST_ENDPOINT_AGENT_IDS.reset(token)
+            _REQUEST_ENDPOINT_IDENTITY.reset(identity_token)
+            _REQUEST_ENDPOINT_AGENT_IDS.reset(ids_token)
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
@@ -4344,7 +4373,7 @@ class TaskOrchestrator:
             candidate
             for candidate in self.candidates
             if candidate.model == requested_model
-            and (endpoint_ids is None or candidate.id in endpoint_ids)
+            and (endpoint_ids is None or _agent_matches_request_endpoint(candidate))
         ]
         if not matches:
             try:
@@ -4558,12 +4587,7 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
-        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-        endpoint_partition = (
-            "endpoint-agents:" + ",".join(sorted(endpoint_ids))
-            if endpoint_ids is not None
-            else "endpoint-agents:auto"
-        )
+        endpoint_partition = _request_endpoint_partition()
         combined_partition = (
             endpoint_partition
             if cache_partition is None
@@ -5585,7 +5609,7 @@ class TaskOrchestrator:
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
             if is_general_chat_agent_model_id(agent.model)
-            and (endpoint_ids is None or agent.id in endpoint_ids)
+            and (endpoint_ids is None or _agent_matches_request_endpoint(agent))
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -5621,7 +5645,7 @@ class TaskOrchestrator:
         known_agents = {
             agent.id: agent
             for agent in self.agents
-            if endpoint_ids is None or agent.id in endpoint_ids
+            if endpoint_ids is None or _agent_matches_request_endpoint(agent)
         }
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
@@ -5721,7 +5745,7 @@ class TaskOrchestrator:
         ]
         endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
         if endpoint_ids is not None:
-            candidates = [agent for agent in candidates if agent.id in endpoint_ids]
+            candidates = [agent for agent in candidates if _agent_matches_request_endpoint(agent)]
         admitted = self._request_admitted_agents.get()
         if admitted is not None:
             candidates = [agent for agent in candidates if agent.id in admitted]
@@ -5837,8 +5861,7 @@ class TaskOrchestrator:
 
     def _embed_cached(self, text: str) -> list[float] | None:
         """Embedding vector for text via the configured embedding member; None on failure."""
-        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-        endpoint_scope = ",".join(sorted(endpoint_ids or ()))
+        endpoint_scope = _request_endpoint_partition()
         digest = hashlib.sha256(
             f"{endpoint_scope}\x1f{text}".encode("utf-8")
         ).hexdigest()
@@ -5863,7 +5886,13 @@ class TaskOrchestrator:
     def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
         """Cached embedding of one agent's operator-declared metadata document."""
         fingerprint = hashlib.sha256(
-            "\x1f".join([agent.id, self._agent_descriptor_text(agent)]).encode("utf-8")
+            "\x1f".join(
+                [
+                    _request_endpoint_partition(),
+                    agent.id,
+                    self._agent_descriptor_text(agent),
+                ]
+            ).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._descriptor_vector_cache.get(fingerprint)
@@ -5929,10 +5958,10 @@ class TaskOrchestrator:
         assurance; an absent triage agent degrades to the direct path because
         no evidence source exists at all. Verdicts are cached by content hash.
         """
-        endpoint_scope = sorted(_REQUEST_ENDPOINT_AGENT_IDS.get() or ())
+        endpoint_scope = _request_endpoint_partition()
         digest = hashlib.sha256(
             json.dumps(
-                {"text": text, "endpoint_agent_ids": endpoint_scope},
+                {"text": text, "endpoint_partition": endpoint_scope},
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8")
@@ -5958,7 +5987,7 @@ class TaskOrchestrator:
             candidates = [
                 agent
                 for agent in self.agents
-                if endpoint_ids is None or agent.id in endpoint_ids
+                if endpoint_ids is None or _agent_matches_request_endpoint(agent)
             ]
         if not candidates:
             return False
@@ -6585,7 +6614,7 @@ class TaskOrchestrator:
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
-            if agent.id == agent_id:
+            if agent.id == agent_id and _agent_matches_request_endpoint(agent):
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
 
