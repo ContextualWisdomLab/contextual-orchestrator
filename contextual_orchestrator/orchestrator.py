@@ -3322,7 +3322,12 @@ class TaskOrchestrator:
             else None
         )
         if replica_agent_ids is not None and agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             agent = next(
                 (
@@ -3549,7 +3554,12 @@ class TaskOrchestrator:
             else None
         )
         if replica_agent_ids is not None and final_agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             final_agent = next(
                 (
