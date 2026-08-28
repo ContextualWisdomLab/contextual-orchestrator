@@ -3629,8 +3629,8 @@ class TaskOrchestrator:
             for candidate in self.candidates
             if (
                 candidate.model == requested_model
-                and not candidate.disabled
                 and self._zdr_agent_allowed(candidate)
+                and (not _REQUEST_ZDR_ONLY.get() or not candidate.disabled)
             )
         ]
         configured_exact = any(candidate.model == requested_model for candidate in self.candidates)
