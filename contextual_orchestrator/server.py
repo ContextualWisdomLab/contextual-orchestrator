@@ -7047,6 +7047,57 @@ def build_server(
                             },
                         )
                         return
+                    if (
+                        model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}
+                        and not body.get("tools")
+                        and not body.get("response_format")
+                        and not (
+                            isinstance(body.get("text"), dict)
+                            and body["text"].get("format")
+                        )
+                    ):
+                        messages = []
+                        instructions = body.get("instructions")
+                        if isinstance(instructions, str) and instructions:
+                            messages.append({"role": "system", "content": instructions})
+                        messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        started_at = time.perf_counter()
+                        result = self._run(
+                            lambda: orchestrator.complete(
+                                messages, mode="auto", model_name=model_name
+                            )
+                        )
+                        summaries = [
+                            _REASONING_STAGE_SUMMARIES.get(
+                                step.get("role"), "Processing the request."
+                            )
+                            for step in result.get("trace", [])
+                        ]
+                        orchestrator.record_analytics_event(
+                            "responses_orchestrated",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "transport_status_code": 200,
+                                "response_status": "completed",
+                                "model_name": model_name,
+                                "duration_ms": round(
+                                    (time.perf_counter() - started_at) * 1000, 2
+                                ),
+                                "response_streamed": False,
+                            },
+                        )
+                        self._send(
+                            _orchestrated_response(
+                                model_name,
+                                result,
+                                f"resp_{uuid.uuid4().hex}",
+                                int(time.time()),
+                                summaries,
+                            )
+                        )
+                        return
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
                     responses_messages = _responses_to_chat_payload(body)["messages"]
