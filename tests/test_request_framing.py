@@ -102,25 +102,32 @@ def test_security_config_rejects_invalid_request_body_limits() -> None:
             raise AssertionError(f"accepted invalid max_body_bytes: {value!r}")
 
 
-def _start_server() -> tuple[object, threading.Thread, int]:
+def _start_server(*, max_body_bytes: int = DEFAULT_MAX_JSON_BODY_BYTES) -> tuple[object, threading.Thread, int]:
     """Start a small authenticated mock server for raw socket framing tests."""
     server = build_server(
         TaskOrchestrator([ModelAgent("framing_agent", "mock-framing")]),
         port=0,
-        security=SecurityConfig(auth_token="framing-token"),
+        security=SecurityConfig(auth_token="framing-token", max_body_bytes=max_body_bytes),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]
 
 
-def _raw_request(port: int, headers: bytes, body: bytes = b"", *, close_write: bool = False) -> bytes:
+def _raw_request(
+    port: int,
+    headers: bytes,
+    body: bytes = b"",
+    *,
+    path: str = "/v1/chat/completions",
+    close_write: bool = False,
+) -> bytes:
     """Send one raw request and return the complete response bytes."""
     request = (
-        b"POST /v1/chat/completions HTTP/1.1\r\n"
-        b"Host: 127.0.0.1\r\n"
-        b"Authorization: Bearer framing-token\r\n"
-        b"Content-Type: application/json\r\n"
+        f"POST {path} HTTP/1.1\r\n".encode()
+        + b"Host: 127.0.0.1\r\n"
+        + b"Authorization: Bearer framing-token\r\n"
+        + b"Content-Type: application/json\r\n"
         + headers
         + b"Connection: close\r\n\r\n"
         + body
@@ -148,6 +155,24 @@ def test_negative_content_length_is_rejected_without_reading_until_peer_close() 
         server.server_close()
     assert b"400 Bad Request" in response
     assert b"invalid_request_framing" in response
+
+
+def test_multimodal_request_honors_configured_body_limit() -> None:
+    """Multimodal protocol allowance cannot bypass the operator's lower limit."""
+    server, thread, port = _start_server(max_body_bytes=1024)
+    try:
+        response = _raw_request(
+            port,
+            b"Content-Length: 1025\r\n",
+            b"{}",
+            path="/v1/images/generations",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+    assert b"HTTP/1.1 413 " in response
+    assert b"request_too_large" in response
 
 
 def test_transfer_encoding_is_rejected_before_chunked_bytes_are_interpreted() -> None:
