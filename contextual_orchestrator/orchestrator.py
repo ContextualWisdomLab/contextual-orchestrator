@@ -6463,6 +6463,10 @@ class TaskOrchestrator:
                     if isinstance(exc, ToolFallbackStoppedError):
                         raise
                     if isinstance(exc, ProviderResponseError):
+                        bounded_provider_response_failures += 1
+                        last_provider_response_error = exc
+                        decision = classify_tool_failure(exc)
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
                         failed_agents = self._request_failed_agents.get()
                         if failed_agents is not None:
@@ -6519,6 +6523,11 @@ class TaskOrchestrator:
             raise NoViableAgentError(
                 retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
             )
+        if (
+            last_provider_response_error is not None
+            and bounded_provider_response_failures == len(candidates)
+        ):
+            raise last_provider_response_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(

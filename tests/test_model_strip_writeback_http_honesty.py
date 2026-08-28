@@ -106,8 +106,8 @@ def test_unit_model_rejects_blank() -> None:
             assert getattr(exc, "code", None) == "invalid_model"
 
 
-def test_http_chat_requires_an_explicit_model() -> None:
-    """Chat Completions must not silently replace an omitted deployment choice."""
+def test_http_chat_omission_uses_gateway_default_model() -> None:
+    """Chat Completions omission uses the public orchestrator gateway id."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -115,8 +115,8 @@ def test_http_chat_requires_an_explicit_model() -> None:
             "/v1/chat/completions",
             {"messages": [{"role": "user", "content": "choose explicitly"}]},
         )
-        assert status == 400, body
-        assert body["error"]["code"] == "invalid_model"
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     finally:
         server.shutdown()
         thread.join(timeout=5)
