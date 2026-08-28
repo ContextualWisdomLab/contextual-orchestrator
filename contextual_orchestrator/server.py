@@ -4673,12 +4673,12 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface. An omitted model
-    is resolved by the orchestrator's explicit ``embedding`` capability pool;
-    no consumer-side sentinel model is accepted.
+    form/JS model names bind to the pool id on every surface. Auto-selection
+    applies only when the caller omits ``model`` entirely; explicit JSON
+    ``null`` still fails closed instead of pretending the client omitted the
+    field.
     """
-    model = body.get("model")
-    if model is None:
+    if "model" not in body:
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4691,7 +4691,8 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
             ) from exc
         body["model"] = model
         return model
-        
+
+    model = body.get("model")
     if not isinstance(model, str):
         raise RequestError(400, "invalid_model", "model must be a string")
     if not model.strip():
