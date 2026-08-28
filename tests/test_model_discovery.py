@@ -154,7 +154,9 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
-    assert "response_format" in agent_from_discovered(discovered[0]).tags
+    assert "response_format" in agent_from_discovered(
+        replace(discovered[0], evidence_only=False)
+    ).tags
 
 
 def test_openrouter_discovery_preserves_every_declared_modality() -> None:
@@ -190,7 +192,9 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert "audio" in generated_audio.capabilities
     embedding = next(model for model in discovered if "embedding" in model.capabilities)
     assert embedding.output_modalities == ("embeddings",)
-    assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
+    assert {"input:text", "output:embeddings"} <= set(
+        agent_from_discovered(replace(embedding, evidence_only=False)).tags
+    )
 
 
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:
@@ -265,7 +269,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(discovered[0]).group_name == ""
+    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
 
 
 def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
@@ -590,6 +594,20 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
     assert agent.credential_key == "BYTEZ_API_KEY"
     assert agent.priority == 3
     assert "discovered" in agent.tags
+
+
+def test_agent_from_discovered_rejects_evidence_only_rows() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/evidence-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        evidence_only=True,
+    )
+
+    with pytest.raises(ValueError, match="evidence-only"):
+        agent_from_discovered(discovered)
 
 
 def test_agent_from_discovered_preserves_explicit_capabilities() -> None:

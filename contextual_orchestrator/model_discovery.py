@@ -578,6 +578,8 @@ def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
     """Build a disabled capability agent or reject a chat-ineligible record."""
+    if discovered.evidence_only:
+        raise ValueError("evidence-only model cannot become a serving agent")
     if not any(
         capability not in {"chat", "response_format"}
         for capability in discovered.capabilities

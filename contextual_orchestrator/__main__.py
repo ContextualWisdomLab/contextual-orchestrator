@@ -254,7 +254,9 @@ def _discover_models_command(argv: list[str]) -> None:
         bootstrap = TaskOrchestrator(
             [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
         )
-        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in reported])
+        bootstrap.sync_discovered_agents(
+            [agent_from_discovered(model) for model in reported if not model.evidence_only]
+        )
         if args.enable_cheapest:
             for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
                 agent_id = agent_id_for(model)

@@ -181,7 +181,7 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
-    assert by_id["openrouter_cheap_model"].disabled is True
+    assert "openrouter_cheap_model" not in by_id
     assert by_id["openai_pricey_model"].disabled is False
 
 
