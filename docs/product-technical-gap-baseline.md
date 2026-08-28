@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 22:57 KST exact-head protected-queue snapshot
+## 2026-08-28 23:27 KST exact-head protected-queue snapshot
 
 Protected `main` is `8d5924f8f7582ece18a6f43d6a5fffcb6a0a9c9f`. No merge is
 claimed from this snapshot. The open queue was re-read against that base and
@@ -9,11 +9,13 @@ supersedes its evidence. `BLOCKED` merge state, missing independent approval, an
 failed or pending required review/security gates remain stop conditions.
 
 PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906)
-at `848418e36b8f6231e18c1f8eb22d208887796883` has passing NIM benchmark quality,
-security, Hypothesis, Noema, and coverage-source checks. Full, Atheris, and
-Strix are still in progress; OpenCode fails because no authenticated
-`opencode-agent` verdict exists, and Devin is pending. Its local focused NIM
-suite is `118 passed`; no independent approval is claimed.
+at `65109a4cd21d8c0db462c7a4a7b9c4f617f1a351` has passing NIM benchmark quality,
+security, Hypothesis, coverage-source, and CodeQL checks. Full, Atheris, and
+Strix are still in progress. Noema fails because the live review sidecar
+discovered no zero-cost models, and OpenCode fails because no authenticated
+`opencode-agent` verdict exists; these are external review/provider gates, not
+source findings. Its local focused NIM suite is `119 passed`, all review threads
+are resolved, and no independent approval is claimed.
 
 PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
 at `126ca3dda89e4466c4947437ac7f5fcb159910c1` has passing ordinary, security,
@@ -34,7 +36,7 @@ The previously stacked PR #907 is merged into #857. The shared batch embedding
 fixture is byte-identical with the current naruon consumer fixture.
 
 PR [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905)
-at `c1d1ec81d32038659f010504859e659b04f1cd91` has passing Full, Atheris, Strix,
+at `606db00e354b2db9827bcbf121aff5c19339c8d3` has passing Full, Atheris, Strix,
 security, Noema, and Devin checks, but OpenCode fails for lack of a current-head
 authenticated verdict. Its review threads are resolved; no independent
 approval is claimed. PR #857 at
@@ -53,8 +55,8 @@ independent approval.
 | PR | Exact head | Base / current gate state |
 | ---: | --- | --- |
 | [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `7a6b6cf43d256cb49d4bd5103c1b1082e2e9155a` | `BLOCKED`; Full/Atheris/Devin pass, Strix retry 2 provider failure, OpenCode fail, no independent approval |
-| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `848418e36b8f6231e18c1f8eb22d208887796883` | `BLOCKED`; NIM quality/security/Noema pass, Full/Atheris/Strix pending, OpenCode fail, Devin pending, no independent approval |
-| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `c1d1ec81d32038659f010504859e659b04f1cd91` | `BLOCKED`; Full/Atheris/Strix/Devin pass, OpenCode fail, no independent approval |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `65109a4cd21d8c0db462c7a4a7b9c4f617f1a351` | `BLOCKED`; NIM quality/security/Hypothesis/CodeQL pass, Full/Atheris/Strix pending, Noema provider/catalog failure, OpenCode fail, no independent approval |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `606db00e354b2db9827bcbf121aff5c19339c8d3` | `BLOCKED`; Full/Atheris/Strix/Devin/Noema pass, OpenCode fail, no independent approval |
 | [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904) | `038e9d348ca7a1220dcf2155b86ba8650ce06cb9` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode fail |
 | [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `57ec66351c1ca37910650d5ad77e6bdbdc79be51` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode/Strix fail closed |
 | [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `126ca3dda89e4466c4947437ac7f5fcb159910c1` | `BLOCKED`; Full/Atheris pass, Strix provider failure, OpenCode fail, no independent approval |
