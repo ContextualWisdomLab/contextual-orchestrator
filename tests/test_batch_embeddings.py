@@ -62,7 +62,7 @@ def _serve():
             model="text-embedding-test",
             base_url="mock://embed",
             provider_name="acme-provider",
-            tags=("embedding", "offline_test"),
+            tags=("embedding", "offline_test", "privacy:zdr"),
             priority=2,
         ),
     ]
