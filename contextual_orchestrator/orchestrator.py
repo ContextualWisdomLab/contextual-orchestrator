@@ -1605,7 +1605,11 @@ class ModelClient:
             }
 
     def probe_structured(
-        self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT
+        self,
+        agent: ModelAgent,
+        *,
+        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Probe one declared agent's structured-output capability within its probe budget."""
         probe_timeout = _validate_provider_probe_timeout(timeout)
@@ -1622,7 +1626,7 @@ class ModelClient:
                         "model": agent.model,
                         "messages": [{"role": "user", "content": "Return one JSON object."}],
                         "max_tokens": 1,
-                        "response_format": {"type": "json_object"},
+                        "response_format": response_format or {"type": "json_object"},
                         "stream": False,
                     },
                 )
@@ -4327,7 +4331,7 @@ class TaskOrchestrator:
     def probe_structured_workflow(
         self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT
     ) -> dict[str, Any]:
-        """Exercise internal schema work and the final JSON-object transport."""
+        """Exercise internal schema work and both native structured transports."""
         probe_timeout = _validate_provider_probe_timeout(timeout)
         deadline = time.monotonic() + probe_timeout
         schema = {
@@ -4350,17 +4354,37 @@ class TaskOrchestrator:
                 remaining = deadline - time.monotonic()
                 if remaining < 0.1:
                     raise RequestDeadlineExceeded("request deadline exceeded")
-                transport = self.client.probe_structured(
+                schema_transport = self.client.probe_structured(
+                    agent,
+                    timeout=min(probe_timeout, remaining),
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {"name": "structured_readiness", "schema": schema},
+                    },
+                )
+                remaining = deadline - time.monotonic()
+                if remaining < 0.1:
+                    raise RequestDeadlineExceeded("request deadline exceeded")
+                object_transport = self.client.probe_structured(
                     agent, timeout=min(probe_timeout, remaining)
                 )
-                if transport.get("status") != "ready":
+                if object_transport.get("status") != "ready":
                     return {
                         "agent_id": agent.id,
                         "status": "not_ready",
                         "error_type": str(
-                            transport.get("error_type", "ProviderResponseError")
+                            object_transport.get("error_type", "ProviderResponseError")
                         ),
                         "failure_code": "json_object_transport_not_ready",
+                    }
+                if schema_transport.get("status") != "ready":
+                    return {
+                        "agent_id": agent.id,
+                        "status": "not_ready",
+                        "error_type": str(
+                            schema_transport.get("error_type", "ProviderResponseError")
+                        ),
+                        "failure_code": "json_schema_transport_not_ready",
                     }
         except RequestDeadlineExceeded:
             raise
