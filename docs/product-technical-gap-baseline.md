@@ -13,7 +13,7 @@ tests and exposed only the optional MCP test's environment API mismatch
 (`mcp==1.23.3` exports no `Client`), which is not in the project lock files.
 PR #857 is at externally advanced head `b2aedb7b` with all other checks passing
 but the same Strix provider outage. PR #901 is now at externally advanced head
-`d1bd3626d` and its code checks pass, while Noema, OpenCode, and Strix remain
+`d1bd3626ddb04a7b14e43aebf60827ac50ef8d17` and its code checks pass, while Noema, OpenCode, and Strix remain
 failed or unavailable gates. PR #902 is a stacked change on #857 at exact head
 `eee5323f`; its merge state is `UNSTABLE`, Devin review is pending, and its own
 body requires #857 to land first. PR #903 adds the governed CEFR
