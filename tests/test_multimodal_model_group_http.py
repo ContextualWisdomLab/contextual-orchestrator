@@ -418,13 +418,13 @@ def test_expired_provider_video_job_stops_polling_with_404() -> None:
         server.shutdown()
 
 
-def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
+def test_image_alias_uses_the_provider_endpoint_without_provider_special_case() -> None:
     agent = ModelAgent(
         "image_member",
-        "provider/image",
+        "vendor/image",
         tags=("image",),
         group_name="image_group",
-        provider_name="openrouter",
+        provider_name="vendor",
     )
     orchestrator = TaskOrchestrator([agent])
     observed: list[tuple[str, dict]] = []
@@ -440,7 +440,9 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
         endpoint="images/generations",
     )
 
-    assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
+    assert observed == [
+        ("images/generations", {"model": "vendor/image", "prompt": "diagram"})
+    ]
 
 
 def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:

@@ -154,6 +154,36 @@ def test_zdr_only_reports_when_the_caller_supplied_array_has_no_eligible_member(
         )
 
 
+def test_model_group_does_not_route_legacy_openrouter_rows_from_caller_array() -> None:
+    evidence = ModelAgent(
+        "legacy_openrouter",
+        "openrouter/legacy-model",
+        "mock://local",
+        provider_name="openrouter",
+        priority=99,
+        tags=("privacy:zdr",),
+    )
+    serving = ModelAgent(
+        "runtime_member",
+        "vendor/runtime-model",
+        "mock://local",
+        provider_name="vendor",
+        tags=("privacy:zdr",),
+    )
+    orchestrator = TaskOrchestrator([evidence, serving])
+
+    selected = orchestrator.select_model_group_members(
+        [evidence, serving],
+        chat_only=False,
+        zdr_only=True,
+    )
+
+    assert [agent.id for agent in selected] == [serving.id]
+    with pytest.raises(ValueError, match="not configured"):
+        with orchestrator.request_policy(False):
+            orchestrator._requested_agent(evidence.model)
+
+
 def test_zdr_only_does_not_reinterpret_an_exact_non_zdr_model_as_its_group() -> None:
     non_zdr = _agent("non_zdr_member", "vendor/non-zdr")
     zdr = ModelAgent(
