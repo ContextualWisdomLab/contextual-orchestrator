@@ -442,7 +442,7 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
         if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
             return _Response({"data": [{"model_id": "openai/shared-model"}]})
         if request.full_url == other_source.list_url:
-            return _Response({"data": [{"id": "shared-model"}]})
+            return _Response({"data": [{"id": "openai/shared-model"}]})
         return _Response({"data": [{"id": "openai/shared-model"}]})
 
     with patch(
@@ -455,6 +455,37 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
         ("openrouter", True),
         ("nvidia_nim", True),
+    ]
+
+
+def test_discover_all_models_does_not_infer_zdr_from_model_suffix() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
+            return _Response({"data": [{"model_id": "openai/shared-model"}]})
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openrouter", True),
+        ("nvidia_nim", False),
     ]
 
 
