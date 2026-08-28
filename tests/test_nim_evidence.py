@@ -130,6 +130,9 @@ def test_successful_replacement_preserves_mode_and_ignores_backup_cleanup_failur
 ) -> None:
     target = tmp_path / "nim_evidence"
     target.mkdir(mode=0o750)
+    # mkdir applies the process umask; set the requested source mode explicitly
+    # so the replacement contract is deterministic on CI runners as well.
+    target.chmod(0o750)
     real_rmtree = shutil.rmtree
 
     def fail_backup(path: str | os.PathLike[str]) -> None:
