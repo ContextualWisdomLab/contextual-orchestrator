@@ -105,7 +105,8 @@ def test_production_guards_reject_single_token_mode(guard: str) -> None:
     assert "single-token mode is local-only" in stderr.getvalue()
 
 
-def test_production_mode_rejects_insecure_admin_cookie() -> None:
+@pytest.mark.parametrize("guard", ["--production", "--allow-public-bind"])
+def test_production_guards_reject_insecure_admin_cookie(guard: str) -> None:
     stderr = StringIO()
     with (
         patch.object(
@@ -114,7 +115,7 @@ def test_production_mode_rejects_insecure_admin_cookie() -> None:
             [
                 "contextual-orchestrator",
                 "--serve",
-                "--production",
+                guard,
                 "--admin-token",
                 "admin",
                 "--inference-token",
@@ -129,7 +130,7 @@ def test_production_mode_rejects_insecure_admin_cookie() -> None:
         except SystemExit as exc:
             assert exc.code == 2
         else:  # pragma: no cover
-            raise AssertionError("production mode must reject insecure cookies")
+            raise AssertionError("production/public bind must reject insecure cookies")
     assert "cannot use --insecure-admin-session-cookie" in stderr.getvalue()
 
 

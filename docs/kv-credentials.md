@@ -191,8 +191,9 @@ The CLI resolves named server tokens from this KV when `--auth-token-key`,
 `--admin-token-key`, or `--inference-token-key` is used; it does not read the
 legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
 Explicit token flags remain local-development escape hatches. Add `--production`
-to require split admin/inference credentials and reject the insecure admin
-session cookie option; `--allow-public-bind` also requires split credentials.
+ to require split admin/inference credentials and reject the insecure admin
+ session cookie option; `--allow-public-bind` requires split credentials and
+ also rejects the insecure cookie option.
 Both gates fail before resolving any credential when a single token is selected.
 
 For production ecosystem access, construct `SecurityConfig` with a reviewed

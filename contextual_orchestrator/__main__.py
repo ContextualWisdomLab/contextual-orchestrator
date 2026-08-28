@@ -486,8 +486,10 @@ def main(argv: list[str] | None = None) -> None:
                 "--production/--allow-public-bind requires split "
                 "--admin-token/--inference-token credentials; single-token mode is local-only"
             )
-        if args.production and args.insecure_admin_session_cookie:
-            parser.error("--production cannot use --insecure-admin-session-cookie")
+        if (args.production or args.allow_public_bind) and args.insecure_admin_session_cookie:
+            parser.error(
+                "--production/--allow-public-bind cannot use --insecure-admin-session-cookie"
+            )
         try:
             auth_token = (
                 _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)
