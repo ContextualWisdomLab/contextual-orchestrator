@@ -3386,7 +3386,10 @@ class TaskOrchestrator:
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and agent is None:
+        if (
+            isinstance(required_agent_id, str)
+            and (agent is None or not self._zdr_agent_allowed(agent))
+        ):
             raise RuntimeError("required file provider is unavailable")
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
@@ -3455,10 +3458,18 @@ class TaskOrchestrator:
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
-            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
             if requested_model == self.FREE_MODEL
             else (
-                {candidate.id for candidate in self.agents}
+                {
+                    candidate.id
+                    for candidate in self.agents
+                    if self._zdr_agent_allowed(candidate)
+                }
                 if requested_model == self.AUTO_MODEL
                 else None
             )
@@ -3600,7 +3611,10 @@ class TaskOrchestrator:
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and final_agent is None:
+        if (
+            isinstance(required_agent_id, str)
+            and (final_agent is None or not self._zdr_agent_allowed(final_agent))
+        ):
             raise RuntimeError("required file provider is unavailable")
         if final_agent is None:
             try:
@@ -3744,9 +3758,21 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
             if free_only
-            else ({candidate.id for candidate in self.agents} if virtual_model else None)
+            else (
+                {
+                    candidate.id
+                    for candidate in self.agents
+                    if self._zdr_agent_allowed(candidate)
+                }
+                if virtual_model
+                else None
+            )
         ))
         if replica_agent_ids is not None:
             allowed_agent_ids = (
@@ -4872,7 +4898,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if self._is_free_agent(candidate)
+            if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
         allowed_agent_ids = free_ids if free_only else None
 

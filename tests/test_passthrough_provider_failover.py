@@ -299,6 +299,26 @@ def test_provider_affine_file_request_does_not_escape_to_another_provider() -> N
     assert "_required_agent_id" not in client.calls[0][1]
 
 
+def test_zdr_only_rejects_a_non_zdr_required_file_provider() -> None:
+    client = SequencedProxyClient({"paid_agent": {"model": "paid-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("paid_agent", "paid-model")],
+        client=client,
+    )
+
+    with orchestrator.request_policy(True), pytest.raises(
+        RuntimeError, match="required file provider is unavailable"
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "private"}],
+                "_required_agent_id": "paid_agent",
+            }
+        )
+    assert client.calls == []
+
+
 @pytest.mark.parametrize("status", [404, 413, 429])
 def test_explicit_model_never_fails_over(status: int) -> None:
     """A concrete model selection remains sticky even when its provider fails."""
