@@ -130,6 +130,58 @@ def test_provider_readiness_refresh_rejects_timeout_outside_probe_contract() -> 
         thread.join(timeout=5)
 
 
+def test_provider_readiness_refresh_declares_safe_polling_cadence() -> None:
+    """Submission and progress expose the rate-budget-derived poll interval."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent("probe_agent", "mock-agent", tags=("reasoning",)),
+    ])
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(
+            admin_token="admin_secret",
+            inference_token="inference_secret",
+            rate_limit_requests=2,
+            rate_limit_window_seconds=1,
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    submission = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/v1/provider_readiness_refreshes",
+        data=json.dumps({
+            "agent_ids": ["probe_agent"],
+            "capability_code": "structured",
+            "timeout_seconds": 1,
+        }).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer admin_secret",
+            "Content-Type": "application/json",
+            "X-Request-Timeout-Ms": "5000",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(submission, timeout=5) as response:
+            assert response.status == 202
+            submitted = json.loads(response.read().decode("utf-8"))
+        assert submitted["poll_after_ms"] == 500
+
+        progress = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/v1/provider_readiness_refreshes/{submitted['job_id']}",
+            headers={"Authorization": "Bearer admin_secret"},
+        )
+        with urllib.request.urlopen(progress, timeout=5) as response:
+            assert response.status == 200
+            document = json.loads(response.read().decode("utf-8"))
+        assert document["poll_after_ms"] == 500
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_healthz_is_unauthenticated_liveness()
     test_provider_readiness_refresh_is_authenticated_and_explicit()

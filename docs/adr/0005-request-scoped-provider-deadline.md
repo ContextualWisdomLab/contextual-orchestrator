@@ -45,6 +45,15 @@ the serving provider's reported usage. Exhaustion fails closed as HTTP 504 with
 `request_deadline_exceeded`. Absence of the header preserves the configured
 provider timeout while still making it one budget across retries.
 
+The gateway's own fixed-window admission rejection returns HTTP 429 with the
+same positive whole-second window remainder in both `Retry-After` and
+`error.detail.retry_after_seconds`. Consumers can therefore defer durable work
+without guessing a delay, while the public error remains provider-neutral.
+Asynchronous readiness submission and progress documents expose
+`poll_after_ms`, derived exactly as the ceiling of the configured rate-window
+duration divided by its request budget. Polling consumers use that value
+instead of inventing a cadence that can exhaust admission.
+
 ## Consequences
 
 - A 180-second request can spend at most 90 seconds on a provider configured
