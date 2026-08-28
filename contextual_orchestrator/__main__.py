@@ -491,6 +491,10 @@ def main(argv: list[str] | None = None) -> None:
                 "--production/--allow-public-bind cannot use --insecure-admin-session-cookie"
             )
         try:
+            SecurityConfig(allow_public_bind=args.allow_public_bind).check_bind(args.host)
+        except ValueError as exc:
+            parser.error(str(exc))
+        try:
             auth_token = (
                 _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)
                 if not split_requested

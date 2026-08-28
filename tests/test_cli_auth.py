@@ -134,6 +134,34 @@ def test_production_guards_reject_insecure_admin_cookie(guard: str) -> None:
     assert "cannot use --insecure-admin-session-cookie" in stderr.getvalue()
 
 
+def test_non_loopback_bind_fails_at_parser_boundary() -> None:
+    stderr = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--host",
+                "192.0.2.1",
+                "--auth-token",
+                "token",
+            ],
+        ),
+        patch.object(sys, "stderr", stderr),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("non-loopback bind must fail at the CLI boundary")
+    assert not serve.called
+    assert "public bind requires --allow-public-bind" in stderr.getvalue()
+
+
 def test_main_accepts_explicit_argv_without_mutating_process_arguments() -> None:
     original_argv = sys.argv[:]
     with patch("contextual_orchestrator.__main__.serve") as serve:
