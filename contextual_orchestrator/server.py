@@ -7508,22 +7508,28 @@ def build_server(
                         TaskOrchestrator.FREE_MODEL,
                     }:
                         _require_pool_model(orchestrator, model_name)
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
+                    response_format = body.get("response_format")
+                    text_format = (body.get("text") or {}).get("format") if isinstance(
+                        body.get("text"), dict
+                    ) else None
+                    structured_output = any(
+                        isinstance(value, dict)
+                        and value.get("type") in {"json_object", "json_schema"}
+                        for value in (response_format, text_format)
+                    )
+                    plain_virtual_request = not body.get("tools") and not structured_output
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    } and (stream or plain_virtual_request):
                         if body.get("tools"):
                             raise RequestError(
                                 400,
                                 "invalid_tools",
                                 "tools are not supported for streamed orchestrated Responses requests",
                             )
-                        response_format = body.get("response_format")
-                        text_format = (body.get("text") or {}).get("format") if isinstance(
-                            body.get("text"), dict
-                        ) else None
-                        if any(
-                            isinstance(value, dict)
-                            and value.get("type") in {"json_object", "json_schema"}
-                            for value in (response_format, text_format)
-                        ):
+                        if structured_output:
                             raise RequestError(
                                 400,
                                 "invalid_response_format",
@@ -7592,68 +7598,51 @@ def build_server(
                         return
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
-                    if tool_loop:
-                        with orchestrator.client.request_settings(
-                            request_deadline_monotonic=request_deadline
-                        ):
-                            proxied = _run_with_routing_endpoint(
-                                orchestrator,
-                                routing,
-                                body.get("model"),
-                                lambda: self._run(
-                                    lambda: orchestrator.proxy_completion(
-                                        body,
-                                        endpoint="responses",
-                                        single_agent=True,
-                                    )
-                                ),
+                    responses_messages = _responses_to_chat_payload(body)["messages"]
+                    responses_attribution = dict(
+                        _validate_attribution(body.get("attribution")) or {}
+                    )
+                    responses_user_id = _validate_completions_user(body)
+                    if responses_user_id is not None and not responses_attribution.get("account"):
+                        responses_attribution["account"] = responses_user_id
+                    responses_attribution.setdefault("model_name", body["model"])
+                    responses_attribution.setdefault("service", "responses_api")
+                    response_max_tokens = next(
+                        (
+                            body.get(key)
+                            for key in (
+                                "max_output_tokens",
+                                "max_completion_tokens",
+                                "max_tokens",
                             )
-                    else:
-                        responses_messages = _responses_to_chat_payload(body)["messages"]
-                        responses_attribution = dict(
-                            _validate_attribution(body.get("attribution")) or {}
-                        )
-                        responses_user_id = _validate_completions_user(body)
-                        if responses_user_id is not None and not responses_attribution.get("account"):
-                            responses_attribution["account"] = responses_user_id
-                        responses_attribution.setdefault("model_name", body["model"])
-                        responses_attribution.setdefault("service", "responses_api")
-                        response_max_tokens = next(
-                            (
-                                body.get(key)
-                                for key in (
-                                    "max_output_tokens",
-                                    "max_completion_tokens",
-                                    "max_tokens",
+                            if body.get(key) is not None
+                        ),
+                        None,
+                    )
+                    with orchestrator.client.request_settings(
+                        max_output_tokens=response_max_tokens,
+                        temperature=body.get("temperature"),
+                        top_p=body.get("top_p"),
+                        presence_penalty=body.get("presence_penalty"),
+                        frequency_penalty=body.get("frequency_penalty"),
+                        request_deadline_monotonic=request_deadline,
+                    ):
+                        proxied = _run_with_routing_endpoint(
+                            orchestrator,
+                            routing,
+                            body["model"],
+                            lambda: self._run(
+                                lambda: coordinator.complete(
+                                    responses_messages,
+                                    mode="conduct",
+                                    attribution=responses_attribution,
+                                    hints=routing,
+                                    model_name=body["model"],
+                                    provider_request=body,
+                                    provider_endpoint="responses",
                                 )
-                                if body.get(key) is not None
                             ),
-                            None,
                         )
-                        with orchestrator.client.request_settings(
-                            max_output_tokens=response_max_tokens,
-                            temperature=body.get("temperature"),
-                            top_p=body.get("top_p"),
-                            presence_penalty=body.get("presence_penalty"),
-                            frequency_penalty=body.get("frequency_penalty"),
-                            request_deadline_monotonic=request_deadline,
-                        ):
-                            proxied = _run_with_routing_endpoint(
-                                orchestrator,
-                                routing,
-                                body["model"],
-                                lambda: self._run(
-                                    lambda: coordinator.complete(
-                                        responses_messages,
-                                        mode="conduct",
-                                        attribution=responses_attribution,
-                                        hints=routing,
-                                        model_name=body["model"],
-                                        provider_request=body,
-                                        provider_endpoint="responses",
-                                    )
-                                ),
-                            )
                     orchestrator.record_analytics_event(
                         (
                             "responses_tools_conducted"

@@ -40,7 +40,7 @@ class _RecordingClient(ModelClient):
 
 
 def _orchestrator() -> TaskOrchestrator:
-    return TaskOrchestrator(
+    orchestrator = TaskOrchestrator(
         [
             ModelAgent(
                 "agent_a",
@@ -58,6 +58,11 @@ def _orchestrator() -> TaskOrchestrator:
         client=_RecordingClient(),
         cache_ttl=60,
     )
+    orchestrator._structured_readiness = {
+        agent.id: {"status": "ready", "checked_at": 0.0}
+        for agent in orchestrator.agents
+    }
+    return orchestrator
 
 
 def test_origin_selector_matches_configured_v1_and_filters_every_role() -> None:

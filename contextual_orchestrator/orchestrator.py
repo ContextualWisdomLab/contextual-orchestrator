@@ -216,6 +216,10 @@ class ProviderResponseError(RuntimeError):
         self.max_tokens = max_tokens
 
 
+class _ProviderTransportExhausted(ProviderResponseError):
+    """Distinguish retry-exhausted transport from an invalid provider response."""
+
+
 class RequestDeadlineExceeded(RuntimeError):
     """Raised when the caller's request-scoped monotonic deadline is exhausted."""
 
@@ -1769,7 +1773,7 @@ class ModelClient:
         # bounded provider-response category so orchestration fails over to the
         # next measured member instead of multiplying the same call through the
         # tool-runtime retry loop.
-        raise ProviderResponseError(f"provider {agent.id} request failed") from None
+        raise _ProviderTransportExhausted(f"provider {agent.id} request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -4031,14 +4035,14 @@ class TaskOrchestrator:
                     candidate.id, time.perf_counter() - started_at
                 )
             return result
-        if structured_request and virtual_model:
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            ) from last_error
         if last_error is not None and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             ) from None
+        if structured_request and virtual_model:
+            raise NoViableAgentError(
+                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+            ) from last_error
         raise RuntimeError(
             f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
         ) from last_error
@@ -4274,7 +4278,7 @@ class TaskOrchestrator:
                 final_agent,
                 task,
                 "synthesizer",
-                required_tags=selection_tags,
+                required_tags=required_tags,
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
             )
@@ -4320,7 +4324,10 @@ class TaskOrchestrator:
                     )
                 try:
                     send = self.client.proxy_send
-                    if virtual_model:
+                    if (
+                        virtual_model
+                        and type(self.client).proxy_send is ModelClient.proxy_send
+                    ):
                         send_once = getattr(self.client, "proxy_send_once", None)
                         if callable(send_once):
                             send = send_once
@@ -7005,6 +7012,12 @@ class TaskOrchestrator:
                     if isinstance(exc, ToolFallbackStoppedError):
                         raise
                     if isinstance(exc, ProviderResponseError):
+                        if (
+                            allowed_agent_ids is None
+                            and self._request_failed_agents.get() is None
+                            and not isinstance(exc, _ProviderTransportExhausted)
+                        ):
+                            raise
                         bounded_provider_response_failures += 1
                         last_provider_response_error = exc
                         decision = classify_tool_failure(exc)
