@@ -166,6 +166,28 @@ def test_virtual_passthrough_advances_on_oversized_tool_description() -> None:
     ]
 
 
+def test_virtual_passthrough_all_oversized_tool_errors_preserve_size_contract() -> None:
+    """Raw provider size errors retain the public exhaustion contract."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _tool_description_too_long_error(),
+            "fallback_agent": _tool_description_too_long_error(),
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "review code"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
+
+    assert orchestrator._circuit == {}
+
+
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
     """A generic provider invalid_tools response must not hide a bad request."""
     failure = _invalid_tools_error()

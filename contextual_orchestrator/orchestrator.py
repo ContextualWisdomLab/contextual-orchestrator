@@ -638,6 +638,16 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
     )
 
 
+def _is_request_too_large_error(exc: BaseException) -> bool:
+    """Return whether a provider rejection is a proven request-size failure."""
+    return isinstance(exc, ProviderRequestTooLargeError) or (
+        isinstance(exc, urllib.error.HTTPError)
+        and (
+            exc.code == 413 or _is_oversized_tool_description_error(exc)
+        )
+    )
+
+
 def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
     """Convert the provider's terminal tool-stop contract to the public safe error."""
     decision = classify_tool_failure(
@@ -3188,9 +3198,7 @@ class TaskOrchestrator:
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
-                request_too_large = isinstance(exc, ProviderRequestTooLargeError) or (
-                    isinstance(exc, urllib.error.HTTPError) and exc.code == 413
-                )
+                request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
                     self._group_router.observe_failure(agent.id)
                 raise
@@ -3262,9 +3270,7 @@ class TaskOrchestrator:
                 if not _is_passthrough_failover_error(exc):
                     raise
                 last_error = exc
-                request_too_large = isinstance(exc, ProviderRequestTooLargeError) or (
-                    isinstance(exc, urllib.error.HTTPError) and exc.code == 413
-                )
+                request_too_large = _is_request_too_large_error(exc)
                 every_failure_was_request_too_large = (
                     every_failure_was_request_too_large
                     and request_too_large
@@ -3480,9 +3486,7 @@ class TaskOrchestrator:
                             send = send_once
                     return send(candidate, endpoint, candidate_payload), candidate
                 except (ProviderRequestTooLargeError, urllib.error.HTTPError) as exc:
-                    request_too_large = isinstance(
-                        exc, ProviderRequestTooLargeError
-                    ) or (isinstance(exc, urllib.error.HTTPError) and exc.code == 413)
+                    request_too_large = _is_request_too_large_error(exc)
                     if not request_too_large or not virtual_model:
                         raise
             raise ProviderRequestTooLargeError(
