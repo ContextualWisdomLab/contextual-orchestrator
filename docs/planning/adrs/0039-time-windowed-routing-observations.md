@@ -46,9 +46,12 @@ completion order, using the existing estimator and priors. Writes prune rows
 outside the window. Separate short-lived SQLite connections and a transactional
 write boundary permit multiple gateway processes to use the same database; a
 storage error propagates so configured durable evidence is never silently
-reported as local-only evidence. Removed group members delete their persisted
-rows. The Admin state reports whether the policy is enabled, its window, and the
-literal `time_window_only` retention policy.
+reported as local-only evidence. A stream may already have emitted provider
+bytes before its post-completion observation write; that write failure therefore
+surfaces as a terminal stream error rather than being downgraded to local-only
+evidence. Removed group members delete their persisted rows. The Admin state
+reports whether the policy is enabled, its window, and the literal
+`time_window_only` retention policy.
 
 This decision deliberately does not add calibrated decay, a fleet-wide sequence
 cursor, a row-count policy, cross-model quality weighting, inferred provider

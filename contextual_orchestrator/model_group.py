@@ -298,9 +298,10 @@ class ModelGroupRouter:
         with self._lock:
             return self._score_locked(member_id)
 
-    def member_observation_count(self, member_id: str) -> int:
+    def member_observation_count(self, member_id: str, *, refresh: bool = True) -> int:
         """Total completed attempts recorded for one member (success + failure)."""
-        self.refresh()
+        if refresh:
+            self.refresh()
         with self._lock:
             state = self._members.get(member_id)
             if state is None:
@@ -313,9 +314,15 @@ class ModelGroupRouter:
             )
             return int(max(alpha, 0.0)) + int(max(beta, 0.0))
 
-    def ranked_member_ids(self, member_ids: list[str] | tuple[str, ...]) -> list[str]:
+    def ranked_member_ids(
+        self,
+        member_ids: list[str] | tuple[str, ...],
+        *,
+        refresh: bool = True,
+    ) -> list[str]:
         """Order member ids best-first by measured score, preserving input ties."""
-        self.refresh()
+        if refresh:
+            self.refresh()
         with self._lock:
             scored = {member_id: self._score_locked(member_id) for member_id in member_ids}
             return sorted(member_ids, key=lambda member_id: -scored[member_id])

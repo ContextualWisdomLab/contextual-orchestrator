@@ -142,6 +142,45 @@ def test_router_preserves_updated_priors_during_refresh(tmp_path) -> None:
     assert report["failure_count"] == 0
 
 
+def test_measured_member_order_refreshes_each_ledger_once(tmp_path, monkeypatch) -> None:
+    agents = [
+        ModelAgent("member_a", "mock-a", group_name="shared_model"),
+        ModelAgent("member_b", "mock-b", group_name="shared_model"),
+        ModelAgent("member_c", "mock-c", group_name="shared_model"),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents,
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+    try:
+        quality_refreshes = 0
+        transport_refreshes = 0
+        quality_refresh = orchestrator._quality_router.refresh
+        transport_refresh = orchestrator._group_router.refresh
+
+        def count_quality_refresh() -> None:
+            nonlocal quality_refreshes
+            quality_refreshes += 1
+            quality_refresh()
+
+        def count_transport_refresh() -> None:
+            nonlocal transport_refreshes
+            transport_refreshes += 1
+            transport_refresh()
+
+        monkeypatch.setattr(orchestrator._quality_router, "refresh", count_quality_refresh)
+        monkeypatch.setattr(orchestrator._group_router, "refresh", count_transport_refresh)
+
+        assert orchestrator._measured_member_order([agent.id for agent in agents]) == [
+            agent.id for agent in agents
+        ]
+        assert quality_refreshes == 1
+        assert transport_refreshes == 1
+    finally:
+        orchestrator.close()
+
+
 def test_router_rejects_incomplete_store_contract() -> None:
     with pytest.raises(TypeError):
         ModelGroupRouter(observation_store=object())  # type: ignore[arg-type]

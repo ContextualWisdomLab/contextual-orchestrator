@@ -2808,7 +2808,9 @@ class _StateStore:
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(path, check_same_thread=False)
+        # Keep the persistent state connection's busy wait aligned with the
+        # short-lived routing-observation connections sharing this file.
+        self._conn = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
         try:
             self._conn.execute("BEGIN IMMEDIATE")
             self._migrate_legacy_table()
@@ -5309,11 +5311,12 @@ class TaskOrchestrator:
         throughput/stability ledger decides; with no evidence at all the
         caller's input order survives untouched. No synthetic scores.
         """
+        self._quality_router.refresh()
         if any(
-            self._quality_router.member_observation_count(member_id) > 0
+            self._quality_router.member_observation_count(member_id, refresh=False) > 0
             for member_id in member_ids
         ):
-            return self._quality_router.ranked_member_ids(member_ids)
+            return self._quality_router.ranked_member_ids(member_ids, refresh=False)
         return self._group_router.ranked_member_ids(member_ids)
 
     def _psychometric_order(
