@@ -7069,13 +7069,20 @@ def build_server(
                             responses_attribution["account"] = responses_user_id
                         responses_attribution.setdefault("model_name", body["model"])
                         responses_attribution.setdefault("service", "responses_api")
+                        responses_routing = dict(
+                            _validate_routing(body.get("routing")) or {}
+                        )
+                        # Responses has no batch job envelope on this path;
+                        # force the coordinator's synchronous contract even
+                        # when a priority or token threshold would select batch.
+                        responses_routing["channel"] = "sync"
                         started_at = time.perf_counter()
                         result = self._run(
                             lambda: coordinator.complete(
                                 messages,
                                 mode="auto",
                                 attribution=responses_attribution,
-                                hints=_validate_routing(body.get("routing")),
+                                hints=responses_routing,
                                 model_name=model_name,
                                 cache_bypass=cache_bypass,
                                 cache_partition=cache_partition,
