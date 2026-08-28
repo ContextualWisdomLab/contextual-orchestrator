@@ -209,8 +209,8 @@ def test_explicit_model_never_fails_over(status: int) -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
 
 
-def test_explicit_group_model_does_not_count_request_size_as_failure() -> None:
-    """A grouped model's HTTP 413 must not degrade measured provider health."""
+def test_explicit_grouped_model_413_does_not_degrade_provider_health() -> None:
+    """Request-size rejection is not provider stability evidence."""
     client = SequencedProxyClient({"primary_agent": _http_error(413)})
     orchestrator = TaskOrchestrator(
         [
@@ -218,18 +218,20 @@ def test_explicit_group_model_does_not_count_request_size_as_failure() -> None:
                 "primary_agent",
                 "primary-model",
                 provider_name="primary",
-                group_name="primary_group",
+                group_name="primary-group",
             )
         ],
         client=client,
     )
 
-    with pytest.raises(urllib.error.HTTPError):
+    with pytest.raises(urllib.error.HTTPError) as caught:
         orchestrator.proxy_completion(
             {"model": "primary-model", "messages": [{"role": "user", "content": "x"}]}
         )
 
-    assert orchestrator._group_router.member_observation_count("primary_agent") == 0
+    assert caught.value.code == 413
+    report = orchestrator._group_router.member_report("primary_agent")
+    assert report["failure_count"] == 0
 
 
 @pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
