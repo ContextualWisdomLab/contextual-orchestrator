@@ -5388,7 +5388,7 @@ class TaskOrchestrator:
     ) -> None:
         """Share race completion evidence with normal stability/circuit ledgers."""
         self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
-        if error is not None:
+        if error is not None and not _is_request_too_large_error(error):
             self._group_router.observe_failure(endpoint_id)
             self._record_failure(endpoint_id)
 

@@ -469,6 +469,44 @@ def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> N
     )
 
 
+def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+    """413s in the equivalent-endpoint race do not open provider circuits."""
+    agents = [
+        ModelAgent(
+            "first_image",
+            "provider/image",
+            tags=("image",),
+            group_name="image_group",
+            endpoint_equivalence=_equivalence("image"),
+        ),
+        ModelAgent(
+            "second_image",
+            "provider/image",
+            tags=("image",),
+            group_name="image_group",
+            endpoint_equivalence=_equivalence("image"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_capability(
+            {"model": "image_group", "prompt": "large image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
+
+
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("paid_video", "provider/paid", tags=("video",), priority=100),
