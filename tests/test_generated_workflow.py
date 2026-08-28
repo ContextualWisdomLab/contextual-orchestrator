@@ -94,6 +94,26 @@ def test_planner_prompt_lists_the_agent_pool() -> None:
     assert "general_agent" in planner_system  # pool advertised to the planner
 
 
+def test_zdr_planner_prompt_lists_only_zdr_agents() -> None:
+    non_zdr = ModelAgent("non_zdr_agent", "gpt-4o", priority=100)
+    zdr = ModelAgent("zdr_agent", "gpt-4o-mini", tags=("privacy:zdr",))
+    client = _PlannerClient(json.dumps({
+        "steps": [
+            {"id": 0, "role": "worker", "agent_id": zdr.id, "subtask": "work", "access": []},
+            {"id": 1, "role": "synthesizer", "agent_id": zdr.id, "subtask": "answer", "access": [0]},
+        ]
+    }))
+    orchestrator = TaskOrchestrator([non_zdr, zdr], client=client)
+
+    with orchestrator.request_policy(True):
+        orchestrator._plan_generated("solve it")
+
+    planner_system = client.calls[0][0]["content"]
+    assert "non_zdr_agent" not in planner_system
+    assert "model=gpt-4o," not in planner_system
+    assert "zdr_agent" in planner_system
+
+
 def test_generated_plan_stops_before_next_call_when_budget_is_spent() -> None:
     """A completed step is charged before another generated step can start."""
     orchestrator, client = _orch(json.dumps(PLAN))

@@ -4812,7 +4812,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if is_general_chat_agent_model_id(agent.model)
+            if is_general_chat_agent_model_id(agent.model) and self._zdr_agent_allowed(agent)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"

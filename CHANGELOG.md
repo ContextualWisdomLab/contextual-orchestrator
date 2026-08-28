@@ -72,6 +72,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Generated workflow planning now advertises only agents eligible under the
+  active ZDR request policy.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Validate orchestration-trace requests before every chat execution branch and
