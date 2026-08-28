@@ -857,7 +857,7 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
                     },
                 }],
             })
-        elif item_type in {"reasoning", "item_reference"}:
+        elif item_type in {"input_file", "reasoning", "item_reference"}:
             continue
         else:
             raise ValueError(f"unsupported local Responses input item: {item_type}")
@@ -3346,6 +3346,8 @@ class TaskOrchestrator:
             self.AUTO_MODEL,
             self.FREE_MODEL,
         ):
+            if isinstance(file_replicas, dict):
+                upstream = _bind_provider_file_ids(upstream, file_replicas, agent.id)
             if effort_profile is not None:
                 upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)

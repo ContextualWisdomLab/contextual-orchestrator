@@ -127,6 +127,22 @@ def test_proxy_completion_honors_an_enabled_requested_worker_model() -> None:
     assert result["model"] == "mock-builder"
 
 
+def test_concrete_model_binds_opaque_file_id_to_provider_replica() -> None:
+    orchestrator = _build()
+    sent: dict[str, object] = {}
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, payload: sent.update(payload) or {"ok": True}
+    )
+
+    orchestrator.proxy_completion({
+        "model": "mock-builder",
+        "input": [{"type": "input_file", "file_id": "file-gateway"}],
+        "_file_replicas": {"file-gateway": {"builder_agent": "file-provider"}},
+    }, endpoint="responses")
+
+    assert sent["input"] == [{"type": "input_file", "file_id": "file-provider"}]
+
+
 def test_proxy_completion_free_model_uses_only_an_explicitly_free_agent() -> None:
     orch = TaskOrchestrator(
         agents=[
