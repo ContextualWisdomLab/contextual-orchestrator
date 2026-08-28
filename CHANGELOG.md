@@ -69,6 +69,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
   `batch_route`; omit it to keep today's payload.
+- Add an optional provider-neutral NVIDIA NIM benchmark harness that dynamically discovers the live `/v1/models` catalog, probes every discovered model under bounded concurrency and a hard request cap, records machine-readable capability outcomes, and compares direct, route-once, bounded-conduct, and explicit pricing-scenario policies over a locked task manifest.
+- Add deterministic no-egress benchmark dry runs, secret-redacted JSON/CSV/Markdown evidence artifacts, paired bootstrap uncertainty, quality-latency and quality-hypothetical-cost Pareto frontiers, all-modality catalog fuzzing, and a manually gated benchmark workflow.
+- Add a validated deterministic one-frame H.264 MP4 probe fixture, deterministic pre-allocation of model-capability cells before concurrent probing, and explicit evidence-sufficiency fields that keep the bundled smoke manifest from authorizing production routing.
+- Add direct benchmark quality gates for 100% production statement/branch coverage, 100% public docstrings, wheel build/install/import smoke testing, and optional-import isolation.
 
 ### Fixed
 
@@ -109,6 +113,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   constants renamed `*_CREDENTIAL_NAME`; readiness label keys renamed
   `readiness_ok/warning/failure`. (#833)
 
+- NIM benchmark provider responses are bounded to 8 MiB, and live HTTPS
+  requests use validation-time public-address pinning with original-host TLS,
+  no proxy lookup, and no redirect following.
+- Live pricing evidence is rejected unless its source, reviewer, dates, rate
+  basis, uncertainty, and explicit rates are complete and current.
+- Direct, route-once, conduct, and reviewed cheapest-worker cells share one
+  total token budget and five-call envelope, with configured and observed
+  values recorded separately.
+
 ### Security
 
 - HTTP/1.1 responses now close the connection when authentication, rate
@@ -118,6 +131,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
 - Worker-agent pool boundaries are enforced beside object lookup so a
   different-pool id can no longer read or mutate another pool's agent.
+
+- Provider hosts resolving to any non-globally-routable address are rejected,
+  including RFC 6598 shared space; benchmark artifacts refuse secret leakage.
 
 ### References
 

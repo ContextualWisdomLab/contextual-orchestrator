@@ -18,7 +18,6 @@ import os
 import socket
 import tempfile
 import urllib.error
-import urllib.request
 from pathlib import Path
 import sys
 
@@ -131,59 +130,160 @@ def test_endpoint_guard_accepts_public_address() -> None:
         socket.getaddrinfo = original
 
 
-class _FakeResponse:
-    """Minimal urlopen context-manager stand-in."""
+class _FakeDirectResponse:
+    """Minimal response returned by the pinned HTTPS connection test seam."""
 
     def __init__(self, status: int, body: bytes) -> None:
         self.status = status
         self._body = body
+        self.closed = False
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, maximum_bytes: int = -1) -> bytes:
+        if maximum_bytes < 0:
+            return self._body
+        return self._body[:maximum_bytes]
 
-    def __enter__(self) -> "_FakeResponse":
-        return self
-
-    def __exit__(self, *exc_info: object) -> None:
-        return None
-
-
-def _run_default_transport(urlopen_fake):
-    original_urlopen = urllib.request.urlopen
-    original_getaddrinfo = socket.getaddrinfo
-    urllib.request.urlopen = urlopen_fake
-    socket.getaddrinfo = _patched_getaddrinfo("93.184.216.34")
-    try:
-        transport = nb.build_default_transport(timeout_seconds=5.0)
-        first = transport("GET", f"{FAKE_ENDPOINT}/models", {}, None)
-        # Second call to the same host must skip revalidation (cached host).
-        second = transport("GET", f"{FAKE_ENDPOINT}/models", {}, None)
-        return first, second
-    finally:
-        urllib.request.urlopen = original_urlopen
-        socket.getaddrinfo = original_getaddrinfo
+    def close(self) -> None:
+        self.closed = True
 
 
-def test_default_transport_returns_status_and_body() -> None:
-    first, second = _run_default_transport(lambda request, timeout, context: _FakeResponse(200, b"body-bytes"))
-    assert first == (200, b"body-bytes")
-    assert second == (200, b"body-bytes")
+class _FakeDirectConnection:
+    """Scripted pinned connection that records address and authority evidence."""
+
+    plans: list[object] = []
+    instances: list["_FakeDirectConnection"] = []
+
+    def __init__(self, server_hostname, pinned_ip, port, timeout, context) -> None:
+        self.server_hostname = server_hostname
+        self.pinned_ip = pinned_ip
+        self.port = port
+        self.timeout = timeout
+        self.context = context
+        self.method = ""
+        self.target = ""
+        self.body = None
+        self.headers = {}
+        self.closed = False
+        self._plan = type(self).plans.pop(0)
+        type(self).instances.append(self)
+
+    def request(self, method, target, body, headers) -> None:
+        self.method = method
+        self.target = target
+        self.body = body
+        self.headers = headers
+        if isinstance(self._plan, BaseException):
+            raise self._plan
+
+    def getresponse(self):
+        return self._plan
+
+    def close(self) -> None:
+        self.closed = True
 
 
-def test_default_transport_returns_http_error_status_with_body() -> None:
-    def urlopen_fake(request, timeout, context):
-        raise urllib.error.HTTPError(request.full_url, 429, "throttled", None, io.BytesIO(b"slow down"))
+def _install_direct_transport_fakes(monkeypatch, plans, addresses=("93.184.216.34",)):
+    """Install deterministic DNS and connection seams for one transport test."""
+    resolution_calls = []
 
-    first, _second = _run_default_transport(urlopen_fake)
-    assert first == (429, b"slow down")
+    def resolve(host, port, label):
+        resolution_calls.append((host, port, label))
+        return addresses
+
+    _FakeDirectConnection.plans = list(plans)
+    _FakeDirectConnection.instances = []
+    monkeypatch.setattr(nb, "_validated_public_addresses", resolve)
+    monkeypatch.setattr(nb, "_PinnedHTTPSConnection", _FakeDirectConnection)
+    return resolution_calls
 
 
-def test_default_transport_handles_http_error_without_body() -> None:
-    def urlopen_fake(request, timeout, context):
-        raise urllib.error.HTTPError(request.full_url, 502, "bad gateway", None, None)
+def test_default_transport_returns_status_and_revalidates_each_request(monkeypatch) -> None:
+    first_response = _FakeDirectResponse(200, b"body-one")
+    second_response = _FakeDirectResponse(200, b"body-two")
+    resolution_calls = _install_direct_transport_fakes(
+        monkeypatch,
+        [first_response, second_response],
+    )
 
-    first, _second = _run_default_transport(urlopen_fake)
-    assert first == (502, b"")
+    transport = nb.build_default_transport(timeout_seconds=5.0)
+    first = transport("GET", f"{FAKE_ENDPOINT}/models", {}, None)
+    second = transport("GET", f"{FAKE_ENDPOINT}/models;format=json?second=1", {}, None)
+
+    assert first == (200, b"body-one")
+    assert second == (200, b"body-two")
+    assert resolution_calls == [
+        ("nim.example.test", 443, "NIM benchmark"),
+        ("nim.example.test", 443, "NIM benchmark"),
+    ]
+    assert all(response.closed for response in (first_response, second_response))
+    assert all(connection.closed for connection in _FakeDirectConnection.instances)
+    assert _FakeDirectConnection.instances[0].server_hostname == "nim.example.test"
+    assert _FakeDirectConnection.instances[0].pinned_ip == "93.184.216.34"
+    assert _FakeDirectConnection.instances[1].target == "/v1/models;format=json?second=1"
+
+
+def test_default_transport_returns_http_error_status_with_body(monkeypatch) -> None:
+    response = _FakeDirectResponse(429, b"slow down")
+    _install_direct_transport_fakes(monkeypatch, [response])
+    assert nb.build_default_transport(5.0)(
+        "POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b"{}"
+    ) == (429, b"slow down")
+    assert response.closed is True
+
+
+def test_default_transport_rejects_oversized_response_and_closes_resources(
+    monkeypatch,
+) -> None:
+    """A provider cannot exhaust memory with an unbounded response body."""
+    response = _FakeDirectResponse(200, b"x" * (nb.MAX_PROVIDER_RESPONSE_BYTES + 1))
+    _install_direct_transport_fakes(monkeypatch, [response])
+
+    with pytest.raises(nb.BenchmarkContractError, match="response exceeds"):
+        nb.build_default_transport(5.0)(
+            "GET", f"{FAKE_ENDPOINT}/models", {}, None
+        )
+
+    assert response.closed is True
+    assert _FakeDirectConnection.instances[0].closed is True
+
+
+def test_default_transport_rejects_redirect_without_following(monkeypatch) -> None:
+    response = _FakeDirectResponse(302, b"redirect")
+    _install_direct_transport_fakes(monkeypatch, [response])
+    with pytest.raises(nb.BenchmarkContractError, match="redirects are not permitted"):
+        nb.build_default_transport(5.0)(
+            "POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b"{}"
+        )
+    assert response.closed is True
+
+
+def test_default_transport_falls_back_only_to_another_validated_address(monkeypatch) -> None:
+    response = _FakeDirectResponse(200, b"catalog")
+    _install_direct_transport_fakes(
+        monkeypatch,
+        [OSError("first pin failed"), response],
+        addresses=("93.184.216.34", "93.184.216.35"),
+    )
+    result = nb.build_default_transport(5.0)(
+        "GET", f"{FAKE_ENDPOINT}/models", {}, None
+    )
+    assert result == (200, b"catalog")
+    assert [item.pinned_ip for item in _FakeDirectConnection.instances] == [
+        "93.184.216.34",
+        "93.184.216.35",
+    ]
+
+
+def test_default_transport_reports_failure_after_every_pin_fails(monkeypatch) -> None:
+    _install_direct_transport_fakes(
+        monkeypatch,
+        [OSError("first pin failed"), OSError("second pin failed")],
+        addresses=("93.184.216.34", "93.184.216.35"),
+    )
+    with pytest.raises(urllib.error.URLError, match="second pin failed"):
+        nb.build_default_transport(5.0)(
+            "GET", f"{FAKE_ENDPOINT}/models", {}, None
+        )
 
 
 # --------------------------------------------------------------------------
@@ -792,7 +892,9 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     assert evaluation["cheapest_worker_skip_reason"] is None
     conduct_cells = [cell for cell in cells if cell["policy_name"] == "conduct_bounded"]
     assert all(cell["workflow_depth"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
-    assert all(cell["workflow_depth"] == 4 for cell in conduct_cells)  # template plan under the cap
+    assert all(cell["configured_total_token_budget"] == 256 for cell in conduct_cells)
+    assert all(cell["configured_maximum_calls"] == nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
+    assert all(cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
     assert cells == sorted(cells, key=lambda cell: (cell["policy_name"], cell["task_id"]))
     assert budget.requests_spent > 0
 
@@ -1104,7 +1206,7 @@ def test_live_run_end_to_end_offline() -> None:
             report = nb.run_benchmark(
                 "live",
                 TASK_MANIFEST_PATH,
-                PRICING_SCENARIO_PATH,
+                None,
                 tmp,
                 max_total_requests=400,
                 git_sha="abc123",
@@ -1116,6 +1218,9 @@ def test_live_run_end_to_end_offline() -> None:
         ModelClient._send = original_send
     assert report["provenance"]["run_mode"] == "live"
     assert report["provenance"]["git_sha"] == "abc123"
+    assert report["honesty_labels"]["actual_cost_basis"] == (
+        "reviewed_nvidia_developer_program_hosted_endpoint_access"
+    )
     assert report["request_budget"]["requests_spent"] <= 400
     assert "nvapi-test-credential" not in json.dumps(report)
 

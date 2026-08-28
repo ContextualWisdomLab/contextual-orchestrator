@@ -287,18 +287,26 @@ Grounding papers (LLM cost, routing, load balancing, evaluation) live in
 ### NIM cost-quality benchmark (optional harness)
 
 Evidence-grade benchmark of the routing policies against a **dynamically
-discovered** NVIDIA NIM catalog: all-modality capability probes (chat,
-completions, Responses API, embeddings, image/video/audio understanding,
-transcription, speech; `omni_capable` derived), fair
-route/conduct/single-worker comparisons with paired-bootstrap uncertainty and
-Pareto frontiers, and strictly separated actual-free vs hypothetical-paid cost
-accounting. Deterministic `--dry-run` needs no network or secret; live runs
-resolve `NVIDIA_NIM_API_KEY` from the KV and fail closed otherwise. See
-[docs/nim_benchmark.md](docs/nim_benchmark.md).
+discovered** NVIDIA NIM catalog. It probes chat, completions, Responses,
+embeddings, image/video/audio understanding, transcription, and speech; compares
+direct, route-once, and bounded-conduct cells under one equal total-token and
+call budget; records paired uncertainty and Pareto frontiers; and keeps reviewed
+actual endpoint-access evidence separate from optional hypothetical paid rates.
+The bundled manifest is smoke-sized and reports `insufficient_evidence`; no
+benchmark artifact automatically changes production routing.
+
+The adapter is lazy and optional: ordinary `import contextual_orchestrator` does
+not import or mutate it. Deterministic `--dry-run` receives no network access or
+NVIDIA secret. Live execution resolves `NVIDIA_NIM_API_KEY` from the credential
+registry, pins HTTPS connections to validation-time public addresses, rejects
+redirects and proxy routing, and fails closed on missing/expired evidence. See
+[docs/nim_benchmark.md](docs/nim_benchmark.md) and the
+[engineering decision record](docs/doctoring/nim-benchmark-evidence-grade.md).
 
 ```bash
 python -m contextual_orchestrator nim-benchmark --dry-run \
-  --pricing-scenario examples/nim_pricing_scenario.json --output-dir benchmark_artifacts
+  --pricing-scenario examples/nim_pricing_scenario.json \
+  --output-dir benchmark_artifacts
 ```
 
 ## Design Artifacts

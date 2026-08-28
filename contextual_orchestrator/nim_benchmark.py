@@ -42,9 +42,10 @@ import argparse
 import base64
 import csv
 import dataclasses
+import datetime as datetime_module
 import hashlib
+import http.client
 import io
-import ipaddress
 import json
 import math
 import os
@@ -52,11 +53,11 @@ import random
 import re
 import socket
 import ssl
+import struct
 import threading
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 import wave
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
@@ -70,6 +71,10 @@ from .orchestrator import (
     TaskOrchestrator,
     estimate_tokens,
 )
+from .provider_transport import (
+    _PinnedHTTPSConnection,
+    _validated_public_addresses,
+)
 
 BENCHMARK_SCHEMA_VERSION = "1.0.0"
 NIM_DEFAULT_ENDPOINT = "https://integrate.api.nvidia.com/v1"
@@ -79,6 +84,32 @@ DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
 DRY_RUN_FIXED_UNIX_TIME = 1767225600.0
 # Issue contract: Conductor/TRINITY-style deep paths are capped at five steps.
 MAX_WORKFLOW_DEPTH = 5
+# Bound every provider response before materializing it in memory. Eight MiB is
+# ample for model catalogs, JSON probe responses, and the deliberately tiny
+# benchmark media outputs while preventing a provider from returning an
+# unbounded body to the evidence collector.
+MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
+# Smoke manifests can exercise plumbing but cannot justify production routing.
+MINIMUM_PAIRED_TASK_COUNT = 30
+REQUIRED_COMPLETION_FRACTION = 0.9
+
+ACTUAL_COST_EVIDENCE: dict[str, Any] = {
+    "evidence_schema_version": "1.0.0",
+    "source_title": "NVIDIA NIM General FAQ",
+    "source_url": "https://docs.api.nvidia.com/nim/docs/product",
+    "reviewed_at_date": "2026-08-05",
+    "valid_until_date": "2026-09-04",
+    "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
+    "access_scope": "free API endpoint access for prototyping",
+    "production_access_note": (
+        "Production support and licensing require NVIDIA AI Enterprise."
+    ),
+    "actual_cost_usd": 0.0,
+    "uncertainty": (
+        "Hosted-endpoint access terms can change. Live runs fail closed after "
+        "the validity date until the official source is reviewed again."
+    ),
+}
 
 # Transport seam: (method, url, headers, body_bytes_or_None) -> (status, body).
 # Network-level failures raise URLError/TimeoutError/ConnectionError/socket.timeout.
@@ -110,53 +141,124 @@ class SecretLeakError(RuntimeError):
 # --------------------------------------------------------------------------
 
 
-def require_public_https_endpoint(url: str) -> None:
-    """Reject non-HTTPS endpoints and hosts resolving to non-public addresses.
+def require_public_https_endpoint(url: str) -> tuple[str, ...]:
+    """Resolve and return public addresses approved for one HTTPS request.
 
-    Mirrors the runtime ``ModelClient`` egress guard so the benchmark cannot be
-    pointed at loopback/private/reserved infrastructure.
+    The returned addresses are the only addresses a caller may dial. Combining
+    resolution and validation in one operation closes the DNS time-of-check to
+    time-of-use gap caused by a generic URL opener resolving the hostname again.
+
+    Args:
+        url: Complete provider URL whose origin may receive credentials.
+
+    Returns:
+        Deduplicated globally routable IPv4 or IPv6 addresses.
+
+    Raises:
+        BenchmarkContractError: If the URL is not HTTPS, lacks a hostname, or
+            resolves to any non-global address.
     """
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise BenchmarkContractError(f"benchmark endpoint must use https: {url!r}")
-    for address in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-        ip_address = ipaddress.ip_address(address[4][0])
-        if (
-            ip_address.is_private
-            or ip_address.is_loopback
-            or ip_address.is_link_local
-            or ip_address.is_multicast
-            or ip_address.is_reserved
-        ):
-            raise BenchmarkContractError(f"benchmark endpoint resolves to a non-public address: {url!r}")
+    try:
+        return _validated_public_addresses(
+            parsed.hostname.lower(),
+            parsed.port or 443,
+            "NIM benchmark",
+        )
+    except RuntimeError as exc:
+        raise BenchmarkContractError(str(exc)) from exc
+
 
 
 def build_default_transport(timeout_seconds: float) -> ProviderTransport:
-    """Return the real HTTPS transport with per-host egress validation.
+    """Build direct HTTPS transport pinned to each request's DNS evidence.
 
-    HTTP error statuses are returned as ``(status, body)`` rather than raised so
-    probe classification can inspect them; genuine network failures propagate.
+    Every request resolves exactly once, validates every answer as globally
+    routable, and connects only to those validation-time addresses. The original
+    hostname remains the HTTP authority and TLS SNI/certificate name. Environment
+    proxies and redirect handlers are never used.
+
+    Args:
+        timeout_seconds: Socket, TLS, and response timeout for each address.
+
+    Returns:
+        A provider transport returning HTTP status and raw response bytes.
+
+    Raises:
+        BenchmarkContractError: If a request URL or redirect violates policy.
+        urllib.error.URLError: If all validation-time addresses fail.
     """
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or timeout_seconds <= 0
+    ):
+        raise BenchmarkContractError("timeout_seconds must be a positive number")
     ssl_context = ssl.create_default_context()
-    validated_hosts: set[str] = set()
 
-    def transport(method: str, url: str, headers: dict[str, str], body: bytes | None) -> tuple[int, bytes]:
-        """Perform one provider HTTP round trip against a validated public host."""
-        host_key = urllib.parse.urlparse(url).netloc
-        if host_key not in validated_hosts:
-            require_public_https_endpoint(url)
-            validated_hosts.add(host_key)
-        request = urllib.request.Request(url, data=body, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(  # nosec B310 - https-only, egress-validated above
-                request, timeout=timeout_seconds, context=ssl_context
-            ) as response:
-                return int(response.status), response.read()
-        except urllib.error.HTTPError as exc:
-            error_body = exc.read() if exc.fp is not None else b""
-            return int(exc.code), error_body
+    def transport(
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: bytes | None,
+    ) -> tuple[int, bytes]:
+        """Perform one request without proxy lookup, redirect follow, or re-resolution."""
+        parsed = urllib.parse.urlparse(url)
+        approved_addresses = require_public_https_endpoint(url)
+        port = parsed.port or 443
+        target = parsed.path or "/"
+        if parsed.params:
+            target = f"{target};{parsed.params}"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        request_headers = dict(headers)
+        request_headers["Connection"] = "close"
+
+        last_error: BaseException | None = None
+        for pinned_ip in approved_addresses:
+            connection = _PinnedHTTPSConnection(
+                parsed.hostname or "",
+                pinned_ip,
+                port,
+                float(timeout_seconds),
+                ssl_context,
+            )
+            response = None
+            try:
+                connection.request(
+                    method,
+                    target,
+                    body=body,
+                    headers=request_headers,
+                )
+                response = connection.getresponse()
+                status = int(response.status)
+                response_body = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
+                if len(response_body) > MAX_PROVIDER_RESPONSE_BYTES:
+                    raise BenchmarkContractError(
+                        "benchmark provider response exceeds "
+                        f"{MAX_PROVIDER_RESPONSE_BYTES} byte limit"
+                    )
+                if 300 <= status < 400:
+                    raise BenchmarkContractError(
+                        f"benchmark provider redirects are not permitted (HTTP {status})"
+                    )
+                return status, response_body
+            except BenchmarkContractError:
+                raise
+            except (OSError, http.client.HTTPException) as exc:
+                last_error = exc
+            finally:
+                if response is not None:
+                    response.close()
+                connection.close()
+        raise urllib.error.URLError(last_error or "benchmark provider connection failed")
 
     return transport
+
 
 
 # --------------------------------------------------------------------------
@@ -168,14 +270,26 @@ class RequestBudget:
     """Thread-safe hard cap on total provider requests for one benchmark run."""
 
     def __init__(self, max_total_requests: int) -> None:
-        if max_total_requests < 1:
+        """Create a positive integer request allowance.
+
+        Args:
+            max_total_requests: Maximum provider calls in the complete run.
+
+        Raises:
+            BenchmarkContractError: If the cap is boolean or not positive.
+        """
+        if (
+            isinstance(max_total_requests, bool)
+            or not isinstance(max_total_requests, int)
+            or max_total_requests < 1
+        ):
             raise BenchmarkContractError("max_total_requests must be a positive integer")
         self.max_total_requests = max_total_requests
         self._spent = 0
         self._lock = threading.Lock()
 
     def try_spend(self) -> bool:
-        """Consume one request from the budget; ``False`` means exhausted (skip)."""
+        """Consume one request from the budget; return ``False`` when exhausted."""
         with self._lock:
             if self._spent >= self.max_total_requests:
                 return False
@@ -183,17 +297,25 @@ class RequestBudget:
             return True
 
     def spend_or_fail(self) -> None:
-        """Consume one request or raise, for phases that must fail closed."""
+        """Consume one request or raise for a phase that must complete."""
         if not self.try_spend():
             raise BenchmarkBudgetError(
-                f"request budget of {self.max_total_requests} exhausted; refusing further provider calls"
+                f"request budget of {self.max_total_requests} exhausted; "
+                "refusing further provider calls"
             )
 
     @property
     def requests_spent(self) -> int:
-        """Number of provider requests consumed so far."""
+        """Return the number of provider requests consumed so far."""
         with self._lock:
             return self._spent
+
+    @property
+    def remaining_requests(self) -> int:
+        """Return the non-negative provider request allowance still available."""
+        with self._lock:
+            return self.max_total_requests - self._spent
+
 
 
 class _BudgetedModelClient(ModelClient):
@@ -207,6 +329,143 @@ class _BudgetedModelClient(ModelClient):
         """Spend one budgeted request, then delegate to the normal chat path."""
         self._request_budget.spend_or_fail()
         return super().chat(agent, messages, temperature)
+
+
+class PolicyTokenBudgetExceeded(RuntimeError):
+    """A policy cell exhausted its shared token or call allowance."""
+
+
+class EqualBudgetModelClient:
+    """Delegate model calls while enforcing an equal per-cell budget.
+
+    Direct, route-once, conduct, and cheapest-worker cells all receive the same
+    total prompt-plus-completion token allowance and the same declared maximum-
+    call envelope. The wrapper lowers each provider call's output cap to the
+    remaining allowance and reconciles estimates with provider-reported usage.
+    """
+
+    def __init__(
+        self,
+        delegate: ModelClient,
+        total_token_budget: int,
+        maximum_calls: int,
+    ) -> None:
+        """Create a cell-local limiter around an existing provider client.
+
+        Args:
+            delegate: Existing request-budgeted provider client.
+            total_token_budget: Cell-wide prompt-plus-completion allowance.
+            maximum_calls: Maximum calls available to every compared policy.
+
+        Raises:
+            ValueError: If either allowance is boolean or not positive.
+        """
+        if (
+            isinstance(total_token_budget, bool)
+            or not isinstance(total_token_budget, int)
+            or total_token_budget < 1
+        ):
+            raise ValueError("total_token_budget must be a positive integer")
+        if (
+            isinstance(maximum_calls, bool)
+            or not isinstance(maximum_calls, int)
+            or maximum_calls < 1
+        ):
+            raise ValueError("maximum_calls must be a positive integer")
+        self._delegate = delegate
+        self.total_token_budget = total_token_budget
+        self.maximum_calls = maximum_calls
+        self.observed_calls = 0
+        self.observed_tokens = 0
+        self._pending_estimated_tokens: int | None = None
+        self._exceeded = False
+
+    @property
+    def max_output_tokens(self) -> int:
+        """Expose the delegate cap for compatibility with orchestration clients."""
+        return int(self._delegate.max_output_tokens)
+
+    @max_output_tokens.setter
+    def max_output_tokens(self, value: int) -> None:
+        """Forward explicit cap changes to the delegated model client."""
+        self._delegate.max_output_tokens = value
+
+    @property
+    def remaining_tokens(self) -> int:
+        """Return the non-negative token allowance remaining in this cell."""
+        return max(0, self.total_token_budget - self.observed_tokens)
+
+    @property
+    def exceeded(self) -> bool:
+        """Return whether observed usage crossed the configured allowance."""
+        return self._exceeded
+
+    @staticmethod
+    def _coerce_usage_count(value: Any) -> int | None:
+        """Return one valid non-negative provider token count, otherwise ``None``."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if not math.isfinite(value) or value < 0:
+            return None
+        return int(value)
+
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[dict[str, Any]],
+        temperature: float = 0.2,
+    ) -> str:
+        """Perform one delegated call within the remaining cell allowance.
+
+        Raises:
+            PolicyTokenBudgetExceeded: If the call or token allowance is already
+                exhausted or the prompt cannot fit.
+        """
+        if self._exceeded or self.observed_calls >= self.maximum_calls:
+            raise PolicyTokenBudgetExceeded(
+                "policy cell maximum-call allowance exhausted"
+            )
+        prompt_text = json.dumps(messages, ensure_ascii=False, sort_keys=True)
+        prompt_tokens = estimate_tokens(prompt_text)
+        output_allowance = self.remaining_tokens - prompt_tokens
+        if output_allowance < 1:
+            raise PolicyTokenBudgetExceeded(
+                "policy cell total-token allowance exhausted"
+            )
+
+        original_max_output_tokens = int(self._delegate.max_output_tokens)
+        self._delegate.max_output_tokens = min(
+            original_max_output_tokens,
+            output_allowance,
+        )
+        self.observed_calls += 1
+        try:
+            answer = self._delegate.chat(agent, messages, temperature)
+        finally:
+            self._delegate.max_output_tokens = original_max_output_tokens
+
+        estimated_total = prompt_tokens + estimate_tokens(answer)
+        self.observed_tokens += estimated_total
+        self._pending_estimated_tokens = estimated_total
+        self._exceeded = self.observed_tokens > self.total_token_budget
+        return answer
+
+    def take_usage(self) -> dict[str, Any] | None:
+        """Return delegated usage and replace the latest estimate when valid."""
+        usage = self._delegate.take_usage()
+        pending_estimate = self._pending_estimated_tokens
+        self._pending_estimated_tokens = None
+        if pending_estimate is None or not isinstance(usage, dict):
+            return usage
+        prompt_tokens = self._coerce_usage_count(usage.get("prompt_tokens"))
+        completion_tokens = self._coerce_usage_count(
+            usage.get("completion_tokens")
+        )
+        if prompt_tokens is None or completion_tokens is None:
+            return usage
+        self.observed_tokens += prompt_tokens + completion_tokens - pending_estimate
+        self._exceeded = self.observed_tokens > self.total_token_budget
+        return usage
 
 
 # --------------------------------------------------------------------------
@@ -297,9 +556,171 @@ def _auth_headers(api_key: str, content_type: str = "application/json") -> dict[
 _TINY_PNG_BASE64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
-# Minimal ISO-BMFF 'ftyp' box: a syntactically recognizable video container stub.
-_TINY_MP4_BYTES = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+# Deterministic one-frame 16x16 H.264 MP4 generated once with bit-exact flags.
+_TINY_MP4_BASE64 = """AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAALzbW9vdgAAAGxtdmhkAAAAAAAAAAAA
+AAAAAAAD6AAAACgAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAA
+AABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAkJ0cmFrAAAAXHRraGQAAAADAAAA
+AAAAAAAAAAABAAAAAAAAACgAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAA
+AAAAAAAAAABAAAAAABAAAAAQAAAAAAAkZWR0cwAAABxlbHN0AAAAAAAAAAEAAAAoAAAAAAABAAAA
+AAG6bWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAyAAAAAgBVxAAAAAAALWhkbHIAAAAAAAAAAHZp
+ZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAABZW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAA
+ACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAASVzdGJsAAAAwXN0c2QAAAAAAAAA
+AQAAALFhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABDExhdmMg
+bGlieDI2NAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAAN2F2Y0MBZAAK/+EAGWdkAAqscgRewEQA
+AAMABAAAAwDIPEiWEYABAAdo6EOPEyEw/fj4AAAAABBwYXNwAAAAAQAAAAEAAAAUYnRydAAAAAAA
+Ai3QAAAAAAAAABhzdHRzAAAAAAAAAAEAAAABAAACAAAAABxzdHNjAAAAAAAAAAEAAAABAAAAAQAA
+AAEAAAAUc3RzegAAAAAAAALKAAAAAQAAABRzdGNvAAAAAAAAAAEAAAMjAAAAPXVkdGEAAAA1bWV0
+YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAAAAAIaWxzdAAAAAhmcmVlAAAC
+0m1kYXQAAAKyBgX//67cRem95tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY0IHIzMTA4IDMxZTE5
+ZjkgLSBILjI2NC9NUEVHLTQgQVZDIGNvZGVjIC0gQ29weWxlZnQgMjAwMy0yMDIzIC0gaHR0cDov
+L3d3dy52aWRlb2xhbi5vcmcveDI2NC5odG1sIC0gb3B0aW9uczogY2FiYWM9MSByZWY9MTYgZGVi
+bG9jaz0xOi0zOi0zIGFuYWx5c2U9MHgzOjB4MTMzIG1lPXVtaCBzdWJtZT0xMCBwc3k9MSBwc3lf
+cmQ9Mi4wMDowLjcwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTI0IGNocm9tYV9tZT0xIHRyZWxsaXM9
+MiA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29m
+ZnNldD0tNCB0aHJlYWRzPTEgbG9va2FoZWFkX3RocmVhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5y
+PTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2lu
+dHJhPTAgYmZyYW1lcz04IGJfcHlyYW1pZD0yIGJfYWRhcHQ9MiBiX2JpYXM9MCBkaXJlY3Q9MyB3
+ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWlnaHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNj
+ZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NjAgcmM9Y3JmIG1idHJlZT0x
+IGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0x
+LjQwIGFxPTE6MS4yMACAAAAAEGWIgQAG5z/+9vD+BTZWBME="""
+VIDEO_PROBE_FIXTURE_SHA256 = "777dda43b5a15162b68a39aa486d5c70c9994d7fe761742fd00d4e13508983c0"
 _MULTIPART_BOUNDARY = "nim-benchmark-boundary-7f3a1c"
+_MP4_CONTAINER_BOX_TYPES = frozenset(
+    {b"moov", b"trak", b"mdia", b"minf", b"dinf", b"stbl", b"edts", b"udta"}
+)
+
+
+def _iter_mp4_boxes(
+    data: bytes,
+    start_offset: int = 0,
+    end_offset: int | None = None,
+):
+    """Yield validated ISO-BMFF boxes as type and payload/end offsets.
+
+    Args:
+        data: Complete MP4 bytes.
+        start_offset: First byte of the bounded box sequence.
+        end_offset: Exclusive sequence end, defaulting to ``len(data)``.
+
+    Yields:
+        Tuples of ``(box_type, payload_start, box_end)``.
+
+    Raises:
+        BenchmarkContractError: If box headers, sizes, or bounds are malformed.
+    """
+    sequence_end = len(data) if end_offset is None else end_offset
+    offset = start_offset
+    while offset < sequence_end:
+        if sequence_end - offset < 8:
+            raise BenchmarkContractError("video probe MP4 has a truncated box header")
+        box_size = struct.unpack(">I", data[offset : offset + 4])[0]
+        box_type = data[offset + 4 : offset + 8]
+        header_size = 8
+        if box_size == 1:
+            if sequence_end - offset < 16:
+                raise BenchmarkContractError("video probe MP4 has a truncated extended box")
+            box_size = struct.unpack(">Q", data[offset + 8 : offset + 16])[0]
+            header_size = 16
+        elif box_size == 0:
+            box_size = sequence_end - offset
+        if box_size < header_size or offset + box_size > sequence_end:
+            raise BenchmarkContractError("video probe MP4 box exceeds its parent bounds")
+        payload_start = offset + header_size
+        box_end = offset + box_size
+        yield box_type, payload_start, box_end
+        offset = box_end
+
+
+def _walk_mp4_boxes(data: bytes):
+    """Yield every validated box in the deterministic video fixture."""
+
+    def walk(start_offset: int, end_offset: int):
+        """Recursively traverse known ISO-BMFF container boxes."""
+        for box_type, payload_start, box_end in _iter_mp4_boxes(
+            data,
+            start_offset,
+            end_offset,
+        ):
+            yield box_type, payload_start, box_end
+            if box_type in _MP4_CONTAINER_BOX_TYPES:
+                yield from walk(payload_start, box_end)
+            elif box_type == b"meta":
+                if box_end - payload_start < 4:
+                    raise BenchmarkContractError(
+                        "video probe MP4 meta box lacks full-box flags"
+                    )
+                yield from walk(payload_start + 4, box_end)
+
+    yield from walk(0, len(data))
+
+
+def validate_video_probe_fixture(data: bytes) -> dict[str, Any]:
+    """Validate one H.264 video stream, dimensions, and frame count.
+
+    Args:
+        data: Candidate ISO-BMFF/MP4 bytes.
+
+    Returns:
+        Codec, width, height, and frame count for the single video stream.
+
+    Raises:
+        BenchmarkContractError: If required boxes or one-frame video evidence is
+            missing, inconsistent, or malformed.
+    """
+    top_level_types = {box_type for box_type, _, _ in _iter_mp4_boxes(data)}
+    if not {b"ftyp", b"moov", b"mdat"} <= top_level_types:
+        raise BenchmarkContractError("video probe MP4 lacks ftyp, moov, or mdat")
+
+    width: int | None = None
+    height: int | None = None
+    frame_count: int | None = None
+    video_handler_count = 0
+    codec_name: str | None = None
+    for box_type, payload_start, box_end in _walk_mp4_boxes(data):
+        payload = data[payload_start:box_end]
+        if box_type == b"tkhd":
+            if len(payload) < 8:
+                raise BenchmarkContractError("video probe MP4 tkhd box is truncated")
+            width_fixed, height_fixed = struct.unpack(">II", payload[-8:])
+            width = width_fixed >> 16
+            height = height_fixed >> 16
+        elif box_type == b"hdlr" and len(payload) >= 12:
+            if payload[8:12] == b"vide":
+                video_handler_count += 1
+        elif box_type == b"stsz":
+            if len(payload) < 12:
+                raise BenchmarkContractError("video probe MP4 stsz box is truncated")
+            frame_count = struct.unpack(">I", payload[8:12])[0]
+        elif box_type == b"stsd" and b"avc1" in payload:
+            codec_name = "h264"
+
+    metadata = {
+        "codec_name": codec_name,
+        "width": width,
+        "height": height,
+        "frame_count": frame_count,
+    }
+    expected = {
+        "codec_name": "h264",
+        "width": 16,
+        "height": 16,
+        "frame_count": 1,
+    }
+    if video_handler_count != 1 or metadata != expected:
+        raise BenchmarkContractError(
+            f"video probe MP4 must contain one 16x16 one-frame H.264 stream: {metadata}"
+        )
+    return metadata
+
+
+def _tiny_mp4_bytes() -> bytes:
+    """Return the validated deterministic one-frame MP4 probe fixture."""
+    fixture = base64.b64decode("".join(_TINY_MP4_BASE64.split()), validate=True)
+    if hashlib.sha256(fixture).hexdigest() != VIDEO_PROBE_FIXTURE_SHA256:
+        raise BenchmarkContractError("video probe MP4 checksum does not match")
+    validate_video_probe_fixture(fixture)
+    return fixture
 
 
 def _tiny_wav_bytes() -> bytes:
@@ -376,8 +797,9 @@ def _image_data_uri() -> str:
 
 
 def _video_data_uri() -> str:
-    """Data URI of the tiny MP4 stub used by the video-understanding probe."""
-    return f"data:video/mp4;base64,{base64.b64encode(_TINY_MP4_BYTES).decode('ascii')}"
+    """Return a data URI containing the validated one-frame MP4 fixture."""
+    return f"data:video/mp4;base64,{base64.b64encode(_tiny_mp4_bytes()).decode('ascii')}"
+
 
 
 def _audio_probe_base64() -> str:
@@ -390,9 +812,8 @@ def _build_capability_probes() -> dict[str, dict[str, Any]]:
 
     Each spec: ``path``, ``content_type``, ``body`` (model_id -> bytes),
     ``validate`` (decoded JSON -> bool), and ``binary_response`` for endpoints
-    that answer with raw media instead of JSON. A tiny synthetic asset is used
-    for media probes; only an HTTP 200 counts as support, so a model that
-    rejects the stub asset is honestly classified unsupported for the contract.
+    that answer with raw media instead of JSON. A deterministic validated media fixture is used for each modality; only an
+    HTTP 200 with the expected response shape counts as contract support.
     """
     return {
         "chat_completion": {
@@ -634,25 +1055,62 @@ def probe_discovered_models(
     clock: Callable[[], float],
     timer: Callable[[], float] = time.perf_counter,
 ) -> list[dict[str, Any]]:
-    """Probe every discovered model across every capability, bounded and ordered.
+    """Probe every model with deterministic allocation and bounded concurrency.
 
-    Concurrency is bounded by ``probe_concurrency``; the shared request budget
-    is enforced per probe, and results are returned sorted by ``model_id`` so
-    provider response-order drift can never reorder the snapshot.
+    The permitted ``(model_id, capability)`` cells are fixed in sorted catalog
+    and capability order before worker threads start. Thread scheduling can
+    change completion order but cannot choose which cells run.
+
+    Args:
+        models: Discovered model rows containing ``model_id`` and ``owned_by``.
+        transport: Provider request seam.
+        endpoint: OpenAI-compatible provider base endpoint.
+        api_key: In-memory credential value, never serialized.
+        request_budget: Shared hard provider-call cap.
+        probe_concurrency: Maximum simultaneous model workers.
+        clock: Provenance timestamp source.
+        timer: Per-probe monotonic latency source.
+
+    Returns:
+        Sorted model rows with complete attempted-or-skipped capability evidence.
+
+    Raises:
+        BenchmarkContractError: If concurrency is boolean or not positive.
     """
-    if probe_concurrency < 1:
+    if (
+        isinstance(probe_concurrency, bool)
+        or not isinstance(probe_concurrency, int)
+        or probe_concurrency < 1
+    ):
         raise BenchmarkContractError("probe_concurrency must be a positive integer")
 
+    sorted_models = sorted(models, key=lambda row: row["model_id"])
+    planned_cells = [
+        (model["model_id"], capability_name)
+        for model in sorted_models
+        for capability_name in CAPABILITY_PROBE_ORDER
+    ]
+    permitted_cells = set(planned_cells[: request_budget.remaining_requests])
+
     def probe_one(model: dict[str, Any]) -> dict[str, Any]:
-        """Probe all capabilities for one model, honoring the shared budget."""
+        """Execute only the preallocated cells for one model."""
         rows: list[dict[str, Any]] = []
         for capability_name in CAPABILITY_PROBE_ORDER:
-            if not request_budget.try_spend():
-                rows.append(_skipped_probe_row(capability_name, "request_budget_exhausted"))
+            cell_key = (model["model_id"], capability_name)
+            if cell_key not in permitted_cells:
+                rows.append(
+                    _skipped_probe_row(capability_name, "request_budget_exhausted")
+                )
                 continue
+            request_budget.spend_or_fail()
             rows.append(
                 execute_capability_probe(
-                    transport, endpoint, api_key, model["model_id"], capability_name, timer
+                    transport,
+                    endpoint,
+                    api_key,
+                    model["model_id"],
+                    capability_name,
+                    timer,
                 )
             )
         classified = classify_model_capabilities(rows)
@@ -666,8 +1124,9 @@ def probe_discovered_models(
         }
 
     with ThreadPoolExecutor(max_workers=probe_concurrency) as executor:
-        results = list(executor.map(probe_one, models))
-    return sorted(results, key=lambda row: row["model_id"])
+        results = list(executor.map(probe_one, sorted_models))
+    return results
+
 
 
 # --------------------------------------------------------------------------
@@ -761,12 +1220,98 @@ def _require_finite_rate(value: Any, label: str) -> float:
     return float(value)
 
 
-def load_pricing_scenario(path: str | None) -> dict[str, Any] | None:
-    """Load and validate the versioned hypothetical price-assumption file.
+_REVIEWED_PRICING_FIELDS = (
+    "source_url",
+    "reviewed_by",
+    "reviewed_at_date",
+    "valid_until_date",
+    "rate_basis",
+    "uncertainty",
+)
 
-    ``None`` (no scenario supplied) is legal: every hypothetical cost then
-    stays ``"unknown"``. Rates are never invented here — only explicit,
-    finite input/output USD-per-million-token pairs are accepted.
+
+def _parse_evidence_date(value: Any, field_name: str) -> datetime_module.date:
+    """Parse one ISO evidence date or raise a field-specific contract error."""
+    if not isinstance(value, str):
+        raise BenchmarkContractError(
+            f"pricing scenario {field_name} must be an ISO date string"
+        )
+    try:
+        return datetime_module.date.fromisoformat(value)
+    except ValueError as exc:
+        raise BenchmarkContractError(
+            f"pricing scenario {field_name} must be a valid ISO date"
+        ) from exc
+
+
+def _validate_reviewed_pricing_metadata(scenario: dict[str, Any]) -> None:
+    """Require complete provenance for a scenario labeled ``reviewed``."""
+    missing = [field for field in _REVIEWED_PRICING_FIELDS if field not in scenario]
+    if missing:
+        raise BenchmarkContractError(
+            f"reviewed pricing scenario is missing fields: {missing}"
+        )
+    parsed_source = urllib.parse.urlparse(str(scenario["source_url"]))
+    if parsed_source.scheme != "https" or not parsed_source.hostname:
+        raise BenchmarkContractError(
+            "reviewed pricing scenario source_url must use https"
+        )
+    for field_name in ("reviewed_by", "rate_basis", "uncertainty"):
+        value = scenario[field_name]
+        if not isinstance(value, str) or not value.strip():
+            raise BenchmarkContractError(
+                f"reviewed pricing scenario {field_name} must be non-empty"
+            )
+    reviewed_at = _parse_evidence_date(scenario["reviewed_at_date"], "reviewed_at_date")
+    valid_until = _parse_evidence_date(scenario["valid_until_date"], "valid_until_date")
+    if valid_until < reviewed_at:
+        raise BenchmarkContractError(
+            "reviewed pricing scenario valid_until_date precedes reviewed_at_date"
+        )
+
+
+def validate_live_pricing_scenario(
+    scenario: dict[str, Any] | None,
+    today: datetime_module.date | None = None,
+) -> None:
+    """Fail before egress when supplied live price evidence is not current.
+
+    Omitting a scenario is valid and leaves every hypothetical cost ``unknown``.
+    Supplying one requires an explicit reviewed status, complete provenance, and
+    a validity horizon that includes the run date.
+    """
+    if scenario is None:
+        return
+    if scenario.get("scenario_status") != "reviewed":
+        raise BenchmarkContractError(
+            "live benchmark pricing scenario must be independently reviewed"
+        )
+    _validate_reviewed_pricing_metadata(scenario)
+    observed_date = today or datetime_module.date.today()
+    reviewed_at = _parse_evidence_date(scenario["reviewed_at_date"], "reviewed_at_date")
+    valid_until = _parse_evidence_date(scenario["valid_until_date"], "valid_until_date")
+    if reviewed_at > observed_date:
+        raise BenchmarkContractError("reviewed pricing evidence is dated in the future")
+    if observed_date > valid_until:
+        raise BenchmarkContractError("reviewed pricing evidence expired")
+
+
+def load_pricing_scenario(path: str | None) -> dict[str, Any] | None:
+    """Load and validate one explicit hypothetical price-assumption file.
+
+    ``None`` is legal and keeps hypothetical costs ``unknown``. Rates are never
+    inferred: only finite non-negative input/output USD-per-million-token values
+    explicitly present in the supplied file are accepted. A scenario labeled
+    ``reviewed`` must also carry complete source and validity metadata.
+
+    Args:
+        path: JSON scenario path, or ``None`` to omit paid-cost assumptions.
+
+    Returns:
+        Validated scenario dictionary or ``None``.
+
+    Raises:
+        BenchmarkContractError: If JSON, status, provenance, or rates are invalid.
     """
     if path is None:
         return None
@@ -774,20 +1319,37 @@ def load_pricing_scenario(path: str | None) -> dict[str, Any] | None:
         try:
             scenario = json.load(handle)
         except ValueError as exc:
-            raise BenchmarkContractError(f"pricing scenario is not valid JSON: {exc}") from exc
-    if not isinstance(scenario, dict) or not isinstance(scenario.get("scenario_version"), str):
-        raise BenchmarkContractError("pricing scenario must be an object with a string 'scenario_version'")
+            raise BenchmarkContractError(
+                f"pricing scenario is not valid JSON: {exc}"
+            ) from exc
+    if not isinstance(scenario, dict) or not isinstance(
+        scenario.get("scenario_version"), str
+    ):
+        raise BenchmarkContractError(
+            "pricing scenario must be an object with a string 'scenario_version'"
+        )
     if scenario.get("scenario_status") not in ("example_unreviewed", "reviewed"):
-        raise BenchmarkContractError("pricing scenario_status must be 'example_unreviewed' or 'reviewed'")
+        raise BenchmarkContractError(
+            "pricing scenario_status must be 'example_unreviewed' or 'reviewed'"
+        )
     rates = scenario.get("usd_per_million_tokens")
     if not isinstance(rates, dict):
-        raise BenchmarkContractError("pricing scenario must carry a 'usd_per_million_tokens' object")
+        raise BenchmarkContractError(
+            "pricing scenario must carry a 'usd_per_million_tokens' object"
+        )
     for model_id, rate in rates.items():
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise BenchmarkContractError("pricing model id must be a non-empty string")
         if not isinstance(rate, dict):
-            raise BenchmarkContractError(f"pricing entry for {model_id!r} must be an object")
+            raise BenchmarkContractError(
+                f"pricing entry for {model_id!r} must be an object"
+            )
         _require_finite_rate(rate.get("input"), f"{model_id}.input")
         _require_finite_rate(rate.get("output"), f"{model_id}.output")
+    if scenario["scenario_status"] == "reviewed":
+        _validate_reviewed_pricing_metadata(scenario)
     return scenario
+
 
 
 def hypothetical_cost_usd(
@@ -1042,95 +1604,122 @@ def evaluate_policies(
     client: ModelClient,
     request_budget: RequestBudget,
     timer: Callable[[], float] = time.perf_counter,
+    total_token_budget: int = 256,
+    maximum_calls: int = MAX_WORKFLOW_DEPTH,
 ) -> dict[str, Any]:
-    """Run every compared policy over the locked split and assemble the cells.
+    """Run every compared policy with equal cell-level token and call budgets.
 
-    Compared systems (identical task set, scorers, caps, and client budgets):
-    per-worker direct baselines (also the source of the best-single-worker-in-
-    hindsight reference), the deterministic ``route_once`` policy, the bounded
-    deep ``conduct`` policy, and the cheapest-scenario-priced-worker baseline.
+    Every policy/task cell receives a fresh orchestrator and limiter so traces,
+    usage, call counts, and allowances never bleed across tasks or policy arms.
+
+    Args:
+        agents: Chat-eligible workers selected from capability probes.
+        manifest: Validated task manifest.
+        pricing_scenario: Optional explicit hypothetical price assumptions.
+        client: Shared request-budgeted model client.
+        request_budget: Complete-run provider request cap.
+        timer: Monotonic latency source.
+        total_token_budget: Equal prompt-plus-completion allowance per cell.
+        maximum_calls: Equal declared provider-call envelope per cell.
+
+    Returns:
+        Evaluation cells and pool/task metadata.
+
+    Raises:
+        BenchmarkContractError: If no workers or locked tasks are available.
+        BenchmarkBudgetError: If the complete evaluation cannot fit the run cap.
     """
     if not agents:
-        raise BenchmarkContractError("policy evaluation requires at least one chat-eligible worker")
+        raise BenchmarkContractError(
+            "policy evaluation requires at least one chat-eligible worker"
+        )
     tasks = locked_evaluation_tasks(manifest)
     if not tasks:
         raise BenchmarkContractError("task manifest has no locked evaluation tasks")
     planned = planned_evaluation_requests(len(agents), len(tasks))
-    remaining = request_budget.max_total_requests - request_budget.requests_spent
-    if planned > remaining:
+    if planned > request_budget.remaining_requests:
         raise BenchmarkBudgetError(
-            f"planned evaluation needs up to {planned} requests but only {remaining} remain in the budget"
+            f"planned evaluation needs up to {planned} requests but only "
+            f"{request_budget.remaining_requests} remain in the budget"
         )
 
     agents_by_id = {agent.id: agent.model for agent in agents}
-    depth_policy = dataclasses.replace(OrchestrationPolicy(), max_workflow_steps=MAX_WORKFLOW_DEPTH)
+    depth_policy = dataclasses.replace(
+        OrchestrationPolicy(),
+        max_workflow_steps=MAX_WORKFLOW_DEPTH,
+    )
 
-    def fresh_orchestrator(pool: list[ModelAgent]) -> TaskOrchestrator:
-        """One orchestrator per policy arm so spend/trace never bleed across arms."""
-        orchestrator = TaskOrchestrator(pool, client=client)
+    def run_cell(
+        policy_name: str,
+        task: dict[str, Any],
+        pool: list[ModelAgent],
+        mode: str,
+    ) -> dict[str, Any]:
+        """Run one independent policy/task cell and append budget evidence."""
+        cell_client = EqualBudgetModelClient(
+            client,
+            total_token_budget,
+            maximum_calls,
+        )
+        orchestrator = TaskOrchestrator(pool, client=cell_client)
         orchestrator.policy = depth_policy
-        return orchestrator
+        cell = run_policy_cell(
+            policy_name,
+            task,
+            lambda: orchestrator.complete(
+                [{"role": "user", "content": task["prompt"]}],
+                mode=mode,
+            ),
+            agents_by_id,
+            pricing_scenario,
+            timer,
+        )
+        cell.update(
+            {
+                "configured_total_token_budget": total_token_budget,
+                "configured_maximum_calls": maximum_calls,
+                "observed_budget_tokens": cell_client.observed_tokens,
+                "observed_budget_calls": cell_client.observed_calls,
+                "remaining_budget_tokens": cell_client.remaining_tokens,
+            }
+        )
+        if cell_client.exceeded:
+            cell["run_outcome"] = "failure"
+            cell["outcome_reason"] = "observed_usage_exceeded_equal_token_budget"
+            cell["task_score"] = None
+        return cell
 
     cells: list[dict[str, Any]] = []
     for agent in agents:
-        single = fresh_orchestrator([agent])
         for task in tasks:
             cells.append(
-                run_policy_cell(
+                run_cell(
                     f"direct_single_worker:{agent.model}",
                     task,
-                    lambda single=single, task=task: single.complete(
-                        [{"role": "user", "content": task["prompt"]}], mode="route"
-                    ),
-                    agents_by_id,
-                    pricing_scenario,
-                    timer,
+                    [agent],
+                    "route",
                 )
             )
-    pool_router = fresh_orchestrator(agents)
-    pool_conductor = fresh_orchestrator(agents)
     for task in tasks:
-        cells.append(
-            run_policy_cell(
-                "route_once",
-                task,
-                lambda task=task: pool_router.complete([{"role": "user", "content": task["prompt"]}], mode="route"),
-                agents_by_id,
-                pricing_scenario,
-                timer,
-            )
-        )
-        cells.append(
-            run_policy_cell(
-                "conduct_bounded",
-                task,
-                lambda task=task: pool_conductor.complete(
-                    [{"role": "user", "content": task["prompt"]}], mode="conduct"
-                ),
-                agents_by_id,
-                pricing_scenario,
-                timer,
-            )
-        )
+        cells.append(run_cell("route_once", task, agents, "route"))
+        cells.append(run_cell("conduct_bounded", task, agents, "conduct"))
+
     cheapest_skip_reason = None
     cheapest = cheapest_priced_agent(agents, pricing_scenario)
     if cheapest is None:
         cheapest_skip_reason = (
-            "no_pricing_scenario_supplied" if pricing_scenario is None else "no_worker_priced_by_scenario"
+            "no_pricing_scenario_supplied"
+            if pricing_scenario is None
+            else "no_worker_priced_by_scenario"
         )
     else:
-        cheapest_orchestrator = fresh_orchestrator([cheapest])
         for task in tasks:
             cells.append(
-                run_policy_cell(
+                run_cell(
                     "cheapest_eligible_worker",
                     task,
-                    lambda task=task: cheapest_orchestrator.complete(
-                        [{"role": "user", "content": task["prompt"]}], mode="route"
-                    ),
-                    agents_by_id,
-                    pricing_scenario,
-                    timer,
+                    [cheapest],
+                    "route",
                 )
             )
     cells.sort(key=lambda cell: (cell["policy_name"], cell["task_id"]))
@@ -1140,6 +1729,7 @@ def evaluate_policies(
         "locked_task_count": len(tasks),
         "worker_count": len(agents),
     }
+
 
 
 # --------------------------------------------------------------------------
@@ -1289,6 +1879,108 @@ def build_pareto_frontiers(summaries: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
+    """Require complete official provenance for the zero access-cost claim."""
+    evidence = report.get("actual_cost_evidence")
+    if not isinstance(evidence, dict):
+        raise BenchmarkContractError(
+            "benchmark report is missing actual_cost_evidence"
+        )
+    required_fields = (
+        "evidence_schema_version",
+        "source_title",
+        "source_url",
+        "reviewed_at_date",
+        "valid_until_date",
+        "access_program",
+        "access_scope",
+        "production_access_note",
+        "actual_cost_usd",
+        "uncertainty",
+    )
+    missing = [field for field in required_fields if field not in evidence]
+    if missing:
+        raise BenchmarkContractError(
+            f"actual cost evidence is missing fields: {missing}"
+        )
+    if evidence["actual_cost_usd"] != 0.0:
+        raise BenchmarkContractError(
+            "actual cost evidence must preserve the reviewed zero-cost value"
+        )
+    if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/product":
+        raise BenchmarkContractError(
+            "actual cost evidence must cite the reviewed NVIDIA NIM General FAQ"
+        )
+    reviewed_at = _parse_evidence_date(evidence["reviewed_at_date"], "reviewed_at_date")
+    valid_until = _parse_evidence_date(evidence["valid_until_date"], "valid_until_date")
+    if valid_until < reviewed_at:
+        raise BenchmarkContractError(
+            "actual cost evidence validity precedes its review date"
+        )
+
+
+def _require_current_actual_cost_evidence(
+    today: datetime_module.date | None = None,
+) -> None:
+    """Fail closed after the reviewed hosted-access validity horizon."""
+    observed_date = today or datetime_module.date.today()
+    reviewed_at = _parse_evidence_date(
+        ACTUAL_COST_EVIDENCE["reviewed_at_date"],
+        "reviewed_at_date",
+    )
+    valid_until = _parse_evidence_date(
+        ACTUAL_COST_EVIDENCE["valid_until_date"],
+        "valid_until_date",
+    )
+    if observed_date < reviewed_at:
+        raise BenchmarkContractError(
+            "reviewed NVIDIA hosted-endpoint cost evidence is dated in the future"
+        )
+    if observed_date > valid_until:
+        raise BenchmarkContractError(
+            "reviewed NVIDIA hosted-endpoint cost evidence expired; "
+            "re-review official terms"
+        )
+
+
+def _evaluation_evidence_summary(
+    cells: list[dict[str, Any]],
+    locked_task_count: int,
+) -> dict[str, Any]:
+    """Classify whether benchmark evidence can inform production review."""
+    successful_cells = [cell for cell in cells if cell["run_outcome"] == "success"]
+    completion_fraction = (
+        round(len(successful_cells) / len(cells), 6) if cells else 0.0
+    )
+    successful_tasks_by_policy: dict[str, set[str]] = {}
+    for cell in successful_cells:
+        successful_tasks_by_policy.setdefault(cell["policy_name"], set()).add(
+            cell["task_id"]
+        )
+    paired_task_ids = successful_tasks_by_policy.get("route_once", set()) & (
+        successful_tasks_by_policy.get("conduct_bounded", set())
+    )
+    sufficient = (
+        locked_task_count >= MINIMUM_PAIRED_TASK_COUNT
+        and len(paired_task_ids) >= MINIMUM_PAIRED_TASK_COUNT
+        and completion_fraction >= REQUIRED_COMPLETION_FRACTION
+    )
+    return {
+        "evidence_status": (
+            "evidence_review_required" if sufficient else "insufficient_evidence"
+        ),
+        "decision_use": (
+            "production_candidate_review" if sufficient else "benchmark_smoke_only"
+        ),
+        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
+        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
+        "observed_locked_task_count": locked_task_count,
+        "observed_paired_task_count": len(paired_task_ids),
+        "observed_completion_fraction": completion_fraction,
+        "routing_recommendation": None,
+    }
+
+
 # --------------------------------------------------------------------------
 # Provenance, report schema, artifacts
 # --------------------------------------------------------------------------
@@ -1348,8 +2040,14 @@ _REPORT_REQUIRED_PATHS = (
     "evaluation.policy_summaries",
     "evaluation.paired_comparisons",
     "evaluation.pareto_frontiers",
+    "evaluation.evidence_status",
+    "evaluation.decision_use",
+    "evaluation.minimum_paired_task_count",
+    "evaluation.required_completion_fraction",
+    "evaluation.routing_recommendation",
     "request_budget.max_total_requests",
     "request_budget.requests_spent",
+    "actual_cost_evidence",
     "honesty_labels.actual_cost_basis",
     "honesty_labels.provider_latency_source",
 )
@@ -1386,6 +2084,11 @@ _CSV_CELL_COLUMNS = (
     "completion_tokens",
     "total_tokens",
     "token_usage_source",
+    "configured_total_token_budget",
+    "configured_maximum_calls",
+    "observed_budget_tokens",
+    "observed_budget_calls",
+    "remaining_budget_tokens",
     "actual_cost_usd",
     "hypothetical_cost_usd",
     "response_sha256",
@@ -1400,7 +2103,7 @@ def _ensure_secret_absent(serialized: str) -> None:
 
 
 def render_markdown_summary(report: dict[str, Any]) -> str:
-    """Human-readable Markdown summary of one benchmark run."""
+    """Render a buyer-readable summary with evidence and cost caveats."""
     lines = [
         "# NIM cost-quality benchmark summary",
         "",
@@ -1411,6 +2114,8 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         f"- discovered models: {report['catalog_snapshot']['discovered_model_count']}",
         f"- requests spent: {report['request_budget']['requests_spent']}"
         f" / {report['request_budget']['max_total_requests']}",
+        f"- evidence status: `{report['evaluation']['evidence_status']}`",
+        f"- decision use: `{report['evaluation']['decision_use']}`",
         "",
         "## Capability classifications",
         "",
@@ -1428,8 +2133,9 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
     ]
     for row in report["evaluation"]["policy_summaries"]:
         lines.append(
-            f"| {row['policy_name']} | {row['mean_task_score']} | {row['mean_latency_ms']} "
-            f"| {row['mean_hypothetical_cost_usd']} | {row['actual_cost_usd']} |"
+            f"| {row['policy_name']} | {row['mean_task_score']} | "
+            f"{row['mean_latency_ms']} | {row['mean_hypothetical_cost_usd']} "
+            f"| {row['actual_cost_usd']} |"
         )
     lines += ["", "## Paired comparisons (95% bootstrap CI)", ""]
     for comparison in report["evaluation"]["paired_comparisons"]:
@@ -1438,7 +2144,27 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
             f"mean diff {comparison['mean_difference']} "
             f"[{comparison['ci_low']}, {comparison['ci_high']}]"
         )
+    evidence = report["actual_cost_evidence"]
     lines += [
+        "",
+        "## Evidence sufficiency",
+        "",
+        f"- paired tasks: {report['evaluation']['observed_paired_task_count']} "
+        f"/ {report['evaluation']['minimum_paired_task_count']} required",
+        f"- completion fraction: {report['evaluation']['observed_completion_fraction']} "
+        f"/ {report['evaluation']['required_completion_fraction']} required",
+        "- production routing recommendation: none"
+        if report["evaluation"]["routing_recommendation"] is None
+        else f"- production routing recommendation: {report['evaluation']['routing_recommendation']}",
+        "",
+        "## Actual API access-cost evidence",
+        "",
+        f"- source: {evidence['source_title']}",
+        f"- reviewed: {evidence['reviewed_at_date']}",
+        f"- valid until: {evidence['valid_until_date']}",
+        f"- access context: {evidence['access_program']} — {evidence['access_scope']}",
+        f"- production distinction: {evidence['production_access_note']}",
+        f"- uncertainty: {evidence['uncertainty']}",
         "",
         "## Honesty labels",
         "",
@@ -1450,8 +2176,13 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def write_benchmark_artifacts(report: dict[str, Any], output_dir: str) -> dict[str, str]:
-    """Validate the report schema, then write the JSON/CSV/Markdown artifacts."""
+
+def write_benchmark_artifacts(
+    report: dict[str, Any],
+    output_dir: str,
+) -> dict[str, str]:
+    """Validate cost evidence and schema, then write JSON, CSV, and Markdown."""
+    _validate_actual_cost_evidence(report)
     validate_report_schema(report)
     os.makedirs(output_dir, exist_ok=True)
     json_text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
@@ -1462,7 +2193,11 @@ def write_benchmark_artifacts(report: dict[str, Any], output_dir: str) -> dict[s
 
     csv_path = os.path.join(output_dir, "benchmark_cells.csv")
     csv_buffer = io.StringIO()
-    writer = csv.DictWriter(csv_buffer, fieldnames=_CSV_CELL_COLUMNS, extrasaction="ignore")
+    writer = csv.DictWriter(
+        csv_buffer,
+        fieldnames=_CSV_CELL_COLUMNS,
+        extrasaction="ignore",
+    )
     writer.writeheader()
     for cell in report["evaluation"]["evaluation_cells"]:
         writer.writerow(cell)
@@ -1476,7 +2211,12 @@ def write_benchmark_artifacts(report: dict[str, Any], output_dir: str) -> dict[s
     markdown_path = os.path.join(output_dir, "benchmark_summary.md")
     with open(markdown_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(markdown_text)
-    return {"json_path": json_path, "csv_path": csv_path, "markdown_path": markdown_path}
+    return {
+        "json_path": json_path,
+        "csv_path": csv_path,
+        "markdown_path": markdown_path,
+    }
+
 
 
 # --------------------------------------------------------------------------
@@ -1494,7 +2234,7 @@ def assemble_benchmark_report(
     provenance_inputs: dict[str, Any],
     seed: int,
 ) -> dict[str, Any]:
-    """Assemble the full schema-validated report from the pipeline outputs."""
+    """Assemble and validate the complete evidence-grade benchmark report."""
     cells = evaluation["evaluation_cells"]
     summaries = summarize_policies(cells)
     capability_summary: dict[str, int] = {}
@@ -1509,6 +2249,10 @@ def assemble_benchmark_report(
         "invalid_entries": catalog["invalid_entries"],
         "probed_models": probed_models,
     }
+    evidence_summary = _evaluation_evidence_summary(
+        cells,
+        evaluation["locked_task_count"],
+    )
     report = {
         "benchmark_schema_version": BENCHMARK_SCHEMA_VERSION,
         "provenance": build_provenance(
@@ -1528,23 +2272,39 @@ def assemble_benchmark_report(
             "best_single_worker_hindsight": best_single_worker_hindsight(summaries),
             "paired_comparisons": paired_policy_comparisons(cells, seed=seed),
             "pareto_frontiers": build_pareto_frontiers(summaries),
-            "cheapest_worker_skip_reason": evaluation["cheapest_worker_skip_reason"],
+            "cheapest_worker_skip_reason": evaluation[
+                "cheapest_worker_skip_reason"
+            ],
             "locked_task_count": evaluation["locked_task_count"],
             "worker_count": evaluation["worker_count"],
+            **evidence_summary,
         },
         "request_budget": {
             "max_total_requests": request_budget.max_total_requests,
             "requests_spent": request_budget.requests_spent,
         },
+        "actual_cost_evidence": dict(ACTUAL_COST_EVIDENCE),
         "honesty_labels": {
-            "actual_cost_basis": "hosted_nim_catalog_free_to_caller_actual_cost_zero",
-            "provider_latency_source": "not_observable_via_openai_compatible_body",
-            "hypothetical_cost_source": "explicit_versioned_pricing_scenario_or_unknown",
-            "dry_run_scores_note": "dry-run scores reflect deterministic mock echoes, not model quality",
+            "actual_cost_basis": (
+                "deterministic_dry_run_no_provider_egress"
+                if run_mode == "dry_run"
+                else "reviewed_nvidia_developer_program_hosted_endpoint_access"
+            ),
+            "provider_latency_source": (
+                "not_observable_via_openai_compatible_body"
+            ),
+            "hypothetical_cost_source": (
+                "explicit_versioned_pricing_scenario_or_unknown"
+            ),
+            "dry_run_scores_note": (
+                "dry-run scores reflect deterministic mock echoes, not model quality"
+            ),
         },
     }
+    _validate_actual_cost_evidence(report)
     validate_report_schema(report)
     return report
+
 
 
 # --------------------------------------------------------------------------
@@ -1674,36 +2434,67 @@ def run_benchmark(
     workflow_run_id: str = "",
     transport: ProviderTransport | None = None,
 ) -> dict[str, Any]:
-    """Run the full benchmark pipeline in ``dry_run`` or ``live`` mode.
+    """Run the complete benchmark in deterministic dry or evidence-gated live mode.
 
-    Dry runs use the in-process synthetic provider, mock evaluation workers,
-    a fixed clock, and a deterministic timer; live runs require the KV-backed
-    ``NVIDIA_NIM_API_KEY`` credential and complete provenance, and go through
-    the egress-validated HTTPS transport. Both share every validation, probe,
-    evaluation, statistics, and artifact code path.
+    Live evidence, optional paid-price provenance, and run identity are validated
+    before any provider transport can execute. Dry runs use an in-process provider
+    and never need or read the NVIDIA credential.
+
+    Args:
+        run_mode: ``dry_run`` or ``live``.
+        task_manifest_path: Versioned locked/exploratory task manifest.
+        pricing_scenario_path: Optional explicit hypothetical pricing scenario.
+        output_dir: Destination for JSON, CSV, and Markdown artifacts.
+        endpoint: OpenAI-compatible provider endpoint.
+        max_total_requests: Complete-run provider request cap.
+        probe_concurrency: Maximum concurrent model probe workers.
+        timeout_seconds: Per-address network timeout.
+        max_output_tokens: Equal per-cell prompt-plus-completion token budget.
+        max_eval_models: Maximum chat-eligible workers in policy evaluation.
+        seed: Deterministic bootstrap seed.
+        git_sha: Exact source revision, required live.
+        workflow_run_id: Workflow provenance identifier, required live.
+        transport: Optional injected provider transport for deterministic tests.
+
+    Returns:
+        Complete report including written artifact paths.
+
+    Raises:
+        BenchmarkContractError: If mode, evidence, or parameters are invalid.
+        NotConfigured: If a live run cannot resolve its KV credential.
     """
     if run_mode not in ("dry_run", "live"):
-        raise BenchmarkContractError(f"run_mode must be 'dry_run' or 'live', not {run_mode!r}")
+        raise BenchmarkContractError(
+            f"run_mode must be 'dry_run' or 'live', not {run_mode!r}"
+        )
     manifest = load_task_manifest(task_manifest_path)
     pricing_scenario = load_pricing_scenario(pricing_scenario_path)
+    if run_mode == "live":
+        if not git_sha or not workflow_run_id:
+            raise BenchmarkContractError(
+                "live runs require --git-sha and --workflow-run-id provenance"
+            )
+        _require_current_actual_cost_evidence()
+        validate_live_pricing_scenario(pricing_scenario)
     request_budget = RequestBudget(max_total_requests)
 
     if run_mode == "dry_run":
         api_key = "dry-run-placeholder-not-a-secret"
         active_transport = transport or build_dry_run_transport()
         clock: Callable[[], float] = lambda: DRY_RUN_FIXED_UNIX_TIME
-        # Zero probe timer: probes run concurrently, so a counting timer would
-        # make latencies depend on thread interleaving and break determinism.
         probe_timer: Callable[[], float] = lambda: 0.0
         timer = _deterministic_timer()
         eval_base_url = "mock://nim-dry-run"
-        eval_client: ModelClient = _BudgetedModelClient(request_budget)
+        eval_client: ModelClient = _BudgetedModelClient(
+            request_budget,
+            max_output_tokens=max_output_tokens,
+        )
     else:
         api_key = get_credential(NIM_CREDENTIAL_NAME) or ""
         if not api_key:
             raise NotConfigured(
-                f"live benchmark requires the '{NIM_CREDENTIAL_NAME}' credential in the KV; "
-                "seed it via `register-credential` bootstrap (never argv)"
+                f"live benchmark requires the '{NIM_CREDENTIAL_NAME}' credential "
+                "in the KV; seed it via register-credential bootstrap (never argv)"
             )
         active_transport = transport or build_default_transport(timeout_seconds)
         clock = time.time
@@ -1711,7 +2502,9 @@ def run_benchmark(
         timer = time.perf_counter
         eval_base_url = endpoint
         eval_client = _BudgetedModelClient(
-            request_budget, timeout=int(timeout_seconds), max_output_tokens=max_output_tokens
+            request_budget,
+            timeout=int(timeout_seconds),
+            max_output_tokens=max_output_tokens,
         )
 
     benchmark_parameters = {
@@ -1722,17 +2515,47 @@ def run_benchmark(
         "max_output_tokens": max_output_tokens,
         "max_eval_models": max_eval_models,
         "max_workflow_depth": MAX_WORKFLOW_DEPTH,
+        "policy_total_token_budget": max_output_tokens,
+        "policy_maximum_calls": MAX_WORKFLOW_DEPTH,
+        "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
+        "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
         "seed": seed,
         "task_manifest_version": manifest["manifest_version"],
-        "pricing_scenario_version": pricing_scenario["scenario_version"] if pricing_scenario else None,
+        "pricing_scenario_version": (
+            pricing_scenario["scenario_version"] if pricing_scenario else None
+        ),
+        "pricing_scenario_status": (
+            pricing_scenario["scenario_status"] if pricing_scenario else None
+        ),
     }
 
-    catalog = discover_model_catalog(active_transport, endpoint, api_key, request_budget)
+    catalog = discover_model_catalog(
+        active_transport,
+        endpoint,
+        api_key,
+        request_budget,
+    )
     probed_models = probe_discovered_models(
-        catalog["models"], active_transport, endpoint, api_key, request_budget, probe_concurrency, clock, probe_timer
+        catalog["models"],
+        active_transport,
+        endpoint,
+        api_key,
+        request_budget,
+        probe_concurrency,
+        clock,
+        probe_timer,
     )
     agents = build_worker_agents(probed_models, eval_base_url, max_eval_models)
-    evaluation = evaluate_policies(agents, manifest, pricing_scenario, eval_client, request_budget, timer)
+    evaluation = evaluate_policies(
+        agents,
+        manifest,
+        pricing_scenario,
+        eval_client,
+        request_budget,
+        timer,
+        total_token_budget=max_output_tokens,
+        maximum_calls=MAX_WORKFLOW_DEPTH,
+    )
     report = assemble_benchmark_report(
         run_mode,
         endpoint,
@@ -1751,6 +2574,7 @@ def run_benchmark(
     )
     report["artifact_paths"] = write_benchmark_artifacts(report, output_dir)
     return report
+
 
 
 def _bootstrap_live_credential() -> None:
