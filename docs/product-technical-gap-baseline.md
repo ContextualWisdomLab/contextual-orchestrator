@@ -1,5 +1,38 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-28 21:20 KST PR #901 ZDR batch omitted-model evidence slice
+
+`gh api user`, `gh pr view 901`, and the review-thread GraphQL query all
+succeeded on August 28, 2026. Live PR `#901`
+(`fix/zdr-only-dynamic-discovery`, exact head `d07b4a70bf7dc23e19a9d7c92daaf6e61584c108`)
+already covers the earlier ZDR routing defects that had active review threads:
+caller-supplied group filtering, generated-plan ZDR revalidation, batch model
+selection error normalization, and duplicate-model embedding identity. The
+remaining protected block is external: `opencode-review` is still fail-closed
+pending a current-head verdict, while the last `strix` failure on this branch
+reported `STRIX_PROVIDER_UNAVAILABLE` rather than a repository finding.
+
+The existing `.worktrees/commercial-loop-20260828-pr901-fix` worktree was
+reconciled before new edits. It is 38 commits behind the live PR head and its
+only unpublished useful delta is an omitted-model batch embeddings regression
+test plus an older baseline note. That behavior proof was ported onto a fresh
+worktree rooted at the current PR head instead of reviving the diverged branch.
+
+This slice closes one bounded evidence gap in the highest-leverage open product
+area: `POST /v1/batch/embeddings` with omitted `model` and `"zdr_only": true`
+now has an explicit loopback HTTP regression test proving the gateway selects
+the ZDR-capable embedding member rather than a higher-priority non-ZDR peer.
+The seeded contract server already carried persisted `privacy:zdr` evidence, so
+the change is a missing acceptance test, not a runtime behavior change.
+
+Exact verification on the current-head worktree:
+
+- `uv pip install --python .venv/bin/python -r requirements.lock` → restored the locked runtime packages for the fresh worktree venv.
+- `uv pip install --python .venv/bin/python -r requirements-opencode-review-ci.txt` → installed the repository's pinned pytest toolchain for focused validation.
+- `uv run --python .venv/bin/python -m pytest -q tests/test_batch_embeddings.py -k 'naruon_contract or zdr_only or omitted_model'` → `2 passed, 6 deselected in 8.40s`
+- `uv run --python .venv/bin/python -m pytest -q tests/test_cost_router.py -k 'zdr_only or duplicate_model'` → `1 passed, 24 deselected in 6.77s`
+- `uv run --python .venv/bin/python -m pytest -q tests/test_model_group.py -k 'zdr_only or duplicate_model'` → `4 passed, 24 deselected in 6.84s`
+
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 
 Protected `main` briefly carried a merge-order regression from PR #891 merged

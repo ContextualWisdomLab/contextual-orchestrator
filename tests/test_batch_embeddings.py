@@ -259,6 +259,38 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         server.shutdown()
 
 
+def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_agent() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("plain_embedding", "plain-embedding", tags=("embedding",), priority=10),
+            ModelAgent(
+                "zdr_embedding",
+                "zdr-embedding",
+                tags=("embedding", "privacy:zdr"),
+                priority=1,
+            ),
+        ]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+    token = "zdr_batch_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}/v1/batch/embeddings",
+            token,
+            {"inputs": ["alpha", "beta"], "zdr_only": True},
+        )
+        assert status == 200, body
+        assert body["model"] == "zdr-embedding"
+    finally:
+        server.shutdown()
+
+
 def test_pending_batch_preserves_resolved_model_identity() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
     coordinator = CostRoutingCoordinator(
