@@ -85,6 +85,11 @@ DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
 DRY_RUN_FIXED_UNIX_TIME = 1767225600.0
 # Issue contract: Conductor/TRINITY-style deep paths are capped at five steps.
 MAX_WORKFLOW_DEPTH = 5
+# Provider output remains capped at 256 tokens by default. The equal cell-wide
+# prompt-plus-completion budget scales with the maximum five-call envelope so a
+# fixed conduct workflow can carry its prompts without being starved.
+DEFAULT_MAX_OUTPUT_TOKENS = 256
+DEFAULT_POLICY_TOTAL_TOKEN_BUDGET = MAX_WORKFLOW_DEPTH * DEFAULT_MAX_OUTPUT_TOKENS
 # Bound every provider response before materializing it in memory. Eight MiB is
 # ample for model catalogs, JSON probe responses, and the deliberately tiny
 # benchmark media outputs while preventing a provider from returning an
@@ -1784,7 +1789,7 @@ def evaluate_policies(
     client: ModelClient,
     request_budget: RequestBudget,
     timer: Callable[[], float] = time.perf_counter,
-    total_token_budget: int = 256,
+    total_token_budget: int = DEFAULT_POLICY_TOTAL_TOKEN_BUDGET,
     maximum_calls: int = MAX_WORKFLOW_DEPTH,
 ) -> dict[str, Any]:
     """Run every compared policy with equal cell-level token and call budgets.
@@ -2644,7 +2649,7 @@ def run_benchmark(
     max_total_requests: int = 2000,
     probe_concurrency: int = 4,
     timeout_seconds: float = 60.0,
-    max_output_tokens: int = 256,
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     max_eval_models: int = 7,
     seed: int = 7,
     git_sha: str = "",
@@ -2666,7 +2671,9 @@ def run_benchmark(
         max_total_requests: Complete-run provider request cap.
         probe_concurrency: Maximum concurrent model probe workers.
         timeout_seconds: Per-address network timeout.
-        max_output_tokens: Equal per-cell prompt-plus-completion token budget.
+        max_output_tokens: Per-provider-call output-token cap. The equal
+            cell-wide prompt-plus-completion budget is this value multiplied
+            by ``MAX_WORKFLOW_DEPTH``.
         max_eval_models: Maximum chat-eligible workers in policy evaluation.
         seed: Deterministic bootstrap seed.
         git_sha: Exact source revision, required live.
@@ -2743,7 +2750,7 @@ def run_benchmark(
         "max_output_tokens": max_output_tokens,
         "max_eval_models": max_eval_models,
         "max_workflow_depth": MAX_WORKFLOW_DEPTH,
-        "policy_total_token_budget": max_output_tokens,
+        "policy_total_token_budget": max_output_tokens * MAX_WORKFLOW_DEPTH,
         "policy_maximum_calls": MAX_WORKFLOW_DEPTH,
         "minimum_paired_task_count": MINIMUM_PAIRED_TASK_COUNT,
         "required_completion_fraction": REQUIRED_COMPLETION_FRACTION,
@@ -2811,7 +2818,7 @@ def run_benchmark(
         eval_client,
         request_budget,
         timer,
-        total_token_budget=max_output_tokens,
+        total_token_budget=max_output_tokens * MAX_WORKFLOW_DEPTH,
         maximum_calls=MAX_WORKFLOW_DEPTH,
     )
     report = assemble_benchmark_report(
@@ -2865,7 +2872,7 @@ def run_benchmark_cli(argv: list[str]) -> int:
     parser.add_argument("--max-total-requests", type=int, default=2000)
     parser.add_argument("--probe-concurrency", type=int, default=4)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
-    parser.add_argument("--max-output-tokens", type=int, default=256)
+    parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
     parser.add_argument("--max-eval-models", type=int, default=7)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--git-sha", default="", help="Provenance: the exact commit under benchmark (required live).")

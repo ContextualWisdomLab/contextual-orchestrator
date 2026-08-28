@@ -974,9 +974,14 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     assert evaluation["cheapest_worker_skip_reason"] is None
     conduct_cells = [cell for cell in cells if cell["policy_name"] == "conduct_bounded"]
     assert all(cell["workflow_depth"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
-    assert all(cell["configured_total_token_budget"] == 256 for cell in conduct_cells)
+    assert all(
+        cell["configured_total_token_budget"]
+        == nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
+        for cell in conduct_cells
+    )
     assert all(cell["configured_maximum_calls"] == nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
     assert all(cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
+    assert all(cell["run_outcome"] == "success" for cell in conduct_cells)
     assert cells == sorted(cells, key=lambda cell: (cell["policy_name"], cell["task_id"]))
     assert budget.requests_spent > 0
 

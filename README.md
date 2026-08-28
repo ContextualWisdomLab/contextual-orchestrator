@@ -292,7 +292,8 @@ embeddings, image/video/audio understanding, transcription, and speech; compares
 direct, route-once, and bounded-conduct cells under one equal total-token and
 call budget; records paired uncertainty and Pareto frontiers; and keeps reviewed
 actual endpoint-access evidence separate from optional hypothetical paid rates.
-The bundled manifest is smoke-sized and reports `insufficient_evidence`; no
+The bundled manifest is smoke-sized and reports `evidence_review_required` only
+after its paired cells complete; `routing_recommendation` remains null and no
 benchmark artifact automatically changes production routing.
 
 The adapter is lazy and optional: ordinary `import contextual_orchestrator` does

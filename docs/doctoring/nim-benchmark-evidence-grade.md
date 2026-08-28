@@ -105,7 +105,8 @@ Direct single-worker, `route_once`, bounded `conduct`, and reviewed
 cheapest-worker cells receive the same per-task contract:
 
 - one locked task and scorer version;
-- one total prompt-plus-completion token allowance;
+- one equal cell-wide prompt-plus-completion token allowance, set to five times
+  the per-provider-call output cap by default (`1,280` tokens);
 - one five-call maximum envelope;
 - one timeout policy; and
 - one workflow-depth ceiling.
