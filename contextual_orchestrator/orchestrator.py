@@ -16,6 +16,7 @@ import http.client
 import io
 import ipaddress
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -41,7 +42,11 @@ from .chat_capability import (
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .release_authorization import evaluate_release_authorization
-from .model_group import ModelGroupRouter, canonical_group_name
+from .model_group import (
+    ModelGroupRouter,
+    RoutingObservationPersistenceError,
+    canonical_group_name,
+)
 from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
@@ -97,6 +102,8 @@ _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "URLError",
     "ValueError",
 })
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _safe_provider_probe_error_type(exc: Exception) -> str:
@@ -4064,24 +4071,48 @@ class TaskOrchestrator:
                 yield delta
         except Exception:
             if agent.group_name or model_name == self.FREE_MODEL:
-                self._group_router.observe_failure(agent.id)
+                try:
+                    self._group_router.observe_failure(agent.id)
+                except RoutingObservationPersistenceError:
+                    _LOGGER.error(
+                        "durable routing observation failed after streamed provider failure"
+                    )
             raise
         if agent.group_name or model_name == self.FREE_MODEL:
-            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            try:
+                self._group_router.observe_success(
+                    agent.id, time.perf_counter() - started_at
+                )
+            except RoutingObservationPersistenceError:
+                # ponytail: preserve an already-emitted stream; surface the
+                # degraded durable-evidence state through the structured log.
+                _LOGGER.error(
+                    "durable routing observation failed after streamed response completion"
+                )
         answer = "".join(parts)
         # Real-time judging after the stream: already-sent bytes cannot be
         # recalled, so the verdict never changes this response -- it feeds the
         # quality ledger so measured accuracy steers future member ordering,
         # and it is persisted for audit.
         latency_seconds = time.perf_counter() - started_at
-        verification = self._realtime_route_judge(
-            text=text,
-            answer=answer,
-            served_id=agent.id,
-            latency_seconds=latency_seconds,
-            usage=None,
-            free_only=model_name == self.FREE_MODEL,
-        )
+        try:
+            verification = self._realtime_route_judge(
+                text=text,
+                answer=answer,
+                served_id=agent.id,
+                latency_seconds=latency_seconds,
+                usage=None,
+                free_only=model_name == self.FREE_MODEL,
+            )
+        except RoutingObservationPersistenceError:
+            _LOGGER.error(
+                "durable routing observation failed after streamed response completion"
+            )
+            verification = {
+                "accepted": False,
+                "reason": "routing observation persistence failed after stream completion",
+                "verifier_output": "",
+            }
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",

@@ -181,6 +181,31 @@ def test_measured_member_order_refreshes_each_ledger_once(tmp_path, monkeypatch)
         orchestrator.close()
 
 
+def test_stream_preserves_emitted_answer_when_observation_write_fails(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("member_a", "mock-model", group_name="shared_model")],
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+
+    def fail_append(*args, **kwargs):
+        raise OSError("simulated storage outage")
+
+    try:
+        monkeypatch.setattr(orchestrator._routing_observation_store, "append", fail_append)
+        assert list(
+            orchestrator.stream_route(
+                [{"role": "user", "content": "stream this"}],
+                model_name="contextual-orchestrator",
+            )
+        )
+        assert "durable routing observation failed" in caplog.text
+    finally:
+        orchestrator.close()
+
+
 def test_router_rejects_incomplete_store_contract() -> None:
     with pytest.raises(TypeError):
         ModelGroupRouter(observation_store=object())  # type: ignore[arg-type]

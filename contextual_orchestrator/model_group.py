@@ -56,6 +56,10 @@ UNOBSERVED_MEMBER_SCORE = BETA_PRIOR_SUCCESS_COUNT / (
 _GROUP_NAME_NORMALIZE_RE = re.compile(r"[-\s]+")
 
 
+class RoutingObservationPersistenceError(RuntimeError):
+    """A configured durable routing observation could not be recorded."""
+
+
 def canonical_group_name(raw_name: str) -> str:
     """Normalize a group alias to its canonical snake_case name.
 
@@ -225,25 +229,46 @@ class ModelGroupRouter:
             raise ValueError("output_tokens must be representable as a finite float") from None
         if throughput_sample is not None and not math.isfinite(throughput_sample):
             raise ValueError("output_tokens must be representable as a finite float")
-        if self._observation_store is not None:
-            self._observation_store.append(
-                self._ledger_name,
-                member_id,
-                success=True,
-                latency_seconds=latency,
-                output_tokens=output_tokens,
-            )
+        self._persist_observation(
+            member_id,
+            success=True,
+            latency_seconds=latency,
+            output_tokens=output_tokens,
+        )
         with self._lock:
             state = self._ensure_locked(member_id)
             self._apply_success_locked(state, clamped, throughput_sample)
 
     def observe_failure(self, member_id: str) -> None:
         """Record one failed attempt (stability evidence only; no latency)."""
-        if self._observation_store is not None:
-            self._observation_store.append(self._ledger_name, member_id, success=False)
+        self._persist_observation(member_id, success=False)
         with self._lock:
             state = self._ensure_locked(member_id)
             self._apply_failure_locked(state)
+
+    def _persist_observation(
+        self,
+        member_id: str,
+        *,
+        success: bool,
+        latency_seconds: float | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
+        """Persist one observation while keeping storage failures identifiable."""
+        if self._observation_store is None:
+            return
+        try:
+            self._observation_store.append(
+                self._ledger_name,
+                member_id,
+                success=success,
+                latency_seconds=latency_seconds,
+                output_tokens=output_tokens,
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve the durable boundary type
+            raise RoutingObservationPersistenceError(
+                "durable routing observation could not be recorded"
+            ) from exc
 
     def refresh(self) -> None:
         """Reload current-window observations from the shared store."""
