@@ -440,7 +440,9 @@ def test_discover_all_models_applies_openrouter_zdr_evidence_to_other_sources() 
 
     def urlopen(request, timeout=None):
         if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
-            return _Response({"data": [{"model_id": "shared-model"}]})
+            return _Response({"data": [{"model_id": "openai/shared-model"}]})
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "nvidia/shared-model"}]})
         return _Response({"data": [{"id": "shared-model"}]})
 
     with patch(
