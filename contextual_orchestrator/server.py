@@ -27,6 +27,7 @@ from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
+    ModelAgent,
     ProviderResponseError,
     TaskOrchestrator,
     _coerce_input_text,
@@ -96,7 +97,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
-    "include_orchestration_trace", "stream", "attribution", "routing",
+    "include_orchestration_trace", "stream", "attribution", "routing", "zdr_only",
     # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
     "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
@@ -109,16 +110,16 @@ ALLOWED_RESPONSES_KEYS = {
     # Tool-loop budget — accepted only for explicit unsupported error (no multi-step tool loop).
     "max_tool_calls",
     # Gateway cost/routing control plane (stripped before provider passthrough).
-    "attribution", "routing",
+    "attribution", "routing", "zdr_only",
     # previous_response_id / conversation / truncation / include fail closed
     # with named unsupported errors. Official text.format is validated
     # (omit-real optionals), not rejected wholesale.
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
-ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing"}
+ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "zdr_only"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing", "zdr_only"}
 ALLOWED_EMBEDDINGS_KEYS = {
-    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing",
+    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing", "zdr_only",
 }
 ALLOWED_COMPLETIONS_KEYS = {
     "model", "prompt", "stream", "stream_options", "echo", "suffix", "best_of",
@@ -138,7 +139,7 @@ ALLOWED_COMPLETIONS_KEYS = {
     "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
     "reasoning", "background", "include",
     "tool_resources",
-} | {"attribution", "routing"}
+} | {"attribution", "routing", "zdr_only"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 # Chat message object keys this gateway interprets. Anything else fails closed
 # with unknown_message_fields (named error, not silent strip/smuggle).
@@ -1797,6 +1798,14 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_zdr_only(body: dict[str, Any]) -> bool:
+    """Validate the naruon request policy without treating it as provider input."""
+    value = body.get("zdr_only", False)
+    if type(value) is not bool:
+        raise RequestError(400, "invalid_zdr_only", "zdr_only must be a boolean")
+    return value
+
+
 
 def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
     """Official Responses ``text`` — ``format`` shapes, omit-real optionals.
@@ -2153,13 +2162,14 @@ def _require_pool_model(
         for agent in (getattr(orchestrator, "agents", None) or [])
         if not getattr(agent, "disabled", False)
     ]
+    zdr_allowed = getattr(orchestrator, "_zdr_agent_allowed", lambda agent: True)
     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
         if required_capability is None:
             if model_name == TaskOrchestrator.AUTO_MODEL:
-                if agents:
+                if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
-            if any(orchestrator._is_free_agent(agent) for agent in agents):
+            if any(zdr_allowed(agent) and orchestrator._is_free_agent(agent) for agent in agents):
                 return model_name
             raise RequestError(400, "invalid_model", "no enabled zero-cost model is available")
         try:
@@ -2168,7 +2178,9 @@ def _require_pool_model(
             capability_agents = []
         if model_name == TaskOrchestrator.FREE_MODEL:
             capability_agents = [
-                agent for agent in capability_agents if orchestrator._is_free_agent(agent)
+                agent
+                for agent in capability_agents
+                if zdr_allowed(agent) and orchestrator._is_free_agent(agent)
             ]
         if capability_agents:
             return capability_agents[0].model
@@ -2179,6 +2191,8 @@ def _require_pool_model(
         )
     for agent in agents:
         if getattr(agent, "disabled", False):
+            continue
+        if not zdr_allowed(agent):
             continue
         if getattr(agent, "model", None) == model_name and (
             required_capability is None
@@ -2197,6 +2211,7 @@ def _require_pool_model(
         for agent in agents
         if group_name
         and getattr(agent, "group_name", "") == group_name
+        and zdr_allowed(agent)
         and (
             required_capability is None
             or (
@@ -5677,6 +5692,7 @@ def build_server(
 
         def do_POST(self) -> None:  # noqa: N802
             """Dispatch authenticated completion, agent, and simulation writes."""
+            request_policy = None
             try:
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/admin/session":
@@ -5702,6 +5718,8 @@ def build_server(
                 )
                 self._authorize(scope, state_changing=True)
                 body = self._read_json()
+                request_policy = orchestrator.request_policy(_validate_zdr_only(body))
+                request_policy.__enter__()
                 metadata_values = [
                     value
                     for key in ("metadata", "client_metadata")
@@ -6837,6 +6855,9 @@ def build_server(
                 self._send_error(400, "invalid_request", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
+            finally:
+                if request_policy is not None:
+                    request_policy.__exit__(None, None, None)
 
         @staticmethod
         def _admin_purpose(path: str) -> str:

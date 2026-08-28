@@ -427,6 +427,35 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].__cause__ is None
 
 
+def test_discover_all_models_applies_openrouter_zdr_evidence_to_other_sources() -> None:
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
+            return _Response({"data": [{"model_id": "shared-model"}]})
+        return _Response({"data": [{"id": "shared-model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models((OPENAI_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openai", True),
+        ("nvidia_nim", True),
+    ]
+
+
 def test_discovery_boundary_contains_raw_connection_reset() -> None:
     """A raw ConnectionResetError (not a URLError) still fails inside the boundary.
 

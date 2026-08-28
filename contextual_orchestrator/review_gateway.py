@@ -1,6 +1,6 @@
 """Bootstrap a local authenticated gateway for trusted CI model reviews.
 
-The five provider keys arrive from a deployment environment only as bootstrap
+The declared provider keys arrive from a deployment environment only as bootstrap
 transport. They are immediately registered in the process-local KV, after
 which model discovery and every provider request use the normal credential
 registry path. This keeps the review sidecar useful without pretending that a
@@ -25,15 +25,10 @@ from .model_discovery import (
     select_bootstrap_discovered_agents,
 )
 from .orchestrator import ModelClient, TaskOrchestrator
+from .provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
 from .server import SecurityConfig, serve
 
-REVIEW_CREDENTIAL_NAMES: tuple[str, ...] = (
-    "BYTEZ_API_KEY",
-    "NVIDIA_NIM_API_KEY",
-    "NVIDIA_NIM_API_KEY_SUB",
-    "OPENROUTER_API_KEY",
-    "OPENAI_API_KEY",
-)
+REVIEW_CREDENTIAL_NAMES = PROVIDER_CREDENTIAL_NAMES
 DEFAULT_REVIEW_AGENT_LIMIT = 12
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 

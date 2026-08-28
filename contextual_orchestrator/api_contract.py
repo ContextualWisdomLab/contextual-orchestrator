@@ -152,6 +152,10 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "messages": {"type": "array", "items": {"type": "object"}},
                                     "stream": {"type": "boolean"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                     "response_format": {"type": "object"},
                                     "include_orchestration_trace": {
                                         "type": "boolean",
@@ -184,6 +188,10 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "prompt": {"oneOf": [{"type": "string"}, {"type": "array"}]},
                                     "stream": {"type": "boolean"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }
@@ -217,6 +225,10 @@ OPENAPI_SPEC = {
                                             {"type": "string"},
                                             {"type": "array", "items": {"type": "string"}},
                                         ]
+                                    },
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only embedding-capable model-group members with ZDR evidence.",
                                     },
                                 },
                             }
@@ -314,6 +326,10 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "input": {"oneOf": [{"type": "string"}, {"type": "array"}]},
                                     "stream": {"type": "boolean"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }
@@ -420,7 +436,7 @@ OPENAPI_SPEC = {
                                         "minItems": 1,
                                         "uniqueItems": True,
                                         "items": {"type": "string"},
-                                    }
+                                    },
                                 },
                             }
                         }
@@ -798,6 +814,10 @@ OPENAPI_SPEC = {
                                     "requests": {"type": "array", "items": {"type": "object"}},
                                     "attribution": {"type": "object"},
                                     "model": {"type": "string"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }
@@ -857,6 +877,10 @@ OPENAPI_SPEC = {
                                         "description": "observability + attribution dims (service, team, group, company, provider)",
                                     },
                                     "attribution": {"type": "object"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only embedding-capable model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }

@@ -90,6 +90,59 @@ def test_orchestrator_resolves_group_alias_and_reorders_only_its_members() -> No
     assert orchestrator._ranked_agents("", "worker")[-1] == other
 
 
+def test_zdr_only_selects_only_zdr_group_members_and_default_is_unchanged() -> None:
+    non_zdr = _agent("non_zdr_member", "vendor/non-zdr", priority=99)
+    zdr = ModelAgent(
+        "zdr_member",
+        "vendor/zdr",
+        "mock://local",
+        provider_name="provider_name",
+        tags=("privacy:zdr",),
+        group_name="shared_reasoning_model",
+    )
+    orchestrator = TaskOrchestrator([non_zdr, zdr])
+
+    assert orchestrator._select_agent("", "worker") == non_zdr
+    with orchestrator.request_policy(True):
+        assert orchestrator._select_agent("", "worker") == zdr
+        with pytest.raises(ValueError, match="not configured"):
+            orchestrator._requested_agent("vendor/non-zdr")
+        assert orchestrator._requested_agent("shared-reasoning-model") == zdr
+
+
+def test_zdr_only_filters_the_caller_supplied_model_group_array() -> None:
+    orchestrator = TaskOrchestrator([_agent("configured_member", "vendor/configured")])
+    non_zdr = _agent("runtime_member", "vendor/runtime")
+    zdr = ModelAgent(
+        "runtime_zdr_member",
+        "vendor/runtime-zdr",
+        "mock://local",
+        provider_name="provider_name",
+        tags=("privacy:zdr",),
+        group_name="runtime_reasoning_model",
+    )
+
+    selected = orchestrator.select_model_group_members(
+        [non_zdr, zdr],
+        chat_only=False,
+        zdr_only=True,
+    )
+
+    assert [agent.id for agent in selected] == [zdr.id]
+
+
+def test_request_policy_requires_a_bool_and_restores_previous_scope() -> None:
+    orchestrator = TaskOrchestrator([_agent("member_one", "vendor/one")])
+
+    with pytest.raises(TypeError, match="zdr_only"):
+        with orchestrator.request_policy(1):
+            pass
+    with orchestrator.request_policy(True):
+        with orchestrator.request_policy(False):
+            assert orchestrator._zdr_agent_allowed(orchestrator.agents[0]) is True
+        assert orchestrator._zdr_agent_allowed(orchestrator.agents[0]) is False
+
+
 def test_explicit_group_alias_routes_plain_completion_to_measured_member() -> None:
     first = ModelAgent("provider_one_model", "vendor-one/model-a", group_name="shared_reasoning_model")
     second = ModelAgent("provider_two_model", "vendor-two/model-b", group_name="shared_reasoning_model")

@@ -7,7 +7,7 @@ and/or :class:`~contextual_orchestrator.cost_ledger.PriceBook` rows.
 
 Credentials are never fabricated: a provider resolves through :func:`get_credential`
 (the KV registry), and a provider with nothing registered is silently skipped so
-registering a subset of the five supported keys still works. Stdlib only
+registering a subset of the declared provider keys still works. Stdlib only
 (``urllib.request``), matching this repo's dependency-free transport convention.
 """
 
@@ -69,6 +69,7 @@ class ProviderModelSource:
     style: str = "openai_compatible"  # or "bytez"
     task_filter: str = ""
     capabilities: tuple[str, ...] = ()
+    bootstrap_required: bool = True
 
 
 # NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
@@ -93,6 +94,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://opencode.ai/zen/v1/models",
         chat_base_url="https://opencode.ai/zen/v1",
         capabilities=("chat",),
+        bootstrap_required=False,
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -120,6 +122,8 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ),
 )
 
+OPENROUTER_ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
+
 
 @dataclass(frozen=True)
 class DiscoveredModel:
@@ -137,6 +141,7 @@ class DiscoveredModel:
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
     is_free: bool = False
+    zdr_capable: bool = False
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -407,6 +412,34 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
     return _deduplicate_discovered_models(discovered)
 
 
+def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
+    """Read public ZDR model evidence without making OpenRouter the route."""
+    try:
+        payload = _fetch_json(OPENROUTER_ZDR_ENDPOINTS_URL, timeout=timeout)
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return set()
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    return {
+        row["model_id"].casefold()
+        for row in rows or ()
+        if isinstance(row, dict)
+        and isinstance(row.get("model_id"), str)
+        and row["model_id"].strip()
+    }
+
+
+def _apply_zdr_model_evidence(
+    discovered: list[DiscoveredModel], zdr_model_ids: set[str]
+) -> list[DiscoveredModel]:
+    """Attach model-level catalog evidence to every matching provider row."""
+    if not zdr_model_ids:
+        return discovered
+    return [
+        replace(model, zdr_capable=model.model_id.casefold() in zdr_model_ids)
+        for model in discovered
+    ]
+
+
 def discover_provider_models(
     source: ProviderModelSource, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
 ) -> list[DiscoveredModel]:
@@ -452,7 +485,13 @@ def discover_all_models(
             discovered.extend(discover_provider_models(source, timeout=timeout))
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    return _deduplicate_discovered_models(discovered), errors
+    # OpenRouter contributes public privacy catalog evidence only. It is not
+    # selected as an upstream here; matching model ids can inform ZDR-only
+    # group assembly for any discovered provider.
+    return _apply_zdr_model_evidence(
+        _deduplicate_discovered_models(discovered),
+        _openrouter_zdr_model_ids(timeout=timeout),
+    ), errors
 
 
 def openrouter_paid_inference_available(
@@ -520,6 +559,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         tags=(
             "discovered",
             *(("cost:free",) if discovered.is_free else ()),
+            *(("privacy:zdr",) if discovered.zdr_capable else ()),
             *discovered.capabilities,
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),

@@ -184,6 +184,7 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     "commercial_report_cache",
     default=None,
 )
+_REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -2987,6 +2988,55 @@ class TaskOrchestrator:
         if self._store is not None:
             self._store.close()
 
+    @contextmanager
+    def request_policy(self, zdr_only: bool = False):
+        """Scope request selection to models carrying verified ZDR evidence."""
+        if type(zdr_only) is not bool:
+            raise TypeError("zdr_only must be a boolean")
+        token = _REQUEST_ZDR_ONLY.set(zdr_only)
+        try:
+            yield
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+
+    @staticmethod
+    def _zdr_agent_allowed(agent: ModelAgent) -> bool:
+        """Return whether one agent is eligible under the active privacy policy."""
+        return not _REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags
+
+    def select_model_group_members(
+        self,
+        candidate_pool: Iterable[ModelAgent],
+        *,
+        text: str = "",
+        role: str = "worker",
+        free_only: bool = False,
+        chat_only: bool = True,
+        zdr_only: bool | None = None,
+    ) -> list[ModelAgent]:
+        """Select from the caller-supplied model-group array.
+
+        The configured pool is only the default request source. Callers such as
+        naruon may pass any discovered/configured group array; the active
+        request policy then filters that array without inventing candidates.
+        """
+        if zdr_only is not None:
+            with self.request_policy(zdr_only):
+                return self.select_model_group_members(
+                    candidate_pool,
+                    text=text,
+                    role=role,
+                    free_only=free_only,
+                    chat_only=chat_only,
+                )
+        return self._ranked_agents(
+            text,
+            role,
+            free_only=free_only,
+            chat_only=chat_only,
+            candidate_pool=candidate_pool,
+        )
+
     def provider_readiness_report(
         self,
         *,
@@ -3056,6 +3106,7 @@ class TaskOrchestrator:
             "include_orchestration_trace",
             "attribution",
             "routing",
+            "zdr_only",
         }
     )
 
@@ -3542,18 +3593,27 @@ class TaskOrchestrator:
             return None
         if type(requested_model) is not str or not requested_model:
             raise ValueError("requested model must be a configured non-empty string")
-        matches = [candidate for candidate in self.candidates if candidate.model == requested_model]
+        matches = [
+            candidate
+            for candidate in self.candidates
+            if candidate.model == requested_model and self._zdr_agent_allowed(candidate)
+        ]
         if not matches:
             try:
                 requested_group = canonical_group_name(requested_model)
             except ValueError:
                 requested_group = ""
-            matches = [
+            group_candidates = [
                 candidate
-                for candidate in self._ranked_agents("", "worker")
+                for candidate in self.candidates
                 if candidate.group_name
                 and canonical_group_name(candidate.group_name) == requested_group
             ]
+            matches = (
+                self.select_model_group_members(group_candidates)
+                if group_candidates
+                else []
+            )
         if not matches:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
@@ -3735,6 +3795,7 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
+        parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
         return build_response_cache_key(
             messages,
             mode,
@@ -4435,7 +4496,7 @@ class TaskOrchestrator:
             if attempt_served_id != candidate.id:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
-            answer, served_id, usage = attempt_answer, attempt_served_id, attempt_usage
+            answer, served_id = attempt_answer, attempt_served_id
             verification = self._realtime_route_judge(
                 text=text,
                 answer=answer,
@@ -4831,6 +4892,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         free_only: bool = False,
         chat_only: bool = True,
+        candidate_pool: Iterable[ModelAgent] | None = None,
     ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group.
 
@@ -4843,9 +4905,11 @@ class TaskOrchestrator:
            order (:meth:`_measured_member_order`: judged quality first, then
            successful responses per second).
         """
+        source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
             agent
-            for agent in self.agents
+            for agent in source
+            if self._zdr_agent_allowed(agent)
             if (not free_only or self._is_free_agent(agent))
             and (not chat_only or is_general_chat_agent_model_id(agent.model))
             and all(tag in agent.tags for tag in required_tags)
@@ -5051,7 +5115,9 @@ class TaskOrchestrator:
         assurance; an absent triage agent degrades to the direct path because
         no evidence source exists at all. Verdicts are cached by content hash.
         """
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(
+            (text + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")).encode("utf-8")
+        ).hexdigest()
         with self._evidence_lock:
             cached = self._triage_cache.get(digest)
         if cached is not None:
@@ -5066,7 +5132,7 @@ class TaskOrchestrator:
             candidates = self._ranked_agents(text, "worker", free_only=True)
         except RuntimeError:
             candidates = []
-        if not candidates:
+        if not candidates and not _REQUEST_ZDR_ONLY.get():
             candidates = list(self.agents)
         if not candidates:
             return False

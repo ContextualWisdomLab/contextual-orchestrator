@@ -17,6 +17,7 @@ from contextual_orchestrator.credentials import (
 )
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
+    PROVIDER_MODEL_SOURCES,
     agent_from_discovered,
 )
 from contextual_orchestrator import provider_bootstrap
@@ -58,12 +59,18 @@ def _model(
 
 def test_fixed_inventory_matches_all_five_organization_secrets():
     """The bootstrap inventory must not silently lose an organization provider key."""
+    assert provider_bootstrap.PROVIDER_CREDENTIAL_NAMES == tuple(
+        dict.fromkeys(
+            source.credential_name
+            for source in PROVIDER_MODEL_SOURCES
+            if source.bootstrap_required
+        )
+    )
     assert set(provider_bootstrap.PROVIDER_CREDENTIAL_NAMES) == {
         "NVIDIA_NIM_API_KEY",
         "NVIDIA_NIM_API_KEY_SUB",
         "BYTEZ_API_KEY",
         "OPENROUTER_API_KEY",
-        "OPENCODE_ZEN_API_KEY",
         "OPENAI_API_KEY",
     }
 

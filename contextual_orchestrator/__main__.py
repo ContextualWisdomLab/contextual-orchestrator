@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
+from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
@@ -213,8 +214,7 @@ def _discover_models_command(argv: list[str]) -> None:
 
     Never fabricates a credential: a provider with nothing registered in the KV
     (see ``register-credential``) is silently skipped, so running this after
-    registering a subset of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY /
-    NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY still works.
+    registering any subset of the declared provider keys still works.
     """
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
@@ -283,10 +283,15 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover and activate only models with explicit chat capability evidence."""
+    """Discover and activate models accepted by the shared chat contract."""
     discovered, _errors = discover_all_models()
     openrouter_paid_available = openrouter_paid_inference_available()
-    chat_models = [model for model in discovered if "chat" in model.capabilities]
+    # Some OpenAI-compatible model-list APIs omit capability metadata. The
+    # parser already applies the shared negative compatibility contract, so use
+    # that same contract here instead of dropping metadata-free general models.
+    chat_models = [
+        model for model in discovered if is_general_chat_agent_model_id(model.model_id)
+    ]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
         replace(

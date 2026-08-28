@@ -76,6 +76,28 @@ def test_auto_discovery_disables_paid_openrouter_without_credit(monkeypatch) -> 
     assert by_model[free.model_id].disabled is False
 
 
+def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> None:
+    """OpenAI-style model rows without capability metadata remain discoverable."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="gpt-5.4",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([discovered], []),
+    )
+
+    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["added"] == ["openai_gpt_5_4"]
+    assert orchestrator.agents[-1].model == discovered.model_id
+
+
 def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
     """Startup fails closed without taking down an explicitly configured pool."""
     embedding = DiscoveredModel(

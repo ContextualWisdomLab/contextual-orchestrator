@@ -272,6 +272,46 @@ def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
     assert "no enabled zero-cost model" in raised.value.read().decode()
 
 
+def test_http_zdr_only_request_filters_the_runtime_candidate_pool() -> None:
+    """The request bool, not a provider-specific model list, controls selection."""
+    token = "zdr_request_token"
+    paid = ModelAgent("paid_worker", "paid-model", group_name="shared_model")
+    private = ModelAgent(
+        "zdr_worker",
+        "zdr-model",
+        tags=("privacy:zdr",),
+        group_name="shared_model",
+    )
+    orchestrator = TaskOrchestrator([paid, private])
+    observed: list[str] = []
+
+    def complete(_messages, *, mode, model_name):
+        selected = orchestrator._select_agent("hello", "worker")
+        observed.append(selected.id)
+        return {"answer": "ok", "trace": []}
+
+    orchestrator.complete = complete  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({
+            "model": "orchestrator/auto",
+            "input": "hello",
+            "zdr_only": True,
+        }).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+    finally:
+        server.shutdown()
+
+    assert observed == [private.id]
+
+
 @pytest.mark.parametrize(
     "structured_output",
     [

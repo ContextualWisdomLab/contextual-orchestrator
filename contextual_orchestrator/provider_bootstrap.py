@@ -1,6 +1,6 @@
 """Durable bootstrap for the organization provider credential inventory.
 
-A trusted deployment process may expose the fixed provider-secret inventory to
+A trusted deployment process may expose the provider-secret inventory declared
 this one-shot module. Values are validated as a complete set, written to the
 configured credential KV, and then model discovery runs exclusively through the
 KV-backed runtime seam. Runtime provider calls never read provider API keys from
@@ -41,9 +41,13 @@ from .orchestrator import ModelAgent, TaskOrchestrator
 
 
 PROVIDER_CREDENTIAL_NAMES: tuple[str, ...] = tuple(
-    dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
+    dict.fromkeys(
+        source.credential_name
+        for source in PROVIDER_MODEL_SOURCES
+        if source.bootstrap_required
+    )
 )
-"""Fixed organization credential inventory accepted by the bootstrap boundary."""
+"""Required credential inventory derived from provider source declarations."""
 
 _GENERIC_SERVING_TAGS = (
     "discovered",
@@ -93,7 +97,7 @@ def _strip_mounted_line_endings(value: str) -> str:
 def collect_provider_credentials(
     environ: Mapping[str, str], *, require_all: bool = True
 ) -> dict[str, str]:
-    """Collect the fixed inventory without rewriting non-line-ending bytes."""
+    """Collect the declared inventory without rewriting non-line-ending bytes."""
     values: dict[str, str] = {}
     missing: list[str] = []
     for name in PROVIDER_CREDENTIAL_NAMES:
@@ -178,6 +182,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
             (
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
+                *(("privacy:zdr",) if model.zdr_capable else ()),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
@@ -345,7 +350,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--allow-partial-credentials",
         action="store_true",
-        help="Permit a subset of the fixed provider inventory (development only).",
+        help="Permit a subset of the declared provider inventory (development only).",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     report = bootstrap_provider_runtime(

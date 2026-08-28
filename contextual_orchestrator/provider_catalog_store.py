@@ -262,6 +262,7 @@ def normalize_discovered_model(
         input_modalities=tuple(model.input_modalities),
         output_modalities=tuple(model.output_modalities),
         is_free=bool(model.is_free),
+        zdr_capable=bool(model.zdr_capable),
     )
 
 
@@ -287,6 +288,7 @@ def _restore_model_semantics(
         completion_price_per_1k=model.completion_price_per_1k,
         currency_code=model.currency_code,
         is_free="cost:free" in normalized,
+        zdr_capable="privacy:zdr" in normalized,
     )
 
 
