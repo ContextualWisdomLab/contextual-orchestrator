@@ -12,6 +12,7 @@ import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.cost_router import CostRoutingCoordinator
+from contextual_orchestrator.orchestrator import ProviderRequestTooLargeError
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.video_jobs import VideoJobContractError
 
@@ -481,6 +482,32 @@ def test_ungrouped_capability_routes_record_measured_outcomes() -> None:
     )
 
     assert orchestrator._group_router.member_report(agent.id)["success_count"] == 1
+
+
+def test_capability_size_exhaustion_preserves_health_and_error_identity() -> None:
+    """Request-size rejection is not provider instability on media routes."""
+    agents = [
+        ModelAgent("first_image", "provider/first", tags=("image",)),
+        ModelAgent("second_image", "provider/second", tags=("image",)),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProviderRequestTooLargeError("provider request body is too large")
+        )
+    )
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every image provider"):
+        orchestrator.proxy_capability(
+            {"model": TaskOrchestrator.AUTO_MODEL, "prompt": "large image request"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
 
 
 def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
