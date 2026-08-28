@@ -29,6 +29,10 @@ available through a public gateway error or an exception cause.
    request failed` / `provider <id> batch request failed`) because a stream may
    already have emitted bytes (no retry, no failover), and raw connection
    resets outside ``URLError`` map to the same stable ``transport_error`` code.
+7. When every request-admitted provider fails before response bytes are sent,
+   the OpenAI-compatible HTTP boundary returns retryable `503 no_viable_agent`
+   with `Retry-After`; it must not misclassify provider exhaustion as an
+   `internal_error` 500.
 
 ## Consequences
 

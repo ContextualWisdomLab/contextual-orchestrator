@@ -6577,6 +6577,10 @@ class TaskOrchestrator:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
+                    failed_agents = self._request_failed_agents.get()
+                    if failed_agents is not None and role != "judge":
+                        self._record_structured_not_ready(agent.id)
+                        failed_agents.add(agent.id)
                     break
                 # Success: one Bernoulli observation plus measured latency, and
                 # provider-reported completion tokens when available feeding the

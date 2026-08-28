@@ -647,6 +647,56 @@ def test_http_structured_no_viable_agent_exposes_retry_contract() -> None:
     assert headers["Retry-After"] == "30"
 
 
+def test_http_exhausted_provider_failover_preserves_openai_retry_contract() -> None:
+    """Provider exhaustion returns typed retry guidance without raw diagnostics."""
+
+    class FailingClient(ModelClient):
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            raise urllib.error.URLError("synthetic-private-provider-detail")
+
+    agents = [
+        ModelAgent(
+            f"ready_{index}",
+            f"provider/ready-{index}",
+            base_url="https://provider.example/v1",
+            tags=("cost:free", "reasoning", "response_format"),
+            group_name="declared_group",
+        )
+        for index in range(2)
+    ]
+    orchestrator = TaskOrchestrator(agents, client=FailingClient(max_retries=0))
+    orchestrator._structured_readiness = {
+        agent.id: {"status": "ready", "checked_at": 1.0} for agent in agents
+    }
+    token = "passthrough_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+    try:
+        status, body, headers = _post_error_with_headers(
+            url,
+            {
+                "model": "orchestrator/free",
+                "messages": [{"role": "user", "content": "give me JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 503
+    assert body["error"]["code"] == "no_viable_agent"
+    assert body["error"]["message"] == "no viable agent is currently ready"
+    assert body["error"]["detail"]["retry_after_seconds"] == 30
+    assert headers["Retry-After"] == "30"
+    assert "synthetic-private-provider-detail" not in json.dumps(body)
+
+
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"

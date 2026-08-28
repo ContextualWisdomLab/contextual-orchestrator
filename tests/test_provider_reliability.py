@@ -808,6 +808,39 @@ def test_conduct_attempts_only_ready_candidates_once_after_failures() -> None:
     )
 
 
+def test_conduct_maps_exhausted_transport_failover_to_typed_unavailability() -> None:
+    """Exhausted ready transports are retryable unavailability, not an internal error."""
+
+    class FailingClient(ModelClient):
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del agent, messages, kwargs
+            raise urllib.error.URLError("synthetic provider outage")
+
+    agents = [
+        ModelAgent(
+            f"ready_{index}",
+            f"provider/ready-{index}",
+            base_url="https://provider.example/v1",
+            tags=("reasoning", "writing", "verification"),
+            group_name="declared_group",
+        )
+        for index in range(2)
+    ]
+    orchestrator = TaskOrchestrator(agents, client=FailingClient(max_retries=0))
+    orchestrator._structured_readiness = {
+        agent.id: {"status": "ready", "checked_at": orchestrator_module.time.monotonic()}
+        for agent in agents
+    }
+
+    with pytest.raises(NoViableAgentError):
+        orchestrator.conduct([{"role": "user", "content": "structured task"}])
+
+    assert all(
+        orchestrator._structured_readiness[agent.id]["status"] == "not_ready"
+        for agent in agents
+    )
+
+
 def test_circuit_breaker_counts_concurrent_failures() -> None:
     orchestrator, _ = _two_worker_orchestrator(down_id="primary_worker")
     calls = orchestrator.circuit_failure_threshold * 4
