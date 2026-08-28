@@ -244,9 +244,13 @@ is read from a **KV config store**, never `os.getenv`.
   `CanonicalUsageRecordSink(event_builder=build_contextual_usage_event,
   enqueue=outbox.enqueue, identity=...)` as `CostLedger(usage_sink=...)`.
   The sink runs only after the local ledger accepts a new record, so failed,
-  dropped, and duplicate writes do not become billing-only events. It exports
-  token counts and bounded provider/model/workflow metadata; prompts, answers,
-  and computed prices never enter the event.
+  dropped, and duplicate writes do not become billing-only events. For a
+  caller-owned SQLite transaction, export is deferred until `flush()` observes
+  the caller's commit; rollback therefore emits no billing-only event. A
+  non-blocking SQL store rejects a billing-backed append while such a
+  transaction is open because its eventual outcome cannot be observed safely.
+  It exports token counts and bounded provider/model/workflow metadata;
+  prompts, answers, and computed prices never enter the event.
 - **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
   rolls up cost + tokens by any dimension over any time window;
   `GET /api/v1/llm_usage_records` lists raw ledger rows;

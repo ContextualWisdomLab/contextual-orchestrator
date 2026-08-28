@@ -35,6 +35,13 @@ migrated transactionally; ambiguous or incompatible schemas fail closed.
 - SQLite enables foreign-key enforcement for the external connection, while
   PostgreSQL metadata discovery uses `information_schema` without poisoning the
   active transaction with SQLite syntax.
+- Caller-owned SQLite transactions remain open across `SqlLedgerStore.append()`;
+  when a billing sink is configured, `CostLedger` defers export until
+  `flush()` observes the transaction outcome and only exports rows that
+  survived commit.
+- A billing-backed `NonBlockingLedgerStore` rejects queue appends made while a
+  caller-owned SQLite transaction is open, because a background worker cannot
+  safely observe whether that transaction will commit before exporting.
 - Nullable legacy labels migrate to the explicit `unattributed` value so the
   normalized child table remains non-nullable.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import sqlite3
 import threading
 
 from contextual_orchestrator.cost_ledger import (
@@ -12,6 +13,7 @@ from contextual_orchestrator.cost_ledger import (
     NonBlockingLedgerStore,
     PriceBook,
     PriceEntry,
+    SqlLedgerStore,
     UsageRecord,
 )
 from contextual_orchestrator.metering import CanonicalUsageRecordSink
@@ -142,6 +144,72 @@ def test_duplicate_usage_record_is_not_counted_or_exported_twice() -> None:
 
     assert len(exported) == 1
     assert ledger.telemetry_health()["records_stored"] == 1
+
+
+def test_billing_export_waits_for_caller_owned_sqlite_commit() -> None:
+    """A rolled-back caller transaction must not leave a billing-only event."""
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(price_book, store=store, usage_sink=sink)
+
+    connection.execute("BEGIN")
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_rolled_back",
+    )
+
+    assert sink.ids == []
+    connection.rollback()
+    assert store.query() == []
+
+    connection.execute("BEGIN")
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_committed",
+    )
+    assert sink.ids == []
+    connection.commit()
+
+    assert ledger.flush() is True
+    assert sink.ids == ["usage_committed"]
+
+
+def test_async_billing_export_rejects_caller_owned_sqlite_transaction() -> None:
+    """The background writer must not bill from an unobservable transaction."""
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(
+        price_book,
+        store=store,
+        non_blocking_store=True,
+        usage_sink=sink,
+    )
+
+    connection.execute("BEGIN")
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_async_rolled_back",
+    )
+    connection.rollback()
+    assert ledger.flush(timeout=5) is True
+    assert sink.ids == []
+    assert store.query() == []
+    assert ledger.telemetry_health()["records_dropped"] == 1
 
 
 def test_inline_health_counts_concurrent_export_failures() -> None:

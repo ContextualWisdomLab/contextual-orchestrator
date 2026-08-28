@@ -442,7 +442,11 @@ def _emit_usage_event(
 
 
 class NonBlockingLedgerStore:
-    """Ledger store wrapper that keeps persistence out of the request path."""
+    """Ledger store wrapper that keeps persistence out of the request path.
+
+    A billing-backed wrapper rejects an already-open caller transaction because
+    a background worker cannot observe its eventual commit safely.
+    """
 
     def __init__(
         self,
@@ -469,6 +473,22 @@ class NonBlockingLedgerStore:
 
     def append(self, record: UsageRecord) -> bool:
         """Queue a record for background persistence without blocking."""
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if (
+            self._usage_record_sink is not None
+            and callable(has_open_transaction)
+            and has_open_transaction()
+        ):
+            self._mark("records_dropped", error_type="caller_transaction")
+            _emit_usage_event(
+                self._telemetry_sink,
+                UsageTelemetryEvent.from_record(
+                    record,
+                    export_state="dropped",
+                    error_type="caller_transaction",
+                ),
+            )
+            return False
         try:
             self._queue.put_nowait(record)
         except queue.Full:
@@ -526,27 +546,30 @@ class NonBlockingLedgerStore:
                 )
             else:
                 if accepted:
-                    self._mark("records_stored")
-                    _emit_usage_event(
-                        self._telemetry_sink,
-                        UsageTelemetryEvent.from_record(record, export_state="stored"),
-                    )
-                    if self._usage_record_sink is not None:
-                        try:
-                            self._usage_record_sink.emit_usage_record(record)
-                        except Exception as exc:
-                            error_type = type(exc).__name__
-                            self._mark("export_failures", error_type=error_type)
-                            _emit_usage_event(
-                                self._telemetry_sink,
-                                UsageTelemetryEvent.from_record(
-                                    record,
-                                    export_state="export_error",
-                                    error_type=error_type,
-                                ),
-                            )
+                    self._record_stored(record)
             finally:
                 self._queue.task_done()
+
+    def _record_stored(self, record: UsageRecord) -> None:
+        self._mark("records_stored")
+        _emit_usage_event(
+            self._telemetry_sink,
+            UsageTelemetryEvent.from_record(record, export_state="stored"),
+        )
+        if self._usage_record_sink is not None:
+            try:
+                self._usage_record_sink.emit_usage_record(record)
+            except Exception as exc:
+                error_type = type(exc).__name__
+                self._mark("export_failures", error_type=error_type)
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="export_error",
+                        error_type=error_type,
+                    ),
+                )
 
     def _mark(self, field_name: str, error_type: Optional[str] = None) -> None:
         with self._lock:
@@ -1010,6 +1033,13 @@ class SqlLedgerStore:
         with self._lock:
             return self._append_locked(record)
 
+    def has_open_transaction(self) -> bool:
+        """Return whether a caller-owned SQLite transaction is still open."""
+        with self._lock:
+            return self._paramstyle == "qmark" and bool(
+                getattr(self._conn, "in_transaction", False)
+            )
+
     def _append_locked(self, record: UsageRecord) -> bool:
         """Insert one record while the shared DB-API connection is locked."""
         row = record.as_dict()
@@ -1102,11 +1132,14 @@ class CostLedger:
                 base_store,
                 queue_size=store_queue_size,
                 telemetry_sink=self.telemetry_sink,
+                usage_record_sink=usage_sink,
             )
         else:
             self.store = base_store
         self._inline_health = UsageTelemetryHealth()
         self._inline_health_lock = threading.Lock()
+        self._deferred_usage_exports: List[UsageRecord] = []
+        self._deferred_usage_exports_lock = threading.Lock()
         self._clock = clock or (lambda: int(time.time()))
         self.usage_sink = usage_sink
         if isinstance(self.store, NonBlockingLedgerStore) and usage_sink is not None:
@@ -1128,6 +1161,7 @@ class CostLedger:
         usage_record_id: Optional[str] = None,
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
+        self._flush_deferred_usage_exports()
         if isinstance(attribution, dict) or attribution is None:
             # Strip caller-controlled execution identity before mapping so a
             # client cannot spoof model/provider rollups (buyer-bill honesty).
@@ -1204,26 +1238,23 @@ class CostLedger:
             and self.usage_sink is not None
             and not isinstance(self.store, NonBlockingLedgerStore)
         ):
-            try:
-                self.usage_sink.emit_usage_record(record)
-            except Exception as exc:
-                self._mark_inline_export_failure(type(exc).__name__)
-                _emit_usage_event(
-                    self.telemetry_sink,
-                    UsageTelemetryEvent.from_record(
-                        record,
-                        export_state="export_error",
-                        error_type=type(exc).__name__,
-                    ),
-                )
+            if self._store_has_open_transaction():
+                with self._deferred_usage_exports_lock:
+                    self._deferred_usage_exports.append(record)
+            else:
+                self._emit_usage_record(record)
         return record
 
     def flush(self, timeout: Optional[float] = None) -> bool:
-        """Wait for pending non-blocking usage writes, if any."""
+        """Wait for pending writes and release exports after caller commits."""
         flush = getattr(self.store, "flush", None)
         if callable(flush):
-            return bool(flush(timeout=timeout))
-        return True
+            complete = bool(flush(timeout=timeout))
+        else:
+            complete = True
+        if complete:
+            self._flush_deferred_usage_exports()
+        return complete
 
     def telemetry_health(self) -> Dict[str, Any]:
         """Return prompt-safe ledger export health counters."""
@@ -1333,6 +1364,41 @@ class CostLedger:
         with self._inline_health_lock:
             self._inline_health.export_failures += 1
             self._inline_health.last_error_type = error_type
+
+    def _store_has_open_transaction(self) -> bool:
+        has_open_transaction = getattr(self.store, "has_open_transaction", None)
+        return bool(callable(has_open_transaction) and has_open_transaction())
+
+    def _flush_deferred_usage_exports(self) -> None:
+        if self._store_has_open_transaction():
+            return
+        with self._deferred_usage_exports_lock:
+            pending = self._deferred_usage_exports
+            self._deferred_usage_exports = []
+        if not pending:
+            return
+        persisted_ids = {
+            row.get("usage_record_id") for row in self.store.query(None, None)
+        }
+        for record in pending:
+            if record.usage_record_id in persisted_ids:
+                self._emit_usage_record(record)
+
+    def _emit_usage_record(self, record: UsageRecord) -> None:
+        if self.usage_sink is None:
+            return
+        try:
+            self.usage_sink.emit_usage_record(record)
+        except Exception as exc:
+            self._mark_inline_export_failure(type(exc).__name__)
+            _emit_usage_event(
+                self.telemetry_sink,
+                UsageTelemetryEvent.from_record(
+                    record,
+                    export_state="export_error",
+                    error_type=type(exc).__name__,
+                ),
+            )
 
 
 def dimension_catalog() -> List[Dict[str, Any]]:
