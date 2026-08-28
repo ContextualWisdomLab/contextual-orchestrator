@@ -7,7 +7,9 @@ Protected `main` remains
 authorization decision now has a bounded implementation branch for its listed
 batch-job gap: HTTP-created batch routing jobs carry a non-secret
 authenticated-principal digest, and both status and result retrieval require
-the same digest. A mismatch is returned as the existing generic
+the same digest. An external verifier can provide a stable tenant/subject key
+through the optional principal resolver; bool-only adapters retain the
+documented bearer-digest fallback. A mismatch is returned as the existing generic
 `batch_job_not_found` response before the backend is called; results also keep
 the separate trace-purpose gate. Local exact-branch evidence is `61 passed`
 across the cost-router, HTTP, and OpenAPI contract suites. This is branch

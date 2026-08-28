@@ -40,6 +40,20 @@ def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
     assert security.readiness_profile()["auth_mode"] == "external_bearer_verifier"
 
 
+def test_external_principal_resolver_survives_bearer_rotation() -> None:
+    """An adapter-provided tenant/subject key keeps resource ownership stable."""
+    valid_tokens = {"old-token", "rotated-token"}
+    security = SecurityConfig(
+        bearer_verifier=lambda token, scope: token in valid_tokens and scope == "inference",
+        principal_resolver=lambda token: "tenant-a/user-a" if token in valid_tokens else None,
+    )
+    old_headers = {"authorization": "Bearer old-token"}
+    rotated_headers = {"authorization": "Bearer rotated-token"}
+    security.authorize(old_headers, "inference", "127.0.0.1")
+    security.authorize(rotated_headers, "inference", "127.0.0.1")
+    assert security.principal_id(old_headers) == security.principal_id(rotated_headers)
+
+
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
     headers = {"content-type": "application/json", "connection": "close"}
     if token:

@@ -20,9 +20,11 @@ confirmed across owners.
 
 The library API continues to support local single-process callers that omit an
 owner key. HTTP callers do not omit it. Deployments with an external bearer
-verifier may use stable per-principal credentials; token rotation may revoke
-access to older evidence and must be handled by the deployment's identity
-policy.
+verifier may inject `principal_resolver(token)` to return a stable,
+tenant-scoped principal key; the gateway hashes that key and never stores the
+bearer. Adapters that retain the legacy bool-only verifier contract use the
+bearer digest fallback, so token rotation may revoke access to older evidence
+and must be handled by the deployment's identity policy.
 
 Batch routing jobs follow the same boundary. The coordinator stores the
 principal digest on each HTTP-created `BatchJob`; status polling and result
@@ -61,8 +63,9 @@ sequenceDiagram
   never rendered in public payloads.
 - Shared static credentials represent one deployment principal; multi-principal
   deployments must issue distinct verified bearers. External bearer deployments
-  currently use the bearer credential digest as that principal key, so token
-  rotation can revoke access to older evidence.
+  should return a stable tenant/subject key through `principal_resolver`; the
+  legacy bool-only fallback uses the bearer credential digest, so token rotation
+  can revoke access to older evidence.
 - Old records without an owner key are not visible through the owner-bound HTTP
   resource routes, which is fail-closed during migration.
 - A guessed batch routing job identifier cannot retrieve another principal's
@@ -75,7 +78,9 @@ response redaction are covered by
 `tests/test_workflow_run_object_authorization.py`.
 Batch status/result ownership and the public trace-plus-inference security
 contract are covered by `tests/test_cost_review_server.py`,
-`tests/test_cost_router_boundaries.py`, and `tests/test_api_contract.py`.
+`tests/test_cost_router_boundaries.py`, and `tests/test_api_contract.py`;
+stable external-principal resolution is covered by
+`tests/test_security_hardening.py`.
 
 ## References
 
