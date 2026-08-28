@@ -524,6 +524,8 @@ def test_other_provider_cannot_retire_configured_gateway_seed(monkeypatch) -> No
     assert result["added"] == ["openrouter_provider_chat_model"]
     assert blank_seed in orchestrator.agents
     assert any(agent.provider_name == "openrouter" for agent in orchestrator.agents)
+
+
 def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     monkeypatch,
 ) -> None:
