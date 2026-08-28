@@ -629,6 +629,34 @@ def test_scorers_match_and_miss() -> None:
     assert nb.score_exact_number_match({"number": "0.05"}, "It costs $0.05 total") == 1.0
     assert nb.score_substring_match({"substring": "Paris"}, "It is PARIS indeed") == 1.0
     assert nb.score_substring_match({"substring": "Paris"}, "It is Lyon") == 0.0
+    assert (
+        nb.score_substring_match(
+            {"substring": "Au", "strict_case_sensitive": True},
+            "Au",
+        )
+        == 1.0
+    )
+    assert (
+        nb.score_substring_match(
+            {"substring": "Au", "strict_case_sensitive": True},
+            "AU",
+        )
+        == 0.0
+    )
+    assert (
+        nb.score_substring_match(
+            {"substring": "Pacific", "strict_texts": ["Pacific", "Pacific Ocean"]},
+            "Pacific Ocean",
+        )
+        == 1.0
+    )
+    assert (
+        nb.score_substring_match(
+            {"substring": "Pacific", "strict_texts": ["Pacific", "Pacific Ocean"]},
+            "The Pacific Ocean",
+        )
+        == 0.0
+    )
 
 
 def _write_json(tmp_path: str, name: str, payload: object) -> str:
@@ -684,6 +712,13 @@ def test_manifest_rejects_each_contract_violation() -> None:
             manifest_with(expected="blue"),
             # Leakage: the scorer would award the prompt itself a point.
             manifest_with(prompt="Answer blue if the sky is blue."),
+            manifest_with(
+                prompt="Answer Pacific Ocean only.",
+                expected={
+                    "substring": "Pacific",
+                    "strict_texts": ["Pacific", "Pacific Ocean"],
+                },
+            ),
         ]
         for index, payload in enumerate(violations):
             path = _write_json(tmp, f"violation_{index}.json", payload)

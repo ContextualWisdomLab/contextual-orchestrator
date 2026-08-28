@@ -1175,9 +1175,46 @@ def score_exact_number_match(expected: dict[str, Any], answer_text: str) -> floa
     return 1.0 if re.search(pattern, answer_text) else 0.0
 
 
+def _normalize_expected_text(value: str, *, case_sensitive: bool) -> str:
+    """Canonicalize one expected text value for exact or containment checks."""
+    normalized = value.strip()
+    return normalized if case_sensitive else normalized.casefold()
+
+
+def _text_match_candidates(expected: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
+    """Return case sensitivity plus the declared expected text candidates."""
+    case_sensitive = bool(expected.get("strict_case_sensitive"))
+    strict_texts = expected.get("strict_texts")
+    if isinstance(strict_texts, list) and strict_texts:
+        values = tuple(str(value) for value in strict_texts)
+    else:
+        values = (str(expected["substring"]),)
+    return case_sensitive, values
+
+
+def expected_text_leaks(expected: dict[str, Any], prompt_text: str) -> bool:
+    """Return ``True`` when any declared expected text appears inside the prompt."""
+    case_sensitive, candidates = _text_match_candidates(expected)
+    haystack = _normalize_expected_text(prompt_text, case_sensitive=case_sensitive)
+    for candidate in candidates:
+        if _normalize_expected_text(candidate, case_sensitive=case_sensitive) in haystack:
+            return True
+    return False
+
+
 def score_substring_match(expected: dict[str, Any], answer_text: str) -> float:
-    """1.0 when the expected substring appears (case-insensitive) in the answer."""
-    return 1.0 if str(expected["substring"]).lower() in answer_text.lower() else 0.0
+    """Score declared text answers with optional case-sensitive exact matching."""
+    case_sensitive, candidates = _text_match_candidates(expected)
+    normalized_answer = _normalize_expected_text(answer_text, case_sensitive=case_sensitive)
+    strict_texts = expected.get("strict_texts")
+    if isinstance(strict_texts, list) and strict_texts:
+        normalized_candidates = {
+            _normalize_expected_text(candidate, case_sensitive=case_sensitive)
+            for candidate in candidates
+        }
+        return 1.0 if normalized_answer in normalized_candidates else 0.0
+    needle = _normalize_expected_text(str(expected["substring"]), case_sensitive=case_sensitive)
+    return 1.0 if needle in normalized_answer else 0.0
 
 
 SCORER_REGISTRY: dict[tuple[str, str], Callable[[dict[str, Any], str], float]] = {
@@ -1232,7 +1269,11 @@ def load_task_manifest(path: str) -> dict[str, Any]:
         # No-leakage rule, defined by the scorer itself: if the registered
         # scorer would award the prompt text a point, the expected answer has
         # leaked into the prompt and a prompt-echoing model would score.
-        if SCORER_REGISTRY[scorer_key](expected, prompt) != 0.0:
+        if scorer_key == ("substring_match", "1"):
+            leaked = expected_text_leaks(expected, prompt)
+        else:
+            leaked = SCORER_REGISTRY[scorer_key](expected, prompt) != 0.0
+        if leaked:
             raise BenchmarkContractError(
                 f"task {task_id!r} leaks its expected answer into the prompt (test-set leakage)"
             )
