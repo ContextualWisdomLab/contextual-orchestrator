@@ -188,6 +188,23 @@ def test_configured_gateway_preserves_consensus_privacy_evidence() -> None:
     ]
 
 
+def test_configured_gateway_keeps_ambiguous_privacy_strings_unknown() -> None:
+    """Only explicit boolean strings can become provider privacy evidence."""
+    payload = {"data": [{"id": "chat-model"}]}
+    metadata = {
+        "data": [
+            {
+                "model_name": "chat-model",
+                "model_info": {"supports_zero_data_retention": "unknown"},
+            }
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert "supports_zero_data_retention" not in merged["data"][0]
+
+
 def test_configured_gateway_preserves_only_consensus_unit_prices() -> None:
     """Official non-token units survive only whole-deployment consensus."""
     payload = {"data": [{"id": "image-model"}, {"id": "mixed-model"}]}

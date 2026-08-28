@@ -596,7 +596,14 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 if isinstance(v, bool):
                     parsed_values.append(v)
                 elif isinstance(v, str):
-                    parsed_values.append(v.strip().casefold() == "true")
+                    normalized = v.strip().casefold()
+                    parsed_values.append(
+                        True
+                        if normalized == "true"
+                        else False
+                        if normalized == "false"
+                        else None
+                    )
                 else:
                     parsed_values.append(None)
             
