@@ -267,12 +267,12 @@ OPENAPI_SPEC = {
                 }
             }
             for path, operation_id, summary, schema in (
-                ("/v1/images/generations", "create_image", "Generate an image", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
-                ("/v1/videos", "create_video", "Submit video generation", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
-                ("/v1/audio/speech", "create_speech", "Synthesize speech", {"type": "object", "required": ["input", "voice"], "properties": {"model": {"type": "string"}, "input": {"type": "string"}, "voice": {"type": "string"}}}),
-                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio", {"type": "object", "required": ["input_audio"], "properties": {"model": {"type": "string"}, "input_audio": {"type": "object", "required": ["data", "format"]}}}),
-                ("/v1/rerank", "create_rerank", "Rerank documents", {"type": "object", "required": ["query", "documents"], "properties": {"model": {"type": "string"}, "query": {"type": "string"}, "documents": {"type": "array", "minItems": 1}}}),
-                ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}}}),
+                ("/v1/images/generations", "create_image", "Generate an image", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/videos", "create_video", "Submit video generation", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/audio/speech", "create_speech", "Synthesize speech", {"type": "object", "required": ["input", "voice"], "properties": {"model": {"type": "string"}, "input": {"type": "string"}, "voice": {"type": "string"}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio", {"type": "object", "required": ["input_audio"], "properties": {"model": {"type": "string"}, "input_audio": {"type": "object", "required": ["data", "format"]}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/rerank", "create_rerank", "Rerank documents", {"type": "object", "required": ["query", "documents"], "properties": {"model": {"type": "string"}, "query": {"type": "string"}, "documents": {"type": "array", "minItems": 1}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
             )
         },
         "/v1/videos/{video_job_id}": {
