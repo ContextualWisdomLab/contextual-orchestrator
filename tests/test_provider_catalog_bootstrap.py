@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-import threading
 
 import pytest
 
@@ -208,6 +208,45 @@ def test_privacy_analysis_success_persists_and_empty_failure_preserves_lkg() -> 
         )
         assert second.privacy_assessment_count == 1
         assert store.privacy_assessments(source) == (evidence,)
+    finally:
+        set_backend(None)
+
+
+def test_privacy_assessment_uses_the_catalog_normalized_model_id() -> None:
+    """Whitespace normalization cannot detach policy evidence from its model row."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        source = _source("openai", "OPENAI_API_KEY")
+        model = _model(source, " catalog-chat-model ")
+        evidence = PrivacyPolicyAssessment(
+            subject_provider=source.provider_name,
+            subject_credential=source.credential_name,
+            subject_model=model.model_id,
+            source_url="https://provider.example/privacy",
+            zero_data_retention_available=True,
+            supports_no_training=True,
+            supports_no_prompt_retention=True,
+            evidence_quote="Prompts are not retained.",
+            analyzer_provider="openrouter",
+            analyzer_model="zdr-analyzer",
+            observed_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+        )
+        store = InMemoryProviderCatalogStore()
+
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(source,),
+            discovery=lambda _sources: ([model], []),
+            analyze_privacy_policies=True,
+            privacy_analysis=lambda models: (list(models), [evidence]),
+            model_limit=1,
+        )
+
+        assert report.privacy_assessment_count == 1
+        stored = store.privacy_assessments(source)
+        assert len(stored) == 1
+        assert stored[0].subject_model == "catalog-chat-model"
     finally:
         set_backend(None)
 

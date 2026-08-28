@@ -11,8 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from dataclasses import dataclass
 import threading
+from dataclasses import dataclass, replace
 from typing import Callable, Mapping, Sequence
 
 from .cost_ledger import PriceBook
@@ -50,6 +50,7 @@ from .provider_catalog_store import (
     InMemoryProviderCatalogStore,
     PostgresProviderCatalogStore,
     ProviderCatalogStore,
+    normalize_discovered_model,
 )
 
 
@@ -221,19 +222,23 @@ def refresh_persisted_provider_catalog(
             refresh_failures += 1
             providers_with_errors.add(source.provider_name)
         else:
+            normalized_account_models = [
+                normalize_discovered_model(source, model)
+                for model in account_models
+            ]
             eligible_ids = {
                 model.model_id
-                for model in account_models
+                for model in normalized_account_models
                 if is_chat_serving_candidate(model)
             }
             tags = {
                 model.model_id: serving_tags_for_discovered(model)
-                for model in account_models
+                for model in normalized_account_models
                 if model.model_id in eligible_ids
             }
             store.record_success(
                 source,
-                account_models,
+                normalized_account_models,
                 eligible_model_ids=eligible_ids,
                 serving_tags=tags,
             )
@@ -312,6 +317,10 @@ def bootstrap_provider_catalog_runtime(
             catalog_refreshes = store.refresh_evidence()[evidence_offset:]
         assessments_by_account: dict[tuple[str, str], list[PrivacyPolicyAssessment]] = {}
         for assessment in privacy_assessments:
+            assessment = replace(
+                assessment,
+                subject_model=assessment.subject_model.strip(),
+            )
             assessments_by_account.setdefault(
                 (assessment.subject_provider, assessment.subject_credential), []
             ).append(assessment)
