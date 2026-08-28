@@ -1,65 +1,79 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 23:27 KST exact-head protected-queue snapshot
+## 2026-08-29 00:10 KST exact-head protected-queue snapshot
 
-Protected `main` is `8d5924f8f7582ece18a6f43d6a5fffcb6a0a9c9f`. No merge is
-claimed from this snapshot. The open queue was re-read against that base and
-contains nine PRs. Duplicate docs-only PR #900 was closed because #905
-supersedes its evidence. `BLOCKED` merge state, missing independent approval, and
-failed or pending required review/security gates remain stop conditions.
+Protected `main` is `b21645116b352967e50fc497b87eb745b9cc8c61`, which contains
+the merge commit for PR #904 at exact head
+`6cd7d57c177d945f67ba3b86b699949584bc6b7e`. This loop did not bypass or claim
+that merge. The open queue now contains eight PRs; duplicate docs-only PR #900
+remains closed because #905 supersedes its evidence, and the previously stacked
+PR #907 is merged into #857. The current protected state still requires exact
+head checks, independent approval, and resolved threads; `behind`, `dirty`, or
+`UNKNOWN` merge state is not readiness.
 
 PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906)
-at `65109a4cd21d8c0db462c7a4a7b9c4f617f1a351` has passing NIM benchmark quality,
-security, Hypothesis, coverage-source, and CodeQL checks. Full, Atheris, and
-Strix are still in progress. Noema fails because the live review sidecar
-discovered no zero-cost models, and OpenCode fails because no authenticated
-`opencode-agent` verdict exists; these are external review/provider gates, not
-source findings. Its local focused NIM suite is `119 passed`, all review threads
-are resolved, and no independent approval is claimed.
+at `a20d0fa0e925fb6c3a4e1464d1ef73e56c34e359` has passing NIM benchmark quality,
+coverage, security, Hypothesis, dependency, OSV, and Trivy checks. Full, Atheris,
+and CodeQL are running on this exact head; Noema passes, OpenCode fails for no
+current authenticated verdict, all threads are resolved, and no independent
+approval is present. Its local NIM evidence is `121 passed` with 100% branch
+coverage for `nim_benchmark.py`; the unused provider response wrapper was
+removed without changing production routing defaults.
+
+PR [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908)
+at `edceb0e9a6211c2c24d1df2f01132cdd5e8a2016` has passing security, Hypothesis,
+dependency, OSV, and Trivy checks. Full, Atheris, and CodeQL are running on this
+exact head; Noema and OpenCode fail, all threads are resolved, and no independent
+approval is present. Its focused metering and cost-ledger proof is `50 passed`;
+deferred exports now use targeted persisted-ID lookups and defer a raced
+caller-transaction export until commit visibility is confirmed.
 
 PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
-at `126ca3dda89e4466c4947437ac7f5fcb159910c1` has passing ordinary, security,
-coverage, Noema, Hypothesis, Full, and Atheris checks. Strix fails closed after
-three HTTP 500 `internal_error` responses from `openai/orchestrator/free`
-without an authoritative vulnerability report; OpenCode also fails for lack
-of a current-head authenticated verdict. It has no qualifying independent
-approval. PR
-[#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908)
-at `7a6b6cf43d256cb49d4bd5103c1b1082e2e9155a` adds transaction-safe
-post-persistence canonical ledger usage export; its focused metering,
-relational-ledger, and boundary proof is `60 passed`. Full, Atheris, and Devin
-pass, while Strix retry 2 fails closed after provider HTTP 500
-`internal_error` responses with no authoritative vulnerability report.
-OpenCode has no current-head authenticated verdict, and no independent
-approval is claimed yet.
+at `c1244f918fd8d0dc900faf4a16dadd9af22a07af` has ordinary security, coverage,
+dependency, OSV, Trivy, Hypothesis, and Noema checks passing. Full, Atheris, and
+Strix are running; OpenCode fails for lack of a current-head authenticated
+verdict. Its one new info thread was verified and resolved; no independent
+approval is present.
+
 The previously stacked PR #907 is merged into #857. The shared batch embedding
 fixture is byte-identical with the current naruon consumer fixture.
 
+PR [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904)
+was merged into protected `main` as
+`b21645116b352967e50fc497b87eb745b9cc8c61`. Its ordinary Full, Atheris,
+security, coverage, dependency, OSV, Hypothesis, and Noema checks passed at the
+source head; OpenCode and Strix are recorded as failed provider/review gates
+after the merge. The merged slice binds concrete model file replicas, honors
+file-provider exclusions, and maps provider delete failures to retryable 503
+responses.
+
 PR [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905)
-at `606db00e354b2db9827bcbf121aff5c19339c8d3` has passing Full, Atheris, Strix,
-security, Noema, and Devin checks, but OpenCode fails for lack of a current-head
-authenticated verdict. Its review threads are resolved; no independent
-approval is claimed. PR #857 at
-`d1afcd3763b925195d6c4303ef5004d92c0d94cf` has 2,707 local tests passed and
-one optional test skipped; hosted Full/Atheris and dependency-review pass,
-while the bounded Strix retry was canceled after its provider outage and
-OpenCode lacks a current-head authenticated verdict. Its principal-bound
-batch/embedding ownership slice is therefore not merge-claimed; independent
-approval remains required.
+at `c1f1cdca5dffa3181e55cc0cfc36fe4ac8cd2c60` has Full, Atheris, Strix, security,
+coverage, dependency, OSV, Trivy, Hypothesis, and Noema passing, but OpenCode
+fails for lack of a current-head authenticated verdict. This is the pre-push
+head of this baseline refresh branch; its own next documentation commit will
+advance the PR head. Threads are resolved and no independent approval is
+present. PR [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903)
+at `57ec66351c1ca37910650d5ad77e6bdbdc79be51` has ordinary checks passing but
+OpenCode and Strix fail closed; it has no qualifying independent approval.
+PR [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879)
+at `2b1829a81ea79e012480c680a7ef5683dc13c3bc` has ordinary checks and OpenCode
+passing but Strix failing closed; it has no qualifying independent approval.
 PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
-at `511956c274109a89af49193d1e6c78260dd2c1eb` has passing ordinary, security,
-fuzz, and coverage checks, but OpenCode lacks a current-head verdict and Strix
-failed closed on provider HTTP 500 responses. This PR has no qualifying
-independent approval.
+at `511956c274109a89af49193d1e6c78260dd2c1eb` has ordinary checks passing but
+OpenCode and Strix fail closed; it has no qualifying independent approval. PR
+[#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857)
+at `d1afcd3763b925195d6c4303ef5004d92c0d94cf` has ordinary checks passing but
+OpenCode fails; it has no qualifying independent approval.
 
 | PR | Exact head | Base / current gate state |
 | ---: | --- | --- |
-| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `7a6b6cf43d256cb49d4bd5103c1b1082e2e9155a` | `BLOCKED`; Full/Atheris/Devin pass, Strix retry 2 provider failure, OpenCode fail, no independent approval |
-| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `65109a4cd21d8c0db462c7a4a7b9c4f617f1a351` | `BLOCKED`; NIM quality/security/Hypothesis/CodeQL pass, Full/Atheris/Strix pending, Noema provider/catalog failure, OpenCode fail, no independent approval |
-| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `606db00e354b2db9827bcbf121aff5c19339c8d3` | `BLOCKED`; Full/Atheris/Strix/Devin/Noema pass, OpenCode fail, no independent approval |
-| [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904) | `038e9d348ca7a1220dcf2155b86ba8650ce06cb9` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode fail |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `edceb0e9a6211c2c24d1df2f01132cdd5e8a2016` | `BEHIND`; ordinary security checks pass, Full/Atheris/CodeQL running, Noema/OpenCode fail, no independent approval |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `a20d0fa0e925fb6c3a4e1464d1ef73e56c34e359` | `DIRTY`; NIM quality/security checks pass, Full/Atheris/CodeQL running, Noema pass, OpenCode fail, no independent approval |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `c1f1cdca5dffa3181e55cc0cfc36fe4ac8cd2c60` | `BEHIND`; Full/Atheris/Strix/Noema/security pass, OpenCode fail, no independent approval |
+| [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904) | `6cd7d57c177d945f67ba3b86b699949584bc6b7e` | `MERGED` as `b21645116b352967e50fc497b87eb745b9cc8c61`; ordinary checks pass, OpenCode/Strix fail after merge |
 | [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `57ec66351c1ca37910650d5ad77e6bdbdc79be51` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode/Strix fail closed |
-| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `126ca3dda89e4466c4947437ac7f5fcb159910c1` | `BLOCKED`; Full/Atheris pass, Strix provider failure, OpenCode fail, no independent approval |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `c1244f918fd8d0dc900faf4a16dadd9af22a07af` | `DIRTY`; Full/Atheris/Strix running, OpenCode fail, no independent approval |
 | [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `2b1829a81ea79e012480c680a7ef5683dc13c3bc` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode/Strix fail closed |
 | [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `511956c274109a89af49193d1e6c78260dd2c1eb` | `BLOCKED`, `REVIEW_REQUIRED`; ordinary checks pass, OpenCode fail, Strix provider failure |
 | [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `d1afcd3763b925195d6c4303ef5004d92c0d94cf` | `BLOCKED`, `REVIEW_REQUIRED`; Strix retry canceled, dependency-review pass, OpenCode fail |
