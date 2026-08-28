@@ -146,4 +146,4 @@ jobs:
           name: nim-benchmark-live-${{ github.run_id }}
           path: benchmark_artifacts/
           retention-days: 90
-          if-no-files-found: error
+          if-no-files-found: warn

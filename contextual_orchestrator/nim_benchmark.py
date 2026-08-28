@@ -68,6 +68,7 @@ from .orchestrator import (
     ModelAgent,
     ModelClient,
     OrchestrationPolicy,
+    ReasoningEffortProfile,
     TaskOrchestrator,
     estimate_tokens,
 )
@@ -325,10 +326,17 @@ class _BudgetedModelClient(ModelClient):
         super().__init__(**kwargs)
         self._request_budget = request_budget
 
-    def chat(self, agent: ModelAgent, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[dict[str, str]],
+        temperature: float | None = None,
+        top_p: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ) -> str:
         """Spend one budgeted request, then delegate to the normal chat path."""
         self._request_budget.spend_or_fail()
-        return super().chat(agent, messages, temperature)
+        return super().chat(agent, messages, temperature, top_p, effort_profile)
 
 
 class PolicyTokenBudgetExceeded(RuntimeError):
@@ -417,7 +425,9 @@ class EqualBudgetModelClient:
         self,
         agent: ModelAgent,
         messages: list[dict[str, Any]],
-        temperature: float = 0.2,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> str:
         """Perform one delegated call within the remaining cell allowance.
 
@@ -437,16 +447,16 @@ class EqualBudgetModelClient:
                 "policy cell total-token allowance exhausted"
             )
 
-        original_max_output_tokens = int(self._delegate.max_output_tokens)
-        self._delegate.max_output_tokens = min(
-            original_max_output_tokens,
-            output_allowance,
-        )
+        output_cap = min(int(self._delegate.max_output_tokens), output_allowance)
         self.observed_calls += 1
-        try:
-            answer = self._delegate.chat(agent, messages, temperature)
-        finally:
-            self._delegate.max_output_tokens = original_max_output_tokens
+        with self._delegate.request_settings(max_output_tokens=output_cap):
+            answer = self._delegate.chat(
+                agent,
+                messages,
+                temperature,
+                top_p,
+                effort_profile,
+            )
 
         estimated_total = prompt_tokens + estimate_tokens(answer)
         self.observed_tokens += estimated_total

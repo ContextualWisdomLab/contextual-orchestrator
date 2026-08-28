@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import subprocess
 import sys
@@ -374,7 +375,25 @@ class _BudgetDelegate:
         self.usage = usage
         self.observed_caps: list[int] = []
 
-    def chat(self, _agent, _messages, _temperature=0.2) -> str:
+    @contextmanager
+    def request_settings(self, **overrides):
+        """Apply the scoped output cap used by the real model client."""
+        previous = self.max_output_tokens
+        if overrides.get("max_output_tokens") is not None:
+            self.max_output_tokens = overrides["max_output_tokens"]
+        try:
+            yield
+        finally:
+            self.max_output_tokens = previous
+
+    def chat(
+        self,
+        _agent,
+        _messages,
+        _temperature=None,
+        _top_p=None,
+        _effort_profile=None,
+    ) -> str:
         """Record the temporary output cap and return the configured answer."""
         self.observed_caps.append(self.max_output_tokens)
         return self.answer
@@ -425,6 +444,9 @@ def test_equal_budget_client_validates_and_exposes_delegate_cap() -> None:
     assert client.max_output_tokens == 256
     client.max_output_tokens = 128
     assert delegate.max_output_tokens == 128
+
+    client.chat(_budget_agent(), [{"role": "user", "content": "hi"}])
+    assert delegate.observed_caps == [11]
 
 
 @pytest.mark.parametrize("value", [True, "3", float("nan"), float("inf"), -1])
