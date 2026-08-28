@@ -3383,7 +3383,7 @@ class TaskOrchestrator:
             if requested_model == self.FREE_MODEL
             else (
                 {candidate.id for candidate in self.agents}
-                if requested_model == self.AUTO_MODEL
+                if requested_model in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
                 else None
             )
         ))
