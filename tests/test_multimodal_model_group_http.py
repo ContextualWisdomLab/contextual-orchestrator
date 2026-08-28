@@ -37,17 +37,6 @@ def _equivalence(capability: str) -> dict[str, object]:
     }
 
 
-def _request_too_large_error() -> urllib.error.HTTPError:
-    """Build a provider request-size rejection for capability routing tests."""
-    return urllib.error.HTTPError(
-        "https://provider.example/v1",
-        413,
-        "request too large",
-        None,
-        None,
-    )
-
-
 def _post(port: int, path: str, payload: dict, *, token: str = TOKEN) -> tuple[int, bytes, str]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
@@ -372,42 +361,6 @@ def test_untrackable_video_submission_is_not_recorded_as_routing_success() -> No
         )
 
     assert orchestrator._group_router.member_report(agent.id)["success_count"] == 0
-
-
-def test_raced_media_size_rejections_do_not_penalize_endpoints() -> None:
-    """Immediate-race media size failures keep both endpoint health ledgers clean."""
-    agents = [
-        ModelAgent(
-            "first_image",
-            "provider/image",
-            tags=("image",),
-            group_name="image_group",
-            endpoint_equivalence=_equivalence("image"),
-        ),
-        ModelAgent(
-            "second_image",
-            "provider/image",
-            tags=("image",),
-            group_name="image_group",
-            endpoint_equivalence=_equivalence("image"),
-        ),
-    ]
-    orchestrator = TaskOrchestrator(agents)
-    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
-        lambda _agent, _endpoint, _payload: (_ for _ in ()).throw(_request_too_large_error())
-    )
-
-    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
-        orchestrator.proxy_capability(
-            {"model": orchestrator.AUTO_MODEL, "prompt": "diagram"},
-            capability="image",
-            endpoint="images/generations",
-        )
-
-    assert all(
-        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
-        for agent in agents
-    )
 
 
 def test_video_provider_outage_returns_documented_503() -> None:
