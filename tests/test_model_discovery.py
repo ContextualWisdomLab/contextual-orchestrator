@@ -427,8 +427,8 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].__cause__ is None
 
 
-def test_discover_all_models_applies_openrouter_zdr_evidence_to_other_sources() -> None:
-    register_credential("OPENAI_API_KEY", "sk-openai")
+def test_discover_all_models_scopes_openrouter_zdr_evidence_to_openrouter() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
     other_source = ProviderModelSource(
         provider_name="nvidia_nim",
         credential_name="NVIDIA_NIM_API_KEY",
@@ -442,19 +442,19 @@ def test_discover_all_models_applies_openrouter_zdr_evidence_to_other_sources() 
         if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
             return _Response({"data": [{"model_id": "openai/shared-model"}]})
         if request.full_url == other_source.list_url:
-            return _Response({"data": [{"id": "nvidia/shared-model"}]})
-        return _Response({"data": [{"id": "shared-model"}]})
+            return _Response({"data": [{"id": "openai/shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
 
     with patch(
         "contextual_orchestrator.model_discovery.urllib.request.urlopen",
         side_effect=urlopen,
     ):
-        discovered, errors = discover_all_models((OPENAI_SOURCE, other_source))
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openai", True),
-        ("nvidia_nim", True),
+        ("openrouter", True),
+        ("nvidia_nim", False),
     ]
 
 
