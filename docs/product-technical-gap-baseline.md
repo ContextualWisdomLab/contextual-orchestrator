@@ -5,11 +5,11 @@
 Protected `main` remains
 `b21645116b352967e50fc497b87eb745b9cc8c61`. The accepted workflow-object
 authorization decision now has a bounded implementation branch for its listed
-batch-job gap: HTTP-created chat/completions batch jobs carry a non-secret
+batch-job gap: HTTP-created batch routing jobs carry a non-secret
 authenticated-principal digest, and both status and result retrieval require
 the same digest. A mismatch is returned as the existing generic
 `batch_job_not_found` response before the backend is called; results also keep
-the separate trace-purpose gate. Local exact-branch evidence is `50 passed`
+the separate trace-purpose gate. Local exact-branch evidence is `61 passed`
 across the cost-router, HTTP, and OpenAPI contract suites. This is branch
 evidence only until the implementation reaches protected `main` through the
 normal review, Checks, and approval gates.
