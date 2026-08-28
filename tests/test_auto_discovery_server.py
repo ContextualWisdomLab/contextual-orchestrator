@@ -471,6 +471,7 @@ def test_disabled_gateway_discovery_cannot_retire_blank_seed_for_other_provider(
         "",
         base_url="https://gateway.example/v1",
         provider_name="configured_gateway",
+        tags=("bootstrap_seed",),
     )
     disabled_discovered = replace(
         ModelAgent(
@@ -491,6 +492,38 @@ def test_disabled_gateway_discovery_cannot_retire_blank_seed_for_other_provider(
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert blank_seed in orchestrator.agents
+
+
+def test_other_provider_cannot_retire_configured_gateway_seed(monkeypatch) -> None:
+    """An unrelated active catalog must not hide a failed-closed gateway seed."""
+    unrelated = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/chat-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        is_free=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda _sources: ([unrelated], []),
+    )
+    blank_seed = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        base_url="https://gateway.example/v1",
+        credential_key="LLM_GATEWAY_API_KEY",
+        provider_name="configured_gateway",
+        tags=("bootstrap_seed",),
+    )
+    orchestrator = TaskOrchestrator([blank_seed])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["added"] == ["openrouter_provider_chat_model"]
+    assert blank_seed in orchestrator.agents
+    assert any(agent.provider_name == "openrouter" for agent in orchestrator.agents)
 def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     monkeypatch,
 ) -> None:

@@ -463,7 +463,15 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for candidate in orchestrator.agents
     )
     for candidate in tuple(orchestrator.agents):
-        if has_real_runtime_agent and "bootstrap_seed" in candidate.tags:
+        configured_gateway_seed = (
+            candidate.provider_name == "configured_gateway"
+            and not candidate.model.strip()
+        )
+        if (
+            has_real_runtime_agent
+            and "bootstrap_seed" in candidate.tags
+            and not configured_gateway_seed
+        ):
             orchestrator.patch_agent(
                 "default", candidate.id, {"status": "disabled"}
             )
