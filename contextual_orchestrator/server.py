@@ -28,6 +28,7 @@ from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
+    ModelAgent,
     ProviderResponseError,
     TaskOrchestrator,
     _coerce_input_text,
@@ -1368,10 +1369,10 @@ def _validate_completions_model(body: dict[str, Any]) -> str:
             )
         body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
         return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
-    if not isinstance(model, str) or not model.strip():
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
     if not isinstance(model, str):
         raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")

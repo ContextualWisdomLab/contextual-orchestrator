@@ -3295,7 +3295,7 @@ class TaskOrchestrator:
         self._raise_if_spend_budget_exceeded()
         workflow = self.conduct(
             messages,
-            model_name=self.FREE_MODEL if free_only else "contextual-orchestrator",
+            model_name=self.FREE_MODEL if free_only else self.GATEWAY_DEFAULT_MODEL,
         )
         in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -4456,7 +4456,7 @@ class TaskOrchestrator:
             if attempt_served_id != candidate.id:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
-            answer, served_id, usage = attempt_answer, attempt_served_id, attempt_usage
+            answer, served_id = attempt_answer, attempt_served_id
             verification = self._realtime_route_judge(
                 text=text,
                 answer=answer,

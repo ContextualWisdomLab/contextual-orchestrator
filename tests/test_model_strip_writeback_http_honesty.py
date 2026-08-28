@@ -106,6 +106,11 @@ def test_unit_model_rejects_blank() -> None:
             assert getattr(exc, "code", None) == "invalid_model"
 
 
+def test_completions_model_rejects_non_string_with_type_error() -> None:
+    with pytest.raises(RequestError, match="model must be a string"):
+        _validate_completions_model({"model": 42})
+
+
 def test_http_chat_tools_accepts_padded_model() -> None:
     """Tools passthrough uses body.model for pool match — must see strip writeback."""
     server, thread, port = _server()

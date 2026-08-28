@@ -129,6 +129,39 @@ This document serves as the baseline for the Contextual Orchestrator (an enterpr
 
 # Product and Technical Gap Baseline
 
+## 2026-08-27 20:10 KST main trace-rpds regression slice
+
+Protected `main` briefly carried a merge-order regression from PR #891 merged
+before #888: the chat/structured branch still called the removed
+`_trace_requested` helper, so every structured chat or
+tool-plus-`response_format` request raised `AttributeError` and returned
+`500 internal_error` instead of the intended fail-closed
+`400 unsupported_trace_disclosure`. The same merge also drifted the fuzz
+requirements (`rpds-py` 2026.6.3) away from `requirements.lock` (`0.30.0`),
+so the Hypothesis and Atheris PR jobs failed `ResolutionImpossible` on every
+open PR.
+
+`#896` restored both: use the already-validated `include_trace` value on the
+chat branch (with two #891-era honesty tests aligned to the fail-closed #888
+contract), and re-pinned both fuzz requirement groups to the lock's
+`rpds-py==0.30.0` (same hash set) with the property `.in` source updated so a
+future regen cannot drift again. Full suite at exact head: **2428 passed**;
+Hypothesis, Atheris, and devin/opencode/noema reviews all pass.
+
+Merged to protected `main` as `5b3069d4`; protected-main runs for #887, #893,
+#883, #889 then landed, delivering bounded tool descriptions, the React +
+Storybook web admin, provider-affine video job ownership, and fail-closed
+commercial release authorization on one linear main sequence.
+
+**Open queue:** `#879` (provider-failure taxonomy/telemetry, `BEHIND`), `#857`
+(provider-backed embeddings, `DIRTY`), `#868` (gateway-default chat surfaces,
+`DIRTY`) remain agent-owned and re-check after the next main advance. The org
+Strix LLM scan is currently failing closed org-wide because the NIM/OpenRouter
+endpoints return 429 and the OpenAI-direct key reports
+`credit_balance_exhausted`; this is a provider-credit/billing condition, not a
+code finding, and its serial queue re-schedules each PR head once credits
+recover.
+
 ## 2026-08-27 trace-authority acceptance slice
 
 Protected `main` at `5a01759165be20ab38c05c2321d8a9f00ec331ea`
