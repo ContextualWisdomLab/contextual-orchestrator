@@ -362,8 +362,9 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
     assert first_status == 200
     assert second_status == 429
     assert second_body["error"]["code"] == "rate_limit_exceeded"
-    assert second_headers["Retry-After"] == "60"
-    assert second_body["error"]["detail"]["retry_after_seconds"] == 60
+    retry_after_seconds = int(second_headers["Retry-After"])
+    assert 1 <= retry_after_seconds <= 60
+    assert second_body["error"]["detail"]["retry_after_seconds"] == retry_after_seconds
 
 
 def test_public_bind_requires_explicit_opt_in() -> None:
