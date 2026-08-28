@@ -73,11 +73,10 @@ durability claim. This decision adds no inferred TTL or new retention policy.
 
 The registry representation is normalized for new submissions: immutable
 ownership lives in `video_job_records`, while the first complete provider usage
-report is joined from `video_job_usages`, and the latest observed status is
-joined from `video_job_lifecycles`. The pre-0037 `video_job_owners` map is read
-and updated only for legacy records during its configured retention. A
-provider's lifecycle status remains an observed provider field; the gateway does
-not infer a status enum from model names or timing.
+report is joined from `video_job_usages`. The pre-0037 `video_job_owners` map is
+read and updated only for legacy records during its configured retention. A
+provider's lifecycle status remains an observed response field; the gateway
+does not persist or infer a status enum from model names or timing.
 
 ## Consequences
 

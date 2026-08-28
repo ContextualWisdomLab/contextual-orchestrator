@@ -123,15 +123,9 @@ classDiagram
     +completion_tokens: integer
     +observed_at: integer
   }
-  class VideoJobLifecycle {
-    +gateway_job_id: text
-    +provider_status: text
-    +observed_at: integer
-  }
   ModelGroup "1" --> "0..*" ModelGroupMember
   AgentPool "1" --> "0..1" ModelGroupMember
   VideoJobRecord "1" --> "0..1" VideoJobUsage
-  VideoJobRecord "1" --> "0..1" VideoJobLifecycle
 ```
 
 `model_group_member.agent_id` is both its primary key and a foreign key, so one

@@ -7,8 +7,7 @@ PR #883's provider-affine video follow-up contract: the client receives an
 opaque gateway id, and polling/content reads use the exact accepting provider
 agent. This candidate slice closes the remaining representation gap for new
 submissions by separating immutable ownership in `video_job_records` from the
-first complete usage observation in `video_job_usages` and latest observed
-provider status in `video_job_lifecycles`, while retaining the
+first complete usage observation in `video_job_usages`, while retaining the
 existing `video_job_owners` shape only for legacy compatibility. The registry's
 existing Valkey configuration remains the only restart/multi-replica durability claim;
 standalone mode remains process-local. No provider status is inferred and no

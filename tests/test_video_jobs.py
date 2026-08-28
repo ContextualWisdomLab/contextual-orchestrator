@@ -14,7 +14,6 @@ from contextual_orchestrator.orchestrator import (
 )
 from contextual_orchestrator.video_jobs import (
     VideoJobContractError,
-    VideoJobLifecycle,
     VideoJobOwner,
     VideoJobRecord,
     VideoJobUsage,
@@ -65,7 +64,6 @@ def test_register_uses_normalized_ownership_and_usage_records() -> None:
     response = registry.register(
         {
             "id": "provider-job",
-            "status": "queued",
             "usage": {"prompt_tokens": 7, "completion_tokens": 2},
         },
         "declared_video_agent",
@@ -74,42 +72,15 @@ def test_register_uses_normalized_ownership_and_usage_records() -> None:
 
     record = factory._registries["video_job_records"][response["id"]]
     usage = factory._registries["video_job_usages"][response["id"]]
-    lifecycle = factory._registries["video_job_lifecycles"][response["id"]]
     assert isinstance(record, VideoJobRecord)
     assert isinstance(usage, VideoJobUsage)
-    assert isinstance(lifecycle, VideoJobLifecycle)
     assert record.owner_id == "principal_one"
     assert usage.prompt_tokens == 7 and usage.completion_tokens == 2
-    assert lifecycle.provider_status == "queued"
     assert not hasattr(record, "provider_usage")
     assert registry.owner(response["id"], "principal_one").provider_usage == {
         "prompt_tokens": 7,
         "completion_tokens": 2,
     }
-
-
-def test_provider_lifecycle_observation_updates_without_rewriting_usage() -> None:
-    factory = _SharedRegistryFactory()
-    registry = VideoJobRegistry(factory)
-    response = registry.register(
-        {"id": "provider-job", "status": "pending"},
-        "declared_video_agent",
-        "principal_one",
-    )
-    owner = registry.owner(response["id"], "principal_one")
-
-    observed = registry.observe_provider_result(
-        owner,
-        {
-            "id": "provider-job",
-            "status": "completed",
-            "usage": {"input_tokens": 8, "output_tokens": 3},
-        },
-    )
-
-    assert observed.provider_status == "completed"
-    assert observed.provider_usage == {"prompt_tokens": 8, "completion_tokens": 3}
-    assert registry.owner(response["id"], "principal_one").provider_status == "completed"
 
 
 def test_stale_owner_observation_cannot_replace_first_complete_usage() -> None:

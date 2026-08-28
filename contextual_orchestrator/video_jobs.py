@@ -36,14 +36,6 @@ class VideoJobUsage:
 
 
 @dataclass(frozen=True)
-class VideoJobLifecycle:
-    """Persist the latest provider lifecycle value without interpreting it."""
-
-    provider_status: str
-    observed_at: int
-
-
-@dataclass(frozen=True)
 class VideoJobOwner:
     """Combine an ownership record with its optional measured usage."""
 
@@ -55,8 +47,6 @@ class VideoJobOwner:
     usage_measurement_status: str = "unavailable"
     provider_usage: dict[str, int] | None = None
     agent_affinity_key: str = ""
-    provider_status: str | None = None
-    status_observed_at: int | None = None
 
 
 def video_agent_affinity_key(agent: Any) -> str:
@@ -83,9 +73,6 @@ class VideoJobRegistry:
         )
         self._usages = job_registry.mapping(
             "video_job_usages", decode=lambda raw: VideoJobUsage(**raw)
-        )
-        self._lifecycles = job_registry.mapping(
-            "video_job_lifecycles", decode=lambda raw: VideoJobLifecycle(**raw)
         )
         self._legacy_owners = job_registry.mapping(
             "video_job_owners", decode=lambda raw: VideoJobOwner(**raw)
@@ -121,18 +108,12 @@ class VideoJobRegistry:
         # Core ownership is written first: a failure after provider acceptance
         # must never leave the job without a gateway-addressable owner.
         self._records[gateway_job_id] = record
-        provider_status = self._provider_status(provider_result)
         if reported_usage is not None:
             self._store_usage_if_absent(gateway_job_id, VideoJobUsage(
                 prompt_tokens=reported_usage["prompt_tokens"],
                 completion_tokens=reported_usage["completion_tokens"],
                 observed_at=submitted_at,
             ))
-        if provider_status is not None:
-            self._lifecycles[gateway_job_id] = VideoJobLifecycle(
-                provider_status=provider_status,
-                observed_at=submitted_at,
-            )
         return self.public_response(provider_result, self._owner_from_record(record))
 
     @staticmethod
@@ -194,7 +175,6 @@ class VideoJobRegistry:
                 "completion_tokens": usage.completion_tokens,
             }
         )
-        lifecycle = self._lifecycles.get(record.gateway_job_id)
         return VideoJobOwner(
             gateway_job_id=record.gateway_job_id,
             provider_job_id=record.provider_job_id,
@@ -206,8 +186,6 @@ class VideoJobRegistry:
             ),
             provider_usage=provider_usage,
             agent_affinity_key=record.agent_affinity_key,
-            provider_status=(None if lifecycle is None else lifecycle.provider_status),
-            status_observed_at=(None if lifecycle is None else lifecycle.observed_at),
         )
 
     def observe_provider_result(
@@ -234,12 +212,6 @@ class VideoJobRegistry:
             self._legacy_owners[owner.gateway_job_id] = updated
             return updated
         assert isinstance(record, VideoJobRecord)
-        provider_status = self._provider_status(provider_result)
-        if provider_status is not None:
-            self._lifecycles[owner.gateway_job_id] = VideoJobLifecycle(
-                provider_status=provider_status,
-                observed_at=int(time.time()),
-            )
         if usage is not None and owner.provider_usage is None:
             self._store_usage_if_absent(owner.gateway_job_id, VideoJobUsage(
                 prompt_tokens=usage["prompt_tokens"],
@@ -271,9 +243,3 @@ class VideoJobRegistry:
                 type(completion) is not int or completion < 0):
             return None
         return {"prompt_tokens": prompt, "completion_tokens": completion}
-
-    @staticmethod
-    def _provider_status(document: dict[str, Any]) -> str | None:
-        """Return a non-empty provider status without mapping it to a gateway enum."""
-        status = document.get("status")
-        return status if isinstance(status, str) and status else None

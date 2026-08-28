@@ -6,12 +6,12 @@ the stored provider owner rather than selecting a model again. The provider job
 identifier remains internal, and a provider lifecycle value is copied only as
 observed data.
 
-New registry entries keep immutable ownership in `video_job_records`, the first
-complete token report in `video_job_usages`, and the latest provider status in
-`video_job_lifecycles`. These are one-to-zero-or-one relationships: missing usage
-remains unavailable, repeated polling cannot revise the first measured report,
-and standalone process-local storage makes no durability claim. Valkey is
-required when restart or replica continuity matters.
+New registry entries keep immutable ownership in `video_job_records` and the
+first complete token report in `video_job_usages`. Missing usage remains
+unavailable, repeated polling cannot revise the first measured report, and
+provider status is returned only as observed by the current provider response.
+Standalone process-local storage makes no durability claim. Valkey is required
+when restart or replica continuity matters.
 
 The contract follows the HTTP asynchronous-resource model: the upstream video
 API accepts work and exposes a polling resource, while HTTP semantics require
