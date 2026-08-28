@@ -151,7 +151,11 @@ def test_virtual_passthrough_advances_on_oversized_tool_description() -> None:
         }
     )
 
-    result = _build(client).proxy_completion(
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, group_name="provider-group") for agent in orchestrator.agents
+    ]
+    result = orchestrator.proxy_completion(
         {
             "model": TaskOrchestrator.AUTO_MODEL,
             "messages": [{"role": "user", "content": "review code"}],
@@ -164,6 +168,8 @@ def test_virtual_passthrough_advances_on_oversized_tool_description() -> None:
         "primary_agent",
         "fallback_agent",
     ]
+    assert "primary_agent" not in orchestrator._circuit
+    assert orchestrator._group_router.member_observation_count("primary_agent") == 0
 
 
 def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
@@ -379,6 +385,71 @@ def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> No
     assert "primary_agent" not in orchestrator._circuit
 
 
+def test_structured_repair_reuses_provider_that_accepted_request() -> None:
+    """Repair must not retry a provider that already rejected the request size."""
+    class RepairClient(SequencedProxyClient):
+        def proxy_send_once(
+            self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            del endpoint
+            self.calls.append((agent.id, deepcopy(payload)))
+            if agent.id == "primary_agent":
+                raise _http_error(413)
+            content = "not json" if len(self.calls) == 2 else "{}"
+            return {
+                "model": agent.model,
+                "choices": [{"message": {"content": content}}],
+            }
+
+        proxy_send = proxy_send_once
+
+    client = RepairClient({})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                priority=10,
+                provider_name="primary",
+                tags=("response_format",),
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                priority=1,
+                provider_name="fallback",
+                tags=("response_format",),
+            ),
+        ],
+        client=client,
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "large structured request"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"schema": {"type": "object"}},
+            },
+        },
+        single_agent=False,
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+        "fallback_agent",
+    ]
+
+
 def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> None:
     """Exhausted 413 routing remains a client-visible size error, not HTTP 500."""
     client = SequencedProxyClient(
@@ -393,6 +464,24 @@ def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> 
             {
                 "model": TaskOrchestrator.AUTO_MODEL,
                 "messages": [{"role": "user", "content": "large request"}],
+            }
+        )
+
+
+def test_all_oversized_tool_rejections_preserve_request_too_large() -> None:
+    """Raw provider-specific size errors retain the all-candidates signal."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _tool_description_too_long_error(),
+            "fallback_agent": _tool_description_too_long_error(),
+        }
+    )
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        _build(client).proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large tools"}],
             }
         )
 
