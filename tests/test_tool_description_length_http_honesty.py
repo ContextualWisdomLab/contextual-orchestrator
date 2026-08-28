@@ -1,4 +1,4 @@
-"""Chat tools function.description max length honesty over HTTP (1024 chars)."""
+"""Chat tools accept bounded-request descriptions used by OpenCode."""
 
 from __future__ import annotations
 
@@ -78,31 +78,27 @@ def test_http_chat_accepts_tool_description_at_1024_chars() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_tool_description_over_1024_chars() -> None:
+def test_http_chat_accepts_opencode_length_tool_description() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "desc 1025"}],
+                "messages": [{"role": "user", "content": "OpenCode tool"}],
                 "tools": [
                     {
                         "type": "function",
                         "function": {
                             "name": "lookup",
-                            "description": "d" * 1025,
+                            "description": "d" * 4096,
                             "parameters": {"type": "object", "properties": {}},
                         },
                     }
                 ],
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_tools" in blob
-        assert "1024" in blob
-        assert "unknown_fields" not in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -110,5 +106,5 @@ def test_http_chat_rejects_tool_description_over_1024_chars() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_tool_description_at_1024_chars()
-    test_http_chat_rejects_tool_description_over_1024_chars()
+    test_http_chat_accepts_opencode_length_tool_description()
     print("ok")

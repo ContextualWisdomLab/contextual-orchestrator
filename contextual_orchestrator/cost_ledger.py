@@ -531,10 +531,16 @@ class InMemoryLedgerStore:
 
     def __init__(self) -> None:
         self._rows: List[Dict[str, Any]] = []
+        self._usage_record_ids: set[str] = set()
+        self._lock = threading.Lock()
 
     def append(self, record: UsageRecord) -> None:
         """Append a flattened record row."""
-        self._rows.append(record.as_dict())
+        with self._lock:
+            if record.usage_record_id in self._usage_record_ids:
+                return
+            self._rows.append(record.as_dict())
+            self._usage_record_ids.add(record.usage_record_id)
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return rows within the optional half-open time window."""
@@ -699,14 +705,14 @@ _CORE_USAGE_INSERT_SQL = {
         "(usage_record_id, created_at, workflow_run_id, request_channel, "
         "route_mode, provider_name, model_name, prompt_tokens, completion_tokens, "
         "total_tokens, cost_amount, currency_code) VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
     "pyformat": (
         "INSERT INTO llm_usage_records "
         "(usage_record_id, created_at, workflow_run_id, request_channel, "
         "route_mode, provider_name, model_name, prompt_tokens, completion_tokens, "
         "total_tokens, cost_amount, currency_code) VALUES "
-        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
 }
 _ATTRIBUTION_VALUE_INSERT_SQL = {
@@ -722,19 +728,18 @@ _RECORD_ATTRIBUTION_INSERT_SQL = {
         "INSERT INTO usage_record_attributions "
         "(usage_record_id, dimension_name, dimension_value) "
         f"VALUES ({placeholder}, {placeholder}, {placeholder}) "
-        "ON CONFLICT (usage_record_id, dimension_name) DO UPDATE SET "
-        "dimension_value = excluded.dimension_value"
+        "ON CONFLICT (usage_record_id, dimension_name) DO NOTHING"
     )
     for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
 }
 _USAGE_MEASUREMENT_INSERT_SQL = {
     "qmark": (
         "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
-        "VALUES (?, ?)"
+        "VALUES (?, ?) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
     "pyformat": (
         "INSERT INTO usage_measurements (usage_record_id, measurement_status) "
-        "VALUES (%s, %s)"
+        "VALUES (%s, %s) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
 }
 _USAGE_SELECT_SQL = (
@@ -1083,6 +1088,7 @@ class CostLedger:
         attribution: Optional[AttributionDimensions | Dict[str, Any]] = None,
         measurement_status: str = "measured",
         created_at: Optional[int] = None,
+        usage_record_id: Optional[str] = None,
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
         if isinstance(attribution, dict) or attribution is None:
@@ -1119,7 +1125,7 @@ class CostLedger:
         if measurement_status not in {"measured", "estimated", "unavailable"}:
             raise ValueError("measurement_status must be measured, estimated, or unavailable")
         record = UsageRecord(
-            usage_record_id=f"usage_{uuid.uuid4().hex}",
+            usage_record_id=usage_record_id or f"usage_{uuid.uuid4().hex}",
             created_at=created_at if created_at is not None else self._clock(),
             workflow_run_id=workflow_run_id,
             request_channel=request_channel,

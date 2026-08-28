@@ -222,7 +222,7 @@ def classify_provider_failure(
             retryable=True,
             transport=transport,
         )
-    dns_error = exc if isinstance(exc, socket.gaierror) else exc.__cause__
+    dns_error = exc if isinstance(exc, socket.gaierror) else getattr(exc, "__cause__", None)
     if isinstance(dns_error, socket.gaierror):
         return ProviderUpstreamError(
             agent_id=agent_id,

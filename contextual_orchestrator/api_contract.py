@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
@@ -32,6 +31,58 @@ OPENAPI_SPEC = {
                         "uniqueItems": True,
                         "items": {"type": "string"},
                     },
+                },
+            },
+            "ReleaseAuthorization": {
+                "type": "object",
+                "required": ["status", "authorized", "blockers", "evidence_identities"],
+                "properties": {
+                    "status": {"type": "string", "enum": ["release_authorized", "release_authorization_blocked"]},
+                    "authorized": {"type": "boolean"},
+                    "blockers": {"type": "array", "items": {"type": "string"}},
+                    "evidence_identities": {"type": "object"},
+                    "required_checks": {"type": "object"},
+                    "review": {"type": "object"},
+                    "findings": {"type": "object"},
+                },
+            },
+            "CommercialReleaseCandidate": {
+                "type": "object",
+                "required": ["release_status", "product_evidence_status", "release_authorization"],
+                "properties": {
+                    "release_status": {"type": "string"},
+                    "product_evidence_status": {"type": "string"},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                    "release_summary": {"type": "object"},
+                },
+            },
+            "CommercialGapRegister": {
+                "type": "object",
+                "required": ["gap_register_status", "gap_summary", "gap_items", "release_authorization", "concrete_blockers"],
+                "properties": {
+                    "gap_register_status": {"type": "string"},
+                    "gap_summary": {"type": "object"},
+                    "gap_items": {"type": "array", "items": {"type": "object"}},
+                    "concrete_blockers": {"type": "array", "items": {"type": "string"}},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                },
+            },
+            "CommercialProcurementReadiness": {
+                "type": "object",
+                "required": ["procurement_status", "release_authorization"],
+                "properties": {
+                    "procurement_status": {"type": "string"},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                    "procurement_summary": {"type": "object"},
+                },
+            },
+            "CommercialContractReadiness": {
+                "type": "object",
+                "required": ["contract_status", "release_authorization"],
+                "properties": {
+                    "contract_status": {"type": "string"},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                    "contract_summary": {"type": "object"},
                 },
             }
         },
@@ -211,6 +262,41 @@ OPENAPI_SPEC = {
                 ("/v1/rerank", "create_rerank", "Rerank documents", {"type": "object", "required": ["query", "documents"], "properties": {"model": {"type": "string"}, "query": {"type": "string"}, "documents": {"type": "array", "minItems": 1}}}),
                 ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}}}),
             )
+        },
+        "/v1/videos/{video_job_id}": {
+            "get": {
+                "operationId": "get_video",
+                "summary": "Check video generation status",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "video_job_id", "in": "path", "required": True,
+                    "schema": {"type": "string"},
+                }],
+                "responses": {
+                    "200": {"description": "Video job status"},
+                    "404": {"description": "Video job not found"},
+                    "503": {"description": "Owning provider is unavailable"},
+                },
+            }
+        },
+        "/v1/videos/{video_job_id}/content": {
+            "get": {
+                "operationId": "download_video",
+                "summary": "Download a completed video",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "video_job_id", "in": "path", "required": True,
+                    "schema": {"type": "string"},
+                }],
+                "responses": {
+                    "200": {
+                        "description": "Video content",
+                        "content": {"video/mp4": {"schema": {"type": "string", "format": "binary"}}},
+                    },
+                    "404": {"description": "Video job not found"},
+                    "503": {"description": "Owning provider is unavailable"},
+                },
+            }
         },
         "/v1/responses": {
             "post": {
@@ -459,7 +545,12 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_release_candidate",
                 "summary": "Get commercial release candidate package for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial release candidate"}},
+                "responses": {
+                    "200": {
+                        "description": "Commercial release candidate with separate fail-closed release authority",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialReleaseCandidate"}}},
+                    }
+                },
             }
         },
         "/api/v1/commercial_gap_registers/latest": {
@@ -467,7 +558,12 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_gap_register",
                 "summary": "Get commercial gap register for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial gap register"}},
+                "responses": {
+                    "200": {
+                        "description": "Commercial gap register with release authority",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialGapRegister"}}},
+                    }
+                },
             }
         },
         "/api/v1/commercial_procurement_readiness/latest": {
@@ -475,7 +571,7 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_procurement_readiness",
                 "summary": "Get commercial procurement readiness for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial procurement readiness"}},
+                "responses": {"200": {"description": "Commercial procurement readiness with release authority", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialProcurementReadiness"}}}}},
             }
         },
         "/api/v1/commercial_contract_readiness/latest": {
@@ -483,7 +579,7 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_contract_readiness",
                 "summary": "Get commercial contract readiness for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial contract readiness"}},
+                "responses": {"200": {"description": "Commercial contract readiness with release authority", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialContractReadiness"}}}}},
             }
         },
         "/api/v1/commercial_onboarding_readiness/latest": {

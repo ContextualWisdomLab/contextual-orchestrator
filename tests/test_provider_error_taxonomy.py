@@ -168,6 +168,10 @@ def test_classification_handles_network_tls_and_unknown_causes() -> None:
     assert permanent_dns.error_code == "provider_connection_error"
     assert not permanent_dns.retryable
 
+    none_failure = classify_provider_failure(None, agent_id="a", model="m")
+    assert none_failure.error_code == "api_error"
+    assert not none_failure.retryable
+
     cert = ssl.SSLCertVerificationError("bad chain")
     tls_verify = classify_provider_failure(cert, agent_id="a", model="m")
     assert tls_verify.error_code == "tls_verification_failed"
@@ -222,6 +226,25 @@ def test_capability_dispatch_preserves_last_classified_provider_failure() -> Non
         assert raised is expected
     else:
         raise AssertionError("classified capability failure was not raised")
+
+
+def test_binary_passthrough_classifies_provider_transport_failure() -> None:
+    """Binary capability failures retain the same caller-facing taxonomy."""
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent("audio_agent", "audio-model", base_url="https://provider.example/v1")
+    upstream = _http_error(503)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_open_provider", side_effect=upstream
+    ):
+        try:
+            client.proxy_send_bytes(agent, "audio/speech", {"input": "hello"})
+        except ProviderUpstreamError as raised:
+            assert raised.error_code == "service_unavailable"
+            assert raised.client_status == 503
+            assert raised.provider_status == 503
+            assert raised.transport == "passthrough"
+        else:  # pragma: no cover
+            raise AssertionError("binary provider failure must be classified")
 
 
 def test_detail_and_transport_are_preserved_for_callers() -> None:
