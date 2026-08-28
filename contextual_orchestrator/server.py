@@ -7047,7 +7047,11 @@ def build_server(
                         TaskOrchestrator.FREE_MODEL,
                     }:
                         _require_pool_model(orchestrator, model_name)
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    } and stream:
                         if body.get("tools"):
                             raise RequestError(
                                 400,
@@ -7089,6 +7093,80 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                                 "response_streamed": stream,
                             },
+                        )
+                        return
+                    if (
+                        model_name in {
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
+                        }
+                        and not body.get("tools")
+                        and not body.get("response_format")
+                        and not (
+                            isinstance(body.get("text"), dict)
+                            and body["text"].get("format")
+                        )
+                    ):
+                        messages = []
+                        instructions = body.get("instructions")
+                        if isinstance(instructions, str) and instructions:
+                            messages.append({"role": "system", "content": instructions})
+                        messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        responses_attribution = dict(
+                            _validate_attribution(body.get("attribution")) or {}
+                        )
+                        responses_user_id = _validate_completions_user(body)
+                        if responses_user_id is not None and not responses_attribution.get("account"):
+                            responses_attribution["account"] = responses_user_id
+                        responses_attribution.setdefault("model_name", body["model"])
+                        responses_attribution.setdefault("service", "responses_api")
+                        responses_routing = dict(
+                            _validate_routing(body.get("routing")) or {}
+                        )
+                        # This Responses path returns JSON, not a batch job envelope.
+                        responses_routing["channel"] = "sync"
+                        started_at = time.perf_counter()
+                        result = self._run(
+                            lambda: coordinator.complete(
+                                messages,
+                                mode="auto",
+                                attribution=responses_attribution,
+                                hints=responses_routing,
+                                model_name=model_name,
+                                cache_bypass=cache_bypass,
+                                cache_partition=cache_partition,
+                            )
+                        )
+                        summaries = [
+                            _REASONING_STAGE_SUMMARIES.get(
+                                step.get("role"), "Processing the request."
+                            )
+                            for step in result.get("trace", [])
+                        ]
+                        orchestrator.record_analytics_event(
+                            "responses_orchestrated",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "transport_status_code": 200,
+                                "response_status": "completed",
+                                "model_name": model_name,
+                                "duration_ms": round(
+                                    (time.perf_counter() - started_at) * 1000, 2
+                                ),
+                                "response_streamed": False,
+                            },
+                        )
+                        self._send(
+                            _orchestrated_response(
+                                model_name,
+                                result,
+                                f"resp_{uuid.uuid4().hex}",
+                                int(time.time()),
+                                summaries,
+                            )
                         )
                         return
                     started_at = time.perf_counter()
