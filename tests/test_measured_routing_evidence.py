@@ -262,7 +262,6 @@ class _VerdictJudgeAdapter:
 
 def test_realtime_judge_accept_records_quality_success(monkeypatch: pytest.MonkeyPatch) -> None:
     orchestrator = _orch(ModelAgent("worker_agent", "mock", tags=("reasoning",)))
-    adapter = _VerdictJudgeAdapter(accepted=True)
 
     monkeypatch.setattr(orchestrator, "_model_judge_verification", lambda *a, **k: {
         "accepted": True, "reason": "stub verdict", "verifier_output": k.get("answer", ""),
@@ -325,6 +324,59 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
     backup_quality = orchestrator._quality_router.member_report("backup_worker")
     assert primary_quality["failure_count"] == 1
     assert backup_quality["success_count"] == 1
+
+
+def test_route_once_keeps_judge_reject_failover_when_quality_write_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, caplog
+) -> None:
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning",), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning",), priority=1),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents,
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+
+    def fake_invoke(agent, messages, **kwargs):
+        if agent.id == "primary_worker":
+            return "weak answer", agent.id, {"completion_tokens": 10}
+        return "strong answer", agent.id, None
+
+    monkeypatch.setattr(orchestrator, "_invoke", fake_invoke)
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda _text, fallback, *, free_only=False: {
+            "accepted": "strong" in fallback["verifier_output"],
+            "reason": "verdict",
+            "verifier_output": fallback["verifier_output"],
+            "judge": "model",
+        },
+    )
+    original_append = orchestrator._routing_observation_store.append
+    append_calls = 0
+
+    def fail_first_quality_append(*args, **kwargs):
+        nonlocal append_calls
+        append_calls += 1
+        if append_calls == 1:
+            raise OSError("simulated quality storage outage")
+        return original_append(*args, **kwargs)
+
+    try:
+        monkeypatch.setattr(
+            orchestrator._routing_observation_store,
+            "append",
+            fail_first_quality_append,
+        )
+        result = orchestrator.route_once([{"role": "user", "content": "do work"}])
+        assert result["answer"] == "strong answer"
+        assert result["trace"][-1]["agent_id"] == "backup_worker"
+        assert "durable quality observation failed" in caplog.text
+    finally:
+        orchestrator.close()
 
 
 def test_policy_realtime_judge_must_be_boolean() -> None:

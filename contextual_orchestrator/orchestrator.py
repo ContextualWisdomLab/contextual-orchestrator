@@ -4921,7 +4921,7 @@ class TaskOrchestrator:
                     served_id, latency_seconds, output_tokens=output_tokens
                 )
             else:
-                self._quality_router.observe_failure(served_id)
+                self._record_quality_failure(served_id)
             if prompt_context is not None:
                 self._observe_contextual_quality(
                     prompt_context,
@@ -6185,6 +6185,15 @@ class TaskOrchestrator:
         except RoutingObservationPersistenceError:
             _LOGGER.error(
                 "durable routing observation failed while recording provider failure"
+            )
+
+    def _record_quality_failure(self, agent_id: str) -> None:
+        """Record judge failure without aborting a usable-answer failover."""
+        try:
+            self._quality_router.observe_failure(agent_id)
+        except RoutingObservationPersistenceError:
+            _LOGGER.error(
+                "durable quality observation failed while recording provider failure"
             )
 
     def _record_success(self, agent_id: str) -> None:
