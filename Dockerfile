@@ -63,9 +63,7 @@ RUN set -eu; \
     test "$#" -eq 1 && test -f "$1" || { \
       echo "pinned Rust token-packer build must produce exactly one wheel" >&2; exit 1; \
     }; \
-    uv run --python /usr/local/bin/python --no-project \
-      --with-requirements requirements.lock \
-      --with-requirements fuzz/requirements-property.txt \
+    uv run --locked --extra api --extra db --extra queue --group dev \
       --with "$1" \
       python -m pytest -q
 USER orchestrator

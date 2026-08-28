@@ -33,5 +33,5 @@ jobs:
         with:
           version: "0.12.5"
 
-      - name: Run full test suite
-        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+      - name: Run hash-locked full test suite with native token packer
+        run: make test

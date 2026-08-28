@@ -1,4 +1,4 @@
 .PHONY: test
 
 test:
-	uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
+	./scripts/run_hash_locked_tests.sh

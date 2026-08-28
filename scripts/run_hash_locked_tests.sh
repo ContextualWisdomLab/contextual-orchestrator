@@ -18,5 +18,4 @@ docker build \
     --build-arg "MATURIN_BUILDER_IMAGE=$MATURIN_BUILDER_IMAGE" \
     --progress plain \
     --target test-runner \
-    --output type=cacheonly \
     "$repository_root"
