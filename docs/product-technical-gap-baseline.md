@@ -1,22 +1,20 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 11:18 KST exact-head PR remediation slice
+## 2026-08-28 11:33 KST exact-head PR remediation slice
 
-Protected `main` is `8d5924f8`. PR #879 remains at `e6d9e937`: its exact tree
-passed **2515 tests**, but the required Strix job failed closed because every
-configured provider was unavailable (OpenAI `insufficient_quota`, NVIDIA 429,
-and OpenRouter 502); no code finding was reported. PR #868 is now at the
-externally advanced exact head `262c6d87`; its predecessor remediation passed
-the focused model/HTTP regression set, but that proof is not promoted to the
-new head until the current hosted checks finish. Both are `MERGEABLE` but
-`BLOCKED` without an independent approval, so neither is claimed as
+Protected `main` is `8d5924f8`. PR #879 is now at `2b1829a8`; its exact tree
+passed **2516 tests** after fixing ambiguous classified passthrough failures so
+status-less connection errors cannot replay a possibly accepted request. Its
+new hosted checks are still running. PR #868 is at externally advanced head
+`262c6d87` with hosted checks passing; PR #857 is at externally advanced head
+`b2aedb7b` with only Strix still pending. All four open PRs remain `MERGEABLE`
+but `BLOCKED` without an independent approval, so none is claimed as
 protected-main delivery.
 
-PR #857 is now at externally advanced head `b2aedb7b`, `MERGEABLE`, and
-`REVIEW_REQUIRED`, with its full suite, Atheris, and Strix checks still
-pending. The earlier local merge attempt at `0aec4a54` was aborted without a
+The earlier local merge attempt for #857 at `0aec4a54` was aborted without a
 push; no stale branch evidence is promoted to protected-main evidence. The
-docs-only recording PR #900 is still open; its full suite is still pending.
+docs-only recording PR #900 has passing hosted checks and remains open pending
+the same independent approval gate.
 The existing hourly OpenCode maintenance workflow remains the single
 scheduled loop (`23 * * * *` UTC); no duplicate scheduler was added.
 
