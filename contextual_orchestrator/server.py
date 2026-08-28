@@ -5977,7 +5977,7 @@ def build_server(
                 } or path.startswith("/v1/audio/")
                 body = self._read_json(
                     max_body_bytes=(
-                        MAX_MULTIMODAL_JSON_BODY_BYTES
+                        min(security.max_body_bytes, MAX_MULTIMODAL_JSON_BODY_BYTES)
                         if large_inference_json
                         else security.max_body_bytes
                     )

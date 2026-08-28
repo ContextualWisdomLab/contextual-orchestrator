@@ -62,6 +62,12 @@ def test_default_json_body_limit_matches_openai_image_request_contract() -> None
     assert (exc_info.value.status, exc_info.value.code) == (413, "request_too_large")
 
 
+def test_multimodal_limit_cannot_override_operator_body_limit() -> None:
+    """The 512 MB protocol ceiling does not bypass the configured safety ceiling."""
+    configured = SecurityConfig(max_body_bytes=1024).max_body_bytes
+    assert min(configured, MAX_MULTIMODAL_JSON_BODY_BYTES) == 1024
+
+
 def test_request_body_size_rejects_duplicate_and_comma_joined_lengths() -> None:
     """Equivalent duplicate values are rejected rather than normalized."""
     duplicate = _headers(content_length="7|7")
