@@ -433,20 +433,16 @@ def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
 def _apply_zdr_model_evidence(
     discovered: list[DiscoveredModel], zdr_model_ids: set[str]
 ) -> list[DiscoveredModel]:
-    """Apply OpenRouter ZDR evidence to matching rows from every provider."""
+    """Attach OpenRouter catalog evidence only to matching OpenRouter rows."""
     if not zdr_model_ids:
         return discovered
     exact_ids = {model_id.strip().casefold() for model_id in zdr_model_ids if model_id.strip()}
-    suffix_counts: dict[str, int] = {}
-    for model_id in exact_ids:
-        suffix = model_id.rsplit("/", 1)[-1]
-        suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
     return [
         replace(
             model,
             zdr_capable=(
-                model.model_id.strip().casefold() in exact_ids
-                or suffix_counts.get(model.model_id.rsplit("/", 1)[-1].strip().casefold()) == 1
+                model.provider_name == "openrouter"
+                and model.model_id.strip().casefold() in exact_ids
             ),
         )
         for model in discovered
