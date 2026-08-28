@@ -1,4 +1,4 @@
 .PHONY: test
 
 test:
-	uv run --no-project --with-requirements requirements.lock --with-requirements fuzz/requirements-property.txt python -m pytest -q
+	uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q

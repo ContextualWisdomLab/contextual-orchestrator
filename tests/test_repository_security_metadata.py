@@ -159,29 +159,19 @@ def test_python_lockfile_uses_hash_pinning():
     assert "sqlalchemy==" in lock_text
 
 
-def test_unit_workflow_installs_runtime_and_test_lockfiles():
-    """CI must exercise declared runtime integrations, not graceful no-op imports."""
+def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
+    """CI must install the uv lock so git-backed runtime dependencies are present."""
     workflow_text = read_text(".github/workflows/tests.yml")
-    install_step = workflow_text.split(
-        "      - name: Install test dependencies\n", 1
-    )[1].split("\n      - name:", 1)[0]
-    runtime_command = "python -m pip install --require-hashes -r requirements.lock"
-    property_command = (
-        "python -m pip install --require-hashes "
-        "-r fuzz/requirements-property.txt"
-    )
-
-    assert runtime_command in install_step
-    assert property_command in install_step
-    assert install_step.index(runtime_command) < install_step.index(property_command)
+    assert "uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e" in workflow_text
+    assert 'version: "0.12.5"' in workflow_text
+    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in workflow_text
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():
-    """The documented local command must exercise optional runtime integrations."""
+    """The documented local command must exercise the project lock."""
     makefile_text = read_text("Makefile")
 
-    assert "--with-requirements requirements.lock" in makefile_text
-    assert "--with-requirements fuzz/requirements-property.txt" in makefile_text
+    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in makefile_text
 
 
 def test_security_tool_lockfile_uses_hash_pinning():
