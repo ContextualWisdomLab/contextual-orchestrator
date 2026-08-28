@@ -66,6 +66,7 @@ from .tool_fallback import (
 )
 from .response_cache import ResponseCacheProvider, build_response_cache_key
 from .psychometric_routing import PsychometricRoutingEvidence
+from .routing_observation_store import SqliteRoutingObservationStore
 from .reasoning_effort_profile import (
     ReasoningEffortProfile,
     apply_request_profile,
@@ -3037,6 +3038,7 @@ class TaskOrchestrator:
         cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
+        routing_observation_window_seconds: int | None = None,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -3048,21 +3050,46 @@ class TaskOrchestrator:
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
+        if routing_observation_window_seconds is not None and (
+            isinstance(routing_observation_window_seconds, bool)
+            or type(routing_observation_window_seconds) is not int
+            or routing_observation_window_seconds < 1
+        ):
+            raise ValueError("routing_observation_window_seconds must be a positive integer")
+        if routing_observation_window_seconds is not None and state_db is None:
+            raise ValueError("routing_observation_window_seconds requires state_db")
+        self._routing_observation_store = (
+            SqliteRoutingObservationStore(
+                state_db,
+                routing_observation_window_seconds,
+            )
+            if state_db is not None and routing_observation_window_seconds is not None
+            else None
+        )
         # Measured speed/stability routing inside model groups (global: every
-        # selection path below funnels through _ranked_agents). Ledger state is
-        # process-local by design: it reflects this instance's observed traffic
-        # and resets on restart, never carrying stale evidence across pools.
-        self._group_router = ModelGroupRouter()
+        # selection path below funnels through _ranked_agents). The optional
+        # store shares only the explicitly configured time window across processes.
+        self._group_router = ModelGroupRouter(
+            observation_store=self._routing_observation_store,
+            ledger_name="transport",
+        )
         # Quality ledger: identical estimator family as the transport ledger but
         # fed by real-time fast-mlsirm judge verdicts on final answers, so
         # measured accuracy -- not transport success -- steers future routing.
-        self._quality_router = ModelGroupRouter(prior_resolver=resolve_quality_prior)
+        self._quality_router = ModelGroupRouter(
+            prior_resolver=resolve_quality_prior,
+            observation_store=self._routing_observation_store,
+            ledger_name="quality",
+        )
         self._psychometric_router = PsychometricRoutingEvidence(
             max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
         )
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
+        if self._routing_observation_store is not None:
+            self._group_router.refresh()
+            self._quality_router.refresh()
 
         self._openrouter_collector = OpenRouterUptimeCollector(
             self.candidates,
@@ -3160,6 +3187,8 @@ class TaskOrchestrator:
             self._pool_store.close()
         if self._store is not None:
             self._store.close()
+        if self._routing_observation_store is not None:
+            self._routing_observation_store.close()
 
     def provider_readiness_report(
         self,
@@ -12956,6 +12985,15 @@ class TaskOrchestrator:
             "routing_evidence": {
                 "transport": self._group_router.snapshot(),
                 "quality": self._quality_router.snapshot(),
+            },
+            "routing_observation_policy": {
+                "enabled": self._routing_observation_store is not None,
+                "window_seconds": (
+                    None
+                    if self._routing_observation_store is None
+                    else self._routing_observation_store.window_seconds
+                ),
+                "retention_policy": "time_window_only" if self._routing_observation_store is not None else None,
             },
             "recent_workflow_runs": [
                 self._shorten_run(run)

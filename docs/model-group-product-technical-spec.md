@@ -108,8 +108,18 @@ classDiagram
     +agent_id: text
     +group_name: text
   }
+  class RoutingObservation {
+    +observation_id: integer
+    +ledger_name: text
+    +member_id: text
+    +observed_at: real
+    +success: boolean
+    +latency_seconds: real?
+    +output_tokens: integer?
+  }
   ModelGroup "1" --> "0..*" ModelGroupMember
   AgentPool "1" --> "0..1" ModelGroupMember
+  ModelGroupMember "1" --> "0..*" RoutingObservation
 ```
 
 `model_group_member.agent_id` is both its primary key and a foreign key, so one
@@ -143,9 +153,13 @@ transactionally into these relations.
 - Touch targets, responsive layout, typography/color tokens, navigation, form
   validation, performance, and accessibility remain governed by the existing
   Admin design system and regression contracts.
-- Multi-replica observation durability, video job ownership, and opt-in spend-
-  capped live canaries remain explicitly tracked in
-  `docs/product-technical-gap-baseline.md`.
+- Operators may opt into multi-process observation sharing with
+  `--routing-observation-window-seconds` alongside `--state-db`. The normalized
+  `routing_observations` table replays only the selected time window and uses
+  retention-only semantics; calibrated decay, cross-model quality weights, and
+  production horizontal-scaling claims remain outside this slice.
+- Video job ownership and opt-in spend-capped live canaries remain explicitly
+  tracked in `docs/product-technical-gap-baseline.md`.
 
 ## Evidence and limits
 

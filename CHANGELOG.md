@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- An opt-in, time-window-only SQLite observation store for measured model-group
+  routing, configured with `--routing-observation-window-seconds` alongside
+  `--state-db`; it shares completed attempt evidence across gateway processes
+  without inventing decay or cross-model equivalence (ADR 0039).
 - Fail-closed commercial release authorization bound to a signed, exact-head
   GitHub evidence snapshot, propagated through every downstream commercial
   readiness report while keeping local product evidence inspectable.

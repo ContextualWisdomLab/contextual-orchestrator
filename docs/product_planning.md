@@ -42,7 +42,7 @@ Enterprise teams want the benefit of collective model intelligence without makin
 |---|---|
 | Admin dashboard | Fugu says the user should see one model; enterprise operators still need internal evidence. |
 | Agent pool | Fugu report makes pool configurability and provider exclusion first-class. |
-| Model groups | Operators assert provider-neutral equivalence, then inspect and edit measured member routing without relying on transient example model names. |
+| Model groups | Operators assert provider-neutral equivalence, then inspect and edit measured member routing without relying on transient example model names; an explicit SQLite time window can share current observations across gateway processes. |
 | Orchestration policy | Fugu and Fugu Ultra define the latency-quality frontier that operators must tune. |
 | Workflow run trace | TRINITY and Conductor both make role/step behavior central to coordination quality. |
 | Access list inspector | Conductor access lists are the concrete mechanism for context visibility and auditability. |
@@ -65,5 +65,6 @@ Enterprise teams want the benefit of collective model intelligence without makin
 - The management console prioritizes traceability and policy control over decorative SaaS chrome.
 - Every new product surface maps to one of: compatible API adoption, model/group pool management, cost and policy control, trace audit, access-list evidence, evaluation replay, or i18n.
 - Local runtime analytics are clearly labeled as process-local evidence and not production telemetry.
+- Shared routing observations are opt-in, time-window-only evidence; they do not imply calibrated decay or production horizontal-scaling readiness.
 - Sales readiness is reported as local enterprise-pilot evidence with pass/warn/fail remediation, not as a production compliance certificate.
 - Commercial readiness is reported as high-value buyer due-diligence evidence with a KRW 2,000,000,000 target value caveat, not as a sale guarantee.

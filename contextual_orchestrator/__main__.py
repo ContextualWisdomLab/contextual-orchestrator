@@ -338,6 +338,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
+    parser.add_argument(
+        "--routing-observation-window-seconds",
+        type=_positive_int,
+        default=None,
+        help="Persist measured routing observations in state-db for this explicit time window; decay is not applied.",
+    )
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
@@ -424,6 +430,8 @@ def main(argv: list[str] | None = None) -> None:
         help="discover source-declared chat-capable models at startup and activate them",
     )
     args = parser.parse_args(arguments)
+    if args.routing_observation_window_seconds is not None and not args.state_db:
+        parser.error("--routing-observation-window-seconds requires --state-db")
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -437,6 +445,7 @@ def main(argv: list[str] | None = None) -> None:
         load_agents(args.agents),
         client=client,
         state_db=args.state_db,
+        routing_observation_window_seconds=args.routing_observation_window_seconds,
         agents_db=args.agents_db,
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,

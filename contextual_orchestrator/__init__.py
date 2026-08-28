@@ -53,6 +53,11 @@ from .response_cache import (
     ResponseCacheProvider,
     build_response_cache_key,
 )
+from .routing_observation_store import (
+    RoutingObservation,
+    RoutingObservationStore,
+    SqliteRoutingObservationStore,
+)
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -108,6 +113,9 @@ __all__ = [
     "ResponseCacheProvider",
     "RedisResponseCacheProvider",
     "build_response_cache_key",
+    "RoutingObservation",
+    "RoutingObservationStore",
+    "SqliteRoutingObservationStore",
     # routing / batch
     "RoutingPolicy",
     "RoutingHints",
