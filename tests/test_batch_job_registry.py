@@ -37,7 +37,12 @@ from contextual_orchestrator.batch_routing import (
 )
 from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.kv_config import InMemoryConfigStore
-from contextual_orchestrator.orchestrator import ModelAgent, ModelClient, TaskOrchestrator
+from contextual_orchestrator.orchestrator import (
+    ModelAgent,
+    ModelClient,
+    RequestDeadlineExceeded,
+    TaskOrchestrator,
+)
 
 
 class FakeValkeyClient:
@@ -262,6 +267,44 @@ def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> N
         time.sleep(0.01)
     assert document["ready_count"] == len(agents)
     assert counters["maximum"] == 2
+
+
+def test_readiness_refresh_keeps_ready_results_when_one_probe_times_out() -> None:
+    """One provider timeout is not a terminal failure for the aggregate job."""
+
+    class PartialProbeClient(ModelClient):
+        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
+            del timeout
+            if agent.id == "timed_out_agent":
+                raise RequestDeadlineExceeded("request deadline exceeded")
+            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    agents = [
+        ModelAgent("timed_out_agent", "mock"),
+        ModelAgent("ready_agent", "mock"),
+    ]
+    orchestrator = TaskOrchestrator(agents, client=PartialProbeClient())
+    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
+    coordinator = CostRoutingCoordinator(orchestrator)
+    job = coordinator.submit_provider_readiness_refresh(
+        agent_ids=[agent.id for agent in agents],
+        capability_code="structured",
+        timeout_seconds=1.0,
+        deadline_epoch=time.time() + 5.0,
+    )
+
+    for _ in range(100):
+        document = coordinator.provider_readiness_refresh_document(job["job_id"])
+        if document["status"] == "completed":
+            break
+        time.sleep(0.01)
+
+    assert document["status"] == "completed"
+    assert document["completed_count"] == 2
+    assert document["ready_count"] == 1
+    assert sorted(document["results"].values()) == ["not_ready", "ready"]
+    assert orchestrator._structured_readiness["timed_out_agent"]["status"] == "not_ready"
+    assert orchestrator._structured_readiness["ready_agent"]["status"] == "ready"
 
 
 def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success() -> None:

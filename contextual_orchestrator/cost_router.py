@@ -407,8 +407,16 @@ class CostRoutingCoordinator:
                     results: Dict[str, str] = {}
                     for future in as_completed(futures):
                         agent_id = futures[future]
-                        result = future.result()
-                        status = "ready" if result.get("status") == "ready" else "not_ready"
+                        try:
+                            result = future.result()
+                        except Exception:  # noqa: BLE001 - one provider probe boundary
+                            status = "not_ready"
+                        else:
+                            status = (
+                                "ready"
+                                if result.get("status") == "ready"
+                                else "not_ready"
+                            )
                         results[agent_id] = status
                         with self.job_registry.lock(
                             "provider_readiness_job_state",
