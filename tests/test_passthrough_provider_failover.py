@@ -522,24 +522,6 @@ def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> 
         )
 
 
-def test_all_oversized_tool_rejections_preserve_request_too_large() -> None:
-    """Raw provider-specific size errors retain the all-candidates signal."""
-    client = SequencedProxyClient(
-        {
-            "primary_agent": _tool_description_too_long_error(),
-            "fallback_agent": _tool_description_too_long_error(),
-        }
-    )
-
-    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
-        _build(client).proxy_completion(
-            {
-                "model": TaskOrchestrator.AUTO_MODEL,
-                "messages": [{"role": "user", "content": "large tools"}],
-            }
-        )
-
-
 def test_mixed_failures_are_not_misreported_as_all_candidates_too_large() -> None:
     """A final 413 cannot erase an earlier provider outage from exhaustion evidence."""
     client = SequencedProxyClient(

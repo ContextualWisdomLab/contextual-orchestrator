@@ -76,6 +76,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Treat a provider's explicit 1,024-character tool-description rejection as a
   request-size failure eligible for virtual-model failover.
+- Preserve request-size exhaustion semantics for media capability failover
+  without degrading provider health.
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
 - Mixed structured workflows now retain a cost-ledger row for calls whose

@@ -443,6 +443,70 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
     assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
 
 
+def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+    """Oversized capability requests do not degrade provider health."""
+    agents = [
+        ModelAgent("first_image", "provider/image", tags=("image",), group_name="image_group"),
+        ModelAgent("second_image", "provider/image", tags=("image",), group_name="image_group"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_capability(
+            {"model": "image-group", "prompt": "large image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
+
+
+def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+    """413s in the equivalent-endpoint race do not open provider circuits."""
+    agents = [
+        ModelAgent(
+            "first_image",
+            "provider/image",
+            tags=("image",),
+            group_name="image_group",
+            endpoint_equivalence=_equivalence("image"),
+        ),
+        ModelAgent(
+            "second_image",
+            "provider/image",
+            tags=("image",),
+            group_name="image_group",
+            endpoint_equivalence=_equivalence("image"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_capability(
+            {"model": "image_group", "prompt": "large image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
+
+
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("paid_video", "provider/paid", tags=("video",), priority=100),
@@ -482,32 +546,6 @@ def test_ungrouped_capability_routes_record_measured_outcomes() -> None:
     )
 
     assert orchestrator._group_router.member_report(agent.id)["success_count"] == 1
-
-
-def test_capability_size_exhaustion_preserves_health_and_error_identity() -> None:
-    """Request-size rejection is not provider instability on media routes."""
-    agents = [
-        ModelAgent("first_image", "provider/first", tags=("image",)),
-        ModelAgent("second_image", "provider/second", tags=("image",)),
-    ]
-    orchestrator = TaskOrchestrator(agents)
-    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ProviderRequestTooLargeError("provider request body is too large")
-        )
-    )
-
-    with pytest.raises(ProviderRequestTooLargeError, match="every image provider"):
-        orchestrator.proxy_capability(
-            {"model": TaskOrchestrator.AUTO_MODEL, "prompt": "large image request"},
-            capability="image",
-            endpoint="images/generations",
-        )
-
-    assert all(
-        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
-        for agent in agents
-    )
 
 
 def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:

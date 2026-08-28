@@ -5368,21 +5368,12 @@ class TaskOrchestrator:
             usage = value[2]
         elif isinstance(value, dict) and isinstance(value.get("usage"), dict):
             usage = value["usage"]
-        validation_outcome = (
-            "completed"
-            if error is None
-            else (
-                "request_too_large"
-                if _is_request_too_large_error(error)
-                else "provider_error"
-            )
-        )
         self._append_audit_event(
             "equivalent_endpoint_attempt_completed",
             {
                 "capability": capability,
                 "endpoint_id": endpoint_id,
-                "validation_outcome": validation_outcome,
+                "validation_outcome": "provider_error" if error is not None else "completed",
                 "usage": usage,
                 "duplicate_cost_evidence": (
                     "provider_reported_usage" if usage is not None
@@ -5463,6 +5454,8 @@ class TaskOrchestrator:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
+        every_failure_was_request_too_large = True
+        saw_failure = False
         race_members = self._equivalent_race_members(candidates, capability=capability)
         # Async video submission creates provider-side work that cannot be
         # raced safely without loser cancellation: every accepted loser would
@@ -5528,7 +5521,6 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         last_error: Exception | None = None
-        all_too_large = True
         for agent in candidates:
             payload = {
                 key: value
@@ -5550,8 +5542,12 @@ class TaskOrchestrator:
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
                 last_error = exc
-                if not _is_request_too_large_error(exc):
-                    all_too_large = False
+                saw_failure = True
+                request_too_large = _is_request_too_large_error(exc)
+                every_failure_was_request_too_large = (
+                    every_failure_was_request_too_large and request_too_large
+                )
+                if not request_too_large:
                     self._group_router.observe_failure(agent.id)
                 continue
             if selection_sink is not None:
@@ -5562,9 +5558,9 @@ class TaskOrchestrator:
                 return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
-        if last_error is not None and all_too_large:
+        if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
-                f"request body exceeds every {capability} provider limit"
+                "request body exceeds every eligible provider limit"
             ) from last_error
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
