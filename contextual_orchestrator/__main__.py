@@ -333,12 +333,12 @@ def main(argv: list[str] | None = None) -> None:
         _check_fast_mlsirm_command()
         return
 
-    if len(sys.argv) > 1 and sys.argv[1] == "nim-benchmark":
+    if arguments and arguments[0] == "nim-benchmark":
         # Optional benchmark harness (issue #86): dynamic NIM catalog discovery,
         # all-modality capability probes, and the cost-quality policy benchmark.
         from .nim_benchmark import run_benchmark_cli
 
-        sys.exit(run_benchmark_cli(sys.argv[2:]))
+        sys.exit(run_benchmark_cli(arguments[1:]))
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")

@@ -94,6 +94,20 @@ def test_main_accepts_explicit_argv_without_mutating_process_arguments() -> None
     assert security.auth_token == expected_value
 
 
+def test_main_dispatches_nim_benchmark_from_explicit_argv() -> None:
+    with patch(
+        "contextual_orchestrator.nim_benchmark.run_benchmark_cli",
+        return_value=7,
+    ) as run_benchmark_cli:
+        try:
+            main(["nim-benchmark", "--dry-run"])
+        except SystemExit as exc:
+            assert exc.code == 7
+        else:  # pragma: no cover
+            raise AssertionError("benchmark CLI must return its exit code")
+    run_benchmark_cli.assert_called_once_with(["--dry-run"])
+
+
 def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
     invalid_options = (
         (["--local-concurrency", "0"], "positive integer"),

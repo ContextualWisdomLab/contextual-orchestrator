@@ -77,8 +77,10 @@ run fails closed before the first capability probe; a lexicographic model prefix
 can never be emitted as routing-readiness evidence.
 
 The acceptance fixture uses 127 discovered models, nine capability contracts,
-seven evaluation workers, and ten locked tasks. Its complete upper bound is
-`1 + (127 × 9) + (10 × (7 + 1 + 5 + 1)) = 1,284` requests. The monthly workflow
+seven evaluation workers, and thirty locked tasks. Its complete upper bound is
+`1 + (127 × 9) + (30 × (2 × 7 + 2 + 5 + 2)) = 1,834` requests. Direct and
+cheapest-worker cells reserve a worker call plus a real-time judge call;
+conduct reserves its five-call workflow and judge envelope. The monthly workflow
 therefore uses a reviewed hard ceiling of 2,000 requests, leaving bounded room
 for catalog growth while retaining a deterministic cap. If a later catalog no
 longer fits, the same preflight reports required and configured counts and makes
@@ -142,8 +144,9 @@ support, or per-model production price.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled ten-task manifest is a smoke test. It verifies the integration
-surface but cannot authorize production routing. The governance floor is:
+The bundled thirty-task manifest is an evidence-floor fixture with two exploratory
+tasks outside the decision set. It verifies the integration surface but cannot
+authorize production routing. The governance floor is:
 
 - at least 30 locked paired tasks shared by compared policies; and
 - at least 90% successful cells across the requested comparison matrix.

@@ -86,10 +86,12 @@ evidence. Once preflight passes, all fixed cells execute under bounded
 concurrency; thread scheduling can change completion order but not coverage.
 
 The monthly schedule uses a hard ceiling of 2,000 requests. On the 127-model
-catalog scale observed on 2026-08-05, the ten-task, seven-worker configuration
-requires 1,284 requests: one catalog request, 1,143 capability probes, and a
-140-request worst-case evaluation reserve. Catalog growth beyond the ceiling
-causes a zero-partial-egress preflight failure rather than silent truncation.
+catalog scale observed on 2026-08-05, the current thirty-task, seven-worker
+configuration requires 1,834 requests: one catalog request, 1,143 capability
+probes, and a 690-request worst-case evaluation reserve. The reserve includes
+the real-time judge call on direct and cheapest-worker cells. Catalog growth
+beyond the ceiling causes a zero-partial-egress preflight failure rather than
+silent truncation.
 
 The embedded video fixture is a deterministic, decodable 16 × 16, one-frame
 H.264 MP4. Its bytes are verified against SHA-256
@@ -154,8 +156,9 @@ dry-run schemas and must never be presented as real model pricing.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled ten-task manifest is a smoke fixture. It proves integration behavior
-but does not authorize production routing. A report reaches
+The bundled thirty-task manifest is an evidence-floor fixture with two exploratory
+tasks kept outside the decision set. It proves integration behavior but does not
+authorize production routing. A report reaches
 `evidence_review_required` only when it contains at least 30 paired locked tasks
 and at least 90% successful comparison cells. Otherwise it reports
 `insufficient_evidence` and explains the shortfall.

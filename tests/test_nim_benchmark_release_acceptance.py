@@ -222,9 +222,9 @@ def test_complete_request_plan_covers_a_127_model_catalog() -> None:
     assert plan == {
         "catalog_request_count": 1,
         "capability_probe_request_count": 127 * 9,
-        "evaluation_reserve_request_count": 140,
+        "evaluation_reserve_request_count": 230,
         "planned_worker_count": 7,
-        "total_required_request_count": 1284,
+        "total_required_request_count": 1374,
     }
 
 
@@ -234,9 +234,9 @@ def test_buyer_facing_request_plan_matches_internal_plan() -> None:
         "catalog_discovery_requests": 1,
         "capability_probe_requests": 127 * 9,
         "evaluation_worker_ceiling": 7,
-        "evaluation_requests": 420,
-        "requests_after_catalog": 127 * 9 + 420,
-        "total_requests": 1564,
+        "evaluation_requests": 690,
+        "requests_after_catalog": 127 * 9 + 690,
+        "total_requests": 1834,
     }
 
 
@@ -261,7 +261,7 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
 
     with pytest.raises(
         nb.BenchmarkBudgetError,
-        match="complete benchmark needs 1564 requests but configured cap is 1563",
+        match="complete benchmark needs 1834 requests but configured cap is 1833",
     ):
         nb.run_benchmark(
             "dry_run",
@@ -269,7 +269,7 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
             None,
             str(tmp_path / "insufficient"),
             endpoint=FAKE_ENDPOINT,
-            max_total_requests=1563,
+            max_total_requests=1833,
             max_eval_models=7,
             transport=transport,
         )
@@ -314,17 +314,17 @@ def test_exact_complete_request_boundary_runs_and_records_plan(tmp_path: Path) -
         None,
         str(tmp_path / "exact_boundary"),
         endpoint=FAKE_ENDPOINT,
-        max_total_requests=18,
+        max_total_requests=21,
         max_eval_models=1,
         transport=transport,
     )
 
-    assert report["request_budget"]["max_total_requests"] == 18
-    assert report["request_budget"]["planned_total_requests"] == 18
+    assert report["request_budget"]["max_total_requests"] == 21
+    assert report["request_budget"]["planned_total_requests"] == 21
     assert report["request_budget"]["catalog_requests"] == 1
     assert report["request_budget"]["capability_probe_requests"] == 9
-    assert report["request_budget"]["evaluation_reserve_requests"] == 8
-    assert report["request_budget"]["requests_spent"] <= 18
+    assert report["request_budget"]["evaluation_reserve_requests"] == 11
+    assert report["request_budget"]["requests_spent"] <= 21
 
 
 def test_video_probe_fixture_is_one_decodable_frame_with_stable_hash() -> None:

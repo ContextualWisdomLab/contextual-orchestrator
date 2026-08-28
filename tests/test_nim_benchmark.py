@@ -308,9 +308,20 @@ def test_budgeted_client_charges_each_chat_call() -> None:
     budget = nb.RequestBudget(1)
     client = nb._BudgetedModelClient(budget)
     agent = _mock_agents("dryrun/chat-basic")[0]
+    assert client.max_retries == 0
     assert client.chat(agent, [{"role": "user", "content": "hello there"}])
     with pytest.raises(nb.BenchmarkBudgetError):
         client.chat(agent, [{"role": "user", "content": "over budget"}])
+
+
+def test_equal_budget_client_forwards_delegate_controls() -> None:
+    delegate = ModelClient(max_output_tokens=32)
+    client = nb.EqualBudgetModelClient(delegate, total_token_budget=128, maximum_calls=2)
+    assert client.temperature == delegate.temperature
+    assert client.timeout == delegate.timeout
+    assert client.request_settings_snapshot() == delegate.request_settings_snapshot()
+    with client.request_settings(max_output_tokens=16):
+        assert client.request_settings_snapshot()["max_output_tokens"] == 16
 
 
 # --------------------------------------------------------------------------
@@ -870,7 +881,9 @@ def test_cheapest_priced_agent_selection() -> None:
 
 
 def test_planned_evaluation_requests_formula() -> None:
-    assert nb.planned_evaluation_requests(3, 10) == 10 * (3 + 1 + nb.MAX_WORKFLOW_DEPTH + 1)
+    assert nb.planned_evaluation_requests(3, 10) == 10 * (
+        3 * 2 + 2 + nb.MAX_WORKFLOW_DEPTH + 2
+    )
 
 
 def test_evaluate_policies_contract_failures() -> None:
@@ -1068,7 +1081,7 @@ def _dry_report(output_dir: str) -> dict:
         TASK_MANIFEST_PATH,
         PRICING_SCENARIO_PATH,
         output_dir,
-        max_total_requests=600,
+        max_total_requests=900,
     )
 
 
@@ -1194,7 +1207,7 @@ def test_dry_run_accepts_explicit_transport() -> None:
             TASK_MANIFEST_PATH,
             None,
             tmp,
-            max_total_requests=600,
+            max_total_requests=900,
             transport=nb.build_dry_run_transport(),
         )
         assert report["provenance"]["pricing_scenario_sha256"] is None
@@ -1220,7 +1233,7 @@ def test_live_run_end_to_end_offline() -> None:
                 TASK_MANIFEST_PATH,
                 None,
                 tmp,
-                max_total_requests=600,
+                max_total_requests=900,
                 git_sha="abc123",
                 workflow_run_id="run-42",
                 transport=nb.build_dry_run_transport(),
@@ -1233,7 +1246,7 @@ def test_live_run_end_to_end_offline() -> None:
     assert report["honesty_labels"]["actual_cost_basis"] == (
         "reviewed_nvidia_developer_program_hosted_endpoint_access"
     )
-    assert report["request_budget"]["requests_spent"] <= 600
+    assert report["request_budget"]["requests_spent"] <= 900
     assert "nvapi-test-credential" not in json.dumps(report)
 
 
@@ -1249,7 +1262,7 @@ def test_live_run_uses_default_transport_builder_when_none_given() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = nb.run_benchmark(
                 "live", TASK_MANIFEST_PATH, None, tmp,
-                max_total_requests=600, git_sha="abc123", workflow_run_id="run-43",
+                max_total_requests=900, git_sha="abc123", workflow_run_id="run-43",
             )
     finally:
         nb.build_default_transport = original_builder
@@ -1289,7 +1302,7 @@ def test_cli_dry_run_succeeds() -> None:
                     "--task-manifest", TASK_MANIFEST_PATH,
                     "--pricing-scenario", PRICING_SCENARIO_PATH,
                     "--output-dir", tmp,
-                    "--max-total-requests", "600",
+                    "--max-total-requests", "900",
                 ]
             )
         assert exit_code == 0

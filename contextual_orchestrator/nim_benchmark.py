@@ -319,6 +319,9 @@ class _BudgetedModelClient(ModelClient):
     """ModelClient that charges every chat call against the shared request budget."""
 
     def __init__(self, request_budget: RequestBudget, **kwargs: Any) -> None:
+        # ponytail: disable hidden provider retries so the hard request budget
+        # bounds actual egress rather than only logical chat calls.
+        kwargs["max_retries"] = 0
         super().__init__(**kwargs)
         self._request_budget = request_budget
 
@@ -376,6 +379,10 @@ class EqualBudgetModelClient:
         self.observed_tokens = 0
         self._pending_estimated_tokens: int | None = None
         self._exceeded = False
+
+    def __getattr__(self, name: str) -> Any:
+        """Forward provider-client capabilities not owned by the cell limiter."""
+        return getattr(self._delegate, name)
 
     @property
     def max_output_tokens(self) -> int:
@@ -1567,11 +1574,13 @@ def cheapest_priced_agent(
 def planned_evaluation_requests(worker_count: int, locked_task_count: int) -> int:
     """Upper bound on evaluation calls, checked pre-flight so the run fails closed.
 
-    Direct baselines: one call per worker per task; ``route_once``: one call
-    per task; ``conduct``: at most :data:`MAX_WORKFLOW_DEPTH` calls per task;
-    cheapest-eligible: one call per task.
+    Direct baselines, ``route_once``, and cheapest-eligible cells each reserve
+    one worker call plus one real-time judge call. ``conduct`` reserves its
+    five-step workflow envelope, including the model judge.
     """
-    return locked_task_count * (worker_count + 1 + MAX_WORKFLOW_DEPTH + 1)
+    return locked_task_count * (
+        worker_count * 2 + 2 + MAX_WORKFLOW_DEPTH + 2
+    )
 
 
 def plan_complete_request_budget(
