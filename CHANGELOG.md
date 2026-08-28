@@ -76,6 +76,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   active ZDR request policy.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
+- Treat a provider's explicit 1,024-character tool-description rejection as a
+  request-size failure eligible for virtual-model failover.
+- Preserve request-size exhaustion semantics for media capability failover
+  without degrading provider health.
+- Allow multimodal JSON up to OpenAI's 512 MB image-input request ceiling when
+  the operator raises `--max-body-bytes` above the secure 64 KiB default.
+- Add principal-owned OpenAI-compatible `/v1/files` resources with disk-backed
+  512 MB uploads, the 200 MB Batch JSONL limit, and provider replicas for 413
+  failover without exposing upstream file IDs.
+- Route initial and fallback AUTO/FREE candidates with fast-mlsirm Judge IRT
+  evidence for similar system/user interactions; candidates without converged
+  psychometric evidence retain the existing measured-routing order.
+- Run the full test suite from the hash-locked `uv.lock` so git-backed
+  `fast-mlsirm` and its `numpy` dependency are installed in CI and locally.
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
 - Mixed structured workflows now retain a cost-ledger row for calls whose
