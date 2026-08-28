@@ -35,6 +35,17 @@ from .cost_ledger import (
     dimension_catalog,
 )
 from .cost_router import CostRoutingCoordinator
+from .cefr_language_observation import (
+    CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1,
+    FAST_MLSIRM_SCORING_SCHEMA_VERSION,
+    CefrContractAdapter,
+    CefrLanguageObservationRequest,
+    CefrObservationError,
+    CefrRaterAssignment,
+    StructuredObservationGateway,
+    TaskOrchestratorCefrGateway,
+    observe_language_response_criteria,
+)
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
@@ -126,5 +137,14 @@ __all__ = [
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
+    "CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1",
+    "FAST_MLSIRM_SCORING_SCHEMA_VERSION",
+    "CefrContractAdapter",
+    "CefrLanguageObservationRequest",
+    "CefrObservationError",
+    "CefrRaterAssignment",
+    "StructuredObservationGateway",
+    "TaskOrchestratorCefrGateway",
+    "observe_language_response_criteria",
     "evaluate_release_authorization",
 ]

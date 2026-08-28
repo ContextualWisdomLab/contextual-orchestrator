@@ -69,6 +69,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
   `batch_route`; omit it to keep today's payload.
+- Experimental CEFR criterion-observation gateway with exact contract checks,
+  independent rater blindness, bounded structured-output parsing, replay
+  provenance, and human-review routing; it emits no final CEFR level or score.
 
 ### Fixed
 
