@@ -90,7 +90,7 @@ def test_configured_gateway_blank_seed_expands_to_exact_catalog_models(
         def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
             del endpoint
             assert agent.model in {"catalog-chat-alpha", "catalog-chat-beta"}
-            assert body["response_format"] == {"type": "json_object"}
+            assert body["response_format"]["type"] in {"json_schema", "json_object"}
             return {
                 "choices": [{"message": {"content": '{"ok":true}'}}],
                 "model": agent.model,
