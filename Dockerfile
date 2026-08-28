@@ -52,9 +52,8 @@ CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_F
 
 # Local and CI tests share this target. The source package extends its package
 # path to the wheel environment so the native module remains a build artifact.
-FROM runtime-base AS test-runner
+FROM token-builder AS test-runner
 USER root
-COPY --from=token-builder /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=token-builder /build/wheels /tmp/token-wheels
 COPY . /io
 WORKDIR /io
@@ -63,7 +62,9 @@ RUN set -eu; \
     test "$#" -eq 1 && test -f "$1" || { \
       echo "pinned Rust token-packer build must produce exactly one wheel" >&2; exit 1; \
     }; \
-    uv run --locked --extra api --extra db --extra queue --group dev \
+    uv run --python /usr/local/bin/python3.12 --no-project \
+      --with-requirements requirements.lock \
+      --with-requirements fuzz/requirements-property.txt \
       --with "$1" \
       python -m pytest -q
 USER orchestrator

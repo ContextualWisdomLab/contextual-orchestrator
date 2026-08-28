@@ -166,10 +166,12 @@ def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     assert "scripts/run_hash_locked_tests.sh" in read_text(
         "Makefile"
     )
-    assert "--target test-runner" in read_text("scripts/run_hash_locked_tests.sh")
-    assert "uv run --locked --extra api --extra db --extra queue --group dev" in read_text(
-        "Dockerfile"
-    )
+    installer_text = read_text("scripts/run_hash_locked_tests.sh")
+    assert "--target test-runner" in installer_text
+    dockerfile_text = read_text("Dockerfile")
+    assert "FROM token-builder AS test-runner" in dockerfile_text
+    assert "--with-requirements requirements.lock" in dockerfile_text
+    assert "--with \"$1\"" in dockerfile_text
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():
