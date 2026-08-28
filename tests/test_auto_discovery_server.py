@@ -50,6 +50,33 @@ def test_main_passes_the_runtime_allowlist_to_the_model_client(monkeypatch) -> N
         main(["synthetic prompt"])
 
 
+def test_explicit_provider_host_replaces_the_environment_default(monkeypatch) -> None:
+    """A CLI trust-boundary override cannot inherit additional env hosts."""
+    monkeypatch.setenv(
+        "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "environment.example"
+    )
+
+    def capture_client(_agents, *, client, **_kwargs):
+        assert client.allowed_provider_hosts == {"explicit.example"}
+        raise RuntimeError("model-client-captured")
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.load_agents", lambda _path: []
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.TaskOrchestrator", capture_client
+    )
+
+    with pytest.raises(RuntimeError, match="model-client-captured"):
+        main(
+            [
+                "synthetic prompt",
+                "--allowed-provider-host",
+                "explicit.example",
+            ]
+        )
+
+
 def test_configured_gateway_blank_seed_expands_to_exact_catalog_models(
     monkeypatch,
 ) -> None:
