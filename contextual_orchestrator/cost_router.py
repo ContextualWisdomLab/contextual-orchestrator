@@ -594,7 +594,9 @@ class CostRoutingCoordinator:
         return job
 
     def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
-        """Resolve one batch request through the caller-provided model pool."""
+        """Resolve only ZDR batch requests through the caller-provided model pool."""
+        if not request.zdr_only:
+            return request
         with self.orchestrator.request_policy(request.zdr_only):
             agent = self.orchestrator._requested_agent(request.model)
             if agent is None:

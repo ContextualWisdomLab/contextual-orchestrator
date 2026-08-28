@@ -708,6 +708,31 @@ def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() ->
     assert captured[0].zdr_only is True
 
 
+def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
+    """The ZDR resolver must not change ordinary batch passthrough behavior."""
+    captured: list[BatchRequest] = []
+
+    class _CapturingBackend:
+        name = "capturing"
+
+        def submit(self, requests, metadata=None):
+            captured.extend(requests)
+            return BatchJob("batch-ordinary", self.name, status="submitted", request_count=len(requests))
+
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("configured_agent", "configured-model", "mock://configured")]),
+        batch_backend=_CapturingBackend(),
+    )
+    request = BatchRequest(
+        messages=[{"role": "user", "content": "ordinary batch"}],
+        model="unconfigured-provider-model",
+    )
+
+    coordinator.submit_batch([request])
+
+    assert captured == [request]
+
+
 if __name__ == "__main__":  # pragma: no cover
     for _name, _fn in sorted(globals().items()):
         if _name.startswith("test_") and callable(_fn):
