@@ -289,6 +289,31 @@ def test_proxy_send_only_client_preserves_classified_failover_signal() -> None:
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
 
 
+def test_classified_ambiguous_connection_error_does_not_fail_over() -> None:
+    """A retryable connection error without status must not replay passthrough."""
+    failure = ProviderUpstreamError(
+        agent_id="primary_agent",
+        model="primary-model",
+        error_code="provider_connection_error",
+        message="the provider primary_agent connection failed or did not finish in time",
+        client_status=502,
+        provider_status=None,
+        retryable=True,
+        transport="passthrough",
+    )
+    client = SequencedProxyClient(
+        {"primary_agent": failure, "fallback_agent": {"model": "fallback-model"}}
+    )
+
+    with pytest.raises(ProviderUpstreamError) as caught:
+        _build(client).proxy_completion(
+            {"model": TaskOrchestrator.AUTO_MODEL, "messages": [{"role": "user", "content": "x"}]}
+        )
+
+    assert caught.value is failure
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 def test_suppressed_transient_context_does_not_authorize_failover() -> None:
     """A deliberately hidden exception context cannot become a routing signal."""
     try:

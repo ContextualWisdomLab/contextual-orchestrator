@@ -1038,8 +1038,6 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
                 _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
             ):
                 return True
-            if current.retryable:
-                return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and current.code
