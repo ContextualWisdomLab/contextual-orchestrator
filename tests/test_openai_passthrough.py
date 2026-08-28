@@ -19,8 +19,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import _responses_to_chat_payload  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    _responses_to_chat_payload,
+)
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    build_server,
+    responses_sse_body,
+)
 
 
 def _build() -> TaskOrchestrator:
@@ -118,6 +125,22 @@ def test_proxy_completion_honors_an_enabled_requested_worker_model() -> None:
     })
 
     assert result["model"] == "mock-builder"
+
+
+def test_concrete_model_binds_opaque_file_id_to_provider_replica() -> None:
+    orchestrator = _build()
+    sent: dict[str, object] = {}
+    orchestrator.client.proxy_send = (  # type: ignore[method-assign]
+        lambda _agent, _endpoint, payload: sent.update(payload) or {"ok": True}
+    )
+
+    orchestrator.proxy_completion({
+        "model": "mock-builder",
+        "input": [{"type": "input_file", "file_id": "file-gateway"}],
+        "_file_replicas": {"file-gateway": {"builder_agent": "file-provider"}},
+    }, endpoint="responses")
+
+    assert sent["input"] == [{"type": "input_file", "file_id": "file-provider"}]
 
 
 def test_proxy_completion_free_model_uses_only_an_explicitly_free_agent() -> None:
@@ -294,6 +317,71 @@ def _serve() -> tuple[object, int, str]:
     return server, server.server_address[1], token
 
 
+def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
+    """Provider-size exhaustion remains an OpenAI-compatible 413 at the gateway."""
+    class RejectingClient(ModelClient):
+        def proxy_send_once(self, agent, endpoint, payload):
+            raise urllib.error.HTTPError(
+                "https://provider.example/v1", 413, "too large", None, None
+            )
+
+        proxy_send = proxy_send_once
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                provider_name="primary",
+                tags=("response_format",),
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                provider_name="fallback",
+                tags=("response_format",),
+            ),
+        ],
+        client=RejectingClient(),  # type: ignore[arg-type]
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [
+            {
+                "id": 0,
+                "role": "worker",
+                "agent_id": "primary_agent",
+                "subtask": "Evidence",
+                "access": [],
+                "output": "evidence",
+            }
+        ],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+    token = "passthrough_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large request"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 413
+    assert body["error"]["code"] == "request_too_large"
+    assert body["error_message"] == "request body exceeds every eligible provider limit"
+
+
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
@@ -414,6 +502,34 @@ def test_http_responses_endpoint_passes_through() -> None:
         server.shutdown()
     assert status == 200
     assert body["object"] == "response"
+
+
+def test_http_virtual_responses_tools_are_conducted_not_single_model_passthrough() -> None:
+    """Tools on orchestrator/auto retain native shape after evidence orchestration."""
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/responses",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "input": "inspect the repository",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "inspect",
+                        "description": "Inspect one path",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 200
+    assert body["object"] == "response"
+    assert body["orchestration"]["mode"] == "conduct"
 
 
 def test_http_models_endpoint_lists_configured_models() -> None:

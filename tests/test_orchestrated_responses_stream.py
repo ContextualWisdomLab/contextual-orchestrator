@@ -290,11 +290,13 @@ def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
         {"text": {"format": {"type": "json_schema", "name": "result", "schema": {}}}},
     ],
 )
-def test_orchestrated_responses_reject_unsupported_structured_output(
+def test_nonstream_orchestrated_responses_support_structured_output(
     structured_output: dict,
 ) -> None:
     token = "responses_stream_token"
-    orchestrator = TaskOrchestrator([ModelAgent("free_worker", "free-model", tags=("cost:free",))])
+    orchestrator = TaskOrchestrator([
+        ModelAgent("free_worker", "free-model", tags=("cost:free", "response_format"))
+    ])
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     request = urllib.request.Request(
@@ -304,12 +306,13 @@ def test_orchestrated_responses_reject_unsupported_structured_output(
         method="POST",
     )
     try:
-        with pytest.raises(urllib.error.HTTPError) as raised:
-            urllib.request.urlopen(request, timeout=5)
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+            body = json.loads(response.read())
     finally:
         server.shutdown()
-    assert raised.value.code == 400
-    assert "structured output is not supported" in raised.value.read().decode()
+    assert status == 200
+    assert body["orchestration"]["mode"] == "conduct"
 
 
 def test_stream_failure_emits_terminal_responses_event() -> None:

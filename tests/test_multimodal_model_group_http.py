@@ -12,6 +12,7 @@ import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.cost_router import CostRoutingCoordinator
+from contextual_orchestrator.orchestrator import ProviderRequestTooLargeError
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.video_jobs import VideoJobContractError
 
@@ -440,6 +441,93 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
     )
 
     assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
+
+
+def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+    """Oversized capability requests do not degrade provider health."""
+    agents = [
+        ModelAgent("first_image", "provider/image", tags=("image",), group_name="image_group"),
+        ModelAgent("second_image", "provider/image", tags=("image",), group_name="image_group"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_capability(
+            {"model": "image-group", "prompt": "large image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
+
+
+def test_raced_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+    """413s in the equivalent-endpoint race do not open provider circuits."""
+    agents = [
+        ModelAgent(
+            "first_image",
+            "provider/image",
+            tags=("image",),
+            group_name="image_group",
+            endpoint_equivalence=_equivalence("image"),
+        ),
+        ModelAgent(
+            "second_image",
+            "provider/image",
+            tags=("image",),
+            group_name="image_group",
+            endpoint_equivalence=_equivalence("image"),
+        ),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_capability(
+            {"model": "image_group", "prompt": "large image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
+
+
+def test_capability_request_size_exhaustion_returns_http_413() -> None:
+    """Capability routes keep oversized upstream requests as client errors."""
+    agent = ModelAgent("image_member", "provider/image", tags=("image",), group_name="image_group")
+    orchestrator = TaskOrchestrator([agent])
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post_error(
+            server.server_address[1],
+            "/v1/images/generations",
+            {"model": "image-group", "prompt": "large image"},
+        )
+        assert status == 413
+        assert body["error"]["code"] == "request_too_large"
+    finally:
+        server.shutdown()
 
 
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:

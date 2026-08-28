@@ -10,6 +10,7 @@ dependencies = [
   "opentelemetry-sdk>=1.30.0",
   "opentelemetry-exporter-otlp-proto-http>=1.30.0",
   "jsonschema>=4.26.0",
+  "fast-mlsirm @ https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz ; python_full_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,12 @@ fuzz = [
 ]
 queue = [
   "redis>=5.0",
+]
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.100",
+  "pytest>=8.0",
 ]
 
 [tool.contextual_orchestrator]
