@@ -5920,7 +5920,9 @@ def build_server(
                             for agent in orchestrator.agents
                             if "files" in agent.tags or "capability:files" in agent.tags
                         ]
-                        for agent in file_agents:
+                        # Upload to one provider by default. Replicating caller data
+                        # across providers requires a separate explicit contract.
+                        for agent in file_agents[:1]:
                             upload.seek(0)
                             try:
                                 provider_result = self._run(

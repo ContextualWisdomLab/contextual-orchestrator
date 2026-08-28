@@ -119,3 +119,44 @@ def test_files_http_upload_list_retrieve_content_and_delete() -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_files_upload_does_not_replicate_to_every_provider() -> None:
+    """A default upload discloses the file to only the first eligible provider."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("first_files_agent", "mock-files", tags=("files",)),
+            ModelAgent("second_files_agent", "mock-files", tags=("files",)),
+        ]
+    )
+    uploaded_by: list[str] = []
+
+    def proxy_upload(agent, *_args, **_kwargs):
+        uploaded_by.append(agent.id)
+        return {"id": f"provider_file_{agent.id}", "object": "file", "bytes": 5}
+
+    orchestrator.client.proxy_upload = proxy_upload
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="files-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/files",
+            data=_multipart(),
+            headers={
+                "Authorization": "Bearer files-token",
+                "Content-Type": "multipart/form-data; boundary=test-boundary",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 201
+        assert uploaded_by == ["first_files_agent"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
