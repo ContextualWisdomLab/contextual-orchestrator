@@ -19,7 +19,6 @@ import json
 import os
 from typing import Mapping, Sequence
 
-from .chat_capability import is_general_chat_agent_model_id
 from .cost_ledger import PriceBook
 from .credentials import (
     InMemoryCredentialBackend,
@@ -35,6 +34,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    is_routable_discovered_model,
     refresh_price_book,
 )
 from .orchestrator import ModelAgent, TaskOrchestrator
@@ -177,7 +177,7 @@ def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
     Models that survive retain only explicit provider/catalog capability and
     cost evidence in addition to the generic chat-serving tags.
     """
-    return not model.evidence_only and is_general_chat_agent_model_id(model.model_id)
+    return is_routable_discovered_model(model)
 
 
 def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:

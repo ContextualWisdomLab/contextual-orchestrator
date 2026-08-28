@@ -569,6 +569,13 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
     return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
 
 
+def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
+    """Return whether a discovered row may become an upstream model agent."""
+    return not discovered.evidence_only and is_general_chat_agent_model_id(
+        discovered.model_id
+    )
+
+
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
     """Build a disabled capability agent or reject a chat-ineligible record."""
     if not any(
@@ -715,7 +722,7 @@ def select_cheapest_discovered_agent(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_general_chat_agent_model_id(model.model_id)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return None
@@ -731,7 +738,7 @@ def select_top_n_cheapest_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_general_chat_agent_model_id(model.model_id)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return []
@@ -760,7 +767,7 @@ def select_bootstrap_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_general_chat_agent_model_id(model.model_id)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return []
