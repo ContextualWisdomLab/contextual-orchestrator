@@ -76,6 +76,10 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_MAX_JSON_BODY_BYTES = 64 * 1024
 MAX_MULTIMODAL_JSON_BODY_BYTES = 512 * 1024 * 1024
 MAX_FILE_UPLOAD_BYTES = 512 * 1024 * 1024
+MAX_FILE_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+MAX_FILE_UPLOAD_REQUEST_BYTES = (
+    MAX_FILE_UPLOAD_BYTES + MAX_FILE_MULTIPART_OVERHEAD_BYTES
+)
 MAX_BATCH_FILE_BYTES = 200 * 1024 * 1024
 
 
@@ -5880,7 +5884,9 @@ def build_server(
                     if content_type.split(";", 1)[0].strip().lower() != "multipart/form-data" or "boundary=" not in content_type:
                         raise RequestError(415, "unsupported_media_type", "content-type must be multipart/form-data with a boundary")
                     try:
-                        body_size = _request_body_size(self.headers, MAX_FILE_UPLOAD_BYTES)
+                        body_size = _request_body_size(
+                            self.headers, MAX_FILE_UPLOAD_REQUEST_BYTES
+                        )
                     except RequestError:
                         self.close_connection = True
                         raise
@@ -5899,6 +5905,12 @@ def build_server(
                         purpose, filename, file_size = _multipart_upload_metadata(
                             upload, content_type
                         )
+                        if file_size > MAX_FILE_UPLOAD_BYTES:
+                            raise RequestError(
+                                413,
+                                "request_too_large",
+                                "files may not exceed 512 MB",
+                            )
                         if purpose == "batch":
                             if not filename.casefold().endswith(".jsonl"):
                                 raise RequestError(

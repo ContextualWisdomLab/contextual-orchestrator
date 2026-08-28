@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import json
 import threading
+import urllib.error
 import urllib.request
 
 import pytest
@@ -12,9 +13,11 @@ import pytest
 from contextual_orchestrator.batch_job_registry import JobRegistryFactory
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.file_registry import FileRegistry
+import contextual_orchestrator.server as server_module
 from contextual_orchestrator.server import (
     MAX_BATCH_FILE_BYTES,
     MAX_FILE_UPLOAD_BYTES,
+    MAX_FILE_UPLOAD_REQUEST_BYTES,
     RequestError,
     _multipart_upload_metadata,
     _request_body_size,
@@ -34,9 +37,19 @@ def _multipart(*, purpose: str = "user_data", filename: str = "sample.png", data
 
 def test_files_and_batch_boundaries_match_openai_contract_without_large_allocations() -> None:
     """Boundary arithmetic proves 512 MB Files and 200 MB Batch limits."""
-    assert _request_body_size({"content-length": str(MAX_FILE_UPLOAD_BYTES)}, MAX_FILE_UPLOAD_BYTES) == MAX_FILE_UPLOAD_BYTES
+    assert MAX_FILE_UPLOAD_REQUEST_BYTES > MAX_FILE_UPLOAD_BYTES
+    assert (
+        _request_body_size(
+            {"content-length": str(MAX_FILE_UPLOAD_REQUEST_BYTES)},
+            MAX_FILE_UPLOAD_REQUEST_BYTES,
+        )
+        == MAX_FILE_UPLOAD_REQUEST_BYTES
+    )
     with pytest.raises(RequestError):
-        _request_body_size({"content-length": str(MAX_FILE_UPLOAD_BYTES + 1)}, MAX_FILE_UPLOAD_BYTES)
+        _request_body_size(
+            {"content-length": str(MAX_FILE_UPLOAD_REQUEST_BYTES + 1)},
+            MAX_FILE_UPLOAD_REQUEST_BYTES,
+        )
     assert MAX_BATCH_FILE_BYTES == 200 * 1024 * 1024
 
 
@@ -48,6 +61,44 @@ def test_multipart_metadata_reads_fields_and_exact_file_size_from_disk() -> None
         assert _multipart_upload_metadata(
             body, "multipart/form-data; boundary=test-boundary"
         ) == ("batch", "jobs.jsonl", 3)
+
+
+def test_files_http_rejects_file_part_over_limit_before_provider_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multipart overhead cannot hide a file part above the 512 MB limit."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("files_agent", "mock-files", tags=("files",))]
+    )
+    monkeypatch.setattr(
+        server_module,
+        "_multipart_upload_metadata",
+        lambda *_args: ("user_data", "oversized.bin", MAX_FILE_UPLOAD_BYTES + 1),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="files-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/files",
+            data=_multipart(),
+            headers={
+                "Authorization": "Bearer files-token",
+                "Content-Type": "multipart/form-data; boundary=test-boundary",
+            },
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request)
+        assert caught.value.code == 413
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_file_registry_hides_provider_identity_and_enforces_principal_ownership() -> None:
