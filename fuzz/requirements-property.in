@@ -1,6 +1,7 @@
-# Property-based fuzz job deps (Python 3.12). Compile: uv pip compile fuzz/requirements-property.in --generate-hashes --universal -o fuzz/requirements-property.txt
+# Property-based fuzz job deps (Python 3.12). Compile: uv pip compile fuzz/requirements-property.in --constraint requirements.lock --generate-hashes --universal -o fuzz/requirements-property.txt
 pip
 hypothesis>=6.100
 pytest
 cryptography>=43.0
-jsonschema>=4.23,<5
+jsonschema>=4.26.0
+typing-extensions==4.15.0; python_full_version < "3.13"

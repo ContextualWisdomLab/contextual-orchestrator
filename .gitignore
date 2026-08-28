@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 dist/
 build/
+node_modules/
 *.egg-info/
 contextual_orchestrator/_token_packer*.so
 tempcred.txt

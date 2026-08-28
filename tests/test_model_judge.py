@@ -21,11 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
+    BudgetExceededError,
     ModelClient,
     NoViableAgentError,
     ProviderResponseError,
     RequestDeadlineExceeded,
     _parse_model_judge_reply,
+    _structured_output_error,
 )
 
 
@@ -800,6 +802,145 @@ def test_structured_readiness_probe_preserves_request_deadline() -> None:
     with client.request_settings(request_deadline_monotonic=time.monotonic() - 1.0):
         with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
             orchestrator._structured_ready_candidates(agent, "judge", {agent.id})
+
+
+def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None:
+    """An invalid synthesis is repaired once and both provider calls stay visible."""
+    orchestrator, _ = _orch("unused")
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    invalid = {
+        "choices": [{"message": {"content": '{"input_count":6}'}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+    }
+    valid = {
+        "choices": [{"message": {"content": '{"input_count":10}'}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6},
+    }
+
+    with (
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+        patch.object(
+            orchestrator.client, "proxy_send", side_effect=[invalid, valid]
+        ) as proxy,
+        patch.object(
+            orchestrator,
+            "_raise_if_spend_budget_exceeded",
+            wraps=orchestrator._raise_if_spend_budget_exceeded,
+        ) as budget_gate,
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert proxy.call_count == 2
+    assert budget_gate.call_count == 3
+    assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
+    run = orchestrator.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    assert [step["role"] for step in run["trace"][-2:]] == [
+        "synthesizer",
+        "repair",
+    ]
+    assert [step["usage"]["completion_tokens"] for step in run["trace"][-2:]] == [3, 4]
+    traced_tokens, _ = orchestrator._trace_budget_spend(run["trace"])
+    assert orchestrator.budget_status()["spent_output_tokens"] == traced_tokens
+    assert _structured_output_error('{"input_count":10}', response_format) is None
+    assert _structured_output_error('{"input_count":6}', response_format) == "schema_violation"
+
+
+def test_structured_synthesis_failure_updates_provider_health() -> None:
+    """A failed final provider is excluded by the existing circuit policy."""
+    orchestrator, _ = _orch("unused")
+    with (
+        patch.object(
+            orchestrator.client,
+            "proxy_send",
+            side_effect=RuntimeError("synthetic provider failure"),
+        ),
+        pytest.raises(RuntimeError, match="synthetic provider failure"),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert orchestrator._circuit["general_agent"]["failures"] == 1
+
+
+def test_structured_repair_is_blocked_by_completed_synthesis_budget() -> None:
+    """A paid repair cannot start after the first synthesis exhausts the budget."""
+    orchestrator, _ = _orch("unused")
+    orchestrator.budget_max_output_tokens = 1
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {"type": "object", "required": ["input_count"]},
+        },
+    }
+    invalid = {
+        "choices": [{"message": {"content": "{}"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    with (
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+        patch.object(orchestrator.client, "proxy_send", return_value=invalid) as proxy,
+        pytest.raises(BudgetExceededError),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+    proxy.assert_called_once()
+
+
+def test_missing_structured_schema_never_starts_repair() -> None:
+    """A malformed caller contract cannot spend a second provider call."""
+    orchestrator, _ = _orch("unused")
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "missing", "strict": True},
+    }
+    response = {"choices": [{"message": {"content": "{}"}}]}
+    with (
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+        patch.object(orchestrator.client, "proxy_send", return_value=response) as proxy,
+        pytest.raises(ProviderResponseError, match="missing a schema"),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": "model-x",
+                "messages": [{"role": "user", "content": "classify"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+    proxy.assert_called_once()
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:

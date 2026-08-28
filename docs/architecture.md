@@ -75,6 +75,12 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `ResponsiveThreadingHTTPServer`: I/O-bound provider waits run in independent
+  daemon request threads, the accept queue uses the operating system's native
+  `SOMAXCONN`, and fixed-length responses use HTTP/1.1 persistent connections.
+  The explicit `max_concurrent_runs` semaphore remains the expensive-work
+  admission boundary, returning 503 without waiting when saturated. See the
+  [k6 web-concurrency baseline](benchmarks/2026-08-25-web-concurrency-k6.md).
 - `contextual_orchestrator.reasoning_effort_profile`: versioned per-role
   compute profiles (issue #568). Fugu's latency-versus-quality split, TRINITY
   roles, and Conductor steps/access lists become an explicit catalog. Sampling

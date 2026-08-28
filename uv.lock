@@ -426,7 +426,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.128.0" },
     { name = "greenlet", marker = "extra == 'db'", specifier = ">=3.2" },
     { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.100" },
-    { name = "jsonschema", specifier = ">=4.23,<5" },
+    { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "opentelemetry-api", specifier = ">=1.30.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.30.0" },
     { name = "opentelemetry-sdk", specifier = ">=1.30.0" },

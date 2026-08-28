@@ -27,12 +27,13 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
 from jsonschema import Draft202012Validator, SchemaError, ValidationError
+from jsonschema.validators import validator_for
 
 from .chat_capability import (
     is_chat_compatible_model_id,
@@ -40,7 +41,10 @@ from .chat_capability import (
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
+from .openrouter_uptime import OpenRouterUptimeCollector
+from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .telemetry import inject_trace_context, traced
 from .pii_protection import (
@@ -184,6 +188,29 @@ def validate_json_schema_contract(schema: dict[str, Any]) -> None:
         Draft202012Validator.check_schema(schema)
     except SchemaError as exc:
         raise ValueError("json_schema is not a valid Draft 2020-12 schema") from exc
+
+
+def _structured_output_error(
+    content: str, response_format: object
+) -> str | None:
+    """Return a bounded contract error for strict JSON Schema output."""
+    if not isinstance(response_format, Mapping) or response_format.get("type") != "json_schema":
+        return None
+    specification = response_format.get("json_schema")
+    schema = specification.get("schema") if isinstance(specification, Mapping) else None
+    if not isinstance(schema, Mapping):
+        return "schema_missing"
+    try:
+        instance = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return "invalid_json"
+    validator_type = validator_for(schema)
+    try:
+        validator_type.check_schema(schema)
+        validator_type(schema).validate(instance)
+    except Exception:  # noqa: BLE001 - untrusted schema/output boundary
+        return "schema_violation"
+    return None
 
 
 def estimate_tokens(text: str) -> int:
@@ -1996,6 +2023,36 @@ class ModelClient:
         finally:
             self._local.provider_transport_timeout = previous_timeout
 
+    def proxy_get_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
+        """Retrieve provider JSON from the exact agent that owns an async job."""
+        if agent.base_url.startswith("mock://"):
+            return {"id": endpoint.rsplit("/", 1)[-1], "status": "completed"}
+        return self._batch_json(  # pragma: no cover - real provider integration
+            agent,
+            "GET",
+            f"/{endpoint.lstrip('/')}",
+            destination=self._validate_provider(agent),
+            max_response_bytes=max_response_bytes,
+        )
+
+    def proxy_get_bytes(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> tuple[bytes, str]:
+        """Retrieve provider media from the exact agent that owns an async job."""
+        if agent.base_url.startswith("mock://"):
+            return b"mock video", "video/mp4"
+        api_key = _provider_credential(agent)  # pragma: no cover
+        headers = {}  # pragma: no cover
+        if api_key:  # pragma: no cover
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(  # pragma: no cover
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            headers=headers,
+            method="GET",
+        )
+        with self._open_provider(  # pragma: no cover
+            request, self._validate_provider(agent)
+        ) as response:
+            return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
+
     def _send_raw_with_retry(
         self,
         agent: ModelAgent,
@@ -2085,6 +2142,15 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        response_format = payload.get("response_format")
+        if response_format is None and isinstance(payload.get("text"), dict):
+            response_format = payload["text"].get("format")
+        mock_content = (
+            "{}"
+            if isinstance(response_format, dict)
+            and str(response_format.get("type", "")).strip().lower() == "json_schema"
+            else f"[{agent.id}] chat-mock"
+        )
         echoed = {
             key: payload[key]
             for key in (
@@ -2111,7 +2177,7 @@ class ModelClient:
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                        "content": [{"type": "output_text", "text": mock_content}],
                     }
                 ],
                 "echo": echoed,
@@ -2123,7 +2189,7 @@ class ModelClient:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "message": {"role": "assistant", "content": mock_content},
                     "finish_reason": "stop",
                 }
             ],
@@ -2360,6 +2426,7 @@ class ModelClient:
         path: str,
         payload: dict[str, Any] | None = None,
         destination: ProviderDestination | None = None,
+        max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
@@ -2372,7 +2439,23 @@ class ModelClient:
             method=method,
         )
         with self._open_provider(request, destination) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
+            return json.loads(raw.decode("utf-8"))
+
+    @staticmethod
+    def _read_bounded_response(response: Any, max_bytes: int) -> bytes:
+        """Read at most ``max_bytes`` and fail closed on oversized provider data."""
+        declared = response.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > max_bytes:
+                    raise ProviderResponseError("provider response exceeds the configured limit")
+            except ValueError as exc:
+                raise ProviderResponseError("provider returned an invalid content length") from exc
+        body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ProviderResponseError("provider response exceeds the configured limit")
+        return body
 
     def _batch_raw(self, agent: ModelAgent, path: str, destination: ProviderDestination | None = None) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
@@ -3136,10 +3219,17 @@ class TaskOrchestrator:
         # Quality ledger: identical estimator family as the transport ledger but
         # fed by real-time fast-mlsirm judge verdicts on final answers, so
         # measured accuracy -- not transport success -- steers future routing.
-        self._quality_router = ModelGroupRouter()
+        self._quality_router = ModelGroupRouter(prior_resolver=resolve_quality_prior)
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
+
+        self._openrouter_collector = OpenRouterUptimeCollector(
+            self.candidates,
+            self._group_router,
+            self._quality_router,
+        )
+        self._openrouter_collector.start()
         # Evidence caches (bounded, thread-safe): semantic-affinity vectors for
         # task text and agent metadata, plus strict triage verdicts keyed by
         # content hash. Bounds are operational memory limits, never weights.
@@ -3231,6 +3321,8 @@ class TaskOrchestrator:
 
     def close(self) -> None:
         """Release optional durable resources owned by this orchestrator."""
+        if hasattr(self, "_openrouter_collector") and self._openrouter_collector:
+            self._openrouter_collector.stop()
         if self._pool_store is not None:
             self._pool_store.close()
         if self._store is not None:
@@ -3630,6 +3722,10 @@ class TaskOrchestrator:
             raise ValueError("structured completion requires non-empty messages")
         task = self._latest_user_text(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        selection_tags = (
+            *required_tags,
+            *(("response_format",) if chat_body.get("response_format") else ()),
+        )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         final_agent = self._requested_agent(requested_model)
@@ -3638,13 +3734,16 @@ class TaskOrchestrator:
                 final_agent = self._select_agent(
                     task,
                     "synthesizer",
-                    required_tags=required_tags,
+                    required_tags=selection_tags,
                     free_only=free_only,
                 )
             except RuntimeError as exc:
-                if not required_tags:
-                    raise
-                raise ValueError("no enabled vision-capable model is available") from exc
+                if selection_tags:
+                    raise ValueError(
+                        "no enabled model supports required tags: "
+                        + ", ".join(selection_tags)
+                    ) from exc
+                raise
         elif any(tag not in final_agent.tags for tag in required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
@@ -3750,32 +3849,29 @@ class TaskOrchestrator:
         # Single-provider by design: no cross-provider failover on this
         # conducted synthesis call (see the docstring above) — only the plain
         # virtual passthrough / virtual tools paths fail over across providers.
-        raw = self.client.proxy_send(final_agent, endpoint, upstream)
-        echo = raw.get("echo")
-        if isinstance(echo, dict):
-            if response_request:
-                original_instructions = body.get("instructions")
-                if isinstance(original_instructions, str) and original_instructions.strip():
-                    echo["instructions"] = original_instructions
-                else:
-                    echo.pop("instructions", None)
-            elif "messages" in echo:
-                echo["messages"] = copy.deepcopy(messages)
-        synthesis_output = ""
-        if response_request:
-            synthesis_output = raw.get("output_text")
-            if not isinstance(synthesis_output, str):
-                synthesis_output = "".join(
+        try:
+            raw = self.client.proxy_send(final_agent, endpoint, upstream)
+        except Exception:
+            self._record_failure(final_agent.id)
+            if final_agent.group_name:
+                self._group_router.observe_failure(final_agent.id)
+            raise
+        def provider_output(response: Mapping[str, Any]) -> str:
+            if not response_request:
+                try:
+                    return ModelClient._response_content(final_agent, response)
+                except RuntimeError:
+                    return ""
+            output = response.get("output_text")
+            if isinstance(output, str):
+                return output
+            return "".join(
                     _responses_text(item.get("content"))
-                    for item in raw.get("output", [])
+                    for item in response.get("output", [])
                     if isinstance(item, dict) and item.get("type") == "message"
                 )
-            raw.setdefault("output_text", synthesis_output)
-        else:
-            try:
-                synthesis_output = ModelClient._response_content(final_agent, raw)
-            except RuntimeError:
-                pass
+
+        synthesis_output = provider_output(raw)
         synthesis_step: dict[str, Any] = {
             "id": len(workflow["trace"]),
             "role": "synthesizer",
@@ -3789,8 +3885,96 @@ class TaskOrchestrator:
             synthesis_step["usage"] = _canonical_provider_usage(
                 raw["usage"], responses=response_request
             )
+        repair_step: dict[str, Any] | None = None
+        response_format = chat_body.get("response_format")
+        contract_error = _structured_output_error(synthesis_output, response_format)
+        if contract_error == "schema_missing":
+            raise ProviderResponseError(
+                "response_format.json_schema is missing a schema"
+            )
+        if contract_error is not None:
+            in_flight_tokens, in_flight_cost = self._trace_budget_spend(
+                [*workflow["trace"], synthesis_step]
+            )
+            self._raise_if_spend_budget_exceeded(
+                additional_output_tokens=in_flight_tokens,
+                additional_cost_usd=in_flight_cost,
+            )
+            repair_upstream = copy.deepcopy(upstream)
+            repair_instruction = (
+                "The prior synthesis violated the caller's strict JSON Schema "
+                f"({contract_error}). Regenerate the complete answer and return only "
+                "JSON that satisfies the supplied response_format."
+            )
+            if response_request:
+                current = repair_upstream.get("instructions")
+                repair_upstream["instructions"] = (
+                    f"{current}\n\n{repair_instruction}"
+                    if isinstance(current, str) and current
+                    else repair_instruction
+                )
+            else:
+                repair_messages = repair_upstream.get("messages")
+                if not isinstance(repair_messages, list):
+                    raise ProviderResponseError("structured synthesis omitted messages")
+                repair_upstream["messages"] = [
+                    *repair_messages,
+                    {"role": "system", "content": repair_instruction},
+                ]
+            repair_started = time.perf_counter()
+            try:
+                repaired = self.client.proxy_send(final_agent, endpoint, repair_upstream)
+            except Exception:
+                self._record_failure(final_agent.id)
+                if final_agent.group_name:
+                    self._group_router.observe_failure(final_agent.id)
+                raise
+            repaired_output = provider_output(repaired)
+            if _structured_output_error(repaired_output, response_format) is not None:
+                self._record_failure(final_agent.id)
+                if final_agent.group_name:
+                    self._group_router.observe_failure(final_agent.id)
+                raise ProviderResponseError(
+                    "structured synthesis and repair violated response_format"
+                )
+            repair_step = {
+                "id": synthesis_step["id"] + 1,
+                "role": "repair",
+                "agent_id": final_agent.id,
+                "subtask": "Strict JSON Schema repair",
+                "access": [synthesis_step["id"]],
+                "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
+                "output": repaired_output,
+            }
+            if isinstance(repaired.get("usage"), dict):
+                repair_step["usage"] = _canonical_provider_usage(
+                    repaired["usage"], responses=response_request
+                )
+            raw = repaired
+            synthesis_output = repaired_output
+        self._record_success(final_agent.id)
+        if final_agent.group_name:
+            self._group_router.observe_success(
+                final_agent.id, time.perf_counter() - synthesis_started
+            )
+        if response_request:
+            raw.setdefault("output_text", synthesis_output)
+        echo = raw.get("echo")
+        if isinstance(echo, dict):
+            if response_request:
+                original_instructions = body.get("instructions")
+                if isinstance(original_instructions, str) and original_instructions.strip():
+                    echo["instructions"] = original_instructions
+                else:
+                    echo.pop("instructions", None)
+            elif "messages" in echo:
+                echo["messages"] = copy.deepcopy(messages)
         workflow_run_id = f"run_{uuid.uuid4().hex}"
-        trace = [*workflow["trace"], synthesis_step]
+        trace = [
+            *workflow["trace"],
+            synthesis_step,
+            *([repair_step] if repair_step is not None else []),
+        ]
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id,
@@ -3805,7 +3989,7 @@ class TaskOrchestrator:
                 "verification": workflow.get("verification"),
             }
         )
-        self._workflow_runs[workflow_run_id] = record
+        self._replace_workflow_run(record)
         self._run_order.appendleft(workflow_run_id)
         if self._store is not None:
             self._store.save("workflow_run", workflow_run_id, record)
@@ -4931,7 +5115,6 @@ class TaskOrchestrator:
         trace_rows: list[dict[str, Any]] = []
         answer = ""
         served_id = ""
-        usage: dict[str, Any] | None = None
         verification: dict[str, Any] = {
             "accepted": False,
             "reason": "no candidate attempted",
@@ -5863,12 +6046,17 @@ class TaskOrchestrator:
         capability: str,
         endpoint: str,
         binary: bool = False,
+        selection_sink: Callable[[ModelAgent, Any], Any] | None = None,
     ) -> dict[str, Any] | tuple[bytes, str]:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
         race_members = self._equivalent_race_members(candidates, capability=capability)
-        if race_members:
+        # Async video submission creates provider-side work that cannot be
+        # raced safely without loser cancellation: every accepted loser would
+        # become an unowned, billable job.  A selection sink marks this
+        # ownership-producing path, so use measured sequential failover below.
+        if race_members and selection_sink is None:
             if len(race_members) > MAX_LOCAL_CONCURRENCY:
                 raise ValueError(
                     "immediate_race endpoint count exceeds the supported concurrency capacity"
@@ -5953,6 +6141,12 @@ class TaskOrchestrator:
                 last_error = exc
                 self._group_router.observe_failure(agent.id)
                 continue
+            if selection_sink is not None:
+                selected_result = selection_sink(agent, result)
+                self._group_router.observe_success(
+                    agent.id, time.perf_counter() - started_at
+                )
+                return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
         raise RuntimeError(f"all {capability} providers failed") from last_error
@@ -8089,8 +8283,9 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the local buyer-facing commercial release-candidate manifest."""
+        """Return product evidence separately from protected release authority."""
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
@@ -8104,6 +8299,7 @@ class TaskOrchestrator:
         concrete_blockers = acceptance["concrete_blockers"]
         acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
         runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
+        release_authorization = evaluate_release_authorization(release_authority)
         release_artifacts = [
             self._buyer_evidence_item(
                 "commercial_acceptance_check",
@@ -8259,8 +8455,18 @@ class TaskOrchestrator:
                 ["docs/commercial_saleability_decision.md", "docs/commercial_release_candidate.md"],
                 "repository_artifact",
                 "ready",
-                "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
-                "Block only on concrete security, API contract, document, or product defects.",
+                "Product evidence remains inspectable while protected release authority is evaluated separately.",
+                "Supply a fresh protected-main authority snapshot before authorizing release.",
+            ),
+            self._buyer_evidence_item(
+                "release_authority_collector",
+                "Protected-head authority collector",
+                "Release owner",
+                ["scripts/ci/release_authority_snapshot.py", "docs/doctoring/release-authorization.md"],
+                "repository_artifact",
+                "ready" if has_file("scripts/ci/release_authority_snapshot.py") else "blocked",
+                "Read-only gh API collector binds checks and reviews to the exact pull-request head without emitting secrets.",
+                "Run the collector with the exact candidate SHA and attach its JSON snapshot to release review.",
             ),
             self._buyer_evidence_item(
                 "packaging_decision",
@@ -8287,9 +8493,17 @@ class TaskOrchestrator:
             for item in acceptance["follow_up_items"]
         ]
         summary = self._buyer_manifest_summary(release_artifacts + external_release_gaps)
-        blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
+        product_blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
+        product_evidence_status = (
+            "commercial_release_blocked"
+            if product_blocked_count
+            else "commercial_release_ready_with_warnings"
+            if acceptance["follow_up_items"]
+            else "commercial_release_ready"
+        )
+        release_blocked_count = product_blocked_count + len(release_authorization["blockers"])
+        if release_blocked_count:
             release_status = "commercial_release_blocked"
         elif warning_count:
             release_status = "commercial_release_ready_with_warnings"
@@ -8298,6 +8512,8 @@ class TaskOrchestrator:
 
         return {
             "release_status": release_status,
+            "product_evidence_status": product_evidence_status,
+            "release_authorization": release_authorization,
             "target_contract_value_krw": target_contract_value_krw,
             "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
             "measurement_status": "local_commercial_release_candidate",
@@ -8310,9 +8526,10 @@ class TaskOrchestrator:
             ),
             "release_summary": {
                 "artifact_count": len(release_artifacts),
-                "blocked_count": blocked_count,
+                "blocked_count": release_blocked_count,
+                "product_blocked_count": product_blocked_count,
                 "warning_count": warning_count,
-                "review_process_is_blocker": acceptance["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "release_artifacts": release_artifacts,
             "external_release_gaps": external_release_gaps,
@@ -8351,12 +8568,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return an owner/action register for commercial release-candidate gaps."""
         release = self.commercial_release_candidate_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         concrete_blockers = release["concrete_blockers"]
         release_blocked = release["release_status"] == "commercial_release_blocked"
@@ -8385,7 +8604,13 @@ class TaskOrchestrator:
                 "is_blocker": False,
             })
 
-        blocked_count = len(concrete_blockers) + (1 if release_blocked else 0)
+        release_authority_blockers = release["release_authorization"]["blockers"]
+        product_blocked_count = release["release_summary"]["product_blocked_count"]
+        blocked_count = (
+            max(1, product_blocked_count + len(release_authority_blockers))
+            if release_blocked
+            else len(concrete_blockers)
+        )
         if blocked_count:
             gap_register_status = "commercial_gap_register_blocked"
         elif gap_items:
@@ -8410,10 +8635,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "blocked_count": blocked_count,
-                "review_process_is_blocker": release["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "gap_items": gap_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release["release_authorization"],
             "gap_status_rules": [
                 {
                     "gap_status": "production_input_required",
@@ -8431,6 +8657,7 @@ class TaskOrchestrator:
             "review_process_policy": release["review_process_policy"],
             "related_runtime_reports": {
                 "commercial_release_status": release["release_status"],
+                "release_authorization_status": release["release_authorization"]["status"],
                 **release["related_runtime_reports"],
             },
             "library_split_decision": release["library_split_decision"],
@@ -8448,12 +8675,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a procurement/legal readiness gate over commercial evidence."""
         gap_register = self.commercial_gap_register_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -8464,6 +8693,8 @@ class TaskOrchestrator:
         production_gap = gap_by_status.get("production_input_required")
         buyer_gap = gap_by_status.get("buyer_input_required")
         concrete_blockers = gap_register["concrete_blockers"]
+        release_authorization = gap_register["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         procurement_items = [
             {
                 "item_name": "license_and_rights",
@@ -8609,9 +8840,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "review_process_is_blocker": gap_register["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "procurement_items": procurement_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "procurement_status_rules": [
                 {
                     "procurement_status": "commercial_procurement_ready",
@@ -8646,12 +8879,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a contract-readiness gate over procurement evidence."""
         procurement = self.commercial_procurement_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -8665,6 +8900,8 @@ class TaskOrchestrator:
         buyer_item = procurement_by_name["buyer_legal_roi_procurement_input"]
         packaging_item = procurement_by_name["packaging_decision"]
         concrete_blockers = procurement["concrete_blockers"]
+        release_authorization = procurement["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         support_slo_gap_count = 1 if support_item["completion_state"] == "warning" else 0
         buyer_order_form_gap_count = 1 if buyer_item["completion_state"] == "warning" else 0
         contract_items = [
@@ -8812,9 +9049,11 @@ class TaskOrchestrator:
                 "support_slo_gap_count": support_slo_gap_count,
                 "buyer_order_form_gap_count": buyer_order_form_gap_count,
                 "review_process_is_blocker": procurement["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "contract_items": contract_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "contract_status_rules": [
                 {
                     "contract_status": "commercial_contract_ready",
@@ -8849,12 +9088,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a paid-onboarding readiness gate over contract evidence."""
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -8866,6 +9107,7 @@ class TaskOrchestrator:
         buyer_item = contract_by_name["buyer_order_form_input"]
         packaging_item = contract_by_name["packaging_decision"]
         concrete_blockers = contract["concrete_blockers"]
+        release_authorization = contract["release_authorization"]
         support_slo_action_count = 1 if support_item["completion_state"] == "warning" else 0
         buyer_input_action_count = 1 if buyer_item["completion_state"] == "warning" else 0
         onboarding_items = [
@@ -9010,9 +9252,11 @@ class TaskOrchestrator:
                 "support_slo_action_count": support_slo_action_count,
                 "buyer_input_action_count": buyer_input_action_count,
                 "review_process_is_blocker": contract["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "onboarding_items": onboarding_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "onboarding_status_rules": [
                 {
                     "onboarding_status": "commercial_onboarding_ready",
@@ -9047,12 +9291,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return an operations-handoff readiness gate over onboarding evidence."""
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -9253,12 +9499,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a buyer security-review attestation gate over operations evidence."""
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -9485,6 +9733,7 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a buyer economic-review gate over value and ROI evidence."""
         commercial = self.commercial_readiness_report(
@@ -9501,6 +9750,7 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         root = Path(__file__).resolve().parents[1]
@@ -9731,32 +9981,38 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the final buyer-close gate over commercial readiness evidence."""
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         export = self.commercial_evidence_export_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -10014,22 +10270,26 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a buyer-facing GTM readiness index over commercial evidence."""
         close = self.commercial_close_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         value = self.commercial_value_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         security = self.commercial_security_attestation_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         export = self.commercial_evidence_export_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -10324,22 +10584,26 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the buyer launch/trial readiness gate over commercial evidence."""
         gtm = self.commercial_go_to_market_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         operations = self.commercial_operations_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         onboarding = self.commercial_onboarding_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
@@ -10631,6 +10895,7 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return the final KRW 2B commercial completion scorecard."""
         commercial = self.commercial_readiness_report(
@@ -10642,11 +10907,13 @@ class TaskOrchestrator:
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         launch = self.commercial_launch_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()

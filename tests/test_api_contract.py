@@ -44,12 +44,24 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "/v1/responses",
         "/v1/batch/embeddings",
         "/v1/batch/embeddings/{batch_id}",
+        "/v1/videos/{video_job_id}",
+        "/v1/videos/{video_job_id}/content",
     }
     assert expected_paths <= OPENAPI_SPEC["paths"].keys()
     assert "security" not in OPENAPI_SPEC["paths"]["/healthz"]["get"]
     assert OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["security"] == [
         {"inference_bearer_auth": []}
     ]
+    chat_schema = OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["schema"]
+    assert chat_schema["properties"]["include_orchestration_trace"]["type"] == "boolean"
+    assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
+        "security"
+    ] == [{"admin_bearer_auth": [], "trace_bearer_auth": []}]
+    assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (
+        "bearer"
+    )
 
 
 def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> None:

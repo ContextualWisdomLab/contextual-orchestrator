@@ -105,4 +105,6 @@ comparison material, but the canonical implementation should remain:
 - Reviewer or review-bot delay is not a product blocker; only security,
   contract/API mismatch, or reproducible product defects block readiness.
 - Review process is not a blocker unless it reports a concrete security,
-  contract, or product defect.
+  contract, or product defect; the release-authority result is a separate
+  blocker for protected-head authorization.
+- The release-authority result is a separate blocker.

@@ -1,0 +1,5 @@
+packages:
+  - "admin_ui"
+
+overrides:
+  valibot: ">=1.4.2"

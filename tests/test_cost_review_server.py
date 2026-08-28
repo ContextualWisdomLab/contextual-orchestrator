@@ -127,6 +127,39 @@ def test_trace_read_defaults_cannot_bypass_trace_purpose_authorization() -> None
     assert body["error"]["code"] == "unauthorized"
 
 
+def test_access_report_requires_trace_purpose_before_resource_lookup() -> None:
+    """Hide both owned and missing access reports from a non-trace principal."""
+    token = "admin_inference_only"
+    security = SecurityConfig(
+        bearer_verifier=lambda presented, scope: (
+            presented == token and scope in {"admin", "inference"}
+        )
+    )
+    server, port, _ = _serve(security)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, created = _request(
+            "POST",
+            f"{base}/api/v1/workflow_runs",
+            token,
+            {
+                "prompt_text": "owner-bound trace evidence",
+                "run_mode": "conduct",
+                "include_orchestration_trace": False,
+            },
+        )
+        assert status == 201, created
+        for run_id in (created["workflow_run_id"], "missing_run"):
+            status, body = _request(
+                "GET", f"{base}/api/v1/access_reports/{run_id}", token
+            )
+            assert status == 401
+            assert body["error"]["code"] == "unauthorized"
+            assert body["error"]["message"] == "bearer token is invalid for this scope"
+    finally:
+        server.shutdown()
+
+
 def test_readiness_never_exposes_backend_identifiers() -> None:
     agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
     orchestrator = TaskOrchestrator(agents)

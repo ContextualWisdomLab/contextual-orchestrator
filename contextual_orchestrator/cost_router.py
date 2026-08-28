@@ -560,6 +560,20 @@ class CostRoutingCoordinator:
             return None
         return prompt, completion
 
+    def record_async_video_usage(self, *, agent: Any, usage: Any, gateway_job_id: str):
+        """Idempotently ledger concrete async-video counts reported by a provider."""
+        counts = self._provider_usage(usage)
+        if counts is None:
+            return None
+        stable_id = hashlib.sha256(gateway_job_id.encode("utf-8")).hexdigest()
+        return self.ledger.record_usage(
+            provider=agent.provider_name or "unknown", model=agent.model,
+            prompt_tokens=counts[0], completion_tokens=counts[1],
+            request_channel="async", route_mode="video",
+            workflow_run_id=gateway_job_id, measurement_status="measured",
+            usage_record_id=f"usage_video_{stable_id}",
+        )
+
     def _record_race_endpoint_usage(self, endpoint_id: str, value: Any) -> None:
         """Ledger provider-reported usage for completed non-winning race calls."""
         context = self._race_usage_context.get()

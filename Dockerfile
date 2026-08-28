@@ -50,8 +50,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
 # --allow-public-bind: 컨테이너 내부 0.0.0.0 바인딩 필요(외부 노출은 호스트 포트 매핑이 결정)
 CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_FILE\" --host 0.0.0.0 --port \"$PORT\" --allow-public-bind --auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN"]
 
-# Local and CI tests share this target. The wheel remains a BuildKit artifact:
-# it is installed only into uv's ephemeral, hash-locked Python 3.12 environment.
+# Local and CI tests share this target. The source package extends its package
+# path to the wheel environment so the native module remains a build artifact.
 FROM runtime-base AS test-runner
 USER root
 COPY --from=token-builder /usr/local/bin/uv /usr/local/bin/uv
@@ -66,7 +66,8 @@ RUN set -eu; \
     uv run --python /usr/local/bin/python --no-project \
       --with-requirements requirements.lock \
       --with-requirements fuzz/requirements-property.txt \
-      --with "$1" python -m pytest -q
+      --with "$1" \
+      python -m pytest -q
 USER orchestrator
 
 FROM runtime-base AS runtime

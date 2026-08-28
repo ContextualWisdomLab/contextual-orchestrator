@@ -17,6 +17,7 @@ from .model_discovery import (
     agent_id_for,
     discover_all_models,
     free_discovered_models,
+    openrouter_paid_inference_available,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
@@ -289,15 +290,38 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in discovered
         if {"chat", "embedding"}.intersection(model.capabilities)
     ]
+    openrouter_paid_available = openrouter_paid_inference_available()
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
-        replace(agent_from_discovered(model), disabled=False)
+        replace(
+            agent_from_discovered(model),
+            disabled=(
+                model.provider_name == "openrouter"
+                and not model.is_free
+                and openrouter_paid_available is not True
+            ),
+        )
         for model in capable_models
         if agent_id_for(model) not in existing_ids
     ]
-    if not agents:
-        return {"added": [], "updated": []}
-    return orchestrator.sync_discovered_agents(agents)
+    result = (
+        orchestrator.sync_discovered_agents(agents)
+        if agents
+        else {"added": [], "updated": []}
+    )
+    has_real_runtime_agent = any(
+        not candidate.disabled
+        and not candidate.base_url.startswith("mock://")
+        and "bootstrap_seed" not in candidate.tags
+        for candidate in orchestrator.agents
+    )
+    for candidate in tuple(orchestrator.agents):
+        if has_real_runtime_agent and "bootstrap_seed" in candidate.tags:
+            orchestrator.patch_agent(
+                "default", candidate.id, {"status": "disabled"}
+            )
+            result["updated"].append(candidate.id)
+    return result
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -320,6 +344,11 @@ def main(argv: list[str] | None = None) -> None:
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
+    parser.add_argument(
+        "--release-authority-json",
+        default=None,
+        help="Path to a persisted exact-head release-authority snapshot collected by the governance CLI.",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
@@ -332,6 +361,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument(
+        "--rate-limit-requests",
+        type=_positive_int,
+        default=None,
+        help="Per-client requests allowed per fixed window (default: SecurityConfig's 60). "
+        "Size this above your measured peak concurrency — load tests and health "
+        "probes from one NAT egress share the same bucket.",
+    )
+    parser.add_argument(
+        "--rate-limit-window-seconds",
+        type=_positive_int,
+        default=None,
+        help="Fixed rate-limit window length in seconds (default: SecurityConfig's 60).",
+    )
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
     parser.add_argument(
@@ -410,6 +453,15 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.serve:
+        release_authority = None
+        if args.release_authority_json:
+            try:
+                with open(args.release_authority_json, encoding="utf-8") as authority_file:
+                    release_authority = json.load(authority_file)
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                parser.error(f"release authority snapshot could not be read: {exc}")
+            if not isinstance(release_authority, dict):
+                parser.error("release authority snapshot must be a JSON object")
         single_requested = bool(args.auth_token or args.auth_token_key)
         split_requested = bool(
             args.admin_token or args.inference_token or args.admin_token_key or args.inference_token_key
@@ -457,12 +509,23 @@ def main(argv: list[str] | None = None) -> None:
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
                 admin_session_secure_cookie=not args.insecure_admin_session_cookie,
+                **(
+                    {}
+                    if args.rate_limit_requests is None
+                    else {"rate_limit_requests": args.rate_limit_requests}
+                ),
+                **(
+                    {}
+                    if args.rate_limit_window_seconds is None
+                    else {"rate_limit_window_seconds": args.rate_limit_window_seconds}
+                ),
             ),
             clearfolio_url=args.clearfolio_url,
             coordinator=CostRoutingCoordinator(
                 orchestrator,
                 config_store=_bootstrap_telemetry_config(),
             ),
+            release_authority=release_authority,
         )
         return
 

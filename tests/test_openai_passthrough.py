@@ -404,6 +404,91 @@ def test_proxy_completion_free_model_fails_closed_without_a_free_agent() -> None
         })
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "body"),
+    [
+        (
+            "chat/completions",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+        ),
+        (
+            "responses",
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "input": "return JSON",
+                "text": {"format": {"type": "json_object"}},
+            },
+        ),
+    ],
+)
+def test_structured_free_model_uses_free_agents_for_evidence_and_synthesis(
+    endpoint: str, body: dict,
+) -> None:
+    """Every conducted call stays inside the explicitly zero-cost pool."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_agent", "paid-model", priority=100),
+            ModelAgent(
+                "free_agent",
+                "free-model",
+                tags=("cost:free", "response_format"),
+            ),
+        ]
+    )
+    called_agents: list[str] = []
+    original_chat = orchestrator.client.chat
+    original_proxy = orchestrator.client.proxy_send
+
+    def recording_chat(agent, *args, **kwargs):
+        called_agents.append(agent.id)
+        return original_chat(agent, *args, **kwargs)
+
+    def recording_proxy(agent, *args, **kwargs):
+        called_agents.append(agent.id)
+        return original_proxy(agent, *args, **kwargs)
+
+    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
+    orchestrator.client.proxy_send = recording_proxy  # type: ignore[method-assign]
+
+    result = orchestrator.proxy_completion(body, endpoint=endpoint, single_agent=False)
+
+    assert result["orchestration"]["mode"] == "conduct"
+    assert called_agents
+    assert set(called_agents) == {"free_agent"}
+
+
+def test_structured_auto_uses_explicit_response_format_capability_for_synthesis() -> None:
+    """Catalog evidence, not model names, selects the structured synthesizer."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("plain_agent", "plain-model", priority=100),
+            ModelAgent(
+                "structured_agent",
+                "structured-model",
+                tags=("response_format",),
+            ),
+        ]
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "return JSON"}],
+            "response_format": {"type": "json_object"},
+        },
+        single_agent=False,
+    )
+
+    run = orchestrator.get_workflow_run(
+        result["orchestration"]["workflow_run_id"]
+    )
+    assert run["trace"][-1]["agent_id"] == "structured_agent"
+
+
 def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
     try:
         _build().proxy_completion({
@@ -542,6 +627,38 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert status == 200  # previously rejected 400 'unknown_fields'
     assert body["object"] == "chat.completion"
     assert body["echo"]["response_format"] == {"type": "json_object"}
+
+
+def test_http_structured_vision_mismatch_remains_a_client_error() -> None:
+    """Pool validation does not weaken the existing vision capability boundary."""
+    token = "structured_vision_token"
+    server = build_server(
+        TaskOrchestrator([ModelAgent("text_agent", "text-model")]),
+        port=0,
+        security=SecurityConfig(auth_token=token),
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "inspect"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                    ],
+                }],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 400
+    assert "vision" in body["error"]["message"]
 
 
 def test_http_virtual_json_schema_preserves_openai_shape_and_orchestration_lineage() -> None:
