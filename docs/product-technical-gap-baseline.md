@@ -1,5 +1,25 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-28 11:06 KST exact-head PR remediation slice
+
+Protected `main` is `8d5924f8`. PR #879 now points at `e6d9e937` after
+merging this main and fixing provider-failure classification for `None`,
+binary passthrough, and authenticated structured-trace auditing; its exact
+merged tree passed **2515 tests**, while hosted Strix and the full-suite gate
+remain pending. PR #868 now points at `7b408aee` after merging this main and
+fixing non-string completion-model validation plus the gateway-default
+constant path; its focused model/HTTP regression set passed **28 tests**,
+while hosted Atheris and the full-suite gate remain pending. Both are
+`MERGEABLE` but `BLOCKED` without an independent approval, so neither is
+claimed as protected-main delivery.
+
+PR #857 remains at `0aec4a54`, `CONFLICTING`, and `REVIEW_REQUIRED`: its long
+stacked embedding branch diverges from current main across runtime, tests,
+documentation, and lockfiles. The attempted current-main merge was aborted
+without a push; no branch evidence is promoted to protected-main evidence.
+The existing hourly OpenCode maintenance workflow remains the single
+scheduled loop (`23 * * * *` UTC); no duplicate scheduler was added.
+
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 
 Protected `main` briefly carried a merge-order regression from PR #891 merged
