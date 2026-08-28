@@ -320,6 +320,36 @@ def test_async_billing_export_preserves_caller_owned_sqlite_transaction() -> Non
     assert ledger.telemetry_health()["records_stored"] == 1
 
 
+def test_async_open_transaction_duplicate_is_reported_as_dropped() -> None:
+    """A duplicate in the synchronous caller-transaction path remains observable."""
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    telemetry = InMemoryUsageTelemetrySink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(
+        price_book,
+        store=store,
+        non_blocking_store=True,
+        telemetry_sink=telemetry,
+        usage_sink=_RecordingUsageSink(),
+    )
+
+    connection.execute("BEGIN")
+    for _ in range(2):
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_open_transaction_duplicate",
+        )
+
+    assert ledger.telemetry_health()["records_dropped"] == 1
+    assert telemetry.events()[-1].error_type == "duplicate"
+    connection.rollback()
+
+
 def test_non_blocking_store_preserves_transaction_without_billing_sink() -> None:
     """A caller transaction is never handed to the background worker."""
     connection = sqlite3.connect(":memory:")

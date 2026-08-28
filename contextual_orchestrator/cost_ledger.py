@@ -482,6 +482,15 @@ class NonBlockingLedgerStore:
         ):
             accepted = self.backend.append(record) is not False
             if not accepted:
+                self._mark("records_dropped", error_type="duplicate")
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="duplicate",
+                    ),
+                )
                 return False
             self._mark("records_accepted")
             if self._usage_record_sink is not None:
