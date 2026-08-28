@@ -14,3 +14,6 @@ tempcred.txt
 .hypothesis/
 .secrets/
 .coverage
+
+# local benchmark artifacts (uploaded by CI, not committed)
+benchmark_artifacts/

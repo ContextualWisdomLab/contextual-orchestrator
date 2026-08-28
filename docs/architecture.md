@@ -91,6 +91,7 @@ the worker is read, patched, or removed.
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses a deterministic capability-hint heuristic only for worker/role routing so the repo runs without training data, GPUs, or vendor credentials. It is never an answer-quality, verification, or accept/reject judgment: verifier decisions must use the structured model judge and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
+The [NIM cost-quality benchmark](nim_benchmark.md) is that evaluation set's supplier: it discovers the hosted catalog dynamically, probes every modality contract, and compares route/conduct/single-worker policies with paired uncertainty — evidence first, learned policy later.
 
 ## SDK omit-real persist
 

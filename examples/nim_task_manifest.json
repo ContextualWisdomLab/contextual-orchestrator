@@ -1,0 +1,90 @@
+{
+  "manifest_version": "2026-08-04.1",
+  "manifest_notes": "Immutable task ids; expected answers and rubrics are scoring-side only and are never injected into model prompts (no test-set leakage). The locked split is the evaluation set; the exploratory split is for tuning only and never enters headline comparisons.",
+  "tasks": [
+    {
+      "task_id": "trick_arithmetic_bat_ball",
+      "split": "locked",
+      "prompt": "A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. How much does the ball cost, in dollars? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "0.05"}
+    },
+    {
+      "task_id": "constant_speed_distance",
+      "split": "locked",
+      "prompt": "A car travels 60 kilometers in 40 minutes. At that same speed, how many kilometers does it travel in 100 minutes? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "150"}
+    },
+    {
+      "task_id": "trick_arithmetic_lily_pads",
+      "split": "locked",
+      "prompt": "A patch of lily pads doubles in size every day. It covers a whole lake in 48 days. After how many days did it cover half the lake? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "47"}
+    },
+    {
+      "task_id": "letter_counting_strawberry",
+      "split": "locked",
+      "prompt": "How many times does the letter r appear in the word strawberry? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "3"}
+    },
+    {
+      "task_id": "unit_conversion_km_miles",
+      "split": "locked",
+      "prompt": "A road is exactly 160.9344 kilometers long. How long is it in miles? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "100"}
+    },
+    {
+      "task_id": "logic_trap_month_days",
+      "split": "locked",
+      "prompt": "Some months have 30 days and some have 31. How many months of the year have 28 days? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "12"}
+    },
+    {
+      "task_id": "capital_recall_france",
+      "split": "locked",
+      "prompt": "Name the capital city of France. Answer with the city name only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "Paris"}
+    },
+    {
+      "task_id": "capital_recall_australia",
+      "split": "locked",
+      "prompt": "Name the capital city of Australia. Answer with the city name only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "Canberra"}
+    },
+    {
+      "task_id": "sequence_next_fibonacci",
+      "split": "locked",
+      "prompt": "What number comes next in this sequence: 1, 1, 2, 3, 5, 8, 13? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "21"}
+    },
+    {
+      "task_id": "digit_sum_reasoning",
+      "split": "locked",
+      "prompt": "Multiply 12 by 12, then add 56 to the result. Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "200"}
+    },
+    {
+      "task_id": "exploratory_summary_probe",
+      "split": "exploratory",
+      "prompt": "Summarize in one word the mood of a calm sunny morning by the sea.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "peace"}
+    },
+    {
+      "task_id": "exploratory_translation_probe",
+      "split": "exploratory",
+      "prompt": "Translate the English word hello into French. Answer with one word only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "bonjour"}
+    }
+  ]
+}

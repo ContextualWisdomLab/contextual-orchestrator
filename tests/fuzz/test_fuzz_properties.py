@@ -19,6 +19,7 @@ from hypothesis import given, settings, strategies as st
 from fuzz.targets import (
     exercise_agent_config,
     exercise_model_judge_reply,
+    exercise_nim_catalog,
     exercise_orchestration,
     exercise_pii_key,
     exercise_provider_model_payload,
@@ -143,3 +144,34 @@ def test_structured_output_validation_never_crashes(content: str, schema: object
 @given(_json_values)
 def test_reasoning_effort_profile_never_crashes(value: object) -> None:
     exercise_reasoning_effort_profile(value)
+
+@given(st.binary(max_size=4096))
+def test_nim_catalog_never_crashes_on_raw_bytes(raw: bytes) -> None:
+    exercise_nim_catalog(raw)
+
+
+# Catalog-shaped adversarial entries: wrong types, missing ids, duplicates.
+_catalog_entry = (
+    st.none()
+    | st.text(max_size=16)
+    | st.integers()
+    | st.fixed_dictionaries(
+        {},
+        optional={
+            "id": st.text(max_size=20) | st.integers() | st.none() | st.just("dup/model"),
+            "owned_by": st.text(max_size=12) | st.integers() | st.none(),
+        },
+    )
+)
+
+
+@_SETTINGS
+@given(st.lists(_catalog_entry, max_size=8).map(lambda entries: json.dumps({"data": entries}).encode("utf-8")))
+def test_nim_catalog_on_structured_entries(raw: bytes) -> None:
+    exercise_nim_catalog(raw)
+
+
+@_SETTINGS
+@given(_json_values.map(lambda v: json.dumps(v).encode("utf-8")))
+def test_nim_catalog_on_arbitrary_json(raw: bytes) -> None:
+    exercise_nim_catalog(raw)

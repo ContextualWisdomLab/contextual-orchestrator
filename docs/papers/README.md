@@ -65,6 +65,19 @@ redistribution is unclear.
 Buyer next action: call `run_equal_budget_ablation` and read
 `production_default_change_allowed` before changing live defaults.
 
+## Evaluation methodology (NIM cost-quality benchmark)
+
+- **Holistic Evaluation of Language Models (HELM)** — Percy Liang, Rishi
+  Bommasani, Tony Lee, et al. arXiv:2211.09110, 2022 (TMLR 2023).
+  `helm-holistic-evaluation-2211.09110.pdf`
+  Grounds the **NIM benchmark harness** (`docs/nim_benchmark.md`): evaluate a
+  broad, explicitly enumerated model pool on multiple metrics at once (quality,
+  latency, cost) instead of a single leaderboard number; report incompleteness
+  honestly (skipped/unsupported/rate-limited cells stay machine-readable rather
+  than silently dropped); and standardize conditions across compared systems
+  (same tasks, scorers, caps, and budgets). Distributed under the arXiv
+non-exclusive license / CC BY as marked on arXiv.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
