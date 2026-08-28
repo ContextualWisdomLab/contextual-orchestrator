@@ -4950,6 +4950,8 @@ class TaskOrchestrator:
             and all(tag in agent.tags for tag in required_tags)
         ]
         if not candidates:
+            if _REQUEST_ZDR_ONLY.get():
+                raise RuntimeError("no ZDR-eligible agent is available for the active privacy policy")
             if free_only:
                 raise RuntimeError("no enabled zero-cost model is available")
             if chat_only:

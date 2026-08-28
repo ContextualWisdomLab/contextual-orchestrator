@@ -143,6 +143,17 @@ def test_zdr_only_filters_the_caller_supplied_model_group_array() -> None:
     assert [agent.id for agent in selected] == [zdr.id]
 
 
+def test_zdr_only_reports_when_the_caller_supplied_array_has_no_eligible_member() -> None:
+    orchestrator = TaskOrchestrator([_agent("configured_member", "vendor/configured")])
+
+    with pytest.raises(RuntimeError, match="ZDR-eligible"):
+        orchestrator.select_model_group_members(
+            [_agent("runtime_member", "vendor/runtime")],
+            chat_only=False,
+            zdr_only=True,
+        )
+
+
 def test_zdr_only_does_not_reinterpret_an_exact_non_zdr_model_as_its_group() -> None:
     non_zdr = _agent("non_zdr_member", "vendor/non-zdr")
     zdr = ModelAgent(
