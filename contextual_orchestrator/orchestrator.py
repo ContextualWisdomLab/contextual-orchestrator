@@ -2931,15 +2931,16 @@ class _StateStore:
         if kind not in self._KEYED:
             raise ValueError("only keyed state can be pruned")
         with self._lock:
-            if retained_keys:
-                placeholders = ",".join("?" for _ in retained_keys)
+            stale_keys = {
+                row[0]
+                for row in self._conn.execute(
+                    "SELECT key FROM orchestration_records WHERE kind = ?", (kind,)
+                ).fetchall()
+                if row[0] not in retained_keys
+            }
+            for key in stale_keys:
                 self._conn.execute(
-                    f"DELETE FROM orchestration_records WHERE kind = ? AND key NOT IN ({placeholders})",  # nosec B608 -- placeholders only
-                    (kind, *sorted(retained_keys)),
-                )
-            else:
-                self._conn.execute(
-                    "DELETE FROM orchestration_records WHERE kind = ?", (kind,)
+                    self._DELETE_KEYED_SQL, (kind, key)
                 )
             self._conn.commit()
 
