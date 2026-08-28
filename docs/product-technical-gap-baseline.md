@@ -15,8 +15,8 @@ protected-main delivery.
 
 The earlier local merge attempt for #857 at `0aec4a54` was aborted without a
 push; no stale branch evidence is promoted to protected-main evidence. The
-docs-only recording PR #900 has passing hosted checks and remains open pending
-the same independent approval gate.
+docs-only recording PR #900 remains open and is not claimed as protected-main
+delivery.
 The existing hourly OpenCode maintenance workflow remains the single
 scheduled loop (`23 * * * *` UTC); no duplicate scheduler was added.
 
