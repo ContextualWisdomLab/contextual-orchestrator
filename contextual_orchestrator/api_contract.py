@@ -466,7 +466,7 @@ OPENAPI_SPEC = {
                 "operationId": "create_provider_readiness_refresh",
                 "summary": "Probe an explicit provider access list asynchronously",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"202": {"description": "Readiness refresh accepted"}},
+                "responses": {"202": {"description": "Readiness refresh accepted with admission-derived polling cadence"}},
             }
         },
         "/api/v1/provider_readiness_refreshes/{job_id}": {
@@ -480,7 +480,7 @@ OPENAPI_SPEC = {
                     "required": True,
                     "schema": {"type": "string"},
                 }],
-                "responses": {"200": {"description": "Readiness refresh progress"}},
+                "responses": {"200": {"description": "Readiness refresh progress with admission-derived polling cadence"}},
             }
         },
         "/api/v1/provider_readiness_refreshes/{job_id}/cancel": {

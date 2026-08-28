@@ -337,11 +337,24 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
 
     try:
         first_status, _ = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload, token="secret_token")
-        second_status, second_body = post_json(
+        request = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            payload,
-            token="secret_token",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": "Bearer secret_token",
+                "content-type": "application/json",
+                "connection": "close",
+            },
+            method="POST",
         )
+        try:
+            urllib.request.urlopen(request, timeout=5)
+        except urllib.error.HTTPError as exc:
+            second_status = exc.code
+            second_headers = exc.headers
+            second_body = json.loads(exc.read().decode("utf-8"))
+        else:  # pragma: no cover
+            raise AssertionError("rate limit did not reject the second request")
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -349,6 +362,8 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
     assert first_status == 200
     assert second_status == 429
     assert second_body["error"]["code"] == "rate_limit_exceeded"
+    assert second_headers["Retry-After"] == "60"
+    assert second_body["error"]["detail"]["retry_after_seconds"] == 60
 
 
 def test_public_bind_requires_explicit_opt_in() -> None:

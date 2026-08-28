@@ -511,7 +511,13 @@ class SecurityConfig:
             if now >= reset_at:
                 count, reset_at = 0, now + self.rate_limit_window_seconds
             if count >= self.rate_limit_requests:
-                raise RequestError(429, "rate_limit_exceeded", "request rate limit exceeded")
+                retry_after_seconds = max(1, math.ceil(reset_at - now))
+                raise RequestError(
+                    429,
+                    "rate_limit_exceeded",
+                    "request rate limit exceeded",
+                    {"retry_after_seconds": retry_after_seconds},
+                )
             self._rate_buckets[key] = (count + 1, reset_at)
 
     @property
@@ -5525,7 +5531,10 @@ def build_server(
                 if path.startswith("/api/v1/provider_readiness_refreshes/"):
                     job_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(coordinator.provider_readiness_refresh_document(job_id))
+                        self._send({
+                            **coordinator.provider_readiness_refresh_document(job_id),
+                            "poll_after_ms": security.batch_poll_after_ms,
+                        })
                     except KeyError:
                         raise RequestError(
                             404, "provider_readiness_refresh_not_found", "readiness refresh was not found"
@@ -5986,7 +5995,10 @@ def build_server(
                         timeout_seconds=validated_timeout,
                         deadline_epoch=deadline_epoch,
                     )
-                    self._send(document, 202)
+                    self._send(
+                        {**document, "poll_after_ms": security.batch_poll_after_ms},
+                        202,
+                    )
                     return
 
                 if path.startswith("/api/v1/provider_readiness_refreshes/") and path.endswith("/cancel"):
@@ -7583,6 +7595,13 @@ def build_server(
             *,
             extra_headers: dict[str, str] | None = None,
         ) -> None:
+            if code == "rate_limit_exceeded":
+                retry_after_seconds = (detail or {}).get("retry_after_seconds")
+                if type(retry_after_seconds) is int and retry_after_seconds > 0:
+                    extra_headers = {
+                        **(extra_headers or {}),
+                        "Retry-After": str(retry_after_seconds),
+                    }
             _LOGGER.warning("request_failed status=%s code=%s", status, code)
             self._send(
                 _error_payload(
