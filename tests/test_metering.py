@@ -47,6 +47,8 @@ def test_record_sink_builds_and_enqueues_without_content() -> None:
 
     assert queued == built
     assert "prompt" not in queued[0]
+    assert "cost_amount" not in queued[0]["record"]
+    assert "currency_code" not in queued[0]["record"]
     assert queued[0]["identity"] == {"tenant_reference": "urn:cwl:tenant:test"}
 
 

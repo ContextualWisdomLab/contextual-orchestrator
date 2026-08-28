@@ -24,7 +24,24 @@ class CanonicalUsageRecordSink(UsageRecordSink):
 
     def emit_usage_record(self, record: UsageRecord) -> None:
         """Convert one ledger record and durably enqueue the resulting event."""
-        event = self._event_builder(record.as_dict(), **self._identity)
+        raw_record = record.as_dict()
+        safe_record = {
+            name: raw_record[name]
+            for name in (
+                "usage_record_id",
+                "created_at",
+                "workflow_run_id",
+                "request_channel",
+                "route_mode",
+                "provider_name",
+                "model_name",
+                "prompt_tokens",
+                "completion_tokens",
+                "measurement_status",
+            )
+            if name in raw_record
+        }
+        event = self._event_builder(safe_record, **self._identity)
         self._enqueue(event)
 
 
