@@ -85,8 +85,10 @@ and configured counts. Partial model-major prefixes cannot produce routing
 evidence. Once preflight passes, all fixed cells execute under bounded
 concurrency; thread scheduling can change completion order but not coverage.
 
-The monthly schedule uses a hard ceiling of 2,000 requests. On the 127-model
-catalog scale observed on 2026-08-05, the current thirty-task, seven-worker
+The monthly schedule runs on the first day of each month and uses a hard ceiling
+of 2,000 requests. This places the next scheduled run inside the current
+reviewed evidence window; stale access-cost evidence still fails closed. On the
+127-model catalog scale observed on 2026-08-05, the current thirty-task, seven-worker
 configuration requires 1,924 requests: one catalog request, 1,143 capability
 probes, and a 780-request worst-case evaluation reserve. The reserve includes
 the full equal-call envelope for route-once cells, the five-call conduct

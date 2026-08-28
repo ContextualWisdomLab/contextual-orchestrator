@@ -87,3 +87,12 @@ def test_scheduled_live_budget_covers_the_reviewed_current_catalog_scale() -> No
 
     assert 'echo "max_requests=2000" >> "$GITHUB_OUTPUT"' in workflow
     assert 'echo "max_requests=300" >> "$GITHUB_OUTPUT"' not in workflow
+
+
+def test_monthly_schedule_starts_inside_the_reviewed_evidence_window() -> None:
+    """The next monthly run must precede the current evidence expiry date."""
+    workflow = (REPOSITORY_ROOT / ".github/workflows/nim-benchmark.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'cron: "23 3 1 * *"' in workflow

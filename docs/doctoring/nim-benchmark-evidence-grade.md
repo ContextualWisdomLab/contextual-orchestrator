@@ -81,8 +81,10 @@ seven evaluation workers, and thirty locked tasks. Its complete upper bound is
 `1 + (127 × 9) + (30 × (2 × 7 + 5 + 5 + 2)) = 1,924` requests. Direct and
 cheapest-worker cells reserve a worker call plus a real-time judge call;
 route-once reserves its full equal-call envelope, and conduct reserves its
-five-call workflow and judge envelope. The monthly workflow
-therefore uses a reviewed hard ceiling of 2,000 requests, leaving bounded room
+five-call workflow and judge envelope. The monthly workflow runs on the first
+day of each month so the next scheduled run falls inside the current reviewed
+evidence window; stale evidence still fails closed. It therefore uses a
+reviewed hard ceiling of 2,000 requests, leaving bounded room
 for catalog growth while retaining a deterministic cap. If a later catalog no
 longer fits, the same preflight reports required and configured counts and makes
 zero partial probe calls. Once admitted, all probe cells execute under bounded

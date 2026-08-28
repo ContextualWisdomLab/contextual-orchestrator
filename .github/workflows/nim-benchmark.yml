@@ -2,8 +2,10 @@ name: NIM benchmark
 
 # Evidence-grade NVIDIA NIM model discovery and cost-quality benchmark.
 # Manual dispatch defaults to a deterministic dry run. Monthly scheduled runs
-# are live but use a conservative hard request cap. Dry execution receives no
-# provider credential; only the live step can read NVIDIA_NIM_API_KEY.
+# are live but use a conservative hard request cap. The first-of-month schedule
+# keeps the next run inside the current reviewed evidence window; stale evidence
+# still fails closed. Dry execution receives no provider credential; only the
+# live step can read NVIDIA_NIM_API_KEY.
 
 on:
   workflow_dispatch:
@@ -21,7 +23,7 @@ on:
         type: string
         default: ""
   schedule:
-    - cron: "23 3 5 * *"
+    - cron: "23 3 1 * *"
 
 permissions:
   contents: read
