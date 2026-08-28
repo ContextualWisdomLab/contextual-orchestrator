@@ -28,12 +28,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install test dependencies
-        # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Install both
-        # runtime integrations and the property-test tools exercised below.
-        run: |
-          python -m pip install --require-hashes -r requirements.lock
-          python -m pip install --require-hashes -r fuzz/requirements-property.txt
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.12.5"
 
       - name: Run full test suite
-        run: python -m pytest -q
+        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q
