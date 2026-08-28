@@ -638,16 +638,6 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
     )
 
 
-def _is_request_too_large_error(exc: BaseException) -> bool:
-    """Return whether a provider rejection is a proven request-size failure."""
-    return isinstance(exc, ProviderRequestTooLargeError) or (
-        isinstance(exc, urllib.error.HTTPError)
-        and (
-            exc.code == 413 or _is_oversized_tool_description_error(exc)
-        )
-    )
-
-
 def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
     """Convert the provider's terminal tool-stop contract to the public safe error."""
     decision = classify_tool_failure(
@@ -1036,22 +1026,44 @@ def _is_omit_equivalent_control(key: str, value: Any) -> bool:
     return False
 
 
-def _is_passthrough_failover_error(exc: BaseException) -> bool:
-    """Recognize failures proving that a passthrough request was not accepted."""
+def _is_request_too_large_error(exc: BaseException) -> bool:
+    """Recognize request-size rejection through a bounded exception chain."""
     current: BaseException | None = exc
     seen: set[int] = set()
     for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
         if current is None or id(current) in seen:
             return False
         seen.add(id(current))
-        if isinstance(current, ProviderRequestTooLargeError):
-            return True
-        if (
+        if isinstance(current, ProviderRequestTooLargeError) or (
             isinstance(current, urllib.error.HTTPError)
             and (
-                current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+                current.code == 413
                 or _is_oversized_tool_description_error(current)
             )
+        ):
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return False
+        else:
+            current = current.__context__
+    return False
+
+
+def _is_passthrough_failover_error(exc: BaseException) -> bool:
+    """Recognize failures proving that a passthrough request was not accepted."""
+    if _is_request_too_large_error(exc):
+        return True
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(_PROVIDER_ERROR_CHAIN_LIMIT):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
         ):
             return True
         if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
@@ -3461,7 +3473,16 @@ class TaskOrchestrator:
             """Send once per eligible provider, advancing only after a proven 413 rejection."""
             nonlocal final_agent
             seen_providers: set[str] = set()
-            for candidate in synthesis_candidates:
+            preferred = final_agent
+            ordered_candidates = [
+                preferred,
+                *(
+                    candidate
+                    for candidate in synthesis_candidates
+                    if candidate.id != preferred.id
+                ),
+            ]
+            for candidate in ordered_candidates:
                 provider_key = (
                     f"provider:{candidate.provider_name.casefold()}"
                     if candidate.provider_name.strip()
@@ -3485,7 +3506,7 @@ class TaskOrchestrator:
                         if callable(send_once):
                             send = send_once
                     return send(candidate, endpoint, candidate_payload), candidate
-                except (ProviderRequestTooLargeError, urllib.error.HTTPError) as exc:
+                except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     request_too_large = _is_request_too_large_error(exc)
                     if not request_too_large or not virtual_model:
                         raise
@@ -3497,11 +3518,9 @@ class TaskOrchestrator:
         try:
             raw, final_agent = send_synthesis(upstream)
         except Exception as exc:
-            if not isinstance(exc, ProviderRequestTooLargeError):
+            if not _is_request_too_large_error(exc):
                 self._record_failure(final_agent.id)
-            if final_agent.group_name and not isinstance(
-                exc, ProviderRequestTooLargeError
-            ):
+            if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)
             raise
         def provider_output(response: Mapping[str, Any]) -> str:
@@ -3573,11 +3592,9 @@ class TaskOrchestrator:
             try:
                 repaired, final_agent = send_synthesis(repair_upstream)
             except Exception as exc:
-                if not isinstance(exc, ProviderRequestTooLargeError):
+                if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
-                if final_agent.group_name and not isinstance(
-                    exc, ProviderRequestTooLargeError
-                ):
+                if final_agent.group_name and not _is_request_too_large_error(exc):
                     self._group_router.observe_failure(final_agent.id)
                 raise
             repaired_output = provider_output(repaired)
@@ -5638,7 +5655,7 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                 except Exception as exc:
-                    if isinstance(exc, ProviderRequestTooLargeError):
+                    if _is_request_too_large_error(exc):
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
