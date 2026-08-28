@@ -70,6 +70,7 @@ class ProviderModelSource:
     task_filter: str = ""
     capabilities: tuple[str, ...] = ()
     bootstrap_required: bool = True
+    evidence_only: bool = False
 
 
 # NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
@@ -87,6 +88,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
+        evidence_only=True,
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -142,6 +144,7 @@ class DiscoveredModel:
     currency_code: str = "USD"
     is_free: bool = False
     zdr_capable: bool = False
+    evidence_only: bool = False
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -458,7 +461,7 @@ def _apply_discovered_model_evidence(
     return [
         replace(
             model,
-            zdr_capable=matches(model.model_id),
+            zdr_capable=not model.evidence_only and matches(model.model_id),
         )
         for model in discovered
     ]
@@ -488,8 +491,10 @@ def discover_provider_models(
             metadata = None
         payload = _merge_models_dev_metadata(payload, metadata, _MODELS_DEV_OPENCODE_PROVIDER)
     if source.style == "bytez":
-        return _parse_bytez(payload, source)
-    return _parse_openai_compatible(payload, source)
+        discovered = _parse_bytez(payload, source)
+    else:
+        discovered = _parse_openai_compatible(payload, source)
+    return [replace(model, evidence_only=source.evidence_only) for model in discovered]
 
 
 def discover_all_models(
