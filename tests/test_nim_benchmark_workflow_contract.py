@@ -47,8 +47,11 @@ def test_temporary_review_export_job_is_absent_from_mergeable_tests_workflow() -
 
 
 def test_temporary_review_evidence_source_is_absent() -> None:
-    """Mergeable source must not retain the one-use transformation payload."""
+    """Mergeable source must not retain any one-use transformation payload."""
     assert not (REPOSITORY_ROOT / ".review-evidence/nim-source-repair.yml").exists()
+    assert not (
+        REPOSITORY_ROOT / ".github/workflows/export-pr90-workspace.yml"
+    ).exists()
 
 
 def test_compatibility_monkeypatch_module_is_absent() -> None:
@@ -74,3 +77,13 @@ def test_tests_workflow_enforces_nim_coverage_docstrings_and_package_smoke() -> 
     assert 'cd "$RUNNER_TEMP"' in workflow
     assert 'PYTHONPATH="$RUNNER_TEMP/nim-wheel-site"' in workflow
     assert "import contextual_orchestrator.nim_benchmark" in workflow
+
+
+def test_scheduled_live_budget_covers_the_reviewed_current_catalog_scale() -> None:
+    """Monthly live runs reserve enough calls for full probes plus evaluation."""
+    workflow = (REPOSITORY_ROOT / ".github/workflows/nim-benchmark.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'echo "max_requests=2000" >> "$GITHUB_OUTPUT"' in workflow
+    assert 'echo "max_requests=300" >> "$GITHUB_OUTPUT"' not in workflow

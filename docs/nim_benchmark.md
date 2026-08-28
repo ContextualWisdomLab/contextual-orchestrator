@@ -24,7 +24,7 @@ python -m contextual_orchestrator nim-benchmark --dry-run \
 # The process bootstraps it into the credential registry and runtime access
 # resolves the credential by name.
 python -m contextual_orchestrator nim-benchmark \
-  --max-total-requests 300 \
+  --max-total-requests 2000 \
   --max-output-tokens 256 \
   --git-sha "$GITHUB_SHA" \
   --workflow-run-id "$GITHUB_RUN_ID"
@@ -76,11 +76,20 @@ Every discovered model receives a row for each contract:
 | `audio_transcription` | `POST /audio/transcriptions` |
 | `audio_speech` | `POST /audio/speech` |
 
-Before threads start, the harness constructs the full sorted
-`(model_id, capability_name)` plan and deterministically allocates the remaining
-request budget. Only those fixed cells execute concurrently; the rest receive a
-stable `request_budget_exhausted` reason. Thread scheduling cannot decide which
-models or modalities receive evidence.
+After catalog discovery and before the first capability request, the harness
+constructs the complete request plan: one discovery request, every sorted
+`(model_id, capability_name)` probe, and the conservative evaluation reserve for
+the maximum eligible worker pool. If the configured cap is even one request
+short, the run fails closed before capability egress and reports the required
+and configured counts. Partial model-major prefixes cannot produce routing
+evidence. Once preflight passes, all fixed cells execute under bounded
+concurrency; thread scheduling can change completion order but not coverage.
+
+The monthly schedule uses a hard ceiling of 2,000 requests. On the 127-model
+catalog scale observed on 2026-08-05, the ten-task, seven-worker configuration
+requires 1,284 requests: one catalog request, 1,143 capability probes, and a
+140-request worst-case evaluation reserve. Catalog growth beyond the ceiling
+causes a zero-partial-egress preflight failure rather than silent truncation.
 
 The embedded video fixture is a deterministic, decodable 16 × 16, one-frame
 H.264 MP4. Its bytes are verified against SHA-256

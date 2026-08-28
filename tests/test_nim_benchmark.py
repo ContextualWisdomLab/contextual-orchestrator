@@ -570,25 +570,38 @@ def test_probe_models_sorted_despite_input_order_drift() -> None:
     assert results[0]["endpoint"] == FAKE_ENDPOINT
 
 
-def test_probe_models_budget_exhaustion_leaves_machine_readable_skips() -> None:
-    models = [{"model_id": "a/model-one", "owned_by": ""}, {"model_id": "b/model-two", "owned_by": ""}]
+def test_probe_models_rejects_incomplete_probe_budget_before_egress() -> None:
+    """A capability phase never emits biased partial-inventory evidence."""
+    models = [
+        {"model_id": "a/model-one", "owned_by": ""},
+        {"model_id": "b/model-two", "owned_by": ""},
+    ]
     budget = nb.RequestBudget(5)
-    results = nb.probe_discovered_models(
-        models,
-        _fixed_transport(*_ok_json({"choices": [{"message": {"content": "OK"}}]})),
-        FAKE_ENDPOINT,
-        "key",
-        budget,
-        1,
-        lambda: 1234.0,
-        lambda: 0.0,
-    )
-    all_rows = [row for result in results for row in result["capability_probe_rows"]]
-    skipped = [row for row in all_rows if row["probe_outcome"] == "skipped"]
-    assert budget.requests_spent == 5
-    assert len(skipped) == len(all_rows) - 5
-    assert {row["outcome_reason"] for row in skipped} == {"request_budget_exhausted"}
-    assert results[-1]["model_classification"] == "skipped"
+    calls: list[str] = []
+
+    def transport(
+        _method: str,
+        _url: str,
+        _headers: dict[str, str],
+        _body: bytes | None,
+    ) -> tuple[int, bytes]:
+        calls.append("called")
+        return _ok_json({"choices": [{"message": {"content": "OK"}}]})
+
+    with pytest.raises(nb.BenchmarkBudgetError, match="capability probe plan needs 18"):
+        nb.probe_discovered_models(
+            models,
+            transport,
+            FAKE_ENDPOINT,
+            "key",
+            budget,
+            1,
+            lambda: 1234.0,
+            lambda: 0.0,
+        )
+
+    assert calls == []
+    assert budget.requests_spent == 0
 
 
 # --------------------------------------------------------------------------
@@ -616,7 +629,7 @@ def _write_json(tmp_path: str, name: str, payload: object) -> str:
 def test_example_task_manifest_is_valid_and_split() -> None:
     manifest = nb.load_task_manifest(TASK_MANIFEST_PATH)
     locked = nb.locked_evaluation_tasks(manifest)
-    assert len(locked) == 10
+    assert len(locked) == 30
     assert len(manifest["tasks"]) - len(locked) == 2  # exploratory tuning split stays out
 
 
@@ -1055,7 +1068,7 @@ def _dry_report(output_dir: str) -> dict:
         TASK_MANIFEST_PATH,
         PRICING_SCENARIO_PATH,
         output_dir,
-        max_total_requests=400,
+        max_total_requests=600,
     )
 
 
@@ -1181,7 +1194,7 @@ def test_dry_run_accepts_explicit_transport() -> None:
             TASK_MANIFEST_PATH,
             None,
             tmp,
-            max_total_requests=400,
+            max_total_requests=600,
             transport=nb.build_dry_run_transport(),
         )
         assert report["provenance"]["pricing_scenario_sha256"] is None
@@ -1207,7 +1220,7 @@ def test_live_run_end_to_end_offline() -> None:
                 TASK_MANIFEST_PATH,
                 None,
                 tmp,
-                max_total_requests=400,
+                max_total_requests=600,
                 git_sha="abc123",
                 workflow_run_id="run-42",
                 transport=nb.build_dry_run_transport(),
@@ -1220,7 +1233,7 @@ def test_live_run_end_to_end_offline() -> None:
     assert report["honesty_labels"]["actual_cost_basis"] == (
         "reviewed_nvidia_developer_program_hosted_endpoint_access"
     )
-    assert report["request_budget"]["requests_spent"] <= 400
+    assert report["request_budget"]["requests_spent"] <= 600
     assert "nvapi-test-credential" not in json.dumps(report)
 
 
@@ -1236,7 +1249,7 @@ def test_live_run_uses_default_transport_builder_when_none_given() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = nb.run_benchmark(
                 "live", TASK_MANIFEST_PATH, None, tmp,
-                max_total_requests=400, git_sha="abc123", workflow_run_id="run-43",
+                max_total_requests=600, git_sha="abc123", workflow_run_id="run-43",
             )
     finally:
         nb.build_default_transport = original_builder
@@ -1276,7 +1289,7 @@ def test_cli_dry_run_succeeds() -> None:
                     "--task-manifest", TASK_MANIFEST_PATH,
                     "--pricing-scenario", PRICING_SCENARIO_PATH,
                     "--output-dir", tmp,
-                    "--max-total-requests", "400",
+                    "--max-total-requests", "600",
                 ]
             )
         assert exit_code == 0

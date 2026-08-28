@@ -15,7 +15,7 @@ on:
       max_total_requests:
         description: "Hard cap on provider requests for this run"
         type: number
-        default: 500
+        default: 2000
       pricing_scenario:
         description: "Optional reviewed pricing-scenario JSON path"
         type: string
@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "schedule" ]; then
-            echo "max_requests=300" >> "$GITHUB_OUTPUT"
+            echo "max_requests=2000" >> "$GITHUB_OUTPUT"
             echo "pricing_scenario=" >> "$GITHUB_OUTPUT"
           else
             echo "max_requests=${INPUT_MAX_REQUESTS}" >> "$GITHUB_OUTPUT"

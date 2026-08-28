@@ -18,7 +18,7 @@ Design contract (mirrors the issue):
   API, embeddings, image understanding (vision), video understanding,
   audio understanding (omni-style ``input_audio``), audio transcription,
   and audio speech synthesis. ``omni_capable`` is derived, never probed
-  separately. Skipped probes always carry a machine-readable reason.
+  separately. A run that cannot execute every cell fails before capability egress.
 * **Fair comparison** — the same task manifest, scorers, call caps,
   workflow-depth cap (five), timeout, and output-token budget apply to all
   compared systems.
@@ -171,7 +171,6 @@ def require_public_https_endpoint(url: str) -> tuple[str, ...]:
         raise BenchmarkContractError(str(exc)) from exc
 
 
-
 def build_default_transport(timeout_seconds: float) -> ProviderTransport:
     """Build direct HTTPS transport pinned to each request's DNS evidence.
 
@@ -260,7 +259,6 @@ def build_default_transport(timeout_seconds: float) -> ProviderTransport:
     return transport
 
 
-
 # --------------------------------------------------------------------------
 # Request budget (fail-closed hard cap)
 # --------------------------------------------------------------------------
@@ -315,7 +313,6 @@ class RequestBudget:
         """Return the non-negative provider request allowance still available."""
         with self._lock:
             return self.max_total_requests - self._spent
-
 
 
 class _BudgetedModelClient(ModelClient):
@@ -483,7 +480,7 @@ def parse_model_catalog_body(body: bytes) -> dict[str, Any]:
     """
     try:
         decoded = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise CatalogDiscoveryError(f"model catalog body is not valid JSON: {exc}") from exc
     if not isinstance(decoded, dict) or not isinstance(decoded.get("data"), list):
         raise CatalogDiscoveryError("model catalog must be a JSON object with a 'data' list")
@@ -801,7 +798,6 @@ def _video_data_uri() -> str:
     return f"data:video/mp4;base64,{base64.b64encode(_tiny_mp4_bytes()).decode('ascii')}"
 
 
-
 def _audio_probe_base64() -> str:
     """Base64 WAV payload used by the omni-style audio-understanding probe."""
     return base64.b64encode(_tiny_wav_bytes()).decode("ascii")
@@ -986,17 +982,6 @@ def _probe_row(
     }
 
 
-def _skipped_probe_row(capability_name: str, skip_reason: str) -> dict[str, Any]:
-    """Row for a probe that never ran; the reason stays machine-readable."""
-    return {
-        "capability_name": capability_name,
-        "probe_outcome": "skipped",
-        "outcome_reason": skip_reason,
-        "http_status": None,
-        "probe_latency_ms": 0.0,
-    }
-
-
 _CHAT_CLASSIFICATIONS = frozenset({"chat_capable", "vision_chat_capable", "omni_capable"})
 
 
@@ -1072,7 +1057,7 @@ def probe_discovered_models(
         timer: Per-probe monotonic latency source.
 
     Returns:
-        Sorted model rows with complete attempted-or-skipped capability evidence.
+        Sorted model rows with complete capability evidence for every model.
 
     Raises:
         BenchmarkContractError: If concurrency is boolean or not positive.
@@ -1085,23 +1070,17 @@ def probe_discovered_models(
         raise BenchmarkContractError("probe_concurrency must be a positive integer")
 
     sorted_models = sorted(models, key=lambda row: row["model_id"])
-    planned_cells = [
-        (model["model_id"], capability_name)
-        for model in sorted_models
-        for capability_name in CAPABILITY_PROBE_ORDER
-    ]
-    permitted_cells = set(planned_cells[: request_budget.remaining_requests])
+    required_probe_requests = len(sorted_models) * len(CAPABILITY_PROBE_ORDER)
+    if required_probe_requests > request_budget.remaining_requests:
+        raise BenchmarkBudgetError(
+            f"complete capability probe plan needs {required_probe_requests} "
+            f"requests but only {request_budget.remaining_requests} remain"
+        )
 
     def probe_one(model: dict[str, Any]) -> dict[str, Any]:
-        """Execute only the preallocated cells for one model."""
+        """Execute every preflighted capability cell for one model."""
         rows: list[dict[str, Any]] = []
         for capability_name in CAPABILITY_PROBE_ORDER:
-            cell_key = (model["model_id"], capability_name)
-            if cell_key not in permitted_cells:
-                rows.append(
-                    _skipped_probe_row(capability_name, "request_budget_exhausted")
-                )
-                continue
             request_budget.spend_or_fail()
             rows.append(
                 execute_capability_probe(
@@ -1126,7 +1105,6 @@ def probe_discovered_models(
     with ThreadPoolExecutor(max_workers=probe_concurrency) as executor:
         results = list(executor.map(probe_one, sorted_models))
     return results
-
 
 
 # --------------------------------------------------------------------------
@@ -1349,7 +1327,6 @@ def load_pricing_scenario(path: str | None) -> dict[str, Any] | None:
     if scenario["scenario_status"] == "reviewed":
         _validate_reviewed_pricing_metadata(scenario)
     return scenario
-
 
 
 def hypothetical_cost_usd(
@@ -1597,6 +1574,100 @@ def planned_evaluation_requests(worker_count: int, locked_task_count: int) -> in
     return locked_task_count * (worker_count + 1 + MAX_WORKFLOW_DEPTH + 1)
 
 
+def plan_complete_request_budget(
+    discovered_model_count: int,
+    max_eval_models: int,
+    locked_task_count: int,
+) -> dict[str, int]:
+    """Return the complete conservative request plan for one catalog snapshot.
+
+    The plan reserves one catalog request, every model-capability probe, and
+    the worst-case equal-budget evaluation envelope for every worker that may
+    enter the capped evaluation pool. It is intentionally conservative: fewer
+    chat-eligible or scenario-priced workers may leave requests unused, but a
+    live run never starts a biased partial probe phase.
+
+    Args:
+        discovered_model_count: Usable model ids returned by ``/v1/models``.
+        max_eval_models: Maximum workers allowed into policy evaluation.
+        locked_task_count: Number of locked benchmark tasks.
+
+    Returns:
+        Named request counts including the complete run total.
+
+    Raises:
+        BenchmarkContractError: If any count is boolean or not positive.
+    """
+    counts = {
+        "discovered_model_count": discovered_model_count,
+        "max_eval_models": max_eval_models,
+        "locked_task_count": locked_task_count,
+    }
+    for label, value in counts.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise BenchmarkContractError(
+                f"{label} must be a positive integer"
+            )
+    planned_worker_count = min(discovered_model_count, max_eval_models)
+    capability_probe_request_count = (
+        discovered_model_count * len(CAPABILITY_PROBE_ORDER)
+    )
+    evaluation_reserve_request_count = planned_evaluation_requests(
+        planned_worker_count,
+        locked_task_count,
+    )
+    return {
+        "catalog_request_count": 1,
+        "capability_probe_request_count": capability_probe_request_count,
+        "evaluation_reserve_request_count": evaluation_reserve_request_count,
+        "planned_worker_count": planned_worker_count,
+        "total_required_request_count": (
+            1
+            + capability_probe_request_count
+            + evaluation_reserve_request_count
+        ),
+    }
+
+
+def planned_complete_run_requests(
+    model_count: int,
+    locked_task_count: int,
+    max_eval_models: int,
+) -> dict[str, int]:
+    """Return buyer-facing request counts for a complete benchmark run.
+
+    This stable planning view translates the internal conservative preflight
+    into terminology used by release acceptance, operator documentation, and
+    acquisition evidence. Validation remains centralized in
+    :func:`plan_complete_request_budget`, so both views fail closed identically.
+
+    Args:
+        model_count: Usable model identifiers discovered from ``/v1/models``.
+        locked_task_count: Number of locked evaluation tasks.
+        max_eval_models: Maximum workers admitted to policy comparison.
+
+    Returns:
+        Catalog, capability, evaluation, post-catalog, and total request counts.
+    """
+    plan = plan_complete_request_budget(
+        discovered_model_count=model_count,
+        max_eval_models=max_eval_models,
+        locked_task_count=locked_task_count,
+    )
+    requests_after_catalog = (
+        plan["capability_probe_request_count"]
+        + plan["evaluation_reserve_request_count"]
+    )
+    return {
+        "catalog_discovery_requests": plan["catalog_request_count"],
+        "capability_probe_requests": plan["capability_probe_request_count"],
+        "evaluation_worker_ceiling": plan["planned_worker_count"],
+        "evaluation_requests": plan["evaluation_reserve_request_count"],
+        "requests_after_catalog": requests_after_catalog,
+        "total_requests": plan["total_required_request_count"],
+    }
+
+
 def evaluate_policies(
     agents: list[ModelAgent],
     manifest: dict[str, Any],
@@ -1729,7 +1800,6 @@ def evaluate_policies(
         "locked_task_count": len(tasks),
         "worker_count": len(agents),
     }
-
 
 
 # --------------------------------------------------------------------------
@@ -1868,13 +1938,25 @@ def _numeric_cost_rows(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_pareto_frontiers(summaries: list[dict[str, Any]]) -> dict[str, Any]:
     """Quality-latency and quality-hypothetical-cost Pareto frontiers."""
+    successful = [row for row in summaries if row["success_count"] > 0]
     return {
-        "quality_vs_latency": pareto_frontier(summaries, "mean_task_score", "mean_latency_ms"),
+        "quality_vs_latency": pareto_frontier(
+            successful,
+            "mean_task_score",
+            "mean_latency_ms",
+        ),
         "quality_vs_hypothetical_cost": pareto_frontier(
-            _numeric_cost_rows(summaries), "mean_task_score", "mean_hypothetical_cost_usd"
+            _numeric_cost_rows(successful),
+            "mean_task_score",
+            "mean_hypothetical_cost_usd",
         ),
         "excluded_unknown_cost_policies": sorted(
-            row["policy_name"] for row in summaries if not isinstance(row["mean_hypothetical_cost_usd"], float)
+            row["policy_name"]
+            for row in successful
+            if not isinstance(row["mean_hypothetical_cost_usd"], float)
+        ),
+        "excluded_zero_success_policies": sorted(
+            row["policy_name"] for row in summaries if row["success_count"] == 0
         ),
     }
 
@@ -2044,12 +2126,20 @@ _REPORT_REQUIRED_PATHS = (
     "evaluation.decision_use",
     "evaluation.minimum_paired_task_count",
     "evaluation.required_completion_fraction",
+    "evaluation.observed_paired_task_count",
+    "evaluation.observed_completion_fraction",
     "evaluation.routing_recommendation",
     "request_budget.max_total_requests",
     "request_budget.requests_spent",
+    "request_budget.planned_total_requests",
+    "request_budget.catalog_requests",
+    "request_budget.capability_probe_requests",
+    "request_budget.evaluation_reserve_requests",
+    "request_budget.planned_worker_count",
     "actual_cost_evidence",
     "honesty_labels.actual_cost_basis",
     "honesty_labels.provider_latency_source",
+    "honesty_labels.hypothetical_cost_source",
 )
 
 
@@ -2114,6 +2204,8 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         f"- discovered models: {report['catalog_snapshot']['discovered_model_count']}",
         f"- requests spent: {report['request_budget']['requests_spent']}"
         f" / {report['request_budget']['max_total_requests']}",
+        f"- complete request plan: {report['request_budget']['planned_total_requests']} "
+        "(catalog + all capability probes + evaluation reserve)",
         f"- evidence status: `{report['evaluation']['evidence_status']}`",
         f"- decision use: `{report['evaluation']['decision_use']}`",
         "",
@@ -2176,7 +2268,6 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-
 def write_benchmark_artifacts(
     report: dict[str, Any],
     output_dir: str,
@@ -2216,7 +2307,6 @@ def write_benchmark_artifacts(
         "csv_path": csv_path,
         "markdown_path": markdown_path,
     }
-
 
 
 # --------------------------------------------------------------------------
@@ -2282,6 +2372,21 @@ def assemble_benchmark_report(
         "request_budget": {
             "max_total_requests": request_budget.max_total_requests,
             "requests_spent": request_budget.requests_spent,
+            "planned_total_requests": provenance_inputs["request_plan"][
+                "total_required_request_count"
+            ],
+            "catalog_requests": provenance_inputs["request_plan"][
+                "catalog_request_count"
+            ],
+            "capability_probe_requests": provenance_inputs["request_plan"][
+                "capability_probe_request_count"
+            ],
+            "evaluation_reserve_requests": provenance_inputs["request_plan"][
+                "evaluation_reserve_request_count"
+            ],
+            "planned_worker_count": provenance_inputs["request_plan"][
+                "planned_worker_count"
+            ],
         },
         "actual_cost_evidence": dict(ACTUAL_COST_EVIDENCE),
         "honesty_labels": {
@@ -2304,7 +2409,6 @@ def assemble_benchmark_report(
     _validate_actual_cost_evidence(report)
     validate_report_schema(report)
     return report
-
 
 
 # --------------------------------------------------------------------------
@@ -2424,7 +2528,7 @@ def run_benchmark(
     pricing_scenario_path: str | None,
     output_dir: str,
     endpoint: str = NIM_DEFAULT_ENDPOINT,
-    max_total_requests: int = 500,
+    max_total_requests: int = 2000,
     probe_concurrency: int = 4,
     timeout_seconds: float = 60.0,
     max_output_tokens: int = 256,
@@ -2512,7 +2616,7 @@ def run_benchmark(
         eval_base_url = endpoint
         eval_client = _BudgetedModelClient(
             request_budget,
-            timeout=int(timeout_seconds),
+            timeout=float(timeout_seconds),
             max_output_tokens=max_output_tokens,
         )
 
@@ -2543,6 +2647,36 @@ def run_benchmark(
         endpoint,
         api_key,
         request_budget,
+    )
+    request_plan = plan_complete_request_budget(
+        discovered_model_count=len(catalog["models"]),
+        max_eval_models=max_eval_models,
+        locked_task_count=len(locked_evaluation_tasks(manifest)),
+    )
+    if (
+        request_plan["total_required_request_count"]
+        > request_budget.max_total_requests
+    ):
+        raise BenchmarkBudgetError(
+            "complete benchmark needs "
+            f"{request_plan['total_required_request_count']} requests but "
+            f"configured cap is {request_budget.max_total_requests}; "
+            "no capability probes were started"
+        )
+    benchmark_parameters.update(
+        {
+            "catalog_request_count": request_plan["catalog_request_count"],
+            "capability_probe_request_count": request_plan[
+                "capability_probe_request_count"
+            ],
+            "evaluation_reserve_request_count": request_plan[
+                "evaluation_reserve_request_count"
+            ],
+            "planned_worker_count": request_plan["planned_worker_count"],
+            "total_required_request_count": request_plan[
+                "total_required_request_count"
+            ],
+        }
     )
     probed_models = probe_discovered_models(
         catalog["models"],
@@ -2578,12 +2712,12 @@ def run_benchmark(
             "task_manifest_path": task_manifest_path,
             "pricing_scenario_path": pricing_scenario_path,
             "benchmark_parameters": benchmark_parameters,
+            "request_plan": request_plan,
         },
         seed,
     )
     report["artifact_paths"] = write_benchmark_artifacts(report, output_dir)
     return report
-
 
 
 def _bootstrap_live_credential() -> None:
@@ -2613,7 +2747,7 @@ def run_benchmark_cli(argv: list[str]) -> int:
                         help="Versioned hypothetical price-assumption JSON (omit => costs stay 'unknown').")
     parser.add_argument("--output-dir", default="benchmark_artifacts")
     parser.add_argument("--endpoint", default=NIM_DEFAULT_ENDPOINT)
-    parser.add_argument("--max-total-requests", type=int, default=500)
+    parser.add_argument("--max-total-requests", type=int, default=2000)
     parser.add_argument("--probe-concurrency", type=int, default=4)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
     parser.add_argument("--max-output-tokens", type=int, default=256)

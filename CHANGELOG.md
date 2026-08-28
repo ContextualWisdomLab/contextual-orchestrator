@@ -71,7 +71,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `batch_route`; omit it to keep today's payload.
 - Add an optional provider-neutral NVIDIA NIM benchmark harness that dynamically discovers the live `/v1/models` catalog, probes every discovered model under bounded concurrency and a hard request cap, records machine-readable capability outcomes, and compares direct, route-once, bounded-conduct, and explicit pricing-scenario policies over a locked task manifest.
 - Add deterministic no-egress benchmark dry runs, secret-redacted JSON/CSV/Markdown evidence artifacts, paired bootstrap uncertainty, quality-latency and quality-hypothetical-cost Pareto frontiers, all-modality catalog fuzzing, and a manually gated benchmark workflow.
-- Add a validated deterministic one-frame H.264 MP4 probe fixture, deterministic pre-allocation of model-capability cells before concurrent probing, and explicit evidence-sufficiency fields that keep the bundled smoke manifest from authorizing production routing.
+- Add a validated deterministic one-frame H.264 MP4 probe fixture, complete preflight reservation for every discovered model-capability cell plus the full evaluation envelope, and explicit evidence-sufficiency fields that keep the bundled smoke manifest from authorizing production routing.
 - Add direct benchmark quality gates for 100% production statement/branch coverage, 100% public docstrings, wheel build/install/import smoke testing, and optional-import isolation.
 
 ### Fixed
@@ -112,6 +112,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Strix B105 false positives eliminated at the source: KV credential-name
   constants renamed `*_CREDENTIAL_NAME`; readiness label keys renamed
   `readiness_ok/warning/failure`. (#833)
+- Expose a stable complete-run request planning view and align API, CLI, manual-workflow, and deterministic test caps with the locked thirty-task evidence floor, preserving fail-before-probe behavior.
+- Fail closed after catalog discovery but before capability egress when the complete all-model probe and equal-budget evaluation plan cannot fit the configured hard request cap; the monthly 2,000-request ceiling covers the representative 127-model, thirty-task, seven-worker plan requiring 1,564 requests and still rejects larger plans before partial probing.
+- Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
+- Record the reviewed current NVIDIA NIM General FAQ as expiring evidence for free Developer Program hosted-endpoint prototyping access, while keeping NVIDIA AI Enterprise production licensing and every hypothetical model rate explicitly separate.
+- Require live hypothetical pricing scenarios to carry reviewed source, reviewer, review date, validity horizon, rate basis, uncertainty, and explicit rates; reject unreviewed, incomplete, future-dated, or expired price evidence before provider egress.
+- Give direct, route-once, conduct, and reviewed cheapest-worker cells one equal total prompt-plus-completion token budget and one common five-call envelope, with configured-versus-observed evidence in every cell.
+- Keep the optional NIM adapter lazy: importing the runtime package no longer imports the benchmark or mutates benchmark globals.
+- Record immutable source-artifact digests and exact Git tree identity in the integration evidence so buyers and reviewers can reproduce the accepted benchmark source independently of transient workflow state.
 
 - NIM benchmark provider responses are bounded to 8 MiB, and live HTTPS
   requests use validation-time public-address pinning with original-host TLS,
@@ -121,6 +129,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Direct, route-once, conduct, and reviewed cheapest-worker cells share one
   total token budget and five-call envelope, with configured and observed
   values recorded separately.
+- Complete catalog probing and the full evaluation reserve are planned before
+  capability egress; the benchmark fails closed when the configured cap is too
+  small, and the scheduled workflow uses a reviewed 2,000-request ceiling.
+- The NIM access-cost evidence, hypothetical pricing provenance, and source
+  artifact digests remain explicit and independently reproducible.
 
 ### Security
 

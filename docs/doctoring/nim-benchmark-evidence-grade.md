@@ -9,8 +9,8 @@ validation-time-address-pinned HTTPS boundary as the gateway, while dry
 execution remains deterministic, network-free, and credential-free.
 
 The benchmark is evidence-generating rather than policy-authorizing. It records
-what was discovered, attempted, completed, skipped, measured, estimated, and
-unknown. It never changes production routing automatically. A report below the
+what was discovered, planned, attempted, completed, failed, measured, estimated,
+and unknown. It never changes production routing automatically. A report below the
 explicit evidence floor is labeled `insufficient_evidence`, and every report
 keeps `routing_recommendation` null so a responsible human review remains
 necessary.
@@ -68,12 +68,23 @@ not following redirects at all.
 are not hard-coded as authoritative catalog entries. The parser records invalid
 and duplicate entries and sorts the usable inventory.
 
-Every discovered model receives a row for every supported probe contract. Before
-threads start, the benchmark constructs the complete ordered
-`(model_id, capability_name)` plan and allocates the remaining request budget in
-that stable order. Only allocated cells execute concurrently. Non-allocated
-cells receive the same machine-readable budget reason on every run. Thread
-scheduling therefore cannot decide which evidence exists.
+Every discovered model must receive a completed outcome row for every supported
+probe contract in a successful live run. Immediately after the catalog request,
+the benchmark computes one complete request plan containing the catalog request,
+all `(model_id, capability_name)` probes, and the worst-case equal-budget policy
+evaluation reserve. If the configured hard cap is even one request short, the
+run fails closed before the first capability probe; a lexicographic model prefix
+can never be emitted as routing-readiness evidence.
+
+The acceptance fixture uses 127 discovered models, nine capability contracts,
+seven evaluation workers, and ten locked tasks. Its complete upper bound is
+`1 + (127 × 9) + (10 × (7 + 1 + 5 + 1)) = 1,284` requests. The monthly workflow
+therefore uses a reviewed hard ceiling of 2,000 requests, leaving bounded room
+for catalog growth while retaining a deterministic cap. If a later catalog no
+longer fits, the same preflight reports required and configured counts and makes
+zero partial probe calls. Once admitted, all probe cells execute under bounded
+concurrency; thread scheduling changes only completion order, never inventory
+coverage or evaluation capacity.
 
 The video-understanding probe contains a deterministic, decodable one-frame H.264
 MP4. Its embedded bytes have SHA-256
@@ -179,7 +190,7 @@ succeed:
 - deterministic unit and adversarial security tests;
 - transport tests for DNS rebinding, proxy isolation, redirects, SNI/authority,
   address fallback, bounded response bodies, and cleanup;
-- deterministic probe-allocation and valid media-fixture tests;
+- complete-plan preflight tests for 127 models, the exact boundary, one request short, zero partial egress, deterministic concurrency, and a valid media fixture;
 - live pricing and access-evidence expiry tests that prove failure before egress;
 - equal token/call budget tests for every comparison arm;
 - evidence-sufficiency, Pareto, provenance, and secret-redaction tests;

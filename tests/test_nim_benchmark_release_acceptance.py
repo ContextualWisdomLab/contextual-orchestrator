@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import urllib.parse
 
 import pytest
 
@@ -138,8 +139,8 @@ def test_live_run_rejects_incomplete_or_expired_pricing_before_egress(
         )
 
 
-def test_probe_budget_allocation_is_deterministic_before_concurrency() -> None:
-    """Thread scheduling cannot choose which model-capability cells receive budget."""
+def test_probe_concurrency_executes_the_complete_cartesian_plan() -> None:
+    """Thread scheduling cannot turn a complete probe plan into a biased prefix."""
     models = [
         {"model_id": "a/model-one", "owned_by": "vendor"},
         {"model_id": "b/model-two", "owned_by": "vendor"},
@@ -155,7 +156,7 @@ def test_probe_budget_allocation_is_deterministic_before_concurrency() -> None:
         _headers: dict[str, str],
         body: bytes | None,
     ) -> tuple[int, bytes]:
-        """Delay the first model so the old race gives budget to the second model."""
+        """Force completion-order drift while every preflighted cell still runs."""
         nonlocal second_model_call_count
         payload = (body or b"").decode("utf-8", errors="ignore")
         if "a/model-one" in payload:
@@ -169,30 +170,161 @@ def test_probe_budget_allocation_is_deterministic_before_concurrency() -> None:
                     second_model_four_calls.set()
         return 400, b"{}"
 
+    budget = nb.RequestBudget(
+        len(models) * len(nb.CAPABILITY_PROBE_ORDER)
+    )
     rows = nb.probe_discovered_models(
         models,
         transport,
         FAKE_ENDPOINT,
         "credential-redacted",
-        nb.RequestBudget(5),
+        budget,
         probe_concurrency=2,
         clock=lambda: 1.0,
         timer=lambda: 0.0,
     )
-    rows_by_model = {row["model_id"]: row for row in rows}
-    attempted_first = [
-        row["capability_name"]
-        for row in rows_by_model["a/model-one"]["capability_probe_rows"]
-        if row["probe_outcome"] != "skipped"
-    ]
-    attempted_second = [
-        row["capability_name"]
-        for row in rows_by_model["b/model-two"]["capability_probe_rows"]
-        if row["probe_outcome"] != "skipped"
+
+    assert [row["model_id"] for row in rows] == ["a/model-one", "b/model-two"]
+    for model_row in rows:
+        assert [
+            probe_row["capability_name"]
+            for probe_row in model_row["capability_probe_rows"]
+        ] == list(nb.CAPABILITY_PROBE_ORDER)
+        assert all(
+            probe_row["probe_outcome"] != "skipped"
+            for probe_row in model_row["capability_probe_rows"]
+        )
+    assert budget.requests_spent == 18
+
+
+def test_complete_request_plan_rejects_invalid_counts() -> None:
+    """Planning inputs are positive integers, never booleans or empty counts."""
+    invalid_cases = [
+        {"discovered_model_count": 0, "max_eval_models": 7, "locked_task_count": 10},
+        {"discovered_model_count": True, "max_eval_models": 7, "locked_task_count": 10},
+        {"discovered_model_count": 1, "max_eval_models": 0, "locked_task_count": 10},
+        {"discovered_model_count": 1, "max_eval_models": 7, "locked_task_count": 0},
     ]
 
-    assert attempted_first == list(nb.CAPABILITY_PROBE_ORDER[:5])
-    assert attempted_second == []
+    for case in invalid_cases:
+        with pytest.raises(nb.BenchmarkContractError, match="positive integer"):
+            nb.plan_complete_request_budget(**case)
+
+
+def test_complete_request_plan_covers_a_127_model_catalog() -> None:
+    """The reviewed current-catalog scale fits only when probes and eval are reserved."""
+    plan = nb.plan_complete_request_budget(
+        discovered_model_count=127,
+        max_eval_models=7,
+        locked_task_count=10,
+    )
+
+    assert plan == {
+        "catalog_request_count": 1,
+        "capability_probe_request_count": 127 * 9,
+        "evaluation_reserve_request_count": 140,
+        "planned_worker_count": 7,
+        "total_required_request_count": 1284,
+    }
+
+
+def test_buyer_facing_request_plan_matches_internal_plan() -> None:
+    """The stable operator view exposes the same complete-run reservation."""
+    assert nb.planned_complete_run_requests(127, 30, 7) == {
+        "catalog_discovery_requests": 1,
+        "capability_probe_requests": 127 * 9,
+        "evaluation_worker_ceiling": 7,
+        "evaluation_requests": 420,
+        "requests_after_catalog": 127 * 9 + 420,
+        "total_requests": 1564,
+    }
+
+
+def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) -> None:
+    """An undersized live-style plan spends discovery only, then fails closed."""
+    model_rows = [
+        {"id": f"vendor/model-{index:03d}", "owned_by": "vendor"}
+        for index in range(127)
+    ]
+    calls: list[tuple[str, str]] = []
+
+    def transport(
+        method: str,
+        url: str,
+        _headers: dict[str, str],
+        _body: bytes | None,
+    ) -> tuple[int, bytes]:
+        calls.append((method, urllib.parse.urlparse(url).path))
+        if method == "GET":
+            return 200, json.dumps({"data": model_rows}).encode("utf-8")
+        raise AssertionError("capability egress must not begin after failed preflight")
+
+    with pytest.raises(
+        nb.BenchmarkBudgetError,
+        match="complete benchmark needs 1564 requests but configured cap is 1563",
+    ):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            str(tmp_path / "insufficient"),
+            endpoint=FAKE_ENDPOINT,
+            max_total_requests=1563,
+            max_eval_models=7,
+            transport=transport,
+        )
+
+    assert calls == [("GET", "/v1/models")]
+
+
+def test_exact_complete_request_boundary_runs_and_records_plan(tmp_path: Path) -> None:
+    """The exact conservative boundary succeeds and records configured reserves."""
+    manifest_path = _write_json(
+        tmp_path / "boundary_manifest.json",
+        {
+            "manifest_version": "boundary.1",
+            "tasks": [
+                {
+                    "task_id": "locked_boundary_task",
+                    "split": "locked",
+                    "prompt": "Name a striped animal.",
+                    "scorer": {"name": "substring_match", "version": "1"},
+                    "expected": {"substring": "zebra"},
+                }
+            ],
+        },
+    )
+
+    def transport(
+        method: str,
+        url: str,
+        _headers: dict[str, str],
+        _body: bytes | None,
+    ) -> tuple[int, bytes]:
+        path = urllib.parse.urlparse(url).path
+        if method == "GET":
+            return 200, json.dumps(
+                {"data": [{"id": "vendor/model-one", "owned_by": "vendor"}]}
+            ).encode("utf-8")
+        return 200, nb._dry_run_success_body(path)
+
+    report = nb.run_benchmark(
+        "dry_run",
+        manifest_path,
+        None,
+        str(tmp_path / "exact_boundary"),
+        endpoint=FAKE_ENDPOINT,
+        max_total_requests=18,
+        max_eval_models=1,
+        transport=transport,
+    )
+
+    assert report["request_budget"]["max_total_requests"] == 18
+    assert report["request_budget"]["planned_total_requests"] == 18
+    assert report["request_budget"]["catalog_requests"] == 1
+    assert report["request_budget"]["capability_probe_requests"] == 9
+    assert report["request_budget"]["evaluation_reserve_requests"] == 8
+    assert report["request_budget"]["requests_spent"] <= 18
 
 
 def test_video_probe_fixture_is_one_decodable_frame_with_stable_hash() -> None:
