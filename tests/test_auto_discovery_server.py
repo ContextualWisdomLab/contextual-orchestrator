@@ -4,9 +4,12 @@ import os
 from dataclasses import replace
 from unittest.mock import patch
 
+import pytest
+
 from contextual_orchestrator.__main__ import (
     _auto_discover_runtime_agents,
     _configured_provider_hosts,
+    main,
 )
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import (
@@ -24,6 +27,27 @@ def test_configured_provider_hosts_reads_the_runtime_allowlist(monkeypatch) -> N
     )
 
     assert _configured_provider_hosts() == ["gateway.example", "secondary.example"]
+
+
+def test_main_passes_the_runtime_allowlist_to_the_model_client(monkeypatch) -> None:
+    """The server constructor receives the env-backed discovery allowlist."""
+    monkeypatch.setenv(
+        "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "gateway.example"
+    )
+
+    def capture_client(_agents, *, client, **_kwargs):
+        assert client.allowed_provider_hosts == {"gateway.example"}
+        raise RuntimeError("model-client-captured")
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.load_agents", lambda _path: []
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.TaskOrchestrator", capture_client
+    )
+
+    with pytest.raises(RuntimeError, match="model-client-captured"):
+        main(["synthetic prompt"])
 
 
 def test_configured_gateway_blank_seed_expands_to_exact_catalog_models(
@@ -367,6 +391,79 @@ def test_discovery_error_is_bounded_and_other_provider_models_activate(
         "provider_name": "configured_gateway",
         "reason_code": "authentication_failed",
     }
+
+
+def test_runtime_auto_discovery_records_missing_gateway_credential(
+    monkeypatch,
+) -> None:
+    """A missing gateway credential is observable without exposing its endpoint."""
+    captured = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: None
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda sources: (captured.extend(sources) or [], []),
+    )
+    gateway = ModelAgent(
+        "configured_gateway",
+        "",
+        base_url="https://gateway.example/v1",
+        provider_name="configured_gateway",
+    )
+    orchestrator = TaskOrchestrator(
+        [gateway], client=ModelClient(allowed_provider_hosts={"gateway.example"})
+    )
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert all(source.provider_name != "configured_gateway" for source in captured)
+    event = orchestrator._analytics_events[-1]
+    assert event["event_name"] == "configured_gateway_discovery_unavailable"
+    assert event["event_detail"] == {"reason_code": "credential_unavailable"}
+    assert "gateway.example" not in repr(event)
+
+
+def test_disabled_gateway_discovery_cannot_retire_blank_seed_for_other_provider(
+    monkeypatch,
+) -> None:
+    """Only an enabled concrete agent at the same origin may replace its seed."""
+    discovered_gateway = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="catalog-chat-alpha",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda _sources: ([discovered_gateway], []),
+    )
+    blank_seed = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        base_url="https://gateway.example/v1",
+        provider_name="configured_gateway",
+    )
+    disabled_discovered = replace(
+        ModelAgent(
+            "configured_gateway_catalog_chat_alpha",
+            "catalog-chat-alpha",
+            base_url="https://gateway.example/v1",
+            provider_name="configured_gateway",
+            tags=("discovered", "chat"),
+        ),
+        disabled=True,
+    )
+    unrelated = ModelAgent(
+        "openai_available_chat", "available-chat", provider_name="openai"
+    )
+    orchestrator = TaskOrchestrator(
+        [blank_seed, disabled_discovered, unrelated]
+    )
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert blank_seed in orchestrator.agents
 def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     monkeypatch,
 ) -> None:

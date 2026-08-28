@@ -439,7 +439,11 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 agent.provider_name == "configured_gateway"
                 and not agent.model.strip()
                 and any(
-                    candidate.id != agent.id and not candidate.disabled
+                    candidate.id != agent.id
+                    and candidate.provider_name == "configured_gateway"
+                    and bool(candidate.model.strip())
+                    and candidate.base_url.rstrip("/") == agent.base_url.rstrip("/")
+                    and not candidate.disabled
                     for candidate in orchestrator.candidates
                 )
             ):
