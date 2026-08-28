@@ -276,7 +276,7 @@ def _responses_format(response_format: Mapping[str, Any]) -> dict[str, Any]:
     schema = response_format.get("json_schema")
     if not isinstance(schema, Mapping):
         raise CefrObservationError("unsupported_response_format", "json_schema format is incomplete")
-    return {key: schema[key] for key in ("name", "schema", "strict") if key in schema}
+    return {"type": "json_schema", **{key: schema[key] for key in ("name", "schema", "strict") if key in schema}}
 
 
 def _response_text(agent: ModelAgent, response: Mapping[str, Any], api_surface: str) -> str:
@@ -467,9 +467,7 @@ def _observe_one(
         base["verifier_state"] = "accepted"
     except Exception as error:  # noqa: BLE001 - return only stable failure evidence
         base["failure_code"] = _failure_code(error)
-        if base["parse_state"] == "not_attempted":
-            base["parse_state"] = "not_attempted"
-        else:
+        if base["parse_state"] == "received":
             base["parse_state"] = "rejected"
         base["verifier_state"] = "rejected"
     return base
@@ -526,6 +524,7 @@ def observe_language_response_criteria(
         value["criterion_observation"]["category_anchor_ref"]
         for value in observations
         if value["criterion_observation"] is not None
+        and value["criterion_observation"]["category_anchor_ref"] is not None
     }
     review_reasons = {
         value["failure_code"]

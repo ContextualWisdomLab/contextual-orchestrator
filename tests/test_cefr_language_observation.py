@@ -24,9 +24,10 @@ class _Contract:
     contract_id = CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1
     fast_mlsirm_contract_version = FAST_MLSIRM_SCORING_SCHEMA_VERSION
 
-    def __init__(self) -> None:
+    def __init__(self, *, reject_observations: bool = False) -> None:
         self.requests: list[dict[str, Any]] = []
         self.observations: list[dict[str, Any]] = []
+        self.reject_observations = reject_observations
 
     def validate_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.requests.append(payload)
@@ -36,6 +37,8 @@ class _Contract:
         self.observations.append(payload)
         assert "cefr_level" not in payload
         assert "score" not in payload
+        if self.reject_observations:
+            raise CefrObservationError("unsupported_evidence", "observation rejected by test contract")
         return payload
 
 
@@ -101,6 +104,22 @@ def _answer(category: str = "anchor/2", *, uncertainty: str = "low") -> str:
     )
 
 
+def _abstention() -> str:
+    return json.dumps(
+        {
+            "criterion_observation": {
+                "criterion_ref": "writing/coherence",
+                "category_anchor_ref": None,
+                "evidence_reference_ids": [],
+                "status": "abstained",
+                "uncertainty": "high",
+                "review_signals": [],
+                "reason_code": "insufficient_evidence",
+            }
+        }
+    )
+
+
 def test_contract_and_gateway_are_required_before_any_rater_call() -> None:
     request = _request()
     gateway = _Gateway({"rater/a": _answer(), "rater/b": _answer()})
@@ -146,6 +165,34 @@ def test_supported_structured_surfaces_are_forwarded(response_format: str, api_s
         assert all(call["format"]["json_schema"]["strict"] is True for call in gateway.calls)
 
 
+def test_responses_json_schema_format_includes_required_type() -> None:
+    orchestrator = TaskOrchestrator([
+        ModelAgent("rater_agent", "mock-rater", tags=("response_format",), base_url="mock://local"),
+    ])
+    observed: dict[str, Any] = {}
+
+    def proxy_send(agent: ModelAgent, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        observed.update({"endpoint": endpoint, "payload": payload})
+        return {"output_text": _answer()}
+
+    orchestrator.client.proxy_send = proxy_send  # type: ignore[method-assign]
+    TaskOrchestratorCefrGateway(orchestrator).complete_structured(
+        [{"role": "user", "content": "opaque references only"}],
+        {
+            "type": "json_schema",
+            "json_schema": {"name": "observation", "schema": {}, "strict": True},
+        },
+        api_surface="responses",
+    )
+
+    assert observed["payload"]["text"]["format"] == {
+        "type": "json_schema",
+        "name": "observation",
+        "schema": {},
+        "strict": True,
+    }
+
+
 def test_disagreement_and_high_uncertainty_route_to_human_review() -> None:
     request = _request()
     gateway = _Gateway({"rater/a": _answer("anchor/1", uncertainty="high"), "rater/b": _answer()})
@@ -166,6 +213,25 @@ def test_duplicate_json_is_failed_without_provider_text_leaking() -> None:
     assert failed["criterion_observation"] is None
     assert "leak-me" not in json.dumps(result)
     assert result["human_review"]["required"] is True
+
+
+def test_verifier_failure_preserves_successful_parse_state() -> None:
+    request = _request()
+    gateway = _Gateway({"rater/a": _answer(), "rater/b": _answer()})
+    result = observe_language_response_criteria(request, gateway, _Contract(reject_observations=True))
+
+    failed = result["observations"][0]
+    assert failed["parse_state"] == "accepted"
+    assert failed["verifier_state"] == "rejected"
+    assert failed["failure_code"] == "unsupported_evidence"
+
+
+def test_abstention_does_not_count_as_category_disagreement() -> None:
+    request = _request()
+    gateway = _Gateway({"rater/a": _abstention(), "rater/b": _answer()})
+    result = observe_language_response_criteria(request, gateway, _Contract())
+
+    assert "disagreement" not in result["human_review"]["reason_codes"]
 
 
 def test_request_rejects_duplicate_or_missing_opaque_references() -> None:
