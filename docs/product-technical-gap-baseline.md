@@ -1,14 +1,16 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 11:33 KST exact-head PR remediation slice
+## 2026-08-28 11:35 KST exact-head PR remediation slice
 
 Protected `main` is `8d5924f8`. PR #879 is now at `2b1829a8`; its exact tree
 passed **2516 tests** after fixing ambiguous classified passthrough failures so
 status-less connection errors cannot replay a possibly accepted request. Its
 new hosted checks are still running. PR #868 is at externally advanced head
 `262c6d87` with hosted checks passing; PR #857 is at externally advanced head
-`b2aedb7b` with only Strix still pending. All four open PRs remain `MERGEABLE`
-but `BLOCKED` without an independent approval, so none is claimed as
+`b2aedb7b` with all other checks passing but Strix failing closed on the same
+provider outage (NVIDIA 429, OpenRouter 502, and OpenAI
+`credit_balance_exhausted`). All four open PRs remain `MERGEABLE` but
+`BLOCKED` without an independent approval, so none is claimed as
 protected-main delivery.
 
 The earlier local merge attempt for #857 at `0aec4a54` was aborted without a
