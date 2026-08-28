@@ -352,12 +352,16 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
 
 
 def test_public_bind_requires_explicit_opt_in() -> None:
-    try:
-        SecurityConfig(auth_token="secret_token").check_bind("0.0.0.0")
-    except ValueError as exc:
-        assert "--allow-public-bind" in str(exc)
-    else:
-        raise AssertionError("public bind should require opt-in")
+    security = SecurityConfig(auth_token="secret_token")
+    for host in ("0.0.0.0", "192.0.2.1", "2001:db8::1"):
+        try:
+            security.check_bind(host)
+        except ValueError as exc:
+            assert "--allow-public-bind" in str(exc)
+        else:
+            raise AssertionError(f"public bind should require opt-in: {host}")
+    for host in ("127.0.0.1", "::1", "localhost"):
+        security.check_bind(host)
 
 
 def test_concurrency_limit_rejects_when_slots_are_full() -> None:

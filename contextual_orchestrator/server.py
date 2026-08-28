@@ -8,6 +8,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
 import mmap
@@ -386,7 +387,12 @@ class SecurityConfig:
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
-        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
+        normalized_host = host.strip().lower()
+        try:
+            is_loopback = ipaddress.ip_address(normalized_host).is_loopback
+        except ValueError:
+            is_loopback = normalized_host == "localhost"
+        if not is_loopback and not self.allow_public_bind:  # nosec B104 - non-loopback binds require explicit opt-in.
             raise ValueError("public bind requires --allow-public-bind")
 
     def resolve_purpose(self, scope: str, purpose: str | None = None) -> str:

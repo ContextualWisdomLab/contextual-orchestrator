@@ -75,7 +75,8 @@ HTTP serving is hardened for local lab use:
 
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one local token. Explicit `--auth-token`/split-token values are local-development escape hatches; `--production` and `--allow-public-bind` reject single-token mode and insecure admin-session cookies, and the CLI never reads auth secrets from environment variables.
 - A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
-- Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
+- Binding to a non-loopback address requires `--allow-public-bind`; loopback
+  addresses and `localhost` remain available for local development.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - `/healthz` is a minimal unauthenticated process probe; use the administrator-authenticated `/readyz` endpoint for secret-free orchestration, sync-routing, and optional batch dependency status. Liveness stays available during optional dependency degradation.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
