@@ -205,6 +205,36 @@ def test_billing_export_waits_for_caller_owned_sqlite_commit() -> None:
     assert sink.ids == ["usage_committed"]
 
 
+def test_billing_export_flush_uses_record_id_lookup() -> None:
+    """Deferred billing release must not scan the complete SQL ledger."""
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(price_book, store=store, usage_sink=sink)
+    statements: list[str] = []
+    connection.set_trace_callback(statements.append)
+
+    connection.execute("BEGIN")
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_targeted_lookup",
+    )
+    connection.commit()
+
+    assert ledger.flush() is True
+    assert sink.ids == ["usage_targeted_lookup"]
+    assert not any("SELECT u.usage_record_id" in statement for statement in statements)
+    assert any(
+        "SELECT usage_record_id FROM llm_usage_records WHERE usage_record_id IN" in statement
+        for statement in statements
+    )
+
+
 def test_async_billing_export_rejects_caller_owned_sqlite_transaction() -> None:
     """The background writer must not bill from an unobservable transaction."""
     connection = sqlite3.connect(":memory:", check_same_thread=False)

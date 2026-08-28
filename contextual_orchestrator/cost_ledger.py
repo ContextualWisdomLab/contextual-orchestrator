@@ -599,6 +599,11 @@ class InMemoryLedgerStore:
         """Return rows within the optional half-open time window."""
         return [row for row in self._rows if _within_window(row["created_at"], start, end)]
 
+    def existing_usage_record_ids(self, usage_record_ids: List[str]) -> set[str]:
+        """Return the requested ids already present in the in-memory ledger."""
+        with self._lock:
+            return set(usage_record_ids).intersection(self._usage_record_ids)
+
     def __len__(self) -> int:
         return len(self._rows)
 
@@ -1080,6 +1085,27 @@ class SqlLedgerStore:
         with self._lock:
             return self._query_locked(start, end)
 
+    def existing_usage_record_ids(self, usage_record_ids: List[str]) -> set[str]:
+        """Return requested ids using indexed primary-key lookups."""
+        ids = list(dict.fromkeys(usage_record_ids))
+        if not ids:
+            return set()
+        placeholder = "?" if self._paramstyle == "qmark" else "%s"
+        found: set[str] = set()
+        with self._lock:
+            cur = self._conn.cursor()
+            # Keep each IN clause below SQLite's default bound-parameter limit.
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                placeholders = ", ".join(placeholder for _ in chunk)
+                cur.execute(
+                    "SELECT usage_record_id FROM llm_usage_records "
+                    f"WHERE usage_record_id IN ({placeholders})",
+                    tuple(chunk),
+                )
+                found.update(row[0] for row in cur.fetchall())
+        return found
+
     def _query_locked(
         self, start: Optional[int], end: Optional[int]
     ) -> List[Dict[str, Any]]:
@@ -1377,9 +1403,15 @@ class CostLedger:
             self._deferred_usage_exports = []
         if not pending:
             return
-        persisted_ids = {
-            row.get("usage_record_id") for row in self.store.query(None, None)
-        }
+        lookup = getattr(self.store, "existing_usage_record_ids", None)
+        if callable(lookup):
+            persisted_ids = set(lookup([record.usage_record_id for record in pending]))
+        else:
+            # Preserve compatibility with third-party stores that only implement
+            # the original append/query contract.
+            persisted_ids = {
+                row.get("usage_record_id") for row in self.store.query(None, None)
+            }
         for record in pending:
             if record.usage_record_id in persisted_ids:
                 self._emit_usage_record(record)
