@@ -5058,7 +5058,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if self._is_free_agent(candidate)
+            if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
@@ -5066,6 +5066,7 @@ class TaskOrchestrator:
                 candidate.id
                 for candidate in self.agents
                 if candidate.group_name == requested_agent.group_name
+                and self._zdr_agent_allowed(candidate)
             }
             if requested_agent is not None and requested_agent.group_name
             else {requested_agent.id}
