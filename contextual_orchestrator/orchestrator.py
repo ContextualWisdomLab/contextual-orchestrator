@@ -3141,8 +3141,11 @@ class TaskOrchestrator:
             started_at = time.perf_counter()
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
-            except Exception:
-                if measured:
+            except Exception as exc:
+                request_too_large = isinstance(exc, ProviderRequestTooLargeError) or (
+                    isinstance(exc, urllib.error.HTTPError) and exc.code == 413
+                )
+                if measured and not request_too_large:
                     self._group_router.observe_failure(agent.id)
                 raise
             if measured:
