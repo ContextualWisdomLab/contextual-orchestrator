@@ -266,6 +266,44 @@ def test_virtual_passthrough_fails_over_on_provider_tool_description_limit() -> 
     ]
 
 
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        "each tool.function.description must be at most 1024 characters",
+        "Bytez rejected the request: each tool.function.description must be at most 1024 characters",
+    ],
+)
+def test_virtual_passthrough_fails_over_on_string_tool_description_limit(
+    provider_error: str,
+) -> None:
+    """Provider APIs that encode ``error`` as text still prove capability mismatch."""
+    failure = _http_error(400, {"error": provider_error})
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
 def test_model_client_preserves_tool_limit_body_for_failover(monkeypatch) -> None:
     """The real passthrough transport shares its one-read provider error body."""
     failure = _http_error(

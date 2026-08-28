@@ -609,6 +609,8 @@ def _is_provider_tool_description_limit_error(error: urllib.error.HTTPError) -> 
         return False
     payload = _provider_error_payload(error)
     details = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(details, str):
+        return _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE in details.casefold()
     return (
         isinstance(details, dict)
         and details.get("code") == "invalid_tools"
