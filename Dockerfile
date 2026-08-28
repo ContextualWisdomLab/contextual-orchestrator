@@ -57,6 +57,8 @@ USER root
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_DIR=/etc/ssl/certs
 COPY --from=token-builder /usr/local/bin/uv /usr/local/bin/uv
 RUN uv python install 3.12
 COPY --from=token-builder /build/wheels /tmp/token-wheels
