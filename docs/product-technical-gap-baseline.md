@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 13:26 KST exact-head PR remediation slice
+## 2026-08-28 13:27 KST exact-head PR remediation slice
 
 Protected `main` is `8d5924f8`. PR #879 is now at `2b1829a8`; its exact tree
 passed **2516 tests** after fixing ambiguous classified passthrough failures so
@@ -23,7 +23,7 @@ coverage, and its ordinary code/security/coverage checks plus Devin passed.
 Noema and Strix failed before producing a structured review because their
 sidecar catalog loader still expects a mapping while the generated catalog is
 list-shaped; OpenCode failed closed because no current-head reviewer verdict
-was posted. Full and Atheris remained pending at the last exact-head poll.
+was posted. Full unit and Atheris subsequently passed on the same exact head.
 All seven open PRs remain subject to protected review and hosted gates; no PR
 is claimed as protected-main delivery. The docs-only recording PR #900 remains
 open.
