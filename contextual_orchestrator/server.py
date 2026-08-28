@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from email.message import Message
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
 import json
 import logging
+import mmap
 import secrets
 import socket
 import struct
+import tempfile
 import threading
 import time
 import urllib.error
@@ -59,8 +62,72 @@ from .video_jobs import (
     VideoJobRegistry,
     video_agent_affinity_key,
 )
+from .file_registry import FileContractError, FileRegistry, file_agent_affinity_key
 
 _LOGGER = logging.getLogger(__name__)
+
+# OpenAI's image-input contract permits a 512 MB total request payload.  That
+# includes JSON requests carrying data-URL/base64 images, not only /files.
+DEFAULT_MAX_JSON_BODY_BYTES = 512 * 1024 * 1024
+MAX_FILE_UPLOAD_BYTES = 512 * 1024 * 1024
+MAX_BATCH_FILE_BYTES = 200 * 1024 * 1024
+
+
+def _multipart_upload_metadata(body: Any, content_type: str) -> tuple[str, str, int]:
+    """Read purpose, filename, and file length from a seekable multipart body."""
+    message = Message()
+    message["content-type"] = content_type
+    boundary = message.get_param("boundary", header="content-type")
+    if not isinstance(boundary, str) or not boundary or len(boundary) > 70:
+        raise RequestError(400, "invalid_file", "multipart boundary is invalid")
+    try:
+        marker = b"--" + boundary.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RequestError(400, "invalid_file", "multipart boundary must be ASCII") from exc
+    purpose: str | None = None
+    filename: str | None = None
+    file_size: int | None = None
+    body.flush()
+    with mmap.mmap(body.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+        position = 0
+        while True:
+            boundary_start = mapped.find(marker, position)
+            if boundary_start < 0:
+                break
+            headers_start = boundary_start + len(marker)
+            if mapped[headers_start : headers_start + 2] == b"--":
+                break
+            if mapped[headers_start : headers_start + 2] != b"\r\n":
+                raise RequestError(400, "invalid_file", "multipart delimiter is malformed")
+            headers_start += 2
+            headers_end = mapped.find(b"\r\n\r\n", headers_start, headers_start + 64 * 1024)
+            if headers_end < 0:
+                raise RequestError(400, "invalid_file", "multipart part headers are malformed")
+            next_boundary = mapped.find(b"\r\n" + marker, headers_end + 4)
+            if next_boundary < 0:
+                raise RequestError(400, "invalid_file", "multipart body is incomplete")
+            part_headers = Message()
+            for line in mapped[headers_start:headers_end].decode("latin-1").split("\r\n"):
+                name, separator, value = line.partition(":")
+                if not separator:
+                    raise RequestError(400, "invalid_file", "multipart part header is malformed")
+                part_headers[name] = value.strip()
+            disposition_message = Message()
+            disposition_message["content-disposition"] = part_headers.get("content-disposition", "")
+            field_name = disposition_message.get_param("name", header="content-disposition")
+            part_start = headers_end + 4
+            if field_name == "purpose":
+                raw_purpose = mapped[part_start:next_boundary]
+                if len(raw_purpose) > 64:
+                    raise RequestError(400, "invalid_file", "purpose is too long")
+                purpose = raw_purpose.decode("utf-8").strip()
+            elif field_name == "file":
+                filename = disposition_message.get_param("filename", header="content-disposition")
+                file_size = next_boundary - part_start
+            position = next_boundary + 2
+    if not purpose or not isinstance(filename, str) or not filename or file_size is None:
+        raise RequestError(400, "invalid_file", "multipart upload requires purpose and file fields")
+    return purpose, filename, file_size
 
 
 class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
@@ -256,7 +323,7 @@ class SecurityConfig:
     inference_token: str = ""
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
-    max_body_bytes: int = 64 * 1024
+    max_body_bytes: int = DEFAULT_MAX_JSON_BODY_BYTES
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
@@ -4994,6 +5061,7 @@ def build_server(
     release_authority = verify_release_authority_snapshot(release_authority)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
     video_jobs = VideoJobRegistry(coordinator.job_registry)
+    files = FileRegistry(coordinator.job_registry)
     configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
@@ -5123,6 +5191,51 @@ def build_server(
                         self._send(orchestrator.get_openai_model(model_id))
                     except KeyError:
                         self._send_error(404, "model_not_found", f"model {model_id!r} not found")
+                    return
+                if path == "/v1/files" or path.startswith("/v1/files/"):
+                    self._authorize("inference")
+                    principal_id = security.principal_id(self.headers)
+                    if path == "/v1/files":
+                        self._send({"object": "list", "data": files.list(principal_id)})
+                        return
+                    suffix = path[len("/v1/files/") :]
+                    content_request = suffix.endswith("/content")
+                    gateway_file_id = suffix[: -len("/content")] if content_request else suffix
+                    if not gateway_file_id or "/" in gateway_file_id:
+                        raise RequestError(400, "invalid_file", "file id must be one path segment")
+                    try:
+                        owner = files.owner(gateway_file_id, principal_id)
+                    except KeyError:
+                        raise RequestError(404, "file_not_found", "file was not found") from None
+                    replicas = owner.replicas or {
+                        owner.agent_id: {
+                            "provider_file_id": owner.provider_file_id,
+                            "agent_affinity_key": owner.agent_affinity_key,
+                        }
+                    }
+                    selected = next(
+                        (
+                            (item, replica["provider_file_id"])
+                            for item in orchestrator.agents
+                            if (replica := replicas.get(item.id)) is not None
+                            and replica.get("agent_affinity_key") == file_agent_affinity_key(item)
+                        ),
+                        None,
+                    )
+                    if selected is None:
+                        raise RequestError(503, "file_provider_unavailable", "the file provider is unavailable")
+                    agent, provider_file_id = selected
+                    if content_request:
+                        raw, content_type = self._run(
+                            lambda: orchestrator.client.proxy_get_bytes(
+                                agent,
+                                f"files/{urllib.parse.quote(provider_file_id, safe='')}/content",
+                                max_response_bytes=MAX_FILE_UPLOAD_BYTES,
+                            )
+                        )
+                        self._send_bytes(raw, content_type)
+                    else:
+                        self._send(files.public_response(owner.document, owner))
                     return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
@@ -5650,6 +5763,43 @@ def build_server(
                         extra_headers={"set-cookie": security.admin_session_clear_cookie_header()},
                     )
                     return
+                if path.startswith("/v1/files/"):
+                    self._authorize("inference", state_changing=True)
+                    gateway_file_id = path[len("/v1/files/") :]
+                    if not gateway_file_id or "/" in gateway_file_id:
+                        raise RequestError(400, "invalid_file", "file id must be one path segment")
+                    principal_id = security.principal_id(self.headers)
+                    try:
+                        owner = files.owner(gateway_file_id, principal_id)
+                    except KeyError:
+                        raise RequestError(404, "file_not_found", "file was not found") from None
+                    replicas = owner.replicas or {
+                        owner.agent_id: {
+                            "provider_file_id": owner.provider_file_id,
+                            "agent_affinity_key": owner.agent_affinity_key,
+                        }
+                    }
+                    targets = [
+                        (agent, replica["provider_file_id"])
+                        for agent in orchestrator.agents
+                        if (replica := replicas.get(agent.id)) is not None
+                        and replica.get("agent_affinity_key") == file_agent_affinity_key(agent)
+                    ]
+                    if len(targets) != len(replicas):
+                        raise RequestError(503, "file_provider_unavailable", "not every file replica provider is available")
+                    for agent, provider_file_id in targets:
+                        result = self._run(
+                            lambda agent=agent, provider_file_id=provider_file_id: orchestrator.client.proxy_delete_json(
+                                agent,
+                                f"files/{urllib.parse.quote(provider_file_id, safe='')}",
+                                max_response_bytes=security.max_body_bytes,
+                            )
+                        )
+                        if result.get("deleted") is not True:
+                            raise RequestError(502, "invalid_file_response", "file provider did not confirm deletion")
+                    files.delete(gateway_file_id, principal_id)
+                    self._send({"id": gateway_file_id, "object": "file", "deleted": True})
+                    return
                 self._authorize("admin", state_changing=True)
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
@@ -5696,6 +5846,85 @@ def build_server(
                         extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
                     )
                     return
+                if path == "/v1/files":
+                    self._authorize("inference", state_changing=True)
+                    content_type = self.headers.get("content-type", "")
+                    if content_type.split(";", 1)[0].strip().lower() != "multipart/form-data" or "boundary=" not in content_type:
+                        raise RequestError(415, "unsupported_media_type", "content-type must be multipart/form-data with a boundary")
+                    try:
+                        body_size = _request_body_size(self.headers, MAX_FILE_UPLOAD_BYTES)
+                    except RequestError:
+                        self.close_connection = True
+                        raise
+                    if body_size == 0:
+                        raise RequestError(400, "invalid_file", "multipart upload body is empty")
+                    with tempfile.TemporaryFile() as upload:
+                        remaining = body_size
+                        while remaining:
+                            chunk = self.rfile.read(min(1024 * 1024, remaining))
+                            if not chunk:
+                                self.close_connection = True
+                                raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
+                            upload.write(chunk)
+                            remaining -= len(chunk)
+                        self._request_body_consumed = True
+                        purpose, filename, file_size = _multipart_upload_metadata(
+                            upload, content_type
+                        )
+                        if purpose == "batch":
+                            if not filename.casefold().endswith(".jsonl"):
+                                raise RequestError(
+                                    400,
+                                    "invalid_file",
+                                    "batch files must use the .jsonl extension",
+                                )
+                            if file_size > MAX_BATCH_FILE_BYTES:
+                                raise RequestError(
+                                    413,
+                                    "request_too_large",
+                                    "batch files may not exceed 200 MB",
+                                )
+                        last_error: Exception | None = None
+                        replicas: list[tuple[dict[str, Any], str, str]] = []
+                        for agent in orchestrator.agents:
+                            upload.seek(0)
+                            try:
+                                provider_result = self._run(
+                                    lambda agent=agent: orchestrator.client.proxy_upload(
+                                        agent,
+                                        "files",
+                                        upload,
+                                        content_type=content_type,
+                                        content_length=body_size,
+                                        max_response_bytes=1024 * 1024,
+                                    )
+                                )
+                                replicas.append(
+                                    (
+                                        provider_result,
+                                        agent.id,
+                                        file_agent_affinity_key(agent),
+                                    )
+                                )
+                            except urllib.error.HTTPError as exc:
+                                last_error = exc
+                                if exc.code == 413:
+                                    continue
+                                continue
+                            except FileContractError:
+                                raise
+                            except Exception as exc:
+                                last_error = exc
+                                continue
+                        if replicas:
+                            response = files.register_replicas(
+                                replicas, security.principal_id(self.headers)
+                            )
+                            self._send(response, 201)
+                            return
+                    if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 413:
+                        raise RequestError(413, "request_too_large", "request body exceeds every eligible provider limit")
+                    raise RequestError(503, "file_provider_unavailable", "no eligible file provider accepted the upload")
                 scope = (
                     "admin"
                     if path in {"/admin/simulate", "/api/v1/evaluation_runs"}
@@ -6623,6 +6852,32 @@ def build_server(
                             "invalid_input",
                             "input must be a non-empty string or non-empty array on /v1/responses",
                         )
+                    try:
+                        body, file_replicas = files.bind_request(
+                            body, security.principal_id(self.headers)
+                        )
+                    except FileContractError as exc:
+                        raise RequestError(404, "file_not_found", str(exc)) from exc
+                    if file_replicas:
+                        valid_agents: set[str] | None = None
+                        provider_ids: dict[str, dict[str, str]] = {}
+                        for gateway_id, replicas in file_replicas.items():
+                            valid = {
+                                agent.id: replica["provider_file_id"]
+                                for agent in orchestrator.agents
+                                if (replica := replicas.get(agent.id)) is not None
+                                and replica.get("agent_affinity_key")
+                                == file_agent_affinity_key(agent)
+                            }
+                            provider_ids[gateway_id] = valid
+                            valid_agents = set(valid) if valid_agents is None else valid_agents & set(valid)
+                        if not valid_agents:
+                            raise RequestError(
+                                503,
+                                "file_provider_unavailable",
+                                "no common referenced file provider is available",
+                            )
+                        body["_file_replicas"] = provider_ids
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).
                     # stream=true is not implemented for Responses passthrough.
                     # String/0-1 forms coerce via shared bool helper (parity with chat).
@@ -6643,11 +6898,12 @@ def build_server(
                             )
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
                         _require_pool_model(orchestrator, model_name)
+                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
                         if body.get("tools"):
                             raise RequestError(
                                 400,
                                 "invalid_tools",
-                                "tools are not supported for orchestrated Responses requests",
+                                "tools are not supported for streamed orchestrated Responses requests",
                             )
                         response_format = body.get("response_format")
                         text_format = (body.get("text") or {}).get("format") if isinstance(
@@ -6661,7 +6917,7 @@ def build_server(
                             raise RequestError(
                                 400,
                                 "invalid_response_format",
-                                "structured output is not supported for orchestrated Responses requests",
+                                "structured output is not supported for streamed orchestrated Responses requests",
                             )
                         messages = []
                         instructions = body.get("instructions")
@@ -6669,30 +6925,9 @@ def build_server(
                             messages.append({"role": "system", "content": instructions})
                         messages.append({"role": "user", "content": _coerce_input_text(input_value)})
                         started_at = time.perf_counter()
-                        if stream:
-                            stream_succeeded = self._stream_orchestrated_response(
-                                orchestrator, security, messages, model_name
-                            )
-                        else:
-                            stream_succeeded = True
-                            result = self._run(
-                                lambda: orchestrator.complete(
-                                    messages, mode="auto", model_name=model_name
-                                )
-                            )
-                            summaries = [
-                                _REASONING_STAGE_SUMMARIES.get(step.get("role"), "Processing the request.")
-                                for step in result.get("trace", [])
-                            ]
-                            self._send(
-                                _orchestrated_response(
-                                    model_name,
-                                    result,
-                                    f"resp_{uuid.uuid4().hex}",
-                                    int(time.time()),
-                                    summaries,
-                                )
-                            )
+                        stream_succeeded = self._stream_orchestrated_response(
+                            orchestrator, security, messages, model_name
+                        )
                         orchestrator.record_analytics_event(
                             "responses_orchestrated",
                             {
@@ -6709,57 +6944,48 @@ def build_server(
                         return
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
-                    if tool_loop:
+                    responses_messages = _responses_to_chat_payload(body)["messages"]
+                    responses_attribution = dict(
+                        _validate_attribution(body.get("attribution")) or {}
+                    )
+                    responses_user_id = _validate_completions_user(body)
+                    if responses_user_id is not None and not responses_attribution.get("account"):
+                        responses_attribution["account"] = responses_user_id
+                    responses_attribution.setdefault("model_name", body["model"])
+                    responses_attribution.setdefault("service", "responses_api")
+                    response_max_tokens = next(
+                        (
+                            body.get(key)
+                            for key in (
+                                "max_output_tokens",
+                                "max_completion_tokens",
+                                "max_tokens",
+                            )
+                            if body.get(key) is not None
+                        ),
+                        None,
+                    )
+                    with orchestrator.client.request_settings(
+                        max_output_tokens=response_max_tokens,
+                        temperature=body.get("temperature"),
+                        top_p=body.get("top_p"),
+                        presence_penalty=body.get("presence_penalty"),
+                        frequency_penalty=body.get("frequency_penalty"),
+                    ):
                         proxied = self._run(
-                            lambda: orchestrator.proxy_completion(
-                                body,
-                                endpoint="responses",
-                                single_agent=True,
+                            lambda: coordinator.complete(
+                                responses_messages,
+                                mode="conduct",
+                                attribution=responses_attribution,
+                                hints=_validate_routing(body.get("routing")),
+                                model_name=body["model"],
+                                provider_request=body,
+                                provider_endpoint="responses",
                             )
                         )
-                    else:
-                        responses_messages = _responses_to_chat_payload(body)["messages"]
-                        responses_attribution = dict(
-                            _validate_attribution(body.get("attribution")) or {}
-                        )
-                        responses_user_id = _validate_completions_user(body)
-                        if responses_user_id is not None and not responses_attribution.get("account"):
-                            responses_attribution["account"] = responses_user_id
-                        responses_attribution.setdefault("model_name", body["model"])
-                        responses_attribution.setdefault("service", "responses_api")
-                        response_max_tokens = next(
-                            (
-                                body.get(key)
-                                for key in (
-                                    "max_output_tokens",
-                                    "max_completion_tokens",
-                                    "max_tokens",
-                                )
-                                if body.get(key) is not None
-                            ),
-                            None,
-                        )
-                        with orchestrator.client.request_settings(
-                            max_output_tokens=response_max_tokens,
-                            temperature=body.get("temperature"),
-                            top_p=body.get("top_p"),
-                            presence_penalty=body.get("presence_penalty"),
-                            frequency_penalty=body.get("frequency_penalty"),
-                        ):
-                            proxied = self._run(
-                                lambda: coordinator.complete(
-                                    responses_messages,
-                                    mode="conduct",
-                                    attribution=responses_attribution,
-                                    hints=_validate_routing(body.get("routing")),
-                                    model_name=body["model"],
-                                    provider_request=body,
-                                    provider_endpoint="responses",
-                                )
-                            )
                     orchestrator.record_analytics_event(
                         (
-                            "responses_passthrough"
+                            "responses_tools_conducted"
                             if tool_loop
                             else "responses_conducted"
                         ),
@@ -6836,6 +7062,12 @@ def build_server(
                     502,
                     "invalid_structured_output",
                     "The selected model could not satisfy the requested response schema.",
+                )
+            except FileContractError:
+                self._send_error(
+                    502,
+                    "invalid_file_response",
+                    "The file provider did not return a trackable file resource.",
                 )
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)

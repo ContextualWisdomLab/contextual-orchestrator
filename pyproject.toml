@@ -10,6 +10,7 @@ dependencies = [
   "opentelemetry-sdk>=1.30.0",
   "opentelemetry-exporter-otlp-proto-http>=1.30.0",
   "jsonschema>=4.26.0",
+  "fast-mlsirm ; python_full_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
@@ -61,3 +62,6 @@ ignore-nested-functions = true
 ignore-private = true
 ignore-property-decorators = true
 ignore-semiprivate = true
+
+[tool.uv.sources]
+fast-mlsirm = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git", rev = "v0.9.1" }

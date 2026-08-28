@@ -78,6 +78,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   request-size failure eligible for virtual-model failover.
 - Preserve request-size exhaustion semantics for media capability failover
   without degrading provider health.
+- Match OpenAI's 512 MB image-input request contract for bounded multimodal
+  JSON so base64/data-URL Responses reach routing instead of failing at framing.
+- Add principal-owned OpenAI-compatible `/v1/files` resources with disk-backed
+  512 MB uploads, the 200 MB Batch JSONL limit, and provider replicas for 413
+  failover without exposing upstream file IDs.
+- Route initial and fallback AUTO/FREE candidates with fast-mlsirm Judge IRT
+  evidence for similar system/user interactions; candidates without converged
+  psychometric evidence retain the existing measured-routing order.
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
 - Mixed structured workflows now retain a cost-ledger row for calls whose

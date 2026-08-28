@@ -65,6 +65,7 @@ from .tool_fallback import (
     downgrade_to_failover,
 )
 from .response_cache import ResponseCacheProvider, build_response_cache_key
+from .psychometric_routing import PsychometricRoutingEvidence
 from .reasoning_effort_profile import (
     ReasoningEffortProfile,
     apply_request_profile,
@@ -152,6 +153,26 @@ def _structured_output_error(
     except Exception:  # noqa: BLE001 - untrusted schema/output boundary
         return "schema_violation"
     return None
+
+
+def _bind_provider_file_ids(
+    document: Any, replicas: Mapping[str, Mapping[str, str]], agent_id: str
+) -> Any:
+    """Replace opaque gateway file ids with one candidate's provider ids."""
+    if isinstance(document, list):
+        return [_bind_provider_file_ids(item, replicas, agent_id) for item in document]
+    if not isinstance(document, dict):
+        return document
+    result: dict[str, Any] = {}
+    for key, value in document.items():
+        if key == "file_id" and isinstance(value, str) and value in replicas:
+            replica = replicas[value].get(agent_id)
+            if not isinstance(replica, str):
+                raise RuntimeError("required file replica is unavailable")
+            result[key] = replica
+        else:
+            result[key] = _bind_provider_file_ids(value, replicas, agent_id)
+    return result
 
 
 def estimate_tokens(text: str) -> int:
@@ -1814,6 +1835,18 @@ class ModelClient:
             max_response_bytes=max_response_bytes,
         )
 
+    def proxy_delete_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
+        """Delete a provider resource owned by an exact provider-affine agent."""
+        if agent.base_url.startswith("mock://"):
+            return {"id": endpoint.rsplit("/", 1)[-1], "object": "file", "deleted": True}
+        return self._batch_json(  # pragma: no cover - real provider integration
+            agent,
+            "DELETE",
+            f"/{endpoint.lstrip('/')}",
+            destination=self._validate_provider(agent),
+            max_response_bytes=max_response_bytes,
+        )
+
     def proxy_get_bytes(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> tuple[bytes, str]:
         """Retrieve provider media from the exact agent that owns an async job."""
         if agent.base_url.startswith("mock://"):
@@ -1831,6 +1864,48 @@ class ModelClient:
             request, self._validate_provider(agent)
         ) as response:
             return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
+
+    def proxy_upload(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        body: Any,
+        *,
+        content_type: str,
+        content_length: int,
+        max_response_bytes: int,
+    ) -> dict[str, Any]:
+        """Stream a seekable multipart body to one validated provider account."""
+        if agent.base_url.startswith("mock://"):
+            return {
+                "id": f"provider_file_{uuid.uuid4().hex}",
+                "object": "file",
+                "bytes": content_length,
+                "purpose": "user_data",
+                "filename": "upload",
+            }
+        api_key = _provider_credential(agent)  # pragma: no cover
+        headers = {  # pragma: no cover
+            "content-type": content_type,
+            "content-length": str(content_length),
+        }
+        if api_key:  # pragma: no cover
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(  # pragma: no cover
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+        with self._open_provider(  # pragma: no cover
+            request, self._validate_provider(agent)
+        ) as response:
+            result = json.loads(
+                self._read_bounded_response(response, max_response_bytes).decode("utf-8")
+            )
+        if not isinstance(result, dict):  # pragma: no cover
+            raise ProviderResponseError("file provider returned a non-object response")
+        return result
 
     def _send_raw_with_retry(
         self,
@@ -2708,7 +2783,7 @@ class _StateStore:
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
-    _KEYED = {"workflow_run", "evaluation_run"}
+    _KEYED = {"workflow_run", "evaluation_run", "psychometric_observation"}
     _TABLE_NAME = "orchestration_records"
     _LEGACY_TABLE_NAME = "records"
     _LEGACY_INDEX_NAME = "records_kind_seq"
@@ -2964,6 +3039,9 @@ class TaskOrchestrator:
         # fed by real-time fast-mlsirm judge verdicts on final answers, so
         # measured accuracy -- not transport success -- steers future routing.
         self._quality_router = ModelGroupRouter(prior_resolver=resolve_quality_prior)
+        self._psychometric_router = PsychometricRoutingEvidence(
+            max_contexts=self.EVIDENCE_CACHE_MAX_ENTRIES
+        )
         for grouped in self.candidates:
             self._group_router.register_member(grouped.id)
             self._quality_router.register_member(grouped.id)
@@ -3113,6 +3191,14 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        for observation in self._store.load("psychometric_observation"):
+            self._psychometric_router.observe_context_id(
+                str(observation["context_id"]),
+                str(observation["agent_id"]),
+                bool(observation["accepted"]),
+                observation.get("vector"),
+                observation.get("irt_row", ()),
+            )
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
             self._run_order.appendleft(record["workflow_run_id"])
@@ -3134,6 +3220,8 @@ class TaskOrchestrator:
             "include_orchestration_trace",
             "attribution",
             "routing",
+            "_required_agent_id",
+            "_file_replicas",
         }
     )
 
@@ -3172,8 +3260,11 @@ class TaskOrchestrator:
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
+            prompt_context = self._prompt_interaction(messages)
         else:
             text = _coerce_input_text(body.get("input"))
+            response_messages = _responses_to_chat_payload(body).get("messages", [])
+            prompt_context = self._prompt_interaction(response_messages)
         requested_model = body.get("model")
         # When the client names a model, resolve a pool agent that actually serves
         # that model id (never silently rewrite to an unrelated agent.model --
@@ -3181,12 +3272,41 @@ class TaskOrchestrator:
         # paths). _requested_agent already fails closed on unconfigured/empty
         # model ids; disabled-agent rejection happens here so the error message
         # is specific to why the request can't be served.
-        agent = self._requested_agent(requested_model)
+        required_agent_id = body.get("_required_agent_id")
+        file_replicas = body.get("_file_replicas")
+        agent = (
+            next((candidate for candidate in self.agents if candidate.id == required_agent_id), None)
+            if isinstance(required_agent_id, str)
+            else self._requested_agent(requested_model)
+        )
+        if isinstance(required_agent_id, str) and agent is None:
+            raise RuntimeError("required file provider is unavailable")
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
         if agent is None:
             agent = self._select_agent(
-                text, "worker", free_only=requested_model == self.FREE_MODEL
+                text,
+                "worker",
+                free_only=requested_model == self.FREE_MODEL,
+                prompt_context=prompt_context,
+            )
+        replica_agent_ids = (
+            set.intersection(*(set(value) for value in file_replicas.values()))
+            if isinstance(file_replicas, dict) and file_replicas
+            else None
+        )
+        if replica_agent_ids is not None and agent.id not in replica_agent_ids:
+            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+                raise RuntimeError("requested model has no referenced file replica")
+            agent = next(
+                candidate
+                for candidate in self._ranked_agents(
+                    text,
+                    "worker",
+                    free_only=requested_model == self.FREE_MODEL,
+                    prompt_context=prompt_context,
+                )
+                if candidate.id in replica_agent_ids
             )
         upstream = {
             key: value
@@ -3220,7 +3340,7 @@ class TaskOrchestrator:
                 )
             return result
 
-        allowed_agent_ids = (
+        allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
             {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
             if requested_model == self.FREE_MODEL
             else (
@@ -3228,13 +3348,23 @@ class TaskOrchestrator:
                 if requested_model == self.AUTO_MODEL
                 else None
             )
-        )
+        ))
+        if replica_agent_ids is not None:
+            allowed_agent_ids = (
+                replica_agent_ids
+                if allowed_agent_ids is None
+                else allowed_agent_ids & replica_agent_ids
+            )
         # Cross-provider failover lives ONLY on this plain virtual passthrough
         # path (and the virtual tools path reached with single_agent=True).
         # Conducted structured synthesis never replays across providers — see
         # _orchestrated_provider_completion.
         ranked_candidates = self._failover_candidates(
-            agent, text, "worker", allowed_agent_ids=allowed_agent_ids
+            agent,
+            text,
+            "worker",
+            allowed_agent_ids=allowed_agent_ids,
+            prompt_context=prompt_context,
         )
         if (
             effort_profile is not None
@@ -3269,6 +3399,10 @@ class TaskOrchestrator:
             started_at = time.perf_counter()
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
+            if isinstance(file_replicas, dict):
+                candidate_payload = _bind_provider_file_ids(
+                    candidate_payload, file_replicas, candidate.id
+                )
             if effort_profile is not None:
                 candidate_payload = self.client.apply_effort_profile(
                     candidate, candidate_payload, effort_profile
@@ -3325,7 +3459,12 @@ class TaskOrchestrator:
         messages = chat_body.get("messages")
         if not isinstance(messages, list) or not messages:
             raise ValueError("structured completion requires non-empty messages")
+        if _structured_output_error("null", chat_body.get("response_format")) == "schema_missing":
+            raise ProviderResponseError(
+                "response_format.json_schema is missing a schema"
+            )
         task = self._latest_user_text(messages)
+        prompt_context = self._prompt_interaction(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         selection_tags = (
             *required_tags,
@@ -3333,7 +3472,15 @@ class TaskOrchestrator:
         )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
-        final_agent = self._requested_agent(requested_model)
+        required_agent_id = body.get("_required_agent_id")
+        file_replicas = body.get("_file_replicas")
+        final_agent = (
+            next((agent for agent in self.agents if agent.id == required_agent_id), None)
+            if isinstance(required_agent_id, str)
+            else self._requested_agent(requested_model)
+        )
+        if isinstance(required_agent_id, str) and final_agent is None:
+            raise RuntimeError("required file provider is unavailable")
         if final_agent is None:
             try:
                 final_agent = self._select_agent(
@@ -3341,6 +3488,7 @@ class TaskOrchestrator:
                     "synthesizer",
                     required_tags=selection_tags,
                     free_only=free_only,
+                    prompt_context=prompt_context,
                 )
             except RuntimeError as exc:
                 if selection_tags:
@@ -3349,6 +3497,25 @@ class TaskOrchestrator:
                         + ", ".join(selection_tags)
                     ) from exc
                 raise
+        replica_agent_ids = (
+            set.intersection(*(set(value) for value in file_replicas.values()))
+            if isinstance(file_replicas, dict) and file_replicas
+            else None
+        )
+        if replica_agent_ids is not None and final_agent.id not in replica_agent_ids:
+            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+                raise RuntimeError("requested model has no referenced file replica")
+            final_agent = next(
+                candidate
+                for candidate in self._ranked_agents(
+                    task,
+                    "synthesizer",
+                    required_tags=selection_tags,
+                    free_only=free_only,
+                    prompt_context=prompt_context,
+                )
+                if candidate.id in replica_agent_ids
+            )
         elif any(tag not in final_agent.tags for tag in required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
@@ -3450,11 +3617,17 @@ class TaskOrchestrator:
             self.AUTO_MODEL,
             self.FREE_MODEL,
         }
-        allowed_agent_ids = (
+        allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
             {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
             if free_only
             else ({candidate.id for candidate in self.agents} if virtual_model else None)
-        )
+        ))
+        if replica_agent_ids is not None:
+            allowed_agent_ids = (
+                replica_agent_ids
+                if allowed_agent_ids is None
+                else allowed_agent_ids & replica_agent_ids
+            )
         synthesis_candidates = (
             self._failover_candidates(
                 final_agent,
@@ -3462,6 +3635,7 @@ class TaskOrchestrator:
                 "synthesizer",
                 required_tags=selection_tags,
                 allowed_agent_ids=allowed_agent_ids,
+                prompt_context=prompt_context,
             )
             if virtual_model
             else [final_agent]
@@ -3495,6 +3669,10 @@ class TaskOrchestrator:
                 # whose attempt actually raised, including the post-413 path.
                 final_agent = candidate
                 candidate_payload = {**payload, "model": candidate.model}
+                if isinstance(file_replicas, dict):
+                    candidate_payload = _bind_provider_file_ids(
+                        candidate_payload, file_replicas, candidate.id
+                    )
                 if active_profile is not None:
                     candidate_payload = self.client.apply_effort_profile(
                         candidate, candidate_payload, active_profile
@@ -3631,6 +3809,15 @@ class TaskOrchestrator:
             )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
+        synthesis_quality = self._realtime_route_judge(
+            text=task,
+            answer=synthesis_output,
+            served_id=final_agent.id,
+            latency_seconds=time.perf_counter() - synthesis_started,
+            usage=raw.get("usage") if isinstance(raw.get("usage"), dict) else None,
+            free_only=free_only,
+            prompt_context=prompt_context,
+        )
         echo = raw.get("echo")
         if isinstance(echo, dict):
             if response_request:
@@ -3659,6 +3846,7 @@ class TaskOrchestrator:
                 "trace": trace,
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": workflow.get("verification"),
+                "synthesis_quality_verification": synthesis_quality,
             }
         )
         self._replace_workflow_run(record)
@@ -4542,11 +4730,14 @@ class TaskOrchestrator:
         design constraint at this layer -- correctness is.
         """
         text = self._latest_user_text(messages)
+        prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
         requested = self._requested_agent(model_name)
         ranked_pool: list[ModelAgent] = (
             [requested] if requested is not None else []
-        ) or self._ranked_agents(text, "worker", free_only=free_only)
+        ) or self._ranked_agents(
+            text, "worker", free_only=free_only, prompt_context=prompt_context
+        )
         free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
         allowed_agent_ids = free_ids if free_only else None
 
@@ -4596,6 +4787,7 @@ class TaskOrchestrator:
                 latency_seconds=latency_seconds,
                 usage=attempt_usage,
                 free_only=free_only,
+                prompt_context=prompt_context,
             )
             row["realtime_judge"] = {
                 "accepted": verification["accepted"],
@@ -4635,6 +4827,7 @@ class TaskOrchestrator:
         latency_seconds: float,
         usage: dict[str, Any] | None,
         free_only: bool,
+        prompt_context: str | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
 
@@ -4645,13 +4838,22 @@ class TaskOrchestrator:
         """
         output_tokens = self._usage_completion_tokens(usage)
 
-        def _record(accepted: bool) -> None:
+        def _record(accepted: bool, irt_row: tuple[int, ...] = ()) -> None:
             if accepted:
                 self._quality_router.observe_success(
                     served_id, latency_seconds, output_tokens=output_tokens
                 )
             else:
                 self._quality_router.observe_failure(served_id)
+            if prompt_context is not None:
+                self._observe_contextual_quality(
+                    prompt_context,
+                    served_id,
+                    accepted=accepted,
+                    latency_seconds=latency_seconds,
+                    output_tokens=output_tokens,
+                    irt_row=irt_row,
+                )
 
         if not self.policy.realtime_judge:
             return {
@@ -4665,7 +4867,14 @@ class TaskOrchestrator:
             text, fallback_report, free_only=free_only
         )
         accepted = bool(base.get("accepted"))
-        _record(accepted)
+        raw_irt_row = base.get("judge_irt_row")
+        irt_row = (
+            tuple(raw_irt_row)
+            if isinstance(raw_irt_row, list)
+            and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
+            else ()
+        )
+        _record(accepted, irt_row)
         return base
 
     @staticmethod
@@ -4984,6 +5193,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         free_only: bool = False,
         chat_only: bool = True,
+        prompt_context: str | None = None,
     ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group.
 
@@ -5016,7 +5226,8 @@ class TaskOrchestrator:
         )
         eligible = [agent for agent in static if role not in agent.provider_exclusions]
         excluded = [agent for agent in static if role in agent.provider_exclusions]
-        return self._refine_partition(eligible, role) + self._refine_partition(excluded, role)
+        ordered = self._refine_partition(eligible, role) + self._refine_partition(excluded, role)
+        return self._psychometric_order(ordered, prompt_context)
 
     def _refine_partition(self, partition: list[ModelAgent], role: str) -> list[ModelAgent]:
         """Group-refine one role-partition with measured intra-group ordering."""
@@ -5052,6 +5263,54 @@ class TaskOrchestrator:
         ):
             return self._quality_router.ranked_member_ids(member_ids)
         return self._group_router.ranked_member_ids(member_ids)
+
+    def _psychometric_order(
+        self, candidates: list[ModelAgent], prompt_context: str | None
+    ) -> list[ModelAgent]:
+        """Put fast-MLSIRM-evidenced candidates before ordinary measured order."""
+        if not prompt_context or len(candidates) < 2:
+            return candidates
+        evidence = self._psychometric_router.ranked_evidence(
+            [candidate.id for candidate in candidates],
+            prompt_context,
+            self._embed_cached(prompt_context),
+        )
+        if not evidence:
+            return candidates
+        by_id = {candidate.id: candidate for candidate in candidates}
+        evidenced_ids = [agent_id for agent_id, _score in evidence]
+        return [by_id[agent_id] for agent_id in evidenced_ids] + [
+            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
+        ]
+
+    def _observe_contextual_quality(
+        self,
+        prompt_context: str,
+        served_id: str,
+        *,
+        accepted: bool,
+        latency_seconds: float,
+        output_tokens: int | None,
+        irt_row: tuple[int, ...] = (),
+    ) -> None:
+        """Record a fast-mlsirm judge outcome for contextual ability fitting."""
+        del latency_seconds, output_tokens
+        self._psychometric_router.observe(
+            prompt_context,
+            served_id,
+            accepted,
+            self._embed_cached(prompt_context),
+            irt_row,
+        )
+        if self._store is not None:
+            context_id = self._psychometric_router.context_id(prompt_context)
+            record = next(
+                item
+                for item in self._psychometric_router.records()
+                if item["context_id"] == context_id and item["agent_id"] == served_id
+            )
+            key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
+            self._store.save("psychometric_observation", key, record)
 
     # --- dual-ledger membership maintenance ---------------------------------
 
@@ -5241,6 +5500,7 @@ class TaskOrchestrator:
         *,
         free_only: bool = False,
         required_tags: tuple[str, ...] = (),
+        prompt_context: str | None = None,
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
@@ -5252,7 +5512,11 @@ class TaskOrchestrator:
         ranked = [
             agent
             for agent in self._ranked_agents(
-                text, role, free_only=free_only, required_tags=required_tags
+                text,
+                role,
+                free_only=free_only,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
             )
             if is_general_chat_agent_model_id(agent.model)
             and all(tag in agent.tags for tag in required_tags)
@@ -5585,12 +5849,14 @@ class TaskOrchestrator:
         select the primary when the call's effort profile has a distinct name.
         """
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        prompt_context = self._prompt_interaction(messages)
         candidates = self._failover_candidates(
             primary,
             text,
             eligibility_role or role,
             required_tags=required_tags,
             allowed_agent_ids=allowed_agent_ids,
+            prompt_context=prompt_context,
         )
         if not candidates and required_tags:
             candidates = self._failover_candidates(
@@ -5598,6 +5864,7 @@ class TaskOrchestrator:
                 text,
                 eligibility_role or role,
                 allowed_agent_ids=allowed_agent_ids,
+                prompt_context=prompt_context,
             )
         if not candidates:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
@@ -5759,9 +6026,15 @@ class TaskOrchestrator:
         *,
         required_tags: tuple[str, ...] = (),
         allowed_agent_ids: set[str] | None = None,
+        prompt_context: str | None = None,
     ) -> list[ModelAgent]:
         try:
-            ranked = self._ranked_agents(text, role, required_tags=required_tags)
+            ranked = self._ranked_agents(
+                text,
+                role,
+                required_tags=required_tags,
+                prompt_context=prompt_context,
+            )
         except RuntimeError:
             if required_tags:
                 return []
@@ -5854,6 +6127,24 @@ class TaskOrchestrator:
             if text:
                 return text
         return ""  # pragma: no cover
+
+    @staticmethod
+    def _prompt_interaction(messages: list[ChatMessage]) -> str:
+        """Canonical system/developer/user interaction used as an IRT item."""
+        interaction = [
+            {"role": message.get("role"), "content": message.get("content")}
+            for message in messages
+            if message.get("role") in {"system", "developer", "user"}
+        ]
+        try:
+            return json.dumps(
+                interaction,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        except (TypeError, ValueError):
+            return ""
 
     @staticmethod
     def _source_image_parts(messages: list[ChatMessage]) -> list[dict[str, Any]]:

@@ -172,6 +172,64 @@ def test_virtual_passthrough_advances_on_oversized_tool_description() -> None:
     assert orchestrator._group_router.member_observation_count("primary_agent") == 0
 
 
+def test_file_replicas_are_rebound_for_each_413_fallback_provider() -> None:
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(413),
+            "fallback_agent": {"model": "fallback-model", "output": []},
+        }
+    )
+    result = _build(client).proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "file_gateway"}]}],
+            "_file_replicas": {
+                "file_gateway": {
+                    "primary_agent": "provider-primary",
+                    "fallback_agent": "provider-fallback",
+                }
+            },
+        },
+        endpoint="responses",
+    )
+
+    assert result["model"] == "fallback-model"
+    assert client.calls[0][1]["input"][0]["content"][0]["file_id"] == "provider-primary"
+    assert client.calls[1][1]["input"][0]["content"][0]["file_id"] == "provider-fallback"
+
+
+def test_auto_keeps_advancing_after_each_413_until_an_eligible_provider_succeeds() -> None:
+    """Fallback is exhaustive, not a single primary-to-secondary hop."""
+    client = SequencedProxyClient(
+        {
+            "first_agent": _http_error(413),
+            "second_agent": _http_error(413),
+            "third_agent": {"model": "third-model", "output": []},
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("first_agent", "first-model", priority=30, provider_name="first"),
+            ModelAgent("second_agent", "second-model", priority=20, provider_name="second"),
+            ModelAgent("third_agent", "third-model", priority=10, provider_name="third"),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {"model": TaskOrchestrator.AUTO_MODEL, "input": "large multimodal request"},
+        endpoint="responses",
+        single_agent=True,
+    )
+
+    assert result["model"] == "third-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "first_agent",
+        "second_agent",
+        "third_agent",
+    ]
+
+
 def test_virtual_passthrough_all_oversized_tool_errors_preserve_size_contract() -> None:
     """Raw provider size errors retain the public exhaustion contract."""
     client = SequencedProxyClient(
@@ -215,6 +273,29 @@ def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
 
     assert caught.value is failure
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_provider_affine_file_request_does_not_escape_to_another_provider() -> None:
+    """A gateway file id pins its rewritten request to the owning provider."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": {"model": "primary-model", "output": []},
+            "fallback_agent": {"model": "fallback-model", "output": []},
+        }
+    )
+    result = _build(client).proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "provider-file"}]}],
+            "_required_agent_id": "fallback_agent",
+        },
+        endpoint="responses",
+        single_agent=True,
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
+    assert "_required_agent_id" not in client.calls[0][1]
 
 
 @pytest.mark.parametrize("status", [404, 413, 429])

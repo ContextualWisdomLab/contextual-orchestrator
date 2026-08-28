@@ -9,12 +9,15 @@ import socket
 import sys
 import threading
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
+    DEFAULT_MAX_JSON_BODY_BYTES,
     RequestError,
     SecurityConfig,
     _request_body_size,
@@ -45,6 +48,16 @@ def test_request_body_size_accepts_absent_zero_and_trimmed_lengths() -> None:
     assert _request_body_size(_headers(), 1024) == 0
     assert _request_body_size(_headers(content_length=" 7 "), 1024) == 7
     assert _request_body_size(_headers(content_length="0"), 1024) == 0
+
+
+def test_default_json_body_limit_matches_openai_image_request_contract() -> None:
+    """Multimodal JSON reaches routing up to OpenAI's 512 MB request limit."""
+    configured = SecurityConfig().max_body_bytes
+    assert configured == DEFAULT_MAX_JSON_BODY_BYTES == 512 * 1024 * 1024
+    assert _request_body_size(_headers(content_length=str(configured)), configured) == configured
+    with pytest.raises(RequestError) as exc_info:
+        _request_body_size(_headers(content_length=str(configured + 1)), configured)
+    assert (exc_info.value.status, exc_info.value.code) == (413, "request_too_large")
 
 
 def test_request_body_size_rejects_duplicate_and_comma_joined_lengths() -> None:

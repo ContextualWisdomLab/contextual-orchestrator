@@ -491,6 +491,11 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
         ) as proxy,
         patch.object(
             orchestrator,
+            "_model_judge_verification",
+            return_value={"accepted": True, "source": "test"},
+        ),
+        patch.object(
+            orchestrator,
             "_raise_if_spend_budget_exceeded",
             wraps=orchestrator._raise_if_spend_budget_exceeded,
         ) as budget_gate,
@@ -594,7 +599,7 @@ def test_missing_structured_schema_never_starts_repair() -> None:
             },
             single_agent=False,
         )
-    proxy.assert_called_once()
+    proxy.assert_not_called()
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:

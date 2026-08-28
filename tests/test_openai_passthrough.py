@@ -468,6 +468,34 @@ def test_http_responses_endpoint_passes_through() -> None:
     assert body["object"] == "response"
 
 
+def test_http_virtual_responses_tools_are_conducted_not_single_model_passthrough() -> None:
+    """Tools on orchestrator/auto retain native shape after evidence orchestration."""
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/responses",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "input": "inspect the repository",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "inspect",
+                        "description": "Inspect one path",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 200
+    assert body["object"] == "response"
+    assert body["orchestration"]["mode"] == "conduct"
+
+
 def test_http_models_endpoint_lists_configured_models() -> None:
     server, port, token = _serve()
     request = urllib.request.Request(
