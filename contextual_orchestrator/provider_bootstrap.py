@@ -49,6 +49,11 @@ PROVIDER_CREDENTIAL_NAMES: tuple[str, ...] = tuple(
 )
 """Required credential inventory derived from provider source declarations."""
 
+PROVIDER_ACCEPTED_CREDENTIAL_NAMES: tuple[str, ...] = tuple(
+    dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
+)
+"""All accepted credentials, including optional provider integrations."""
+
 _GENERIC_SERVING_TAGS = (
     "discovered",
     "chat",
@@ -100,12 +105,12 @@ def collect_provider_credentials(
     """Collect the declared inventory without rewriting non-line-ending bytes."""
     values: dict[str, str] = {}
     missing: list[str] = []
-    for name in PROVIDER_CREDENTIAL_NAMES:
+    for name in PROVIDER_ACCEPTED_CREDENTIAL_NAMES:
         raw = environ.get(name, "")
         value = _strip_mounted_line_endings(raw) if isinstance(raw, str) else ""
         if value and value.strip():
             values[name] = value
-        else:
+        elif name in PROVIDER_CREDENTIAL_NAMES:
             missing.append(name)
     if require_all and missing:
         raise ProviderBootstrapError(
@@ -123,7 +128,7 @@ def register_provider_credentials_atomically(
     """Register a validated credential batch with one commit where supported."""
     if not credentials:
         raise ProviderBootstrapError("provider bootstrap received an empty credential batch")
-    unknown = sorted(set(credentials) - set(PROVIDER_CREDENTIAL_NAMES))
+    unknown = sorted(set(credentials) - set(PROVIDER_ACCEPTED_CREDENTIAL_NAMES))
     if unknown:
         raise ProviderBootstrapError("provider bootstrap rejected unknown credential names")
 

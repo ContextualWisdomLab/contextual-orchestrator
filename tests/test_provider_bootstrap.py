@@ -89,6 +89,15 @@ def test_collect_requires_complete_inventory_without_leaking_values():
     )
 
 
+def test_collect_accepts_optional_provider_credentials_without_requiring_them():
+    environment = _complete_environment()
+    environment["OPENCODE_ZEN_API_KEY"] = "optional-zen-secret\n"
+
+    collected = provider_bootstrap.collect_provider_credentials(environment)
+
+    assert collected["OPENCODE_ZEN_API_KEY"] == "optional-zen-secret"
+
+
 def test_atomic_memory_registration_strips_mounted_secret_newlines():
     """A complete inventory becomes visible together and mounted newlines are removed."""
     credentials = provider_bootstrap.collect_provider_credentials(
