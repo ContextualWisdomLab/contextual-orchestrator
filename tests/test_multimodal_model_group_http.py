@@ -12,6 +12,7 @@ import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.cost_router import CostRoutingCoordinator
+from contextual_orchestrator.orchestrator import ProviderRequestTooLargeError
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.video_jobs import VideoJobContractError
 
@@ -440,6 +441,32 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
     )
 
     assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
+
+
+def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+    """Oversized capability requests do not degrade provider health."""
+    agents = [
+        ModelAgent("first_image", "provider/image", tags=("image",), group_name="image_group"),
+        ModelAgent("second_image", "provider/image", tags=("image",), group_name="image_group"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_capability(
+            {"model": "image-group", "prompt": "large image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
 
 
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:
