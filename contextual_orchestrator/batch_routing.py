@@ -170,11 +170,9 @@ class BatchRequest:
             "custom_id": self.custom_id,
             "method": "POST",
             "url": endpoint,
-            "body": {
-                "model": self.model,
-                "messages": self.messages,
-                "zdr_only": self.zdr_only,
-            },
+            # ``zdr_only`` is a contextual-orchestrator selection policy, not
+            # an upstream provider request field.
+            "body": {"model": self.model, "messages": self.messages},
         }
 
 
@@ -455,11 +453,8 @@ class EmbeddingBatchRequest:
             "custom_id": self.custom_id,
             "method": "POST",
             "url": endpoint,
-            "body": {
-                "model": self.model,
-                "input": self.input_text,
-                "zdr_only": self.zdr_only,
-            },
+            # ``zdr_only`` is enforced before this provider JSONL is built.
+            "body": {"model": self.model, "input": self.input_text},
         }
 
 
