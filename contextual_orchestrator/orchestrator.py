@@ -3627,7 +3627,11 @@ class TaskOrchestrator:
         matches = [
             candidate
             for candidate in self.candidates
-            if candidate.model == requested_model and self._zdr_agent_allowed(candidate)
+            if (
+                candidate.model == requested_model
+                and not candidate.disabled
+                and self._zdr_agent_allowed(candidate)
+            )
         ]
         configured_exact = any(candidate.model == requested_model for candidate in self.candidates)
         if not matches and not configured_exact:

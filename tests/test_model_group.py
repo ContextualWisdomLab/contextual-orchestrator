@@ -171,6 +171,23 @@ def test_zdr_only_does_not_reinterpret_an_exact_non_zdr_model_as_its_group() -> 
             orchestrator._requested_agent(non_zdr.model)
 
 
+def test_requested_agent_rejects_a_disabled_zdr_exact_model() -> None:
+    disabled = ModelAgent(
+        "disabled_zdr_member",
+        "vendor/disabled-zdr",
+        "mock://local",
+        tags=("privacy:zdr",),
+        disabled=True,
+    )
+    orchestrator = TaskOrchestrator(
+        [disabled, ModelAgent("enabled_member", "vendor/enabled")]
+    )
+
+    with orchestrator.request_policy(True):
+        with pytest.raises(ValueError, match="not configured"):
+            orchestrator._requested_agent(disabled.model)
+
+
 def test_request_policy_requires_a_bool_and_restores_previous_scope() -> None:
     orchestrator = TaskOrchestrator([_agent("member_one", "vendor/one")])
 
