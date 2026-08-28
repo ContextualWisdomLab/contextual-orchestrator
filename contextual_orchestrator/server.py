@@ -5792,6 +5792,8 @@ def build_server(
                         ) from exc
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
+                    except ProviderRequestTooLargeError:
+                        raise
                     except RuntimeError as exc:
                         raise RequestError(
                             503,

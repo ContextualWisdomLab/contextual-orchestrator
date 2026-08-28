@@ -567,6 +567,32 @@ def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
         server.shutdown()
 
 
+def test_capability_request_size_exhaustion_returns_http_413() -> None:
+    """Capability request-size exhaustion reaches the public 413 contract."""
+    agents = [
+        ModelAgent("first_image", "provider/first", tags=("image",), group_name="image_group"),
+        ModelAgent("second_image", "provider/second", tags=("image",), group_name="image_group"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError(endpoint, 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=TOKEN))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post_error(
+            server.server_address[1],
+            "/v1/images/generations",
+            {"model": "image-group", "prompt": "large image"},
+        )
+        assert status == 413
+        assert body["error"]["code"] == "request_too_large"
+    finally:
+        server.shutdown()
+
+
 @pytest.mark.parametrize(
     ("capability", "endpoint", "binary"),
     [
