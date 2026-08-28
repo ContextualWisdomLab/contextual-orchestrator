@@ -450,11 +450,13 @@ class NonBlockingLedgerStore:
         *,
         queue_size: int = 1000,
         telemetry_sink: Optional[UsageTelemetrySink] = None,
+        usage_record_sink: Optional[UsageRecordSink] = None,
     ) -> None:
         if queue_size < 1:
             raise ValueError("queue_size must be at least 1")
         self.backend = backend
         self._telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
+        self._usage_record_sink = usage_record_sink
         self._queue: queue.Queue[UsageRecord] = queue.Queue(maxsize=queue_size)
         self._health = UsageTelemetryHealth()
         self._lock = threading.Lock()
@@ -508,8 +510,9 @@ class NonBlockingLedgerStore:
     def _run(self) -> None:
         while True:
             record = self._queue.get()
+            accepted = False
             try:
-                self.backend.append(record)
+                accepted = self.backend.append(record) is not False
             except Exception as exc:
                 error_type = type(exc).__name__
                 self._mark("store_failures", error_type=error_type)
@@ -522,11 +525,26 @@ class NonBlockingLedgerStore:
                     ),
                 )
             else:
-                self._mark("records_stored")
-                _emit_usage_event(
-                    self._telemetry_sink,
-                    UsageTelemetryEvent.from_record(record, export_state="stored"),
-                )
+                if accepted:
+                    self._mark("records_stored")
+                    _emit_usage_event(
+                        self._telemetry_sink,
+                        UsageTelemetryEvent.from_record(record, export_state="stored"),
+                    )
+                    if self._usage_record_sink is not None:
+                        try:
+                            self._usage_record_sink.emit_usage_record(record)
+                        except Exception as exc:
+                            error_type = type(exc).__name__
+                            self._mark("export_failures", error_type=error_type)
+                            _emit_usage_event(
+                                self._telemetry_sink,
+                                UsageTelemetryEvent.from_record(
+                                    record,
+                                    export_state="export_error",
+                                    error_type=error_type,
+                                ),
+                            )
             finally:
                 self._queue.task_done()
 
@@ -1091,6 +1109,8 @@ class CostLedger:
         self._inline_health_lock = threading.Lock()
         self._clock = clock or (lambda: int(time.time()))
         self.usage_sink = usage_sink
+        if isinstance(self.store, NonBlockingLedgerStore) and usage_sink is not None:
+            self.store._usage_record_sink = usage_sink
 
     def record_usage(
         self,
@@ -1179,7 +1199,11 @@ class CostLedger:
                     self.telemetry_sink,
                     UsageTelemetryEvent.from_record(record, export_state="stored"),
                 )
-        if accepted and self.usage_sink is not None:
+        if (
+            accepted
+            and self.usage_sink is not None
+            and not isinstance(self.store, NonBlockingLedgerStore)
+        ):
             try:
                 self.usage_sink.emit_usage_record(record)
             except Exception as exc:

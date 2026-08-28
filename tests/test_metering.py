@@ -7,6 +7,7 @@ import threading
 
 from contextual_orchestrator.cost_ledger import (
     CostLedger,
+    InMemoryLedgerStore,
     InMemoryUsageTelemetrySink,
     NonBlockingLedgerStore,
     PriceBook,
@@ -220,7 +221,96 @@ def test_billing_export_skips_non_blocking_queue_drops() -> None:
             completion_tokens=1,
             usage_record_id="usage_3",
         )
-        assert sink.ids == ["usage_1", "usage_2"]
     finally:
         release.set()
         assert store.flush(timeout=5)
+    assert sink.ids == ["usage_1", "usage_2"]
+
+
+def test_non_blocking_billing_export_waits_for_backend_success() -> None:
+    """A background persistence failure must not create a billing event."""
+
+    class _FailingBackend:
+        def append(self, _record: UsageRecord) -> bool:
+            raise RuntimeError("backend unavailable")
+
+        def query(self, start=None, end=None):
+            del start, end
+            return []
+
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(
+        price_book,
+        store=_FailingBackend(),
+        non_blocking_store=True,
+        usage_sink=sink,
+    )
+
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_backend_failure",
+    )
+
+    assert ledger.flush(timeout=5)
+    assert sink.ids == []
+
+
+def test_non_blocking_billing_export_deduplicates_backend_writes() -> None:
+    """A backend duplicate must not be exported as a second billing event."""
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(
+        price_book,
+        store=InMemoryLedgerStore(),
+        non_blocking_store=True,
+        usage_sink=sink,
+    )
+
+    for _ in range(2):
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_async_duplicate",
+        )
+
+    assert ledger.flush(timeout=5)
+    assert sink.ids == ["usage_async_duplicate"]
+
+
+def test_non_blocking_billing_export_failure_updates_health() -> None:
+    """A post-persistence billing failure remains visible without failing work."""
+
+    class _FailingExportSink:
+        def emit_usage_record(self, _record: UsageRecord) -> None:
+            raise RuntimeError("export unavailable")
+
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(
+        price_book,
+        store=InMemoryLedgerStore(),
+        non_blocking_store=True,
+        usage_sink=_FailingExportSink(),
+    )
+
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_async_export_failure",
+    )
+
+    assert ledger.flush(timeout=5)
+    health = ledger.telemetry_health()
+    assert health["records_stored"] == 1
+    assert health["export_failures"] == 1
+    assert health["last_error_type"] == "RuntimeError"
