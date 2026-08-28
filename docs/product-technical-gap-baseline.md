@@ -1,5 +1,31 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-29 04:06 KST exact-head protected-queue snapshot
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The eight-PR open queue was
+re-read at the exact heads below. Every PR has zero qualifying independent
+approvals and zero unresolved review threads after the current-head review
+reply on #903; no protected control was bypassed.
+
+| PR | Exact head | Current protected evidence |
+| ---: | --- | --- |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `13432f3e4836df9bc8b3c83778ca0faf09c04d93` | `BLOCKED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `8a1654ead5a23e985c9bf1d6d500602283f05ab8` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `ec17d4e0b77fe10c8087c587cb748d4027fe4d0f` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode and Strix fail closed |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `29d9493fcdbf11aaa3d43bc6c7e10857bb85ca73` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed and Strix fails closed on provider `500` |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `e12d334cf307b5bda1253a020ea6a13cb0e243f4` | `BLOCKED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed and Strix remains in progress |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `bbad9c2653a8d4f3af198f09b4d82e561f5abbc4` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode and Strix fail closed |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `bf6fbb7d372922088bd075b395543b325d91ed78` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+
+The current OpenCode failures report that no authenticated `opencode-agent`
+review exists for the exact head; they are not review approvals. #901's Strix
+log records three provider/backend `500 internal_error` attempts with no
+structured report, so its required check failed closed on unavailable external
+evidence. #903's local CEFR/reasoning/passthrough regression set is `80
+passed`; its hosted Strix result is still pending at this snapshot.
+
 ## 2026-08-29 03:35 KST exact-head protected-queue snapshot
 
 Protected `main` remains
