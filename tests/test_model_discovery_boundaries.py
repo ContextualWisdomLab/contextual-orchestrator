@@ -8,7 +8,9 @@ happy-path tests cannot reach.
 
 from __future__ import annotations
 
+import ssl
 import urllib.error
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
@@ -25,8 +27,11 @@ from contextual_orchestrator.model_discovery import (
     ProviderDiscoveryError,
     ProviderModelSource,
     _fetch_json,
+    _fetch_configured_gateway_json,
+    MAX_DISCOVERY_RESPONSE_BYTES,
     _provider_discovery_error_code,
     _valid_price_component,
+    agent_from_discovered,
     discover_provider_models,
     refresh_price_book,
     select_bootstrap_discovered_agents,
@@ -84,6 +89,78 @@ def test_timeout_maps_to_stable_timeout_code() -> None:
         with pytest.raises(ProviderDiscoveryError) as excinfo:
             discover_provider_models(OPENAI_SOURCE)
     assert excinfo.value.error_code == "timeout"
+
+
+def test_configured_gateway_uses_pinned_bounded_provider_transport() -> None:
+    response = _Response({"data": []})
+    reads = []
+    original_read = response.read
+
+    def bounded_read(size=-1):
+        reads.append(size)
+        return original_read()
+
+    response.read = bounded_read
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._validate_provider",
+            return_value=(2, ("203.0.113.10", 443)),
+        ) as validate,
+        patch(
+            "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+            return_value=response,
+        ) as opened,
+    ):
+        assert _fetch_configured_gateway_json(
+            "https://gateway.example/v1/models",
+            api_key="secret",
+            auth_scheme="Bearer",
+            timeout=1,
+        ) == {"data": []}
+    validate.assert_called_once()
+    assert validate.call_args.args[0].credential_key == "LLM_GATEWAY_API_KEY"
+    request = opened.call_args.args[0]
+    assert request.headers["Authorization"] == "Bearer secret"
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
+def test_configured_gateway_discovery_keeps_combined_system_trust() -> None:
+    """Configured discovery uses the client's system-plus-certifi trust default."""
+    with patch(
+        "contextual_orchestrator.model_discovery.ModelClient",
+        side_effect=RuntimeError("stop after construction"),
+    ) as client:
+        with pytest.raises(RuntimeError, match="stop after construction"):
+            _fetch_configured_gateway_json(
+                "https://gateway.example/v1/models",
+                api_key="secret",
+                auth_scheme="Bearer",
+                timeout=1,
+            )
+    assert client.call_args.kwargs.get("ca_bundle") is None
+
+
+def test_fixed_provider_ca_failure_retries_with_certifi_verification() -> None:
+    calls = []
+
+    def urlopen(request, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise urllib.error.URLError(
+                ssl.SSLCertVerificationError(1, "unable to get local issuer")
+            )
+        return _Response({"data": []})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        assert _fetch_json("https://provider.example/v1/models", timeout=1) == {
+            "data": []
+        }
+    assert "context" not in calls[0]
+    assert calls[1]["context"].verify_mode == ssl.CERT_REQUIRED
+    assert calls[1]["context"].check_hostname is True
 
 
 def test_malformed_json_maps_to_invalid_response_code() -> None:
@@ -313,6 +390,19 @@ def test_bootstrap_rejects_non_positive_limits_and_empty_catalogs() -> None:
     assert select_bootstrap_discovered_agents(ineligible, book, 5) == []
     assert select_top_n_cheapest_discovered_agents(ineligible, book, 5) == []
     assert select_cheapest_discovered_agent([], book) is None
+
+
+def test_bootstrap_rejects_explicit_non_chat_capabilities() -> None:
+    """A video-looking catalog row cannot enter the chat pool by identifier fallback."""
+    book = PriceBook(InMemoryConfigStore())
+    video = replace(
+        _chat_model("openrouter", "vendor-video-model"),
+        capabilities=("video",),
+        output_modalities=("video",),
+    )
+
+    assert select_bootstrap_discovered_agents([video], book, 1) == []
+    assert "video" in agent_from_discovered(video).tags
 
 
 def test_bootstrap_fills_remainder_from_deferred_same_family_models() -> None:

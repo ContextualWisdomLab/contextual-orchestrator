@@ -36,7 +36,7 @@ jobs:
       - name: Install fuzz dependencies
         # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Sources:
         # fuzz/requirements-property.in (recompile with uv pip compile --generate-hashes).
-        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+        run: python -m pip install --require-hashes -r requirements.lock -r fuzz/requirements-property.txt
 
       - name: Install Rust token packer
         run: ./scripts/install_native_token_packer.sh
@@ -65,7 +65,7 @@ jobs:
       - name: Install Atheris
         # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Sources:
         # fuzz/requirements-atheris.in (recompile with uv pip compile --generate-hashes).
-        run: python -m pip install --require-hashes -r fuzz/requirements-atheris.txt
+        run: python -m pip install --require-hashes -r requirements.lock -r fuzz/requirements-atheris.txt
 
       - name: Install Rust token packer
         run: ./scripts/install_native_token_packer.sh

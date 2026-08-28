@@ -9,11 +9,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
+    RequestError,
     SecurityConfig,
+    _validate_chat_model,
     _validate_completions_model,
     _validate_embeddings_model,
     _validate_responses_model,
@@ -60,6 +64,7 @@ def _server():
 
 def test_unit_model_strip_writeback() -> None:
     for validate in (
+        _validate_chat_model,
         _validate_completions_model,
         _validate_responses_model,
         _validate_embeddings_model,
@@ -69,8 +74,27 @@ def test_unit_model_strip_writeback() -> None:
         assert body["model"] == "mock-planner"
 
 
+def test_text_model_omission_selects_gateway_default() -> None:
+    """Chat omits to the public gateway id; Responses omits to orchestrator/auto."""
+    chat_body: dict = {}
+    responses_body: dict = {}
+
+    assert _validate_chat_model(chat_body) == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    assert chat_body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    assert _validate_responses_model(responses_body) == TaskOrchestrator.AUTO_MODEL
+    assert responses_body["model"] == TaskOrchestrator.AUTO_MODEL
+
+
+def test_text_model_rejects_explicit_null() -> None:
+    for validate in (_validate_chat_model, _validate_completions_model, _validate_responses_model):
+        with pytest.raises(RequestError) as error:
+            validate({"model": None})
+        assert error.value.code == "invalid_model"
+
+
 def test_unit_model_rejects_blank() -> None:
     for validate in (
+        _validate_chat_model,
         _validate_completions_model,
         _validate_responses_model,
         _validate_embeddings_model,
@@ -120,6 +144,108 @@ def test_http_chat_tools_accepts_padded_model() -> None:
             },
         )
         assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_accepts_advertised_gateway_default_model() -> None:
+    """The gateway-default id advertised on /v1/models must be callable on chat.
+
+    Regression: ``_require_pool_model`` special-cased only
+    :data:`TaskOrchestrator.AUTO_MODEL`/:data:`TaskOrchestrator.FREE_MODEL`,
+    so the first entry of the advertised model list — the literal
+    ``contextual-orchestrator`` default every batch request already used —
+    was rejected with 400 on the general chat surface. Callers could submit
+    batch jobs but never hold a conversation: the endpoint contract matched
+    the async batch-routing API only.
+    """
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                "messages": [{"role": "user", "content": "gateway default chat"}],
+            },
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "implicit gateway default"}]},
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
+        # The advertised list must keep offering exactly this id first.
+        models_request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/models",
+            headers={"authorization": f"Bearer {_TEST_AUTH_TOKEN}"},
+        )
+        with urllib.request.urlopen(models_request, timeout=10) as response:
+            listed = json.loads(response.read().decode("utf-8"))
+        assert listed["data"][0]["id"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_legacy_completions_defaults_missing_model() -> None:
+    """Legacy completions shares the gateway-default selection contract."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, "/v1/completions", {"prompt": "implicit default"})
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+
+        status, body = _post(
+            port,
+            "/v1/completions",
+            {
+                "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                "prompt": "explicit default",
+            },
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_http_responses_accepts_advertised_gateway_default_model(stream: bool) -> None:
+    """Responses must share the advertised gateway-default virtual model contract."""
+    server, thread, port = _server()
+    try:
+        payload = {
+            "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+            "input": "gateway default responses",
+            "stream": stream,
+        }
+        if stream:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/responses",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+                    "connection": "close",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.status == 200
+                assert response.headers.get_content_type() == "text/event-stream"
+                assert b"response.completed" in response.read()
+        else:
+            status, body = _post(port, "/v1/responses", payload)
+            assert status == 200, body
+            assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -62,10 +62,10 @@ jobs:
           import os
           import secrets
 
+          passphrase = secrets.token_urlsafe(32)
+          print(f"::add-mask::{passphrase}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
-              environment.write(
-                  f"RUN_SCOPED_KV_PASSPHRASE={secrets.token_urlsafe(32)}\n"
-              )
+              environment.write(f"RUN_SCOPED_KV_PASSPHRASE={passphrase}\n")
               environment.write("CATALOG_STORAGE_SCOPE=run-scoped\n")
           PY
           else
@@ -83,6 +83,7 @@ jobs:
           NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
           BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
@@ -104,6 +105,7 @@ jobs:
               'NVIDIA_NIM_API_KEY_SUB',
               'BYTEZ_API_KEY',
               'OPENROUTER_API_KEY',
+              'OPENCODE_ZEN_API_KEY',
               'OPENAI_API_KEY',
           }
           registered = set(report['registered_credentials'])
@@ -137,6 +139,7 @@ jobs:
               'NVIDIA_NIM_API_KEY_SUB',
               'BYTEZ_API_KEY',
               'OPENROUTER_API_KEY',
+              'OPENCODE_ZEN_API_KEY',
               'OPENAI_API_KEY',
           )
           leaked = [
