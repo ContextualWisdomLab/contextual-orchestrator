@@ -6860,7 +6860,7 @@ def build_server(
                 )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
-            except BatchModelSelectionError as exc:
+            except BatchModelSelectionError:
                 self._send_error(
                     503,
                     "batch_model_unavailable",

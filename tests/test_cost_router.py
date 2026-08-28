@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
@@ -23,6 +25,7 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     BatchRequest,
     PgLlmBatchBackend,
 )
+from contextual_orchestrator.cost_router import BatchModelSelectionError  # noqa: E402
 
 
 class _FailingLedgerStore:
@@ -706,6 +709,27 @@ def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() ->
 
     assert captured[0].model == zdr.model
     assert captured[0].zdr_only is True
+
+
+def test_zdr_batch_rejects_an_explicit_non_zdr_configured_model() -> None:
+    non_zdr = ModelAgent(
+        "non_zdr_member",
+        "vendor/non-zdr",
+        "mock://non-zdr",
+        provider_name="vendor",
+    )
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([non_zdr]))
+
+    with pytest.raises(BatchModelSelectionError):
+        coordinator.submit_batch(
+            [
+                BatchRequest(
+                    messages=[{"role": "user", "content": "private batch"}],
+                    model=non_zdr.model,
+                    zdr_only=True,
+                )
+            ]
+        )
 
 
 def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -> None:

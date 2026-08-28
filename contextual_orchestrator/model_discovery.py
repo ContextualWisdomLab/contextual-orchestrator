@@ -433,14 +433,32 @@ def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
 def _apply_discovered_model_evidence(
     discovered: list[DiscoveredModel], zdr_model_ids: set[str]
 ) -> list[DiscoveredModel]:
-    """Apply model-level ZDR evidence to matching rows from every provider."""
+    """Apply model-level ZDR evidence to matching rows from every provider.
+
+    Providers may expose a bare model id while OpenRouter namespaces the same
+    model. Exact ids win; a namespaced evidence id may qualify a different
+    provider row only when its final model component is unique in the feed.
+    """
     if not zdr_model_ids:
         return discovered
     exact_ids = {model_id.strip().casefold() for model_id in zdr_model_ids if model_id.strip()}
+
+    def matches(model_id: str) -> bool:
+        normalized = model_id.strip().casefold()
+        if normalized in exact_ids:
+            return True
+        suffix = normalized.rsplit("/", 1)[-1]
+        suffix_matches = {
+            candidate
+            for candidate in exact_ids
+            if candidate.rsplit("/", 1)[-1] == suffix
+        }
+        return bool(suffix) and len(suffix_matches) == 1
+
     return [
         replace(
             model,
-            zdr_capable=model.model_id.strip().casefold() in exact_ids,
+            zdr_capable=matches(model.model_id),
         )
         for model in discovered
     ]
