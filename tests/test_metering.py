@@ -146,6 +146,7 @@ def test_billing_export_requires_store_acceptance() -> None:
 def test_duplicate_usage_record_is_not_counted_or_exported_twice() -> None:
     """Idempotent local writes must stay idempotent at the billing boundary."""
     exported: list[dict[str, object]] = []
+    telemetry = InMemoryUsageTelemetrySink()
     sink = CanonicalUsageRecordSink(
         event_builder=lambda record, **_identity: {"record": record},
         enqueue=exported.append,
@@ -153,7 +154,7 @@ def test_duplicate_usage_record_is_not_counted_or_exported_twice() -> None:
     )
     price_book = PriceBook(InMemoryConfigStore())
     price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
-    ledger = CostLedger(price_book, usage_sink=sink)
+    ledger = CostLedger(price_book, telemetry_sink=telemetry, usage_sink=sink)
 
     for _ in range(2):
         ledger.record_usage(
@@ -166,6 +167,8 @@ def test_duplicate_usage_record_is_not_counted_or_exported_twice() -> None:
 
     assert len(exported) == 1
     assert ledger.telemetry_health()["records_stored"] == 1
+    assert ledger.telemetry_health()["records_dropped"] == 1
+    assert telemetry.events()[-1].error_type == "duplicate"
 
 
 def test_billing_export_waits_for_caller_owned_sqlite_commit() -> None:
@@ -188,6 +191,9 @@ def test_billing_export_waits_for_caller_owned_sqlite_commit() -> None:
 
     assert sink.ids == []
     connection.rollback()
+    assert ledger.flush() is True
+    assert ledger.telemetry_health()["records_stored"] == 0
+    assert ledger.telemetry_health()["records_dropped"] == 1
     assert store.query() == []
 
     connection.execute("BEGIN")

@@ -1329,6 +1329,16 @@ class CostLedger:
                     self.telemetry_sink,
                     UsageTelemetryEvent.from_record(record, export_state="stored"),
                 )
+            elif not accepted and not isinstance(self.store, NonBlockingLedgerStore):
+                self._mark_inline_drop("duplicate")
+                _emit_usage_event(
+                    self.telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="duplicate",
+                    ),
+                )
         if (
             accepted
             and self.usage_sink is not None
@@ -1450,6 +1460,13 @@ class CostLedger:
             self._inline_health.records_accepted += 1
             self._inline_health.records_stored += 1
 
+    def _mark_inline_drop(self, error_type: str, *, was_stored: bool = False) -> None:
+        with self._inline_health_lock:
+            if was_stored:
+                self._inline_health.records_stored -= 1
+            self._inline_health.records_dropped += 1
+            self._inline_health.last_error_type = error_type
+
     def _mark_inline_failure(self, error_type: str) -> None:
         with self._inline_health_lock:
             self._inline_health.records_accepted += 1
@@ -1497,6 +1514,16 @@ class CostLedger:
         for record in pending:
             if record.usage_record_id in persisted_ids:
                 self._emit_usage_record(record)
+            else:
+                self._mark_inline_drop("caller_transaction_rollback", was_stored=True)
+                _emit_usage_event(
+                    self.telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="caller_transaction_rollback",
+                    ),
+                )
 
     def _emit_usage_record(self, record: UsageRecord) -> None:
         if self.usage_sink is None:

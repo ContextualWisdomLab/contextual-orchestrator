@@ -79,9 +79,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Billing export from a caller-owned SQLite transaction now waits for
   `CostLedger.flush()` after commit, so rollback cannot leave a billing-only
   event.
-- A billing-backed non-blocking SQL store now rejects appends made while a
-  caller-owned SQLite transaction is open, rather than moving them outside the
-  caller's transaction.
+- A billing-backed non-blocking SQL store now writes appends synchronously while
+  a caller-owned SQLite transaction is open and defers billing export until
+  commit confirmation, rather than moving them outside the caller's transaction.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Treat a provider's explicit 1,024-character tool-description rejection as a
