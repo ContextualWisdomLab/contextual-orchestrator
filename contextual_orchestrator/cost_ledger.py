@@ -477,16 +477,16 @@ class NonBlockingLedgerStore:
         """Queue a record for background persistence without blocking."""
         has_open_transaction = getattr(self.backend, "has_open_transaction", None)
         if (
-            self._usage_record_sink is not None
-            and callable(has_open_transaction)
+            callable(has_open_transaction)
             and has_open_transaction()
         ):
             accepted = self.backend.append(record) is not False
             if not accepted:
                 return False
             self._mark("records_accepted")
-            with self._deferred_usage_exports_lock:
-                self._deferred_usage_exports.append(record)
+            if self._usage_record_sink is not None:
+                with self._deferred_usage_exports_lock:
+                    self._deferred_usage_exports.append(record)
             _emit_usage_event(
                 self._telemetry_sink,
                 UsageTelemetryEvent.from_record(
@@ -494,6 +494,8 @@ class NonBlockingLedgerStore:
                     export_state="queued",
                 ),
             )
+            if self._usage_record_sink is None:
+                self._record_stored(record)
             return True
         try:
             self._queue.put_nowait(record)

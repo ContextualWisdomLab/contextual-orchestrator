@@ -320,6 +320,34 @@ def test_async_billing_export_preserves_caller_owned_sqlite_transaction() -> Non
     assert ledger.telemetry_health()["records_stored"] == 1
 
 
+def test_non_blocking_store_preserves_transaction_without_billing_sink() -> None:
+    """A caller transaction is never handed to the background worker."""
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    wrapper = NonBlockingLedgerStore(store)
+    record = UsageRecord(
+        usage_record_id="usage_async_without_sink",
+        created_at=1,
+        workflow_run_id=None,
+        request_channel="sync",
+        route_mode=None,
+        provider_name="openai",
+        model_name="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        total_tokens=2,
+        cost_amount=0.0,
+        currency_code="USD",
+    )
+
+    connection.execute("BEGIN")
+    assert wrapper.append(record)
+    assert wrapper.flush(timeout=5)
+    assert store.query()[0]["usage_record_id"] == record.usage_record_id
+    connection.rollback()
+    assert store.query() == []
+
+
 def test_async_billing_export_does_not_race_new_transaction() -> None:
     """A transaction opened after enqueue must defer export until it settles."""
     class _RaceBackend:
