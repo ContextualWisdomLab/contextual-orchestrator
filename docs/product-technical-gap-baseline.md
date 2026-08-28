@@ -6,10 +6,11 @@ Protected `main` remains
 `b21645116b352967e50fc497b87eb745b9cc8c61`. The current implementation branch
 adds fail-closed `--production`/`--allow-public-bind` CLI gates: server startup
 must choose split admin/inference credentials, and the insecure admin-session
-cookie option is rejected. Canonical `compose.yaml` now seeds those two names into the KV from
-separate stdin-only secrets. Single-token mode remains available for explicit
-local development, while split static credentials still do not grant the
-separate trace purpose without a verified external adapter. Branch evidence is
+cookie option is rejected; every non-loopback bind also requires the explicit
+public-bind opt-in. Canonical `compose.yaml` now seeds those two names into the
+KV from separate stdin-only secrets. Single-token mode remains available for
+explicit local development, while split static credentials still do not grant
+the separate trace purpose without a verified external adapter. Branch evidence is
 local focused CLI/Compose/authorization coverage only until normal protected
 review, Checks, and approval gates complete.
 

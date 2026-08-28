@@ -32,10 +32,10 @@ the explicit server default.
 
 The injected `bearer_verifier(token, scope)` is the production boundary for
 OIDC/Keyverse claims. Static single-token mode permits the local development
-escape hatch only. The CLI `--production` gate requires split static
-admin/inference credentials (or a deployment-specific external verifier), so a
-legacy single token cannot silently become a production trace credential; split
-static admin/inference mode otherwise fails closed for the trace purpose because
+escape hatch only. The CLI `--production`/`--allow-public-bind` gates require
+split static admin/inference credentials (or a deployment-specific external
+verifier), so a legacy single token cannot silently become a production trace
+credential; split static admin/inference mode otherwise fails closed for the trace purpose because
 it has no verified trace claim.
 
 ## Acceptance evidence
