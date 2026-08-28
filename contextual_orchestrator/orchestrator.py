@@ -1032,6 +1032,13 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         if current is None or id(current) in seen:
             return False
         seen.add(id(current))
+        if isinstance(current, ProviderUpstreamError):
+            if current.provider_status in (
+                _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
+            ):
+                return True
+            if current.retryable:
+                return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and current.code

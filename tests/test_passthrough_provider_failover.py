@@ -248,6 +248,47 @@ def test_wrapped_transient_error_can_fail_over() -> None:
     )["model"] == "fallback-model"
 
 
+def test_proxy_send_only_client_preserves_classified_failover_signal() -> None:
+    """Virtual passthrough still fails over when only classified proxy_send exists."""
+
+    class ProxySendOnlyClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, Any]]] = []
+
+        def proxy_send(
+            self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            del endpoint
+            self.calls.append((agent.id, deepcopy(payload)))
+            if agent.id == "primary_agent":
+                raise ProviderUpstreamError(
+                    agent_id=agent.id,
+                    model=agent.model,
+                    error_code="model_not_found",
+                    message="provider rejected the request with HTTP 404",
+                    client_status=404,
+                    provider_status=404,
+                    retryable=False,
+                    transport="passthrough",
+                )
+            return {"model": "fallback-model", "choices": []}
+
+        def apply_effort_profile(
+            self,
+            agent: ModelAgent,
+            payload: dict[str, Any],
+            profile: ReasoningEffortProfile,
+        ) -> dict[str, Any]:
+            return ModelClient().apply_effort_profile(agent, payload, profile)
+
+    client = ProxySendOnlyClient()
+
+    assert _build(client).proxy_completion(
+        {"model": TaskOrchestrator.AUTO_MODEL, "messages": [{"role": "user", "content": "x"}]}
+    )["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent", "fallback_agent"]
+
+
 def test_suppressed_transient_context_does_not_authorize_failover() -> None:
     """A deliberately hidden exception context cannot become a routing signal."""
     try:
