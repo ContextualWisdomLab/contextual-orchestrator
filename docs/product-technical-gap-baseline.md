@@ -1,9 +1,18 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-28 21:42 KST PR #901 provider error-shape compatibility slice
+
+PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
+is at exact head `bcead52a` after a narrow failover repair: provider HTTP 400
+tool-description-limit responses whose `error` field is a string now receive
+the same capability-mismatch failover as the existing `invalid_tools` object
+shape. The focused passthrough suite passed **28 tests**; protected hosted
+checks and independent approval remain authoritative and are not claimed here.
+
 ## 2026-08-28 21:20 KST PR #901 ZDR batch omitted-model evidence slice
 
 `gh api user`, `gh pr view 901`, and the review-thread GraphQL query all
-succeeded on August 28, 2026. Live PR `#901`
+succeeded on August 28, 2026. At that snapshot, PR `#901`
 (`fix/zdr-only-dynamic-discovery`, exact head `dcdb04b7adcfc8f57cbf5b13332b504f5c246fed`)
 already covers the earlier ZDR routing defects that had active review threads:
 caller-supplied group filtering, generated-plan ZDR revalidation, batch model
