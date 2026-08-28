@@ -10,13 +10,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
-### Changed
-
-- Fixed-window admission failures now expose an RFC 9110 `Retry-After` value
-  and matching structured delay, while readiness jobs publish the
-  admission-derived polling cadence so durable consumers can retry without
-  guessing.
-
 ### Added
 
 - ADR 0006 defines evidence-gated CPU, MLX, CUDA/OpenCL, Compose, and
@@ -111,6 +104,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Fixed-window admission failures now expose an RFC 9110 `Retry-After` value
+  and matching structured delay, while readiness jobs publish the
+  admission-derived polling cadence so durable consumers can retry without
+  guessing.
 - Web requests now use the native `SOMAXCONN` listen backlog and HTTP/1.1
   persistent connections, while the existing per-request daemon threading and
   explicit run-slot admission keep slow provider I/O from blocking liveness.
