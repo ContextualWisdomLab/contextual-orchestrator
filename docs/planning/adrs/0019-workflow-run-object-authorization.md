@@ -24,6 +24,35 @@ verifier may use stable per-principal credentials; token rotation may revoke
 access to older evidence and must be handled by the deployment's identity
 policy.
 
+Batch routing jobs follow the same boundary. The coordinator stores the
+principal digest on each HTTP-created `BatchJob`; status polling and result
+retrieval require an equal digest and report an owner mismatch as not found
+before calling the backend. Result retrieval additionally requires both
+inference and trace-purpose authorization. Legacy in-process jobs without an
+owner remain available only through the library API, not through an
+owner-bound HTTP request.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant H as HTTP boundary
+    participant S as Security principal
+    participant R as Batch registry/backend
+    C->>H: submit batch
+    H->>S: verify inference and derive owner digest
+    H->>R: persist BatchJob(owner digest)
+    C->>H: poll or retrieve job id
+    H->>S: verify required scope and derive owner digest
+    H->>R: lookup job by id and equal owner digest
+    alt owner mismatch or legacy ownerless HTTP job
+        R-->>H: not found
+        H-->>C: generic not-found response
+    else owner matches
+        R-->>H: status or results
+        H-->>C: permitted response
+    end
+```
+
 ## Consequences
 
 - A bearer cannot use a guessed workflow identifier to read another owner's
@@ -36,12 +65,17 @@ policy.
   rotation can revoke access to older evidence.
 - Old records without an owner key are not visible through the owner-bound HTTP
   resource routes, which is fail-closed during migration.
+- A guessed batch routing job identifier cannot retrieve another principal's
+  provider result or trigger its cost recording.
 
 ## Acceptance evidence
 
 Owner mismatch, list filtering, evaluation ownership, digest stability, and
 response redaction are covered by
 `tests/test_workflow_run_object_authorization.py`.
+Batch status/result ownership and the public trace-plus-inference security
+contract are covered by `tests/test_cost_review_server.py`,
+`tests/test_cost_router_boundaries.py`, and `tests/test_api_contract.py`.
 
 ## References
 

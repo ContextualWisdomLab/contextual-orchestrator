@@ -117,6 +117,26 @@ def test_retrieve_batch_requires_known_job_id() -> None:
         coordinator.retrieve_batch("nope_missing_job")
 
 
+def test_batch_poll_and_retrieve_require_the_bound_owner() -> None:
+    """An opaque job identifier cannot cross the authenticated owner boundary."""
+    coordinator = _coordinator()
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "owned"}],
+        hints={"channel": "batch"},
+        owner_id="principal-a",
+    )
+    job_id = submitted["job_id"]
+    job = coordinator._batch_jobs[job_id]
+
+    assert job.owner_id == "principal-a"
+    assert coordinator.poll_batch(job_id, owner_id="principal-a")["is_complete"] is True
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.poll_batch(job_id, owner_id="principal-b")
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.retrieve_batch(job_id, owner_id="principal-b")
+    assert coordinator.retrieve_batch(job_id, owner_id="principal-a")["result_count"] == 1
+
+
 # --- embedding input splitting --------------------------------------------------------
 
 

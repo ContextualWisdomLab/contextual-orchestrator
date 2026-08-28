@@ -5382,7 +5382,11 @@ def build_server(
                 if path.startswith("/api/v1/batch_routing_jobs/"):
                     job_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(coordinator.poll_batch(job_id))
+                        self._send(
+                            coordinator.poll_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
@@ -6183,6 +6187,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                         ))
                     # Batch-channel Completions return a job handle (202), not a
                     # text_completion body — match chat Completions honesty so
@@ -6519,6 +6524,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                         ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
@@ -6743,7 +6749,13 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
                     batch_requests = _validate_batch_requests(body, security.expose_trace_by_default)
                     metadata = {"actor_scope": "inference"}
-                    job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                    job = self._run(
+                        lambda: coordinator.submit_batch(
+                            batch_requests,
+                            metadata=metadata,
+                            owner_id=security.principal_id(self.headers),
+                        )
+                    )
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
@@ -6766,7 +6778,11 @@ def build_server(
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
                     self._authorize_trace_access()
                     try:
-                        retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                        retrieved = self._run(
+                            lambda: coordinator.retrieve_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return

@@ -842,7 +842,7 @@ OPENAPI_SPEC = {
         "/api/v1/batch_routing_jobs": {
             "post": {
                 "operationId": "create_batch_routing_job",
-                "summary": "Submit a batch of latency-tolerant requests to the batch backend (pg-llm-batch)",
+                "summary": "Submit a principal-owned batch of latency-tolerant requests to the batch backend (pg-llm-batch)",
                 "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,
@@ -866,7 +866,7 @@ OPENAPI_SPEC = {
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}": {
             "get": {
                 "operationId": "get_batch_routing_job",
-                "summary": "Poll a submitted batch routing job",
+                "summary": "Poll a submitted batch routing job owned by the authenticated principal",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
@@ -877,8 +877,8 @@ OPENAPI_SPEC = {
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results": {
             "post": {
                 "operationId": "create_batch_routing_job_results",
-                "summary": "Retrieve batch results and record their usage + cost",
-                "security": [{"inference_bearer_auth": []}],
+                "summary": "Retrieve principal-owned batch results and record their usage + cost",
+                "security": [{"inference_bearer_auth": [], "trace_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],

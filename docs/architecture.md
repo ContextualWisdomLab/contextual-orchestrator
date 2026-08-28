@@ -68,6 +68,10 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- Batch routing jobs carry a non-secret authenticated-principal digest from
+  submission through status and result retrieval; mismatched owners receive
+  the same not-found response before backend access. Results require the
+  separate trace purpose in addition to inference authorization.
 - `ResponsiveThreadingHTTPServer`: I/O-bound provider waits run in independent
   daemon request threads, the accept queue uses the operating system's native
   `SOMAXCONN`, and fixed-length responses use HTTP/1.1 persistent connections.

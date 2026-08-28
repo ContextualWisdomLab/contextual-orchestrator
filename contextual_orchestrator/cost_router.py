@@ -259,7 +259,9 @@ class CostRoutingCoordinator:
                 attribution=dict(attribution or {}),
                 mode=mode,
             )
-            job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
+            job = self.submit_batch(
+                [request], metadata={"routing_reason": decision.reason}, owner_id=owner_id
+            )
             return {
                 "channel": "batch",
                 "routing_reason": decision.reason,
@@ -578,20 +580,22 @@ class CostRoutingCoordinator:
         self,
         requests: List[BatchRequest],
         metadata: Optional[Dict[str, Any]] = None,
+        owner_id: Optional[str] = None,
     ) -> BatchJob:
-        """Submit a batch of requests to the configured batch backend."""
+        """Submit a batch, optionally binding it to an authenticated owner."""
         job = self.batch_backend.submit(requests, metadata=metadata)
+        job.owner_id = owner_id
         self._batch_jobs[job.job_id] = job
         return job
 
-    def poll_batch(self, job_id: str) -> Dict[str, Any]:
-        """Poll a previously submitted batch job by id."""
-        job = self._require_job(job_id)
+    def poll_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
+        """Poll a previously submitted batch job owned by ``owner_id``."""
+        job = self._require_job(job_id, owner_id=owner_id)
         return self.batch_backend.poll(job)
 
-    def retrieve_batch(self, job_id: str) -> Dict[str, Any]:
-        """Retrieve batch results and record usage + cost for each completion."""
-        job = self._require_job(job_id)
+    def retrieve_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
+        """Retrieve results for a batch owned by ``owner_id`` and record usage."""
+        job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
         recorded: List[Dict[str, Any]] = []
         for item in items:
@@ -633,9 +637,9 @@ class CostRoutingCoordinator:
             provider = "unknown"
         return provider, item.model
 
-    def _require_job(self, job_id: str) -> BatchJob:
+    def _require_job(self, job_id: str, *, owner_id: Optional[str] = None) -> BatchJob:
         job = self._batch_jobs.get(job_id)
-        if job is None:
+        if job is None or job.owner_id != owner_id:
             raise KeyError(f"batch job {job_id!r} not found")
         return job
 

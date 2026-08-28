@@ -62,6 +62,9 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (
         "bearer"
     )
+    assert OPENAPI_SPEC["paths"]["/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"]["post"][
+        "security"
+    ] == [{"inference_bearer_auth": [], "trace_bearer_auth": []}]
 
 
 def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> None:
