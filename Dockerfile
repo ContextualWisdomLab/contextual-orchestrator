@@ -52,8 +52,13 @@ CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_F
 
 # Local and CI tests share this target. The source package extends its package
 # path to the wheel environment so the native module remains a build artifact.
-FROM token-builder AS test-runner
+FROM rust:1.97.1-slim-bookworm@sha256:2775a09d208ff0d7c1f50490c45b62db929e87ba1dcbc3f2132ac71a704bcdd3 AS test-runner
 USER root
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=token-builder /usr/local/bin/uv /usr/local/bin/uv
+RUN uv python install 3.12
 COPY --from=token-builder /build/wheels /tmp/token-wheels
 COPY . /io
 WORKDIR /io
@@ -62,7 +67,7 @@ RUN set -eu; \
     test "$#" -eq 1 && test -f "$1" || { \
       echo "pinned Rust token-packer build must produce exactly one wheel" >&2; exit 1; \
     }; \
-    uv run --python /usr/local/bin/python3.12 --no-project \
+    uv run --python 3.12 --no-project \
       --with-requirements requirements.lock \
       --with-requirements fuzz/requirements-property.txt \
       --with "$1" \

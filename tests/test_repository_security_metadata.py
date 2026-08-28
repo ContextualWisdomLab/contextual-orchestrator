@@ -169,7 +169,9 @@ def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     installer_text = read_text("scripts/run_hash_locked_tests.sh")
     assert "--target test-runner" in installer_text
     dockerfile_text = read_text("Dockerfile")
-    assert "FROM token-builder AS test-runner" in dockerfile_text
+    assert "FROM rust:1.97.1-slim-bookworm@sha256:" in dockerfile_text
+    assert "apt-get install --no-install-recommends --yes build-essential ca-certificates" in dockerfile_text
+    assert "uv python install 3.12" in dockerfile_text
     assert "--with-requirements requirements.lock" in dockerfile_text
     assert "--with \"$1\"" in dockerfile_text
 
