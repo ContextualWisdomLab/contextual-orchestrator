@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 11:51 KST exact-head PR remediation slice
+## 2026-08-28 12:23 KST exact-head PR remediation slice
 
 Protected `main` is `8d5924f8`. PR #879 is now at `2b1829a8`; its exact tree
 passed **2516 tests** after fixing ambiguous classified passthrough failures so
@@ -8,9 +8,11 @@ status-less connection errors cannot replay a possibly accepted request. Its
 Full unit and contract suite passed, but Strix failed closed on the provider
 outage described below. PR #868 is at externally advanced head `262c6d87` with
 hosted checks passing; PR #857 is at externally advanced head `b2aedb7b` with
-all other checks passing but the same Strix provider outage. All four open PRs
+all other checks passing but the same Strix provider outage. All five open PRs
 remain `MERGEABLE` but `BLOCKED` without an independent approval, so none is
-claimed as protected-main delivery.
+claimed as protected-main delivery. PR #901 is at exact head `efa0c9fa` and
+adds provider-neutral ZDR-only model-group selection plus catalog evidence;
+its hosted checks are still running.
 
 The earlier local merge attempt for #857 at `0aec4a54` was aborted without a
 push; no stale branch evidence is promoted to protected-main evidence. The
