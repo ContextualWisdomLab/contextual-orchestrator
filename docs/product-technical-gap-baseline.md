@@ -16,7 +16,7 @@ PR #857 is now at externally advanced head `b2aedb7b`, `MERGEABLE`, and
 `REVIEW_REQUIRED`, with its full suite, Atheris, and Strix checks still
 pending. The earlier local merge attempt at `0aec4a54` was aborted without a
 push; no stale branch evidence is promoted to protected-main evidence. The
-docs-only recording PR is #900 at `16254dd3`; its full suite is still pending.
+docs-only recording PR #900 is still open; its full suite is still pending.
 The existing hourly OpenCode maintenance workflow remains the single
 scheduled loop (`23 * * * *` UTC); no duplicate scheduler was added.
 
