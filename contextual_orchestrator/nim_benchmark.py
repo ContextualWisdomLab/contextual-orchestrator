@@ -1741,7 +1741,11 @@ def evaluate_policies(
             total_token_budget,
             maximum_calls,
         )
-        orchestrator = TaskOrchestrator(pool, client=cell_client)
+        orchestrator = TaskOrchestrator(
+            pool,
+            client=cell_client,
+            tool_retry_attempts=0,
+        )
         orchestrator.policy = depth_policy
         cell = run_policy_cell(
             policy_name,

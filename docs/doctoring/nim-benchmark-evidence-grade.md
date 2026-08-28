@@ -107,6 +107,10 @@ cheapest-worker cells receive the same per-task contract:
 - one timeout policy; and
 - one workflow-depth ceiling.
 
+Provider retries and orchestration tool retries are disabled inside each
+benchmark cell so the declared request budget bounds actual egress and the
+measured call envelope remains comparable across policies.
+
 The token allowance is cell-wide rather than per request. Prompt estimates are
 charged before a call, the output cap is reduced to the remaining allowance,
 and provider-reported usage replaces the latest estimate when valid. Booleans,

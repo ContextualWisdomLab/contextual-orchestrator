@@ -115,6 +115,10 @@ Every policy × task cell receives the same:
 - timeout policy; and
 - five-step workflow-depth ceiling.
 
+Provider retries and orchestration tool retries are disabled inside the benchmark
+cell so the declared request budget bounds actual egress and the measured call
+envelope remains comparable across policies.
+
 The token allowance is cell-wide, not per call. Prompt tokens are charged before
 a request, the output cap is reduced to the remaining allowance, and valid
 provider-reported usage replaces the latest estimate. A deep `conduct` path
