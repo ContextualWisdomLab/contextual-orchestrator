@@ -10,8 +10,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.batch_routing import (  # noqa: E402
     BatchRequest,
+    EmbeddingBatchRequest,
     LocalBatchBackend,
     PgLlmBatchBackend,
+    PgLlmBatchEmbeddingBackend,
     RoutingHints,
     RoutingPolicy,
     build_jsonl_body,
@@ -239,6 +241,64 @@ def test_build_jsonl_body_uses_openai_batch_line_shape() -> None:
     assert '"custom_id": "a"' in body
     assert '"url": "/v1/chat/completions"' in body
     assert '"method": "POST"' in body
+
+
+def test_pg_llm_embedding_batch_preserves_agent_identity() -> None:
+    class _Assembler:
+        def __init__(self) -> None:
+            self.lines = []
+
+        def assemble(self, lines):
+            self.lines = lines
+            return "embeddings.jsonl"
+
+    class _EmbeddingClient:
+        def __init__(self) -> None:
+            self.metadata = None
+
+        async def upload_jsonl(self, file_path, endpoint_alias):
+            assert file_path == "embeddings.jsonl"
+            return {"id": "embedding-file"}
+
+        async def create_batch_job(self, input_file_id, endpoint_alias, endpoint, metadata=None):
+            assert input_file_id == "embedding-file"
+            self.metadata = metadata
+            return {"id": "embedding-job", "status": "validating"}
+
+        async def download_results(self, batch_id, endpoint_alias):
+            return {
+                "success": True,
+                "responses": [
+                    {
+                        "custom_id": "8:member-b:emb-1",
+                        "response": {
+                            "body": {
+                                "data": [{"embedding": [0.1, 0.2]}],
+                                "usage": {"prompt_tokens": 3},
+                            }
+                        },
+                    }
+                ],
+            }
+
+    assembler = _Assembler()
+    client = _EmbeddingClient()
+    backend = PgLlmBatchEmbeddingBackend(client, payload_assembler=assembler)
+    request = EmbeddingBatchRequest(
+        input_text="route me",
+        model="shared-embedding",
+        custom_id="emb-1",
+        agent_id="member-b",
+    )
+
+    job = backend.submit([request], metadata={"trace": "batch"})
+
+    assert assembler.lines[0]["custom_id"] == "8:member-b:emb-1"
+    assert assembler.lines[0]["body"] == {"model": "shared-embedding", "input": "route me"}
+    assert client.metadata == {"trace": "batch", "agent_id": "member-b"}
+    result = backend.retrieve(job)[0]
+    assert result.custom_id == "emb-1"
+    assert result.agent_id == "member-b"
 
 
 if __name__ == "__main__":  # pragma: no cover

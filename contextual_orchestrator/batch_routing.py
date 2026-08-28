@@ -455,11 +455,20 @@ class EmbeddingBatchRequest:
     part_count: int = 1
     token_count: int = 0
     zdr_only: bool = False
+    agent_id: Optional[str] = None
+
+    def wire_custom_id(self) -> str:
+        """Carry the selected agent through providers' standard custom-id field."""
+        if self.agent_id is None:
+            return self.custom_id
+        return f"{len(self.agent_id)}:{self.agent_id}:{self.custom_id}"
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""
         return {
-            "custom_id": self.custom_id,
+            # The provider body stays OpenAI-compatible; custom_id is the
+            # standard per-request carrier for the immutable route identity.
+            "custom_id": self.wire_custom_id(),
             "method": "POST",
             "url": endpoint,
             # ``zdr_only`` is enforced before this provider JSONL is built.
@@ -476,6 +485,7 @@ class EmbeddingBatchResultItem:
     embedding: List[float]
     prompt_tokens: int = 0
     model: str = "contextual-orchestrator"
+    agent_id: Optional[str] = None
 
 
 class EmbeddingBatchBackend(Protocol):
@@ -568,6 +578,7 @@ class LocalEmbeddingBatchBackend:
                     embedding=list(self._embedder(request.input_text)),
                     prompt_tokens=self._count_tokens(request.input_text, request.model),
                     model=request.model,
+                    agent_id=request.agent_id,
                 )
             )
         self._results[job_id] = items
@@ -628,6 +639,17 @@ class PgLlmBatchEmbeddingBackend:
     ) -> BatchJob:
         """Upload embeddings JSONL + create a batch job via the pg-llm-batch client."""
         file_path = self._assemble_payload(requests)
+        wire_custom_ids = [
+            request.to_jsonl_line(self._endpoint)["custom_id"] for request in requests
+        ]
+        job_metadata = dict(metadata) if metadata is not None else None
+        agent_ids = sorted({request.agent_id for request in requests if request.agent_id})
+        if agent_ids:
+            job_metadata = job_metadata or {}
+            if len(agent_ids) == 1:
+                job_metadata["agent_id"] = agent_ids[0]
+            else:
+                job_metadata["agent_ids"] = agent_ids
 
         async def _submit() -> Dict[str, Any]:
             uploaded = await self._client.upload_jsonl(file_path, self._endpoint_alias)
@@ -636,7 +658,7 @@ class PgLlmBatchEmbeddingBackend:
                 input_file_id,
                 self._endpoint_alias,
                 endpoint=self._endpoint,
-                metadata=metadata,
+                metadata=job_metadata,
             )
 
         job_payload = self._run(_submit())
@@ -646,9 +668,10 @@ class PgLlmBatchEmbeddingBackend:
             # JSON primitives, not dataclass instances, so a Valkey-backed
             # registry can serialize the tracked state (see PgLlmBatchBackend).
             "requests": {
-                request.custom_id: dataclasses.asdict(request) for request in requests
+                wire_id: dataclasses.asdict(request)
+                for wire_id, request in zip(wire_custom_ids, requests)
             },
-            "order": [request.custom_id for request in requests],
+            "order": wire_custom_ids,
         }
         return BatchJob(
             job_id=batch_id,
@@ -692,11 +715,12 @@ class PgLlmBatchEmbeddingBackend:
             tracked_request = EmbeddingBatchRequest(**raw_request) if raw_request else None
             items.append(
                 EmbeddingBatchResultItem(
-                    custom_id=custom_id,
+                    custom_id=tracked_request.custom_id if tracked_request else custom_id,
                     index=position_by_custom_id.get(custom_id, len(items)),
                     embedding=embedding,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     model=tracked_request.model if tracked_request else "contextual-orchestrator",
+                    agent_id=tracked_request.agent_id if tracked_request else None,
                 )
             )
         items.sort(key=lambda item: item.index)

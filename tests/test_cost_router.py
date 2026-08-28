@@ -757,6 +757,7 @@ def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -
 
     assert document["status"] == "completed"
     assert backend.requests[0].model == second.model
+    assert backend.requests[0].agent_id == second.id
 
 
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:

@@ -688,10 +688,14 @@ class CostRoutingCoordinator:
             raise TypeError("zdr_only must be a boolean")
         if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
             raise TypeError("agent_id must be a non-empty string when provided")
-        resolved_model = self._resolve_embedding_model(model, zdr_only, agent_id)
+        resolved_model, resolved_agent_id = self._resolve_embedding_target(model, zdr_only, agent_id)
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
-            inputs, model=resolved_model, attribution=shared_attribution, zdr_only=zdr_only
+            inputs,
+            model=resolved_model,
+            attribution=shared_attribution,
+            zdr_only=zdr_only,
+            agent_id=resolved_agent_id,
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
@@ -702,12 +706,12 @@ class CostRoutingCoordinator:
         self._embedding_part_limits[job.job_id] = part_limits
         return job
 
-    def _resolve_embedding_model(
+    def _resolve_embedding_target(
         self, model: str, zdr_only: bool, agent_id: Optional[str]
-    ) -> str:
+    ) -> tuple[str, Optional[str]]:
         """Resolve one embedding member without losing a caller's member choice."""
         if agent_id is None and not zdr_only:
-            return model
+            return model, None
         selection_model = (
             None
             if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
@@ -716,10 +720,10 @@ class CostRoutingCoordinator:
         with self.orchestrator.request_policy(zdr_only):
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
-            return candidates[0].model
+            return candidates[0].model, candidates[0].id
         for candidate in candidates:
             if candidate.id == agent_id:
-                return candidate.model
+                return candidate.model, candidate.id
         raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
 
     def _build_embedding_requests(
@@ -729,6 +733,7 @@ class CostRoutingCoordinator:
         model: str,
         attribution: Dict[str, Any],
         zdr_only: bool,
+        agent_id: Optional[str],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
@@ -752,6 +757,7 @@ class CostRoutingCoordinator:
                         part_count=part_count,
                         token_count=token_count,
                         zdr_only=zdr_only,
+                        agent_id=agent_id,
                     )
                 )
         return requests, part_counts, {
