@@ -128,7 +128,7 @@ class ProviderResponseError(RuntimeError):
 
 
 class ProviderRequestTooLargeError(RuntimeError):
-    """Raised after every eligible provider rejects a request body with HTTP 413."""
+    """Raised after every eligible provider rejects the request as too large."""
 
 
 def _structured_output_error(
