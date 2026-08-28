@@ -30,10 +30,12 @@ from .cost_ledger import (
     SqlLedgerStore,
     UsageTelemetryEvent,
     UsageTelemetryHealth,
+    UsageRecordSink,
     UsageTelemetrySink,
     UsageRecord,
     dimension_catalog,
 )
+from .metering import CanonicalUsageRecordSink
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
@@ -98,7 +100,9 @@ __all__ = [
     "UsageRecord",
     "UsageTelemetryEvent",
     "UsageTelemetryHealth",
+    "UsageRecordSink",
     "UsageTelemetrySink",
+    "CanonicalUsageRecordSink",
     "dimension_catalog",
     # config / tokens
     "InMemoryConfigStore",

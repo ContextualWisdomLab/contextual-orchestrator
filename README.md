@@ -239,6 +239,12 @@ is read from a **KV config store**, never `os.getenv`.
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
   configured, and fall back to a deterministic heuristic otherwise.
+- **Canonical Billing export.** Install the published `metering_billing`
+  producer SDK, create its durable outbox, and pass
+  `CanonicalUsageRecordSink(event_builder=build_contextual_usage_event,
+  enqueue=outbox.enqueue, identity=...)` as `CostLedger(usage_sink=...)`.
+  The sink exports token counts and bounded provider/model/workflow metadata;
+  prompts, answers, and computed prices never enter the event.
 - **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
   rolls up cost + tokens by any dimension over any time window;
   `GET /api/v1/llm_usage_records` lists raw ledger rows;

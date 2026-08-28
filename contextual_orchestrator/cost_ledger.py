@@ -370,6 +370,14 @@ class UsageTelemetrySink(Protocol):
         ...
 
 
+class UsageRecordSink(Protocol):
+    """Receive one accepted usage record for durable billing export."""
+
+    def emit_usage_record(self, record: UsageRecord) -> None:
+        """Export a prompt-safe usage record to an application-owned sink."""
+        ...
+
+
 class NoopUsageTelemetrySink:
     """Default sink for callers that do not wire telemetry yet."""
 
@@ -1059,6 +1067,7 @@ class CostLedger:
         telemetry_sink: Optional[UsageTelemetrySink] = None,
         non_blocking_store: Optional[bool] = None,
         store_queue_size: int = 1000,
+        usage_sink: Optional[UsageRecordSink] = None,
     ) -> None:
         self.price_book = price_book
         self.telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
@@ -1074,6 +1083,7 @@ class CostLedger:
             self.store = base_store
         self._inline_health = UsageTelemetryHealth()
         self._clock = clock or (lambda: int(time.time()))
+        self.usage_sink = usage_sink
 
     def record_usage(
         self,
@@ -1158,6 +1168,18 @@ class CostLedger:
                 _emit_usage_event(
                     self.telemetry_sink,
                     UsageTelemetryEvent.from_record(record, export_state="stored"),
+                )
+        if self.usage_sink is not None:
+            try:
+                self.usage_sink.emit_usage_record(record)
+            except Exception as exc:
+                _emit_usage_event(
+                    self.telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="export_error",
+                        error_type=type(exc).__name__,
+                    ),
                 )
         return record
 
