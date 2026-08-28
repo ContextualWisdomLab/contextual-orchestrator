@@ -252,11 +252,19 @@ every chat execution branch and requires trace authority before access-report
 resource lookup, making owned and unknown identifiers indistinguishable to a
 non-trace caller.
 
-This is not full #117 closure. Batch routing jobs still lack principal-bound
-ownership; the bearer-verifier contract lacks tenant, resource, purpose,
-lifetime, and revocation context; and legacy single-token production migration
-does not yet have a fail-closed deployment gate. Those requirements need their
-own protected implementation and HTTP acceptance evidence.
+This is not full #117 closure. The bearer-verifier contract lacks tenant,
+resource, purpose, lifetime, and revocation context; and legacy single-token
+production migration does not yet have a fail-closed deployment gate. Those
+requirements need their own protected implementation and HTTP acceptance
+evidence.
+
+The #857 follow-on slice now supplies the bounded batch portion of that gap:
+generic routing and embedding job handles are persisted with the authenticated
+principal's non-secret hash, embedding deduplication is principal-isolated, and
+owner-mismatched polls, result reads, and cancellations use the existing
+generic not-found contract. This does not close #117; tenant/resource/
+purpose/lifetime/revocation claims and the legacy single-token migration gate
+remain open.
 
 ## 2026-08-26 protected-main catalog evidence slice
 
@@ -947,7 +955,7 @@ guarantees.
 | [#123](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/123) | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
 | [#119](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/119) | Ambiguous or unbounded inbound framing threatens request integrity. | The #776/#783 implementation stack is merged into non-main branches; protected-main integration still requires exact-head hosted evidence and independent approval. |
 | [#118](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/118) | Liveness and authenticated readiness are not yet fully separated. | PR [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) implements the minimal `/healthz` and authenticated `/readyz` contract; merge only after exact-head Checks and independent approval. |
-| [#117](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/117) | Trace access and inference access need separate authority. | The #781 implementation is integrated into #780 at the current parent branch; merge #780 only after exact-head protected evidence confirms the `trace` purpose scope, pre-release audit event, and audit-outage fail-closed behavior. |
+| [#117](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/117) | Trace access and inference access need separate authority. | The #781 implementation is integrated into #780 at the current parent branch; #857 adds principal-bound ownership for batch routing and embedding jobs, including principal-isolated embedding deduplication. Merge only after exact-head protected evidence confirms the trace purpose scope, batch ownership, pre-release audit event, and audit-outage fail-closed behavior; tenant/resource/lifetime/revocation context and legacy single-token migration remain open. |
 | [#116](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/116) | Browser admin sessions need separation from long-lived bearer credentials. | PR [#788](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/788) implements opaque bounded sessions, Secure-by-default cookies, same-origin state-change checks, logout/revocation, and regression evidence. |
 | [#103](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/103) | Release readiness must fail closed on stale head, missing review, or missing Checks evidence. | PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) separates product evidence from release authority and adds exact-head `gh api` collection; merge only after fresh protected evidence. |
 | [#102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102) | Equivalent endpoints need race-to-first-valid completion without unsafe cancellation. | Closed predecessor [#114](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/114) is explicitly a partial experiment and its evidence does not transfer. Rebuild one bounded vertical slice after the protected provider boundary is integrated: explicit endpoint equivalence, completed-response validation, bounded budgets, cancellation-or-drain, deterministic tie-breaking, secret-redacted attempt provenance, and provider-truth tests. |

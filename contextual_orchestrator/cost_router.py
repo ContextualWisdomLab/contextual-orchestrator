@@ -262,9 +262,11 @@ class CostRoutingCoordinator:
         self.embedding_batch_backend = embedding_batch_backend or self._local_embedding_backend
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
+        self._batch_job_owners = registry.mapping("batch_job_owners")
         # embeddings batch state: job handle + submitted requests + cached doc,
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
         self._embedding_jobs = registry.mapping("embedding_jobs", decode=lambda raw: BatchJob(**raw))
+        self._embedding_job_owners = registry.mapping("embedding_job_owners")
         self._embedding_models = registry.mapping("embedding_models")
         self._embedding_requests = registry.mapping(
             "embedding_requests", decode=lambda raw: EmbeddingBatchRequest(**raw)
@@ -674,7 +676,9 @@ class CostRoutingCoordinator:
                 attribution=dict(attribution or {}),
                 mode=mode,
             )
-            job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
+            job = self.submit_batch(
+                [request], metadata={"routing_reason": decision.reason}, owner_id=owner_id
+            )
             return {
                 "channel": "batch",
                 "routing_reason": decision.reason,
@@ -1040,20 +1044,25 @@ class CostRoutingCoordinator:
         self,
         requests: List[BatchRequest],
         metadata: Optional[Dict[str, Any]] = None,
+        *,
+        owner_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a batch of requests to the configured batch backend."""
+        owner_id = self._normalize_owner_id(owner_id)
         job = self.batch_backend.submit(requests, metadata=metadata)
         self._batch_jobs[job.job_id] = job
+        if owner_id is not None:
+            self._batch_job_owners[job.job_id] = owner_id
         return job
 
-    def poll_batch(self, job_id: str) -> Dict[str, Any]:
+    def poll_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
         """Poll a previously submitted batch job by id."""
-        job = self._require_job(job_id)
+        job = self._require_job(job_id, owner_id=owner_id)
         return self.batch_backend.poll(job)
 
-    def retrieve_batch(self, job_id: str) -> Dict[str, Any]:
+    def retrieve_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
         """Retrieve batch results and record usage + cost for each completion."""
-        job = self._require_job(job_id)
+        job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
         recorded: List[Dict[str, Any]] = []
         for item in items:
@@ -1095,11 +1104,21 @@ class CostRoutingCoordinator:
             provider = "unknown"
         return provider, item.model
 
-    def _require_job(self, job_id: str) -> BatchJob:
+    def _require_job(self, job_id: str, *, owner_id: Optional[str] = None) -> BatchJob:
+        owner_id = self._normalize_owner_id(owner_id)
         job = self._batch_jobs.get(job_id)
-        if job is None:
+        if job is None or (owner_id is not None and self._batch_job_owners.get(job_id) != owner_id):
             raise KeyError(f"batch job {job_id!r} not found")
         return job
+
+    @staticmethod
+    def _normalize_owner_id(owner_id: Optional[str]) -> Optional[str]:
+        """Accept only bounded, non-secret principal keys at the ownership boundary."""
+        if owner_id is None:
+            return None
+        if type(owner_id) is not str or not owner_id or len(owner_id) > 128:
+            raise ValueError("owner_id must be a non-empty string of at most 128 characters")
+        return owner_id
 
     # ------------------------------------------------------------------
     # Embeddings batch lifecycle
@@ -1114,6 +1133,7 @@ class CostRoutingCoordinator:
         routing_agent_id: str | None = None,
         input_attributions: Optional[List[Dict[str, Any]]] = None,
         input_metadata: Optional[List[Dict[str, Any]]] = None,
+        owner_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -1122,6 +1142,7 @@ class CostRoutingCoordinator:
         owned by the orchestrator. Returns the backend job handle; the vectors
         and recorded cost are produced by :meth:`embeddings_batch_document`.
         """
+        owner_id = self._normalize_owner_id(owner_id)
         shared_attribution = dict(attribution or {})
         backend: EmbeddingBatchBackend | None = self._embedding_backend_override
         if not inputs and backend is None and routing_agent_id is None:
@@ -1160,6 +1181,7 @@ class CostRoutingCoordinator:
                 {
                     "model": model,
                     "routing_agent_id": routing_agent_id,
+                    "owner_id": owner_id,
                     "requests": request_documents,
                 },
                 ensure_ascii=False,
@@ -1188,6 +1210,8 @@ class CostRoutingCoordinator:
             job = backend.submit(requests, metadata=metadata)
             self._embedding_job_backends[job.job_id] = backend.name
             self._embedding_jobs[job.job_id] = job
+            if owner_id is not None:
+                self._embedding_job_owners[job.job_id] = owner_id
             self._embedding_models[job.job_id] = model
             self._embedding_requests[job.job_id] = requests
             self._embedding_input_counts[job.job_id] = len(inputs)
@@ -1485,13 +1509,17 @@ class CostRoutingCoordinator:
             raise RuntimeError("exact token counter returned an invalid count")
         return value
 
-    def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
+    def embeddings_batch_document(
+        self, batch_id: str, *, owner_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Serialize terminal materialization so cost is recorded exactly once."""
+        owner_id = self._normalize_owner_id(owner_id)
+        self._require_embedding_job(batch_id, owner_id=owner_id)
         with self.job_registry.lock(
             "embedding_document_materialization", batch_id,
             lease_seconds=self._embedding_document_lease_seconds(),
         ):
-            return self._embeddings_batch_document_locked(batch_id)
+            return self._embeddings_batch_document_locked(batch_id, owner_id=owner_id)
 
     def _embedding_document_lease_seconds(self) -> float | None:
         """Use the configured provider timeout after a successful terminal wait."""
@@ -1510,7 +1538,9 @@ class CostRoutingCoordinator:
             return remaining
         return configured if remaining is None else min(configured, remaining)
 
-    def _embeddings_batch_document_locked(self, batch_id: str) -> Dict[str, Any]:
+    def _embeddings_batch_document_locked(
+        self, batch_id: str, *, owner_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Return the naruon-shaped batch document for ``batch_id``.
 
         Polls the backend; once complete, retrieves the vectors, records one
@@ -1519,11 +1549,13 @@ class CostRoutingCoordinator:
         total_tokens, part_count, model}``. Idempotent: the completed document is
         cached so a poll after completion never double-records cost.
         """
+        owner_id = self._normalize_owner_id(owner_id)
+        self._require_embedding_job(batch_id, owner_id=owner_id)
         cached = self._embedding_documents.get(batch_id)
         if cached is not None:
             return cached
 
-        job = self._require_embedding_job(batch_id)
+        job = self._require_embedding_job(batch_id, owner_id=owner_id)
         requests = self._embedding_requests.get(batch_id, [])
         model_name = self._embedding_models.get(batch_id, "contextual-orchestrator")
         backend = self._embedding_backend_for_job(batch_id)
@@ -1704,6 +1736,7 @@ class CostRoutingCoordinator:
         input_attributions: Optional[List[Dict[str, Any]]] = None,
         input_metadata: Optional[List[Dict[str, Any]]] = None,
         wait_for_terminal: bool = True,
+        owner_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -1720,6 +1753,7 @@ class CostRoutingCoordinator:
             routing_agent_id=routing_agent_id,
             input_attributions=input_attributions,
             input_metadata=input_metadata,
+            owner_id=owner_id,
         )
         if wait_for_terminal:
             backend = self._embedding_backend_for_job(job.job_id)
@@ -1744,22 +1778,26 @@ class CostRoutingCoordinator:
                     and hasattr(client, "remaining_request_timeout")
                 ):
                     client.remaining_request_timeout()
-        return self.embeddings_batch_document(job.job_id)
+        return self.embeddings_batch_document(job.job_id, owner_id=owner_id)
 
-    def cancel_embeddings_batch(self, batch_id: str, *, reason: str) -> Dict[str, Any]:
+    def cancel_embeddings_batch(
+        self, batch_id: str, *, reason: str, owner_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Cancel a provider batch through its durable backend state."""
+        owner_id = self._normalize_owner_id(owner_id)
+        self._require_embedding_job(batch_id, owner_id=owner_id)
         with self.job_registry.lock(
             "embedding_document_materialization", batch_id,
             lease_seconds=self._embedding_document_lease_seconds(),
         ):
-            job = self._require_embedding_job(batch_id)
+            job = self._require_embedding_job(batch_id, owner_id=owner_id)
             backend = self._embedding_backend_for_job(batch_id)
             cancel = getattr(backend, "cancel", None)
             if not callable(cancel):
                 raise ValueError("embedding batch backend does not support cancellation")
             status = cancel(job, reason=reason)
             if status["status"] != "cancelled":
-                return self._embeddings_batch_document_locked(batch_id)
+                return self._embeddings_batch_document_locked(batch_id, owner_id=owner_id)
             document = {
                 "batch_id": batch_id,
                 "status": status["status"],
@@ -1771,9 +1809,14 @@ class CostRoutingCoordinator:
             self._embedding_documents[batch_id] = document
             return document
 
-    def _require_embedding_job(self, batch_id: str) -> BatchJob:
+    def _require_embedding_job(
+        self, batch_id: str, *, owner_id: Optional[str] = None
+    ) -> BatchJob:
+        owner_id = self._normalize_owner_id(owner_id)
         job = self._embedding_jobs.get(batch_id)
-        if job is None:
+        if job is None or (
+            owner_id is not None and self._embedding_job_owners.get(batch_id) != owner_id
+        ):
             raise KeyError(f"embeddings batch job {batch_id!r} not found")
         return job
 

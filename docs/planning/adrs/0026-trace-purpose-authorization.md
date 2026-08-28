@@ -46,9 +46,15 @@ purpose because it has no verified trace claim.
   contains no prompt, output, credential, or PII value;
 - audit failure returns a generic `503` instead of releasing the trace.
 
-Issue #117 remains open: batch jobs still need principal-bound ownership, the
-authorization adapter still needs tenant/resource/lifetime context, and legacy
-single-token production migration still needs a fail-closed deployment gate.
+The follow-on batch ownership slice binds generic routing and embedding job
+handles to the authenticated principal's non-secret hash. It persists that
+binding beside the job registry, includes the principal in embedding dedup
+keys, and returns the existing generic not-found response for an owner
+mismatch before cached embedding documents or batch results are read.
+
+Issue #117 remains open: the authorization adapter still needs
+tenant/resource/lifetime context, and legacy single-token production migration
+still needs a fail-closed deployment gate.
 
 ## Research grounding
 

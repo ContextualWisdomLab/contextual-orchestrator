@@ -1071,6 +1071,58 @@ def test_pending_http_batch_declares_rate_budget_polling_cadence() -> None:
         server.shutdown()
 
 
+def test_embedding_batch_jobs_are_bound_to_the_authenticated_principal() -> None:
+    security = SecurityConfig(
+        bearer_verifier=lambda token, _scope: token in {"owner-a", "owner-b"}
+    )
+    server, port, _token, _coordinator = _serve(security=security)
+    base = f"http://127.0.0.1:{port}"
+    payload = {"model": "text-embedding-test", "inputs": ["owner-bound input"]}
+    try:
+        status, owner_a_job = _request(
+            "POST", f"{base}/v1/batch/embeddings", "owner-a", payload
+        )
+        assert status == 200
+        status, owner_b_job = _request(
+            "POST", f"{base}/v1/batch/embeddings", "owner-b", payload
+        )
+        assert status == 200
+        assert owner_a_job["batch_id"] != owner_b_job["batch_id"]
+
+        status, _document = _request(
+            "GET",
+            f"{base}/v1/batch/embeddings/{owner_a_job['batch_id']}",
+            "owner-a",
+        )
+        assert status == 200
+
+        status, body = _request(
+            "GET",
+            f"{base}/v1/batch/embeddings/{owner_a_job['batch_id']}",
+            "owner-b",
+        )
+        assert status == 404
+        assert body["error"]["code"] == "embeddings_batch_not_found"
+
+        status, body = _request(
+            "POST",
+            f"{base}/v1/batch/embeddings/{owner_a_job['batch_id']}/cancel",
+            "owner-b",
+            {"reason": "owner_cancel"},
+        )
+        assert status == 404
+        assert body["error"]["code"] == "embeddings_batch_not_found"
+
+        status, _document = _request(
+            "GET",
+            f"{base}/v1/batch/embeddings/{owner_b_job['batch_id']}",
+            "owner-b",
+        )
+        assert status == 200
+    finally:
+        server.shutdown()
+
+
 def test_identical_embedding_submission_reuses_durable_job() -> None:
     agent = ModelAgent(
         id="mock_worker",

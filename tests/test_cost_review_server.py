@@ -402,6 +402,56 @@ def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
         server.shutdown()
 
 
+def test_batch_routing_jobs_are_bound_to_the_authenticated_principal() -> None:
+    security = SecurityConfig(
+        bearer_verifier=lambda token, _scope: token in {"owner-a", "owner-b"}
+    )
+    server, port, _token = _serve(security)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, job = _request(
+            "POST",
+            f"{base}/api/v1/batch_routing_jobs",
+            "owner-a",
+            {"requests": [{"messages": [{"role": "user", "content": "owner-bound"}]}]},
+        )
+        assert status == 201
+
+        status, body = _request(
+            "GET",
+            f"{base}/api/v1/batch_routing_jobs/{job['job_id']}",
+            "owner-b",
+        )
+        assert status == 404
+        assert body["error"]["code"] == "batch_job_not_found"
+
+        status, polled = _request(
+            "GET",
+            f"{base}/api/v1/batch_routing_jobs/{job['job_id']}",
+            "owner-a",
+        )
+        assert status == 200
+        assert polled["job_id"] == job["job_id"]
+
+        status, body = _request(
+            "POST",
+            f"{base}/api/v1/batch_routing_jobs/{job['job_id']}/results",
+            "owner-b",
+        )
+        assert status == 404
+        assert body["error"]["code"] == "batch_job_not_found"
+
+        status, retrieved = _request(
+            "POST",
+            f"{base}/api/v1/batch_routing_jobs/{job['job_id']}/results",
+            "owner-a",
+        )
+        assert status == 200
+        assert retrieved["result_count"] == 1
+    finally:
+        server.shutdown()
+
+
 def test_batch_routing_jobs_round_trip_caller_supplied_custom_ids() -> None:
     """Without caller custom_ids, results cannot be mapped back to requests
     on backends that do not preserve submission order (the OpenAI Batch

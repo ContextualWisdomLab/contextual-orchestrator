@@ -5353,7 +5353,9 @@ def build_server(
                     batch_id = path[len("/v1/batch/embeddings/"):]
                     try:
                         document = {
-                            **coordinator.embeddings_batch_document(batch_id),
+                            **coordinator.embeddings_batch_document(
+                                batch_id, owner_id=security.principal_id(self.headers)
+                            ),
                             "poll_after_ms": security.batch_poll_after_ms,
                             "job_retention_ms": coordinator.embedding_batch_retention_ms,
                         }
@@ -5447,6 +5449,7 @@ def build_server(
                         ) from exc
                     return
                 self._authorize("admin", purpose=self._admin_purpose(path))
+                request_principal_id = security.principal_id(self.headers)
                 if path == "/api/v1/cost_attribution_dimensions":
                     self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})
                     return
@@ -5475,7 +5478,7 @@ def build_server(
                 if path.startswith("/api/v1/batch_routing_jobs/"):
                     job_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(coordinator.poll_batch(job_id))
+                        self._send(coordinator.poll_batch(job_id, owner_id=request_principal_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
@@ -5953,6 +5956,7 @@ def build_server(
                     else "inference"
                 )
                 self._authorize(scope, state_changing=True)
+                request_principal_id = security.principal_id(self.headers)
                 body = self._read_json()
                 metadata_values = [
                     value
@@ -6030,7 +6034,7 @@ def build_server(
                     batch_id = path[len("/v1/batch/embeddings/") : -len("/cancel")]
                     try:
                         document = coordinator.cancel_embeddings_batch(
-                            batch_id, reason=reason.strip()
+                            batch_id, reason=reason.strip(), owner_id=request_principal_id
                         )
                     except KeyError:
                         raise RequestError(
@@ -6234,6 +6238,7 @@ def build_server(
                                 workflow_run_id=f"run_{uuid.uuid4().hex}",
                                 cache_bypass=cache_bypass,
                                 cache_partition=cache_partition,
+                                owner_id=request_principal_id,
                             )),
                         )
                     # Batch-channel Completions return a job handle (202), not a
@@ -6683,6 +6688,7 @@ def build_server(
                                 workflow_run_id=f"run_{uuid.uuid4().hex}",
                                 cache_bypass=cache_bypass,
                                 cache_partition=cache_partition,
+                                owner_id=request_principal_id,
                             )),
                         )
                     # Latency-tolerant requests get dispatched to the batch backend.
@@ -6799,6 +6805,7 @@ def build_server(
                                     metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                     routing_agent_id=agent.id,
                                     wait_for_terminal=True,
+                                    owner_id=request_principal_id,
                                 ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             if isinstance(exc, RequestDeadlineExceeded):
@@ -6902,6 +6909,7 @@ def build_server(
                                     input_attributions=input_attributions,
                                     input_metadata=input_metadata,
                                     wait_for_terminal=False,
+                                    owner_id=request_principal_id,
                                 ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             if isinstance(exc, RequestDeadlineExceeded):
@@ -6953,7 +6961,11 @@ def build_server(
                     with orchestrator.client.request_settings(
                         request_deadline_monotonic=request_deadline
                     ):
-                        job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests, metadata=metadata, owner_id=request_principal_id
+                            )
+                        )
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
@@ -6979,7 +6991,11 @@ def build_server(
                         with orchestrator.client.request_settings(
                             request_deadline_monotonic=request_deadline
                         ):
-                            retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                            retrieved = self._run(
+                                lambda: coordinator.retrieve_batch(
+                                    job_id, owner_id=request_principal_id
+                                )
+                            )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return

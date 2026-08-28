@@ -20,6 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Provider-affine asynchronous video jobs now return an opaque gateway id and
   keep status polling and content download bound to the exact provider agent
   that accepted the submission (ADR 0037).
+- Batch-routing and embedding job handles are now bound to the authenticated
+  principal with persistent ownership state; embedding deduplication is also
+  principal-isolated and unauthorized polls, results, and cancellations return
+  the existing not-found contract (Issue #117 follow-up).
 - A fail-closed, transactional evidence boundary for the optional NVIDIA NIM
   benchmark with immutable task/scorer identities and complete provenance.
 - Bounded first-valid-completion racing for operator-declared equivalent model
