@@ -324,6 +324,20 @@ def test_equal_budget_client_forwards_delegate_controls() -> None:
         assert client.request_settings_snapshot()["max_output_tokens"] == 16
 
 
+def test_equal_budget_client_fails_closed_on_call_and_prompt_limits() -> None:
+    client = nb.EqualBudgetModelClient(ModelClient(), total_token_budget=20, maximum_calls=1)
+    client.chat(_mock_agents("dryrun/chat-basic")[0], [{"role": "user", "content": "hi"}])
+    with pytest.raises(nb.PolicyTokenBudgetExceeded, match="maximum-call"):
+        client.chat(_mock_agents("dryrun/chat-basic")[0], [{"role": "user", "content": "again"}])
+
+    tight = nb.EqualBudgetModelClient(ModelClient(), total_token_budget=1, maximum_calls=1)
+    with pytest.raises(nb.PolicyTokenBudgetExceeded, match="total-token"):
+        tight.chat(
+            _mock_agents("dryrun/chat-basic")[0],
+            [{"role": "user", "content": "x" * 100}],
+        )
+
+
 # --------------------------------------------------------------------------
 # Catalog parsing (adversarial)
 # --------------------------------------------------------------------------
@@ -984,6 +998,28 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     assert all(cell["run_outcome"] == "success" for cell in conduct_cells)
     assert cells == sorted(cells, key=lambda cell: (cell["policy_name"], cell["task_id"]))
     assert budget.requests_spent > 0
+
+
+def test_evaluate_policies_records_observed_budget_overflow() -> None:
+    class OversizedAnswerClient(ModelClient):
+        def chat(self, *args, **kwargs) -> str:  # type: ignore[override]
+            del args, kwargs
+            return "x" * 5000
+
+    evaluation = nb.evaluate_policies(
+        _mock_agents("dryrun/chat-basic"),
+        _mini_manifest(1),
+        None,
+        OversizedAnswerClient(),
+        nb.RequestBudget(100),
+        total_token_budget=512,
+    )
+
+    assert evaluation["evaluation_cells"]
+    assert all(
+        cell["outcome_reason"] == "observed_usage_exceeded_equal_token_budget"
+        for cell in evaluation["evaluation_cells"]
+    )
 
 
 def test_evaluate_policies_skip_reasons_without_pricing() -> None:
