@@ -266,7 +266,9 @@ def test_policy_crawler_uses_camoufox_rendering_after_wardnet_approval() -> None
 
 
 def test_pinned_mcp_client_renders_and_closes_camoufox_tab() -> None:
-    pytest.importorskip("mcp")
+    mcp = pytest.importorskip("mcp")
+    if not hasattr(mcp, "Client"):
+        pytest.skip("installed mcp package does not expose the optional Client API")
     calls: list[tuple[str, dict[str, object]]] = []
 
     class _Context:
