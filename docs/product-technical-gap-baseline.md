@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 13:24 KST exact-head PR remediation slice
+## 2026-08-28 13:26 KST exact-head PR remediation slice
 
 Protected `main` is `8d5924f8`. PR #879 is now at `2b1829a8`; its exact tree
 passed **2516 tests** after fixing ambiguous classified passthrough failures so
@@ -15,8 +15,9 @@ PR #857 is at externally advanced head `b2aedb7b` with all other checks passing
 but the same Strix provider outage. PR #901 is now at externally advanced head
 `d1bd3626d` and its code checks pass, while Noema, OpenCode, and Strix remain
 failed or unavailable gates. PR #902 is a stacked change on #857 at exact head
-`cb4d5bca`; its available review checks pass, but its own body requires #857 to
-land first. PR #903 adds the governed CEFR language-observation slice at exact
+`eee5323f`; its merge state is `UNSTABLE`, Devin review is pending, and its own
+body requires #857 to land first. PR #903 adds the governed CEFR
+language-observation slice at exact
 head `f456393e`; its local exact tree passed 2492 tests with 100% interrogate
 coverage, and its ordinary code/security/coverage checks plus Devin passed.
 Noema and Strix failed before producing a structured review because their
