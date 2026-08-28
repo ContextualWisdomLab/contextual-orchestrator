@@ -3209,15 +3209,6 @@ class TaskOrchestrator:
         """Return whether one agent is eligible under the active privacy policy."""
         return not _REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags
 
-    @staticmethod
-    def _agent_is_evidence_only(agent: ModelAgent) -> bool:
-        """Reject legacy OpenRouter rows, which are catalog evidence only."""
-        return (
-            agent.provider_name.strip().casefold() == "openrouter"
-            or agent.credential_name.strip().casefold() == "openrouter_api_key"
-            or (urlparse(agent.base_url).hostname or "").casefold() == "openrouter.ai"
-        )
-
     def select_model_group_members(
         self,
         candidate_pool: Iterable[ModelAgent],
@@ -3389,7 +3380,6 @@ class TaskOrchestrator:
                     candidate
                     for candidate in self.agents
                     if candidate.id == required_agent_id
-                    and not self._agent_is_evidence_only(candidate)
                 ),
                 None,
             )
@@ -3604,7 +3594,6 @@ class TaskOrchestrator:
                     agent
                     for agent in self.agents
                     if agent.id == required_agent_id
-                    and not self._agent_is_evidence_only(agent)
                 ),
                 None,
             )
@@ -4015,7 +4004,6 @@ class TaskOrchestrator:
             for candidate in self.candidates
             if (
                 candidate.model == requested_model
-                and not self._agent_is_evidence_only(candidate)
                 and self._zdr_agent_allowed(candidate)
                 and (not _REQUEST_ZDR_ONLY.get() or not candidate.disabled)
             )
@@ -4884,8 +4872,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if not self._agent_is_evidence_only(candidate)
-            and self._is_free_agent(candidate)
+            if self._is_free_agent(candidate)
         }
         allowed_agent_ids = free_ids if free_only else None
 
@@ -5071,8 +5058,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if not self._agent_is_evidence_only(candidate)
-            and self._is_free_agent(candidate)
+            if self._is_free_agent(candidate)
         }
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
@@ -5369,7 +5355,6 @@ class TaskOrchestrator:
             agent
             for agent in source
             if not agent.disabled
-            and not self._agent_is_evidence_only(agent)
             and self._zdr_agent_allowed(agent)
             if (not free_only or self._is_free_agent(agent))
             and (not chat_only or is_general_chat_agent_model_id(agent.model))
@@ -5659,9 +5644,7 @@ class TaskOrchestrator:
         except RuntimeError:
             candidates = []
         if not candidates and not _REQUEST_ZDR_ONLY.get():
-            candidates = [
-                agent for agent in self.agents if not self._agent_is_evidence_only(agent)
-            ]
+            candidates = list(self.agents)
         if not candidates:
             return False
         triage_agent = candidates[0]
@@ -5918,7 +5901,11 @@ class TaskOrchestrator:
                     if key not in self._ORCHESTRATION_ONLY_KEYS
                 }
                 payload["model"] = agent.model
-                provider_endpoint = endpoint
+                provider_endpoint = (
+                    "images"
+                    if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                    else endpoint
+                )
                 return (
                     self.client.proxy_send_bytes(agent, provider_endpoint, payload)
                     if binary else self.client.proxy_send(agent, provider_endpoint, payload)
@@ -5970,7 +5957,11 @@ class TaskOrchestrator:
                 if key not in self._ORCHESTRATION_ONLY_KEYS
             }
             payload["model"] = agent.model
-            provider_endpoint = endpoint
+            provider_endpoint = (
+                "images"
+                if agent.provider_name == "openrouter" and endpoint == "images/generations"
+                else endpoint
+            )
             started_at = time.perf_counter()
             try:
                 result = (
@@ -6235,7 +6226,6 @@ class TaskOrchestrator:
             agent
             for agent in ordered
             if not agent.disabled
-            and not self._agent_is_evidence_only(agent)
             and self._zdr_agent_allowed(agent)
             and is_general_chat_agent_model_id(agent.model)
             and all(tag in agent.tags for tag in required_tags)

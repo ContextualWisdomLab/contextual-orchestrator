@@ -132,27 +132,6 @@ def test_add_patch_remove_survive_restart() -> None:
         assert {a.id for a in third.agents} == {"general_agent"}  # removal survived restart
 
 
-def test_restart_does_not_route_persisted_openrouter_evidence_row(tmp_path) -> None:
-    db = str(tmp_path / "pool.db")
-    serving = ModelAgent("serving_agent", "vendor/serving-model")
-    evidence = ModelAgent(
-        "legacy_openrouter",
-        "openrouter/legacy-model",
-        "mock://local",
-        provider_name="openrouter",
-        priority=99,
-    )
-
-    first = TaskOrchestrator([serving], agents_db=db)
-    first.add_agent("default", evidence.to_config())
-    second = TaskOrchestrator([serving], agents_db=db)
-
-    assert [
-        agent.id
-        for agent in second.select_model_group_members(second.candidates, chat_only=False)
-    ] == [serving.id]
-
-
 def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")
