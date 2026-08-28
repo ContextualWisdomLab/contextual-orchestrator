@@ -708,6 +708,57 @@ def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() ->
     assert captured[0].zdr_only is True
 
 
+def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -> None:
+    """A retry member must not be re-resolved to the first duplicate model."""
+    from contextual_orchestrator.batch_routing import EmbeddingBatchResultItem
+
+    first = ModelAgent(
+        "first_zdr_member",
+        "shared-embedding",
+        "mock://first",
+        provider_name="first-provider",
+        tags=("embedding", "privacy:zdr"),
+    )
+    second = ModelAgent(
+        "second_zdr_member",
+        "shared-embedding",
+        "mock://second",
+        provider_name="second-provider",
+        tags=("embedding", "privacy:zdr"),
+    )
+
+    class _RecordingEmbeddingBackend:
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def submit(self, requests, metadata=None):
+            self.requests.extend(requests)
+            return BatchJob("duplicate-model", self.name, status="completed", request_count=len(requests))
+
+        def poll(self, job):
+            return {"is_complete": True, "status": "completed"}
+
+        def retrieve(self, job):
+            return [EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model) for request in self.requests]
+
+    backend = _RecordingEmbeddingBackend()
+    orchestrator = TaskOrchestrator([first, second])
+
+    def fail_reselection(*_args, **_kwargs):
+        raise AssertionError("the selected embedding member must not be re-resolved")
+
+    orchestrator.select_capability_agent = fail_reselection  # type: ignore[method-assign]
+    coordinator = CostRoutingCoordinator(orchestrator, embedding_batch_backend=backend)
+    document = coordinator.complete_embeddings_batch(
+        ["private"], model=second.model, zdr_only=True, agent_id=second.id
+    )
+
+    assert document["status"] == "completed"
+    assert backend.requests[0].model == second.model
+
+
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
     """The ZDR resolver must not change ordinary batch passthrough behavior."""
     captured: list[BatchRequest] = []

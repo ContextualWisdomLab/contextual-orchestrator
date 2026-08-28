@@ -6355,6 +6355,7 @@ def build_server(
                                 attribution=attribution,
                                 metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                 zdr_only=zdr_only,
+                                agent_id=agent.id,
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
@@ -6435,6 +6436,7 @@ def build_server(
                                 attribution=attribution,
                                 metadata=submit_metadata,
                                 zdr_only=zdr_only,
+                                agent_id=agent.id,
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc

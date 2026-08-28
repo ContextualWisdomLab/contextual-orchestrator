@@ -675,6 +675,7 @@ class CostRoutingCoordinator:
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         zdr_only: bool = False,
+        agent_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -685,18 +686,9 @@ class CostRoutingCoordinator:
         """
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
-        resolved_model = model
-        if zdr_only:
-            selection_model = (
-                None
-                if model
-                in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
-                else model
-            )
-            with self.orchestrator.request_policy(True):
-                resolved_model = self.orchestrator.select_capability_agent(
-                    "embedding", selection_model
-                ).model
+        if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
+            raise TypeError("agent_id must be a non-empty string when provided")
+        resolved_model = self._resolve_embedding_model(model, zdr_only, agent_id)
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
             inputs, model=resolved_model, attribution=shared_attribution, zdr_only=zdr_only
@@ -709,6 +701,26 @@ class CostRoutingCoordinator:
         self._embedding_part_counts[job.job_id] = part_counts
         self._embedding_part_limits[job.job_id] = part_limits
         return job
+
+    def _resolve_embedding_model(
+        self, model: str, zdr_only: bool, agent_id: Optional[str]
+    ) -> str:
+        """Resolve one embedding member without losing a caller's member choice."""
+        if agent_id is None and not zdr_only:
+            return model
+        selection_model = (
+            None
+            if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
+            else model
+        )
+        with self.orchestrator.request_policy(zdr_only):
+            candidates = self.orchestrator._capability_agents("embedding", selection_model)
+        if agent_id is None:
+            return candidates[0].model
+        for candidate in candidates:
+            if candidate.id == agent_id:
+                return candidate.model
+        raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
 
     def _build_embedding_requests(
         self,
@@ -995,6 +1007,7 @@ class CostRoutingCoordinator:
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         zdr_only: bool = False,
+        agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -1009,6 +1022,7 @@ class CostRoutingCoordinator:
             attribution=attribution,
             metadata=metadata,
             zdr_only=zdr_only,
+            agent_id=agent_id,
         )
         return self.embeddings_batch_document(job.job_id)
 
