@@ -280,6 +280,31 @@ def test_memory_privacy_evidence_replaces_success_and_survives_failure() -> None
     assert store.privacy_assessments(source) == (replacement,)
 
 
+def test_memory_privacy_evidence_normalizes_subject_model_identity() -> None:
+    """Assessment identity follows the model-id normalization used by the catalog."""
+    source = _source()
+    model = replace(
+        _model(source, "model-a"),
+        privacy_policy_urls=("https://provider.example/privacy",),
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [replace(model, model_id=" model-a ")],
+        eligible_model_ids={"model-a"},
+        serving_tags={},
+    )
+
+    store.record_privacy_assessment_success(
+        source,
+        [replace(_assessment(source), subject_model=" model-a ", source_url=" https://provider.example/privacy ")],
+    )
+
+    persisted = store.privacy_assessments(source)
+    assert persisted[0].subject_model == "model-a"
+    assert persisted[0].source_url == "https://provider.example/privacy"
+
+
 def test_memory_successful_refresh_prunes_stale_privacy_evidence() -> None:
     """Evidence cannot survive removal of its model or policy source."""
     source = _source()

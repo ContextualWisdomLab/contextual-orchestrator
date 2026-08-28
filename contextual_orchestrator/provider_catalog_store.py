@@ -13,7 +13,7 @@ import math
 import re
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
@@ -384,12 +384,14 @@ def _normalize_privacy_assessments(
     """Validate account-local grounded evidence and deduplicate subject/source rows."""
     unique: dict[tuple[str, str], "PrivacyPolicyAssessment"] = {}
     for assessment in assessments:
+        subject_model = assessment.subject_model.strip()
+        source_url = assessment.source_url.strip()
         if (
             assessment.subject_provider != source.provider_name
             or assessment.subject_credential != source.credential_name
         ):
             raise ProviderCatalogError("privacy assessment belongs to a different account")
-        if not assessment.subject_model.strip() or not assessment.source_url.strip():
+        if not subject_model or not source_url:
             raise ProviderCatalogError("privacy assessment identity is incomplete")
         if not assessment.evidence_quote.strip():
             raise ProviderCatalogError("privacy assessment quote is empty")
@@ -397,7 +399,11 @@ def _normalize_privacy_assessments(
             raise ProviderCatalogError("privacy assessment analyzer identity is incomplete")
         if assessment.observed_at.tzinfo is None:
             raise ProviderCatalogError("privacy assessment timestamp must be timezone-aware")
-        unique[(assessment.subject_model, assessment.source_url)] = assessment
+        unique[(subject_model, source_url)] = replace(
+            assessment,
+            subject_model=subject_model,
+            source_url=source_url,
+        )
     if not unique:
         raise ProviderCatalogError("successful privacy assessment cannot be empty")
     return tuple(unique[key] for key in sorted(unique))
