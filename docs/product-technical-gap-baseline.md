@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 21:52 KST exact-head protected-queue snapshot
+## 2026-08-28 21:54 KST exact-head protected-queue snapshot
 
 Protected `main` is `8d5924f8f7582ece18a6f43d6a5fffcb6a0a9c9f`. No merge is
 claimed from this snapshot. The open queue was re-read against that base and
@@ -22,7 +22,7 @@ coverage, Noema, and Hypothesis checks, while Full/Atheris/Strix remain in
 progress and OpenCode fails for lack of a current-head authenticated verdict.
 It has no qualifying independent approval. PR
 [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908)
-at `b6ef4d74c211f71842bfdaae71eaa38e0f224bbf` adds canonical ledger usage
+at `c8e7372692da7b4bc010b916434d40c1d1a6a134` adds canonical ledger usage
 export and is undergoing a fresh full check run after the accepted-write
 boundary repair; no terminal current-head result or independent approval is
 claimed yet.
@@ -47,7 +47,7 @@ independent approval.
 
 | PR | Exact head | Base / current gate state |
 | ---: | --- | --- |
-| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `b6ef4d74c211f71842bfdaae71eaa38e0f224bbf` | `BLOCKED`; fresh Checks pending, no terminal result or independent approval |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `c8e7372692da7b4bc010b916434d40c1d1a6a134` | `BLOCKED`; fresh Checks pending, no terminal result or independent approval |
 | [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `2cc89dfb655921b9722b17c33c49ff6fc4b9063e` | `BLOCKED`; OpenCode fail, Strix provider failure, no independent approval |
 | [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `69120a2b2742a1e1fbcc83a12051f3ab552c1694` | `BLOCKED`, `REVIEW_REQUIRED`; ordinary checks and Strix/Devin pass, OpenCode fail |
 | [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904) | `038e9d348ca7a1220dcf2155b86ba8650ce06cb9` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode fail |
