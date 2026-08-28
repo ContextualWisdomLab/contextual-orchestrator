@@ -73,12 +73,15 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def _server_with_verifier(verifier):
+def _server_with_verifier(verifier, *, expose_trace_by_default: bool = False):
     orchestrator = build()
     server = build_server(
         orchestrator,
         port=0,
-        security=SecurityConfig(bearer_verifier=verifier),
+        security=SecurityConfig(
+            bearer_verifier=verifier,
+            expose_trace_by_default=expose_trace_by_default,
+        ),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -318,6 +321,33 @@ def test_structured_chat_ignores_server_trace_default_when_flag_is_omitted() -> 
         server.shutdown()
         thread.join(timeout=5)
     assert status == 200, body
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
+def test_structured_chat_server_trace_default_still_requires_trace_scope() -> None:
+    """A trace-by-default server setting must still authorize trace disclosure."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_INFERENCE_TOKEN and scope == "inference",
+        expose_trace_by_default=True,
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token=_TEST_INFERENCE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 401, body
+    assert body["error"]["code"] == "unauthorized"
     assert not any(
         event["event_type"] == "orchestration_trace_access_granted"
         for event in orchestrator._audit_events

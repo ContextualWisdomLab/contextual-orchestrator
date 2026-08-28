@@ -6138,6 +6138,8 @@ def build_server(
                             if tool_loop
                             else include_trace
                         )
+                        if include_trace:
+                            self._authorize_trace_access()
                         started_at = time.perf_counter()
                         if tool_loop:
                             proxied = self._run(
@@ -6210,6 +6212,8 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
+                        if include_trace:
+                            self._audit_trace_disclosure("/v1/chat/completions")
                         self._send(
                             proxied
                             if tool_loop
