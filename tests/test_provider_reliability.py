@@ -27,6 +27,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
     NoViableAgentError,
+    ProviderRequestTooLargeError,
     ProviderResponseError,
     RequestDeadlineExceeded,
     is_transient_error,
@@ -48,6 +49,29 @@ def _stopped_http_error() -> urllib.error.HTTPError:
         "Conflict",
         None,
         io.BytesIO(json.dumps({"error": {"code": "tool_execution_stopped"}}).encode()),
+    )
+
+
+def _tool_description_too_long_error() -> urllib.error.HTTPError:
+    """Build the provider's bounded tool-description rejection."""
+    return urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        400,
+        "invalid tools",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "invalid_tools",
+                        "message": (
+                            "each tool.function.description must be at most "
+                            "1024 characters"
+                        ),
+                    }
+                }
+            ).encode()
+        ),
     )
 
 
@@ -126,6 +150,36 @@ def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -
     stopped = _stopped_http_error()
     assert not is_transient_error(stopped)
     assert is_transient_error(_http_error(409))
+
+
+def test_oversized_tool_description_becomes_provider_request_too_large() -> None:
+    """The provider-specific size contract is normalized by both client paths."""
+    class OversizedToolClient(ModelClient):
+        def _validate_provider(self, agent):  # type: ignore[override]
+            del agent
+            return None
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination, timeout
+            raise _tool_description_too_long_error()
+
+        def _send_raw(self, agent, endpoint, payload, destination=None):  # type: ignore[override]
+            del agent, endpoint, payload, destination
+            raise _tool_description_too_long_error()
+
+    client = OversizedToolClient(max_retries=2, retry_backoff=0.0)
+    agent = ModelAgent(
+        "provider_worker",
+        "provider-model",
+        base_url="https://provider.example/v1",
+        api_key_env="",
+        credential_key="",
+    )
+
+    with pytest.raises(ProviderRequestTooLargeError):
+        client.chat(agent, [{"role": "user", "content": "send"}])
+    with pytest.raises(ProviderRequestTooLargeError):
+        client.proxy_send(agent, "chat/completions", {"model": agent.model, "messages": []})
 
 
 def test_terminal_tool_stop_is_preserved_by_chat_and_passthrough_transport() -> None:
@@ -334,7 +388,30 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
 
 
-def test_structural_provider_response_fails_over_to_next_provider() -> None:
+def test_route_advances_on_413_and_preserves_exhausted_size_error() -> None:
+    """Plain orchestrated chat uses another model, then returns 413 only on exhaustion."""
+    orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
+    original_chat = client.chat
+
+    def size_limited_chat(agent, messages, temperature=0.2):
+        if agent.id == "primary_worker":
+            client.calls.append(agent.id)
+            raise ProviderRequestTooLargeError("provider request body is too large")
+        return original_chat(agent, messages, temperature)
+
+    client.chat = size_limited_chat  # type: ignore[method-assign]
+    result = orchestrator.route_once([{"role": "user", "content": "large request"}])
+    assert result["trace"][0]["served_agent_id"] == "backup_worker"
+
+    def all_too_large(agent, messages, temperature=0.2):
+        raise ProviderRequestTooLargeError("provider request body is too large")
+
+    client.chat = all_too_large  # type: ignore[method-assign]
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.route_once([{"role": "user", "content": "large request"}])
+
+
+def test_structural_provider_response_stops_before_tool_failover() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
         ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
@@ -349,18 +426,22 @@ def test_structural_provider_response_fails_over_to_next_provider() -> None:
             self.calls.append(agent.id)
             if agent.id == "primary_worker":
                 raise ProviderResponseError("provider primary_worker response did not contain assistant content")
-            return "backup answer"
+            return "backup must not be called"
 
     client = MalformedPrimaryClient()
     orchestrator = TaskOrchestrator(agents, client=client)
 
-    output, served_id, _usage = orchestrator._invoke(
-        agents[0], [{"role": "user", "content": "route this"}], text="route this", role="worker"
-    )
+    try:
+        orchestrator._invoke(
+            agents[0], [{"role": "user", "content": "route this"}], text="route this", role="worker"
+        )
+    except ProviderResponseError as exc:
+        assert "did not contain assistant content" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("a structurally invalid provider response must fail closed")
 
-    assert output == "backup answer"
-    assert served_id == "backup_worker"
-    assert client.calls == ["primary_worker", "backup_worker"]
+    assert client.calls == ["primary_worker"]
+    assert orchestrator._circuit == {}
 
 
 def test_exhausted_provider_transport_uses_failover_error_category() -> None:

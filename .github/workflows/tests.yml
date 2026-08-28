@@ -5,7 +5,6 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,5 +23,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Run hash-locked full test suite
-        run: make test
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.12.5"
+
+      - name: Run full test suite
+        run: uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q

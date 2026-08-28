@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from email.message import Message
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
@@ -10,9 +11,11 @@ import hashlib
 import json
 import logging
 import math
+import mmap
 import secrets
 import socket
 import struct
+import tempfile
 import threading
 import time
 import urllib.error
@@ -31,7 +34,9 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     NoViableAgentError,
     RequestDeadlineExceeded,
+    ProviderRequestTooLargeError,
     ProviderResponseError,
+    ModelAgent,
     TaskOrchestrator,
     normalize_endpoint_selector,
     _validate_provider_probe_timeout,
@@ -64,8 +69,82 @@ from .video_jobs import (
     VideoJobRegistry,
     video_agent_affinity_key,
 )
+from .file_registry import (
+    FileContractError,
+    FileProviderUnavailableError,
+    FileRegistry,
+    file_agent_affinity_key,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+# OpenAI's image-input contract permits a 512 MB total request payload.  That
+# includes JSON requests carrying data-URL/base64 images, not only /files.
+DEFAULT_MAX_JSON_BODY_BYTES = 64 * 1024
+MAX_MULTIMODAL_JSON_BODY_BYTES = 512 * 1024 * 1024
+MAX_FILE_UPLOAD_BYTES = 512 * 1024 * 1024
+MAX_FILE_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+MAX_FILE_UPLOAD_REQUEST_BYTES = (
+    MAX_FILE_UPLOAD_BYTES + MAX_FILE_MULTIPART_OVERHEAD_BYTES
+)
+MAX_BATCH_FILE_BYTES = 200 * 1024 * 1024
+
+
+def _multipart_upload_metadata(body: Any, content_type: str) -> tuple[str, str, int]:
+    """Read purpose, filename, and file length from a seekable multipart body."""
+    message = Message()
+    message["content-type"] = content_type
+    boundary = message.get_param("boundary", header="content-type")
+    if not isinstance(boundary, str) or not boundary or len(boundary) > 70:
+        raise RequestError(400, "invalid_file", "multipart boundary is invalid")
+    try:
+        marker = b"--" + boundary.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RequestError(400, "invalid_file", "multipart boundary must be ASCII") from exc
+    purpose: str | None = None
+    filename: str | None = None
+    file_size: int | None = None
+    body.flush()
+    with mmap.mmap(body.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+        position = 0
+        while True:
+            boundary_start = mapped.find(marker, position)
+            if boundary_start < 0:
+                break
+            headers_start = boundary_start + len(marker)
+            if mapped[headers_start : headers_start + 2] == b"--":
+                break
+            if mapped[headers_start : headers_start + 2] != b"\r\n":
+                raise RequestError(400, "invalid_file", "multipart delimiter is malformed")
+            headers_start += 2
+            headers_end = mapped.find(b"\r\n\r\n", headers_start, headers_start + 64 * 1024)
+            if headers_end < 0:
+                raise RequestError(400, "invalid_file", "multipart part headers are malformed")
+            next_boundary = mapped.find(b"\r\n" + marker, headers_end + 4)
+            if next_boundary < 0:
+                raise RequestError(400, "invalid_file", "multipart body is incomplete")
+            part_headers = Message()
+            for line in mapped[headers_start:headers_end].decode("latin-1").split("\r\n"):
+                name, separator, value = line.partition(":")
+                if not separator:
+                    raise RequestError(400, "invalid_file", "multipart part header is malformed")
+                part_headers[name] = value.strip()
+            disposition_message = Message()
+            disposition_message["content-disposition"] = part_headers.get("content-disposition", "")
+            field_name = disposition_message.get_param("name", header="content-disposition")
+            part_start = headers_end + 4
+            if field_name == "purpose":
+                raw_purpose = mapped[part_start:next_boundary]
+                if len(raw_purpose) > 64:
+                    raise RequestError(400, "invalid_file", "purpose is too long")
+                purpose = raw_purpose.decode("utf-8").strip()
+            elif field_name == "file":
+                filename = disposition_message.get_param("filename", header="content-disposition")
+                file_size = next_boundary - part_start
+            position = next_boundary + 2
+    if not purpose or not isinstance(filename, str) or not filename or file_size is None:
+        raise RequestError(400, "invalid_file", "multipart upload requires purpose and file fields")
+    return purpose, filename, file_size
 
 
 class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
@@ -264,7 +343,7 @@ class SecurityConfig:
     inference_token: str = ""
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
-    max_body_bytes: int = 64 * 1024
+    max_body_bytes: int = DEFAULT_MAX_JSON_BODY_BYTES
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
@@ -5207,6 +5286,7 @@ def build_server(
     release_authority = verify_release_authority_snapshot(release_authority)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
     video_jobs = VideoJobRegistry(coordinator.job_registry)
+    files = FileRegistry(coordinator.job_registry)
     configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
@@ -5345,6 +5425,62 @@ def build_server(
                             poll_after_ms=security.batch_poll_after_ms,
                         )
                     )
+                    return
+                if path == "/v1/files" or path.startswith("/v1/files/"):
+                    self._authorize("inference")
+                    principal_id = security.principal_id(self.headers)
+                    if path == "/v1/files":
+                        self._send({"object": "list", "data": files.list(principal_id)})
+                        return
+                    suffix = path[len("/v1/files/") :]
+                    content_request = suffix.endswith("/content")
+                    gateway_file_id = suffix[: -len("/content")] if content_request else suffix
+                    if not gateway_file_id or "/" in gateway_file_id:
+                        raise RequestError(400, "invalid_file", "file id must be one path segment")
+                    try:
+                        owner = files.owner(gateway_file_id, principal_id)
+                    except KeyError:
+                        raise RequestError(404, "file_not_found", "file was not found") from None
+                    replicas = owner.replicas or {
+                        owner.agent_id: {
+                            "provider_file_id": owner.provider_file_id,
+                            "agent_affinity_key": owner.agent_affinity_key,
+                        }
+                    }
+                    selected = next(
+                        (
+                            (item, replica["provider_file_id"])
+                            for item in orchestrator.agents
+                            if (replica := replicas.get(item.id)) is not None
+                            and replica.get("agent_affinity_key") == file_agent_affinity_key(item)
+                        ),
+                        None,
+                    )
+                    if selected is None:
+                        raise RequestError(503, "file_provider_unavailable", "the file provider is unavailable")
+                    agent, provider_file_id = selected
+                    if content_request:
+                        try:
+                            raw, content_type = self._run(
+                                lambda: orchestrator.client.proxy_get_bytes(
+                                    agent,
+                                    f"files/{urllib.parse.quote(provider_file_id, safe='')}/content",
+                                    max_response_bytes=MAX_FILE_UPLOAD_BYTES,
+                                )
+                            )
+                        except urllib.error.HTTPError as exc:
+                            if exc.code == 404:
+                                raise RequestError(
+                                    404, "file_not_found", "file content was not found"
+                                ) from exc
+                            raise RequestError(
+                                503,
+                                "file_provider_unavailable",
+                                "the file provider is unavailable",
+                            ) from exc
+                        self._send_bytes(raw, content_type)
+                    else:
+                        self._send(files.public_response(owner.document, owner))
                     return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
@@ -5898,6 +6034,58 @@ def build_server(
                         extra_headers={"set-cookie": security.admin_session_clear_cookie_header()},
                     )
                     return
+                if path.startswith("/v1/files/"):
+                    self._authorize("inference", state_changing=True)
+                    gateway_file_id = path[len("/v1/files/") :]
+                    if not gateway_file_id or "/" in gateway_file_id:
+                        raise RequestError(400, "invalid_file", "file id must be one path segment")
+                    principal_id = security.principal_id(self.headers)
+                    try:
+                        owner = files.owner(gateway_file_id, principal_id)
+                    except KeyError:
+                        raise RequestError(404, "file_not_found", "file was not found") from None
+                    replicas = owner.replicas or {
+                        owner.agent_id: {
+                            "provider_file_id": owner.provider_file_id,
+                            "agent_affinity_key": owner.agent_affinity_key,
+                        }
+                    }
+                    targets = [
+                        (agent, replica["provider_file_id"])
+                        for agent in orchestrator.agents
+                        if (replica := replicas.get(agent.id)) is not None
+                        and replica.get("agent_affinity_key") == file_agent_affinity_key(agent)
+                    ]
+                    if len(targets) != len(replicas):
+                        raise RequestError(503, "file_provider_unavailable", "not every file replica provider is available")
+                    remaining = dict(replicas)
+                    for agent, provider_file_id in targets:
+                        try:
+                            result = self._run(
+                                lambda agent=agent, provider_file_id=provider_file_id: orchestrator.client.proxy_delete_json(
+                                    agent,
+                                    f"files/{urllib.parse.quote(provider_file_id, safe='')}",
+                                    max_response_bytes=security.max_body_bytes,
+                                )
+                            )
+                        except urllib.error.HTTPError as exc:
+                            if exc.code != 404:
+                                files.retain_replicas(gateway_file_id, principal_id, remaining)
+                                raise RequestError(
+                                    503,
+                                    "file_provider_unavailable",
+                                    "the file provider is unavailable",
+                                ) from exc
+                        else:
+                            if result.get("deleted") is not True:
+                                files.retain_replicas(gateway_file_id, principal_id, remaining)
+                                raise RequestError(502, "invalid_file_response", "file provider did not confirm deletion")
+                        remaining.pop(agent.id, None)
+                        if remaining:
+                            files.retain_replicas(gateway_file_id, principal_id, remaining)
+                    files.delete(gateway_file_id, principal_id)
+                    self._send({"id": gateway_file_id, "object": "file", "deleted": True})
+                    return
                 self._authorize("admin", state_changing=True)
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
@@ -5944,6 +6132,105 @@ def build_server(
                         extra_headers={"set-cookie": security.admin_session_cookie_header(session_id)},
                     )
                     return
+                if path == "/v1/files":
+                    self._authorize("inference", state_changing=True)
+                    content_type = self.headers.get("content-type", "")
+                    if content_type.split(";", 1)[0].strip().lower() != "multipart/form-data" or "boundary=" not in content_type:
+                        raise RequestError(415, "unsupported_media_type", "content-type must be multipart/form-data with a boundary")
+                    try:
+                        body_size = _request_body_size(
+                            self.headers, MAX_FILE_UPLOAD_REQUEST_BYTES
+                        )
+                    except RequestError:
+                        self.close_connection = True
+                        raise
+                    if body_size == 0:
+                        raise RequestError(400, "invalid_file", "multipart upload body is empty")
+                    with tempfile.TemporaryFile() as upload:
+                        remaining = body_size
+                        while remaining:
+                            chunk = self.rfile.read(min(1024 * 1024, remaining))
+                            if not chunk:
+                                self.close_connection = True
+                                raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
+                            upload.write(chunk)
+                            remaining -= len(chunk)
+                        self._request_body_consumed = True
+                        purpose, filename, file_size = _multipart_upload_metadata(
+                            upload, content_type
+                        )
+                        if file_size > MAX_FILE_UPLOAD_BYTES:
+                            raise RequestError(
+                                413,
+                                "request_too_large",
+                                "files may not exceed 512 MB",
+                            )
+                        if purpose == "batch":
+                            if not filename.casefold().endswith(".jsonl"):
+                                raise RequestError(
+                                    400,
+                                    "invalid_file",
+                                    "batch files must use the .jsonl extension",
+                                )
+                            if file_size > MAX_BATCH_FILE_BYTES:
+                                raise RequestError(
+                                    413,
+                                    "request_too_large",
+                                    "batch files may not exceed 200 MB",
+                                )
+                        saw_failure = False
+                        every_failure_was_request_too_large = True
+                        replicas: list[tuple[dict[str, Any], str, str]] = []
+                        file_agents = [
+                            agent
+                            for agent in orchestrator.agents
+                            if "files" in agent.tags or "capability:files" in agent.tags
+                            if "files" not in agent.provider_exclusions
+                        ]
+                        # Upload to one provider by default. Replicating caller data
+                        # across providers requires a separate explicit contract.
+                        for agent in file_agents[:1]:
+                            upload.seek(0)
+                            try:
+                                provider_result = self._run(
+                                    lambda agent=agent: orchestrator.client.proxy_upload(
+                                        agent,
+                                        "files",
+                                        upload,
+                                        content_type=content_type,
+                                        content_length=body_size,
+                                        max_response_bytes=1024 * 1024,
+                                    )
+                                )
+                                replicas.append(
+                                    (
+                                        provider_result,
+                                        agent.id,
+                                        file_agent_affinity_key(agent),
+                                    )
+                                )
+                            except urllib.error.HTTPError as exc:
+                                saw_failure = True
+                                every_failure_was_request_too_large = (
+                                    every_failure_was_request_too_large
+                                    and exc.code == 413
+                                )
+                                continue
+                            except FileContractError:
+                                raise
+                            except Exception:
+                                saw_failure = True
+                                every_failure_was_request_too_large = False
+                                continue
+                        if replicas:
+                            response = files.register_replicas(
+                                replicas, security.principal_id(self.headers)
+                            )
+                            self._send(response, 201)
+                            return
+                    if saw_failure and every_failure_was_request_too_large:
+                        raise RequestError(413, "request_too_large", "request body exceeds every eligible provider limit")
+                    raise RequestError(503, "file_provider_unavailable", "no eligible file provider accepted the upload")
                 scope = (
                     "admin"
                     if path in {
@@ -5957,7 +6244,19 @@ def build_server(
                 )
                 self._authorize(scope, state_changing=True)
                 request_principal_id = security.principal_id(self.headers)
-                body = self._read_json()
+                large_inference_json = path in {
+                    "/v1/chat/completions",
+                    "/v1/responses",
+                    "/v1/images/generations",
+                    "/v1/videos",
+                } or path.startswith("/v1/audio/")
+                body = self._read_json(
+                    max_body_bytes=(
+                        min(security.max_body_bytes, MAX_MULTIMODAL_JSON_BODY_BYTES)
+                        if large_inference_json
+                        else security.max_body_bytes
+                    )
+                )
                 metadata_values = [
                     value
                     for key in ("metadata", "client_metadata")
@@ -6142,6 +6441,8 @@ def build_server(
                         ) from exc
                     except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
+                    except ProviderRequestTooLargeError as exc:
+                        raise RequestError(413, "request_too_large", str(exc)) from exc
                     except RuntimeError as exc:
                         raise RequestError(
                             503,
@@ -7151,6 +7452,36 @@ def build_server(
                             "invalid_input",
                             "input must be a non-empty string or non-empty array on /v1/responses",
                         )
+                    try:
+                        body, file_replicas = files.bind_request(
+                            body, security.principal_id(self.headers)
+                        )
+                    except FileProviderUnavailableError as exc:
+                        raise RequestError(
+                            503, "file_provider_unavailable", str(exc)
+                        ) from exc
+                    except FileContractError as exc:
+                        raise RequestError(404, "file_not_found", str(exc)) from exc
+                    if file_replicas:
+                        valid_agents: set[str] | None = None
+                        provider_ids: dict[str, dict[str, str]] = {}
+                        for gateway_id, replicas in file_replicas.items():
+                            valid = {
+                                agent.id: replica["provider_file_id"]
+                                for agent in orchestrator.agents
+                                if (replica := replicas.get(agent.id)) is not None
+                                and replica.get("agent_affinity_key")
+                                == file_agent_affinity_key(agent)
+                            }
+                            provider_ids[gateway_id] = valid
+                            valid_agents = set(valid) if valid_agents is None else valid_agents & set(valid)
+                        if not valid_agents:
+                            raise RequestError(
+                                503,
+                                "file_provider_unavailable",
+                                "no common referenced file provider is available",
+                            )
+                        body["_file_replicas"] = provider_ids
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).
                     # stream=true is not implemented for Responses passthrough.
                     # String/0-1 forms coerce via shared bool helper (parity with chat).
@@ -7177,11 +7508,12 @@ def build_server(
                         TaskOrchestrator.FREE_MODEL,
                     }:
                         _require_pool_model(orchestrator, model_name)
+                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
                         if body.get("tools"):
                             raise RequestError(
                                 400,
                                 "invalid_tools",
-                                "tools are not supported for orchestrated Responses requests",
+                                "tools are not supported for streamed orchestrated Responses requests",
                             )
                         response_format = body.get("response_format")
                         text_format = (body.get("text") or {}).get("format") if isinstance(
@@ -7195,7 +7527,7 @@ def build_server(
                             raise RequestError(
                                 400,
                                 "invalid_response_format",
-                                "structured output is not supported for orchestrated Responses requests",
+                                "structured output is not supported for streamed orchestrated Responses requests",
                             )
                         messages = []
                         instructions = body.get("instructions")
@@ -7324,7 +7656,7 @@ def build_server(
                             )
                     orchestrator.record_analytics_event(
                         (
-                            "responses_passthrough"
+                            "responses_tools_conducted"
                             if tool_loop
                             else "responses_conducted"
                         ),
@@ -7401,6 +7733,8 @@ def build_server(
                     TOOL_FALLBACK_STOPPED_MESSAGE,
                     _tool_fallback_error_detail(exc),
                 )
+            except ProviderRequestTooLargeError as exc:
+                self._send_error(413, "request_too_large", str(exc))
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except NoViableAgentError as exc:
@@ -7418,6 +7752,12 @@ def build_server(
                     502,
                     "invalid_structured_output",
                     "The selected model could not satisfy the requested response schema.",
+                )
+            except FileContractError:
+                self._send_error(
+                    502,
+                    "invalid_file_response",
+                    "The file provider did not return a trackable file resource.",
                 )
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
@@ -7578,11 +7918,14 @@ def build_server(
                 return None
             return int(raw)
 
-        def _read_json(self) -> dict[str, Any]:
+        def _read_json(self, *, max_body_bytes: int | None = None) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
             try:
-                body_size = _request_body_size(self.headers, security.max_body_bytes)
+                body_size = _request_body_size(
+                    self.headers,
+                    security.max_body_bytes if max_body_bytes is None else max_body_bytes,
+                )
             except RequestError:
                 # Do not let a peer reuse a connection after an ambiguous frame.
                 self.close_connection = True

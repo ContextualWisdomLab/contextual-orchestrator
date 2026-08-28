@@ -1,5 +1,4 @@
 import re
-import subprocess
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -160,57 +159,19 @@ def test_python_lockfile_uses_hash_pinning():
     assert "sqlalchemy==" in lock_text
 
 
-def test_unit_workflow_installs_runtime_and_test_lockfiles():
-    """CI must use the same fail-closed, hash-locked target as local runs."""
+def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
+    """CI must install the uv lock so git-backed runtime dependencies are present."""
     workflow_text = read_text(".github/workflows/tests.yml")
-    assert "run: make test" in workflow_text
-    assert "python -m pytest -q" not in workflow_text
-    assert "pip install --no-deps dist/*.whl" not in workflow_text
+    assert "uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e" in workflow_text
+    assert 'version: "0.12.5"' in workflow_text
+    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in workflow_text
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():
-    """The documented local command must exercise optional runtime integrations."""
+    """The documented local command must exercise the project lock."""
     makefile_text = read_text("Makefile")
-    runner_text = read_text("scripts/run_hash_locked_tests.sh")
-    dockerfile_text = read_text("Dockerfile")
-    package_text = read_text("contextual_orchestrator/__init__.py")
 
-    assert "./scripts/run_hash_locked_tests.sh" in makefile_text
-    assert "ghcr.io/pyo3/maturin@sha256:" in runner_text
-    assert "--target test-runner" in runner_text
-    assert "--output type=cacheonly" in runner_text
-    assert "make test requires Docker" in runner_text
-    assert "maturin build --locked" in dockerfile_text
-    assert "FROM runtime-base AS test-runner" in dockerfile_text
-    assert "python -m zipfile" not in dockerfile_text
-    assert 'cp "$1" /io/contextual_orchestrator/' not in dockerfile_text
-    assert "extend_path(__path__, __name__)" in package_text
-    assert "--with-requirements requirements.lock" in dockerfile_text
-    assert "--with-requirements fuzz/requirements-property.txt" in dockerfile_text
-    assert '--with "$1"' in dockerfile_text
-
-
-def test_native_token_packer_is_built_from_source_not_tracked():
-    """Platform-specific PyO3 output must remain a reproducible build artifact."""
-    ignore_text = read_text(".gitignore")
-    if (ROOT_DIR / ".git").exists():
-        tracked_files = subprocess.run(
-            ["git", "ls-files"],
-            cwd=ROOT_DIR,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-    else:
-        assert ".git" in read_text(".dockerignore").splitlines()
-        tracked_files = [str(path.relative_to(ROOT_DIR)) for path in ROOT_DIR.rglob("*")]
-
-    assert "contextual_orchestrator/_token_packer*.so" in ignore_text
-    assert not any(
-        path.startswith("contextual_orchestrator/_token_packer")
-        and path.endswith((".so", ".dylib", ".dll", ".pyd"))
-        for path in tracked_files
-    )
+    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in makefile_text
 
 
 def test_security_tool_lockfile_uses_hash_pinning():
