@@ -145,6 +145,7 @@ def test_structured_output_validation_never_crashes(content: str, schema: object
 def test_reasoning_effort_profile_never_crashes(value: object) -> None:
     exercise_reasoning_effort_profile(value)
 
+@_SETTINGS
 @given(st.binary(max_size=4096))
 def test_nim_catalog_never_crashes_on_raw_bytes(raw: bytes) -> None:
     exercise_nim_catalog(raw)
