@@ -86,6 +86,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Route initial and fallback AUTO/FREE candidates with fast-mlsirm Judge IRT
   evidence for similar system/user interactions; candidates without converged
   psychometric evidence retain the existing measured-routing order.
+- Run the full test suite from the hash-locked `uv.lock` so git-backed
+  `fast-mlsirm` and its `numpy` dependency are installed in CI and locally.
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
 - Mixed structured workflows now retain a cost-ledger row for calls whose
