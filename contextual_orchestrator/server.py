@@ -4677,7 +4677,7 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     no consumer-side sentinel model is accepted.
     """
     model = body.get("model")
-    if model is None or (isinstance(model, str) and not model.strip()):
+    if model is None:
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4693,6 +4693,8 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
         
     if not isinstance(model, str):
         raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
