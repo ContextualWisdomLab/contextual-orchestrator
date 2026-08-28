@@ -3404,6 +3404,7 @@ class TaskOrchestrator:
             payload: dict[str, Any],
         ) -> tuple[dict[str, Any], ModelAgent]:
             """Send once per eligible provider, advancing only after a proven 413 rejection."""
+            nonlocal final_agent
             seen_providers: set[str] = set()
             for candidate in synthesis_candidates:
                 provider_key = (
@@ -3414,6 +3415,9 @@ class TaskOrchestrator:
                 if provider_key in seen_providers:
                     continue
                 seen_providers.add(provider_key)
+                # Keep the outer failure accounting attached to the provider
+                # whose attempt actually raised, including the post-413 path.
+                final_agent = candidate
                 candidate_payload = {**payload, "model": candidate.model}
                 if active_profile is not None:
                     candidate_payload = self.client.apply_effort_profile(

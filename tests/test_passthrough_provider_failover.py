@@ -205,6 +205,63 @@ def test_orchestrated_structured_synthesis_advances_on_413(model: str) -> None:
     ]
 
 
+def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> None:
+    """A post-413 provider error must trip the provider that actually failed."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(413),
+            "fallback_agent": RuntimeError("fallback unavailable"),
+        }
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                priority=10,
+                provider_name="primary",
+                tags=("response_format",),
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                priority=1,
+                provider_name="fallback",
+                tags=("response_format",),
+            ),
+        ],
+        client=client,
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [
+            {
+                "id": 0,
+                "role": "worker",
+                "agent_id": "primary_agent",
+                "subtask": "Evidence",
+                "access": [],
+                "output": "evidence",
+            }
+        ],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+
+    with pytest.raises(RuntimeError, match="fallback unavailable"):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large structured request"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert orchestrator._circuit["fallback_agent"]["failures"] == 1.0
+    assert "primary_agent" not in orchestrator._circuit
+
+
 def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> None:
     """Exhausted 413 routing remains a client-visible size error, not HTTP 500."""
     client = SequencedProxyClient(
