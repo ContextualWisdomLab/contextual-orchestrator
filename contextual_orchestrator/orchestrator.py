@@ -6450,7 +6450,9 @@ class TaskOrchestrator:
             return base_url.split("//", 1)[-1].split("/", 1)[0]
         return base_url  # pragma: no cover
 
-    def _agent_to_admin_payload(self, agent: ModelAgent) -> dict[str, Any]:
+    def _agent_to_admin_payload(
+        self, agent: ModelAgent, *, refresh: bool = True
+    ) -> dict[str, Any]:
         return {
             "id": agent.id,
             "model": agent.model,
@@ -6461,16 +6463,25 @@ class TaskOrchestrator:
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
             "group_name": agent.group_name,
-            "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
+            "group_routing": (
+                self._group_router.member_report(agent.id, refresh=refresh)
+                if agent.group_name
+                else None
+            ),
         }
 
-    def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
+    def list_agents(
+        self, page_number: int = 1, page_size: int = 10, *, refresh: bool = True
+    ) -> list[dict[str, Any]]:
         """Return a paginated admin-safe view of configured agents."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        return [self._agent_to_admin_payload(agent) for agent in self.candidates[start:end]]
+        return [
+            self._agent_to_admin_payload(agent, refresh=refresh)
+            for agent in self.candidates[start:end]
+        ]
 
     def list_openai_models(self) -> dict[str, Any]:
         """Return an OpenAI-compatible ``/v1/models`` list from the agent pool.
@@ -13014,15 +13025,17 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.candidates))
+        self._group_router.refresh()
+        self._quality_router.refresh()
         return {
-            "agents": self.list_agents(page_size=agent_page_size),
+            "agents": self.list_agents(page_size=agent_page_size, refresh=False),
             "policy": {
                 **self.policy.as_dict(),
                 "roles": list(self.ROLE_TAGS),
             },
             "routing_evidence": {
-                "transport": self._group_router.snapshot(),
-                "quality": self._quality_router.snapshot(),
+                "transport": self._group_router.snapshot(refresh=False),
+                "quality": self._quality_router.snapshot(refresh=False),
             },
             "routing_observation_policy": {
                 "enabled": self._routing_observation_store is not None,

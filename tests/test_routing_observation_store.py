@@ -146,18 +146,20 @@ def test_router_serializes_store_operations_with_memory_updates() -> None:
     class _LockCheckingStore:
         router: ModelGroupRouter | None = None
 
-        def _assert_router_locked(self) -> None:
-            assert self.router is not None and self.router._lock.locked()
+        def _assert_observation_io_locked(self) -> None:
+            assert self.router is not None
+            assert self.router._observation_io_lock.locked()
+            assert not self.router._lock.locked()
 
         def append(self, *args, **kwargs) -> None:
-            self._assert_router_locked()
+            self._assert_observation_io_locked()
 
         def load(self, ledger_name: str) -> list:
-            self._assert_router_locked()
+            self._assert_observation_io_locked()
             return []
 
         def delete_members(self, ledger_name: str, member_ids) -> None:
-            self._assert_router_locked()
+            self._assert_observation_io_locked()
 
     store = _LockCheckingStore()
     router = ModelGroupRouter(observation_store=store)
@@ -205,6 +207,37 @@ def test_measured_member_order_refreshes_each_ledger_once(tmp_path, monkeypatch)
         ]
         assert quality_refreshes == 1
         assert transport_refreshes == 1
+    finally:
+        orchestrator.close()
+
+
+def test_admin_state_refreshes_each_routing_ledger_once(tmp_path, monkeypatch) -> None:
+    agents = [
+        ModelAgent("member_a", "mock-a", group_name="shared_model"),
+        ModelAgent("member_b", "mock-b", group_name="shared_model"),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents,
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+    refreshes = {"transport": 0, "quality": 0}
+    original_transport_refresh = orchestrator._group_router.refresh
+    original_quality_refresh = orchestrator._quality_router.refresh
+
+    def count_transport_refresh() -> None:
+        refreshes["transport"] += 1
+        original_transport_refresh()
+
+    def count_quality_refresh() -> None:
+        refreshes["quality"] += 1
+        original_quality_refresh()
+
+    try:
+        monkeypatch.setattr(orchestrator._group_router, "refresh", count_transport_refresh)
+        monkeypatch.setattr(orchestrator._quality_router, "refresh", count_quality_refresh)
+        orchestrator.admin_state()
+        assert refreshes == {"transport": 1, "quality": 1}
     finally:
         orchestrator.close()
 

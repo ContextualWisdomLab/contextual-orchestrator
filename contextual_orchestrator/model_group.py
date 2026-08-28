@@ -110,6 +110,9 @@ class ModelGroupRouter:
         self._observation_store = observation_store
         self._ledger_name = ledger_name.strip()
         self._lock = threading.Lock()
+        # ponytail: one per-router I/O lock preserves store/apply ordering
+        # without holding the memory lock during bounded SQLite waits.
+        self._observation_io_lock = threading.Lock()
         # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
         # None until the first observation of each kind arrives.
         self._members: dict[str, dict[str, float | None]] = {}
@@ -141,21 +144,33 @@ class ModelGroupRouter:
 
     def forget_members(self, keep_member_ids: set[str]) -> None:
         """Drop ledger rows for members that left every group."""
-        with self._lock:
-            removed = set(self._members) - keep_member_ids
-            if self._observation_store is not None:
-                self._observation_store.delete_members(self._ledger_name, removed)
-            for member_id in list(self._members):
-                if member_id not in keep_member_ids:
-                    del self._members[member_id]
+        if self._observation_store is None:
+            with self._lock:
+                for member_id in list(self._members):
+                    if member_id not in keep_member_ids:
+                        del self._members[member_id]
+            return
+        with self._observation_io_lock:
+            with self._lock:
+                removed = set(self._members) - keep_member_ids
+            self._observation_store.delete_members(self._ledger_name, removed)
+            with self._lock:
+                for member_id in removed:
+                    if member_id not in keep_member_ids:
+                        self._members.pop(member_id, None)
 
     def reset_members(self, member_ids: set[str]) -> None:
         """Discard measurements whose group context changed."""
-        with self._lock:
-            if self._observation_store is not None:
-                self._observation_store.delete_members(self._ledger_name, member_ids)
-            for member_id in member_ids:
-                self._members.pop(member_id, None)
+        if self._observation_store is None:
+            with self._lock:
+                for member_id in member_ids:
+                    self._members.pop(member_id, None)
+            return
+        with self._observation_io_lock:
+            self._observation_store.delete_members(self._ledger_name, member_ids)
+            with self._lock:
+                for member_id in member_ids:
+                    self._members.pop(member_id, None)
 
     def update_prior(
         self,
@@ -227,22 +242,24 @@ class ModelGroupRouter:
             raise ValueError("output_tokens must be representable as a finite float") from None
         if throughput_sample is not None and not math.isfinite(throughput_sample):
             raise ValueError("output_tokens must be representable as a finite float")
-        with self._lock:
+        with self._observation_io_lock:
             self._persist_observation(
                 member_id,
                 success=True,
                 latency_seconds=latency,
                 output_tokens=output_tokens,
             )
-            state = self._ensure_locked(member_id)
-            self._apply_success_locked(state, clamped, throughput_sample)
+            with self._lock:
+                state = self._ensure_locked(member_id)
+                self._apply_success_locked(state, clamped, throughput_sample)
 
     def observe_failure(self, member_id: str) -> None:
         """Record one failed attempt (stability evidence only; no latency)."""
-        with self._lock:
+        with self._observation_io_lock:
             self._persist_observation(member_id, success=False)
-            state = self._ensure_locked(member_id)
-            self._apply_failure_locked(state)
+            with self._lock:
+                state = self._ensure_locked(member_id)
+                self._apply_failure_locked(state)
 
     def _persist_observation(
         self,
@@ -272,48 +289,50 @@ class ModelGroupRouter:
         """Reload current-window observations from the shared store."""
         if self._observation_store is None:
             return
-        with self._lock:
+        with self._observation_io_lock:
             observations = self._observation_store.load(self._ledger_name)
-            # ponytail: replay the bounded window for cross-process correctness;
-            # add a sequence cursor only after measured fleet load requires it.
-            member_ids = tuple(self._members)
-            prior_by_member = {
-                member_id: (
-                    self._float_value(
-                        state.get("prior_alpha"), BETA_PRIOR_SUCCESS_COUNT
-                    ),
-                    self._float_value(
-                        state.get("prior_beta"), BETA_PRIOR_FAILURE_COUNT
-                    ),
-                )
-                for member_id, state in self._members.items()
-            }
-            rebuilt = {
-                member_id: self._blank_state(member_id) for member_id in member_ids
-            }
-            for member_id, (prior_alpha, prior_beta) in prior_by_member.items():
-                state = rebuilt[member_id]
-                state["alpha"] = prior_alpha
-                state["beta"] = prior_beta
-                state["prior_alpha"] = prior_alpha
-                state["prior_beta"] = prior_beta
-            for observation in observations:
-                if observation.member_id not in rebuilt:
-                    continue
-                state = rebuilt[observation.member_id]
-                if observation.success:
-                    if observation.latency_seconds is None:
-                        continue
-                    latency = max(float(observation.latency_seconds), self._min_latency_seconds)
-                    throughput = (
-                        None
-                        if observation.output_tokens is None
-                        else float(observation.output_tokens) / latency
+            with self._lock:
+                # ponytail: replay the bounded window for cross-process
+                # correctness; add a sequence cursor only after measured fleet
+                # load requires it.
+                member_ids = tuple(self._members)
+                prior_by_member = {
+                    member_id: (
+                        self._float_value(
+                            state.get("prior_alpha"), BETA_PRIOR_SUCCESS_COUNT
+                        ),
+                        self._float_value(
+                            state.get("prior_beta"), BETA_PRIOR_FAILURE_COUNT
+                        ),
                     )
-                    self._apply_success_locked(state, latency, throughput)
-                else:
-                    self._apply_failure_locked(state)
-            self._members = rebuilt
+                    for member_id, state in self._members.items()
+                }
+                rebuilt = {
+                    member_id: self._blank_state(member_id) for member_id in member_ids
+                }
+                for member_id, (prior_alpha, prior_beta) in prior_by_member.items():
+                    state = rebuilt[member_id]
+                    state["alpha"] = prior_alpha
+                    state["beta"] = prior_beta
+                    state["prior_alpha"] = prior_alpha
+                    state["prior_beta"] = prior_beta
+                for observation in observations:
+                    if observation.member_id not in rebuilt:
+                        continue
+                    state = rebuilt[observation.member_id]
+                    if observation.success:
+                        if observation.latency_seconds is None:
+                            continue
+                        latency = max(float(observation.latency_seconds), self._min_latency_seconds)
+                        throughput = (
+                            None
+                            if observation.output_tokens is None
+                            else float(observation.output_tokens) / latency
+                        )
+                        self._apply_success_locked(state, latency, throughput)
+                    else:
+                        self._apply_failure_locked(state)
+                self._members = rebuilt
 
     def member_score(self, member_id: str) -> float:
         """Return the expected successful responses per second for a member."""
@@ -350,15 +369,21 @@ class ModelGroupRouter:
             scored = {member_id: self._score_locked(member_id) for member_id in member_ids}
             return sorted(member_ids, key=lambda member_id: -scored[member_id])
 
-    def member_report(self, member_id: str) -> dict[str, float | int | None]:
+    def member_report(
+        self, member_id: str, *, refresh: bool = True
+    ) -> dict[str, float | int | None]:
         """One member's measured evidence row for admin/analytics surfaces."""
-        self.refresh()
+        if refresh:
+            self.refresh()
         with self._lock:
             return self._report_locked(member_id)
 
-    def snapshot(self) -> dict[str, dict[str, float | int | None]]:
+    def snapshot(
+        self, *, refresh: bool = True
+    ) -> dict[str, dict[str, float | int | None]]:
         """Copy of every member's report keyed by member id."""
-        self.refresh()
+        if refresh:
+            self.refresh()
         with self._lock:
             return {member_id: self._report_locked(member_id) for member_id in self._members}
 
