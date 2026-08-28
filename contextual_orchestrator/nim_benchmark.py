@@ -2481,8 +2481,17 @@ def run_benchmark(
     if run_mode == "dry_run":
         api_key = "dry-run-placeholder-not-a-secret"
         active_transport = transport or build_dry_run_transport()
-        clock: Callable[[], float] = lambda: DRY_RUN_FIXED_UNIX_TIME
-        probe_timer: Callable[[], float] = lambda: 0.0
+
+        def dry_run_clock() -> float:
+            """Return the fixed timestamp used by deterministic dry runs."""
+            return DRY_RUN_FIXED_UNIX_TIME
+
+        def dry_run_probe_timer() -> float:
+            """Return a zero-duration probe clock for deterministic evidence."""
+            return 0.0
+
+        clock: Callable[[], float] = dry_run_clock
+        probe_timer: Callable[[], float] = dry_run_probe_timer
         timer = _deterministic_timer()
         eval_base_url = "mock://nim-dry-run"
         eval_client: ModelClient = _BudgetedModelClient(
