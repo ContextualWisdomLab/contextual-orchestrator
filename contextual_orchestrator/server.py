@@ -4528,7 +4528,8 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 def _validate_responses_model(body: dict[str, Any]) -> str:
     """Validate or default the Responses API model.
 
-    An omitted model selects the advertised gateway default. Explicit JSON
+    An omitted model selects ``orchestrator/auto`` for the orchestrated path.
+    Explicit JSON
     null or empty/whitespace strings are client mistakes, not omissions, and
     fail closed (400). Non-string values also fail closed. Strip + write back
     so passthrough pool matching sees the same id as form/JS padded names.
