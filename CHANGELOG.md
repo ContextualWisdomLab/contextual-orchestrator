@@ -74,6 +74,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Billing usage-export failures now appear in the operator-safe telemetry health
   counters instead of only in emitted error events.
+- Billing usage export now follows accepted ledger writes and skips duplicate,
+  failed, or queue-dropped records.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Validate orchestration-trace requests before every chat execution branch and

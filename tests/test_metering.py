@@ -2,15 +2,29 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import threading
+
 from contextual_orchestrator.cost_ledger import (
     CostLedger,
     InMemoryUsageTelemetrySink,
+    NonBlockingLedgerStore,
     PriceBook,
     PriceEntry,
     UsageRecord,
 )
 from contextual_orchestrator.metering import CanonicalUsageRecordSink
 from contextual_orchestrator.kv_config import InMemoryConfigStore
+
+
+class _RecordingUsageSink:
+    """Collect exported record ids for ledger acceptance assertions."""
+
+    def __init__(self) -> None:
+        self.ids: list[str] = []
+
+    def emit_usage_record(self, record: UsageRecord) -> None:
+        self.ids.append(record.usage_record_id)
 
 
 def test_record_sink_builds_and_enqueues_without_content() -> None:
@@ -77,3 +91,136 @@ def test_cost_ledger_reports_sink_failure_without_failing_completion() -> None:
     health = ledger.telemetry_health()
     assert health["export_failures"] == 1
     assert health["last_error_type"] == "RuntimeError"
+
+
+def test_billing_export_requires_store_acceptance() -> None:
+    """A dropped local record must not become a billing-only record."""
+
+    class _RejectingStore:
+        def append(self, _record: UsageRecord) -> bool:
+            return False
+
+        def query(self, _start: int | None = None, _end: int | None = None) -> list[dict[str, object]]:
+            return []
+
+    exported: list[dict[str, object]] = []
+    sink = CanonicalUsageRecordSink(
+        event_builder=lambda record, **_identity: {"record": record},
+        enqueue=exported.append,
+        identity={},
+    )
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(price_book, store=_RejectingStore(), usage_sink=sink)
+
+    ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1, completion_tokens=1)
+
+    assert exported == []
+
+
+def test_duplicate_usage_record_is_not_counted_or_exported_twice() -> None:
+    """Idempotent local writes must stay idempotent at the billing boundary."""
+    exported: list[dict[str, object]] = []
+    sink = CanonicalUsageRecordSink(
+        event_builder=lambda record, **_identity: {"record": record},
+        enqueue=exported.append,
+        identity={},
+    )
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(price_book, usage_sink=sink)
+
+    for _ in range(2):
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_duplicate",
+        )
+
+    assert len(exported) == 1
+    assert ledger.telemetry_health()["records_stored"] == 1
+
+
+def test_inline_health_counts_concurrent_export_failures() -> None:
+    """Concurrent request threads must not lose export-failure increments."""
+    telemetry = InMemoryUsageTelemetrySink()
+
+    class _FailingExportSink:
+        def emit_usage_record(self, _record: UsageRecord) -> None:
+            raise RuntimeError("export unavailable")
+
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(
+        price_book,
+        telemetry_sink=telemetry,
+        usage_sink=_FailingExportSink(),
+    )
+    count = 32
+
+    with ThreadPoolExecutor(max_workers=count) as executor:
+        list(
+            executor.map(
+                lambda _index: ledger.record_usage(
+                    provider="openai",
+                    model="gpt-x",
+                    prompt_tokens=1,
+                    completion_tokens=1,
+                ),
+                range(count),
+            )
+        )
+
+    assert ledger.telemetry_health()["export_failures"] == count
+
+
+def test_billing_export_skips_non_blocking_queue_drops() -> None:
+    """A queue.Full drop must not become a billing-only record."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    class _BlockingStore:
+        def append(self, record: UsageRecord) -> bool:
+            del record
+            entered.set()
+            assert release.wait(timeout=5)
+            return True
+
+        def query(self, start=None, end=None):
+            del start, end
+            return []
+
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    store = NonBlockingLedgerStore(_BlockingStore(), queue_size=1)
+    ledger = CostLedger(price_book, store=store, usage_sink=sink)
+    try:
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_1",
+        )
+        assert entered.wait(timeout=5)
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_2",
+        )
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            usage_record_id="usage_3",
+        )
+        assert sink.ids == ["usage_1", "usage_2"]
+    finally:
+        release.set()
+        assert store.flush(timeout=5)

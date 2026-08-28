@@ -298,8 +298,8 @@ class UsageRecord:
 class LedgerStore(Protocol):
     """Storage contract for usage records."""
 
-    def append(self, record: UsageRecord) -> None:
-        """Persist a usage record."""
+    def append(self, record: UsageRecord) -> bool:
+        """Persist a usage record and report whether it was accepted."""
         ...
 
     def query(self, start: Optional[int], end: Optional[int]) -> List[Dict[str, Any]]:
@@ -465,7 +465,7 @@ class NonBlockingLedgerStore:
         )
         self._worker.start()
 
-    def append(self, record: UsageRecord) -> None:
+    def append(self, record: UsageRecord) -> bool:
         """Queue a record for background persistence without blocking."""
         try:
             self._queue.put_nowait(record)
@@ -479,12 +479,13 @@ class NonBlockingLedgerStore:
                     error_type="queue.Full",
                 ),
             )
-            return
+            return False
         self._mark("records_accepted")
         _emit_usage_event(
             self._telemetry_sink,
             UsageTelemetryEvent.from_record(record, export_state="queued"),
         )
+        return True
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Query the backing store; queued writes may still be in flight."""
@@ -544,13 +545,14 @@ class InMemoryLedgerStore:
         self._usage_record_ids: set[str] = set()
         self._lock = threading.Lock()
 
-    def append(self, record: UsageRecord) -> None:
+    def append(self, record: UsageRecord) -> bool:
         """Append a flattened record row."""
         with self._lock:
             if record.usage_record_id in self._usage_record_ids:
-                return
+                return False
             self._rows.append(record.as_dict())
             self._usage_record_ids.add(record.usage_record_id)
+            return True
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return rows within the optional half-open time window."""
@@ -978,7 +980,7 @@ class SqlLedgerStore:
                     (name, label, order),
                 )
 
-    def append(self, record: UsageRecord) -> None:
+    def append(self, record: UsageRecord) -> bool:
         """Insert a usage record row and its attributions atomically.
 
         On sqlite connections opened in autocommit mode an explicit ``BEGIN``
@@ -988,9 +990,9 @@ class SqlLedgerStore:
         open for the caller to commit or roll back.
         """
         with self._lock:
-            self._append_locked(record)
+            return self._append_locked(record)
 
-    def _append_locked(self, record: UsageRecord) -> None:
+    def _append_locked(self, record: UsageRecord) -> bool:
         """Insert one record while the shared DB-API connection is locked."""
         row = record.as_dict()
         cur = self._conn.cursor()
@@ -1004,6 +1006,7 @@ class SqlLedgerStore:
                 _CORE_USAGE_INSERT_SQL[self._paramstyle],
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
             )
+            accepted = getattr(cur, "rowcount", 1) != 0
             cur.execute(
                 _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
                 (row["usage_record_id"], row.get("measurement_status", "unavailable")),
@@ -1013,6 +1016,7 @@ class SqlLedgerStore:
                 cur.execute("RELEASE SAVEPOINT usage_record_append")
             else:
                 self._conn.commit()
+            return accepted
         except Exception:
             if outer_transaction:
                 cur.execute("ROLLBACK TO SAVEPOINT usage_record_append")
@@ -1084,6 +1088,7 @@ class CostLedger:
         else:
             self.store = base_store
         self._inline_health = UsageTelemetryHealth()
+        self._inline_health_lock = threading.Lock()
         self._clock = clock or (lambda: int(time.time()))
         self.usage_sink = usage_sink
 
@@ -1152,8 +1157,11 @@ class CostLedger:
             measurement_status=measurement_status,
             attribution=dims,
         )
+        accepted = False
         try:
-            self.store.append(record)
+            # ``None`` remains a successful result for legacy third-party
+            # stores; internal stores return an explicit bool.
+            accepted = self.store.append(record) is not False
         except Exception as exc:
             self._mark_inline_failure(type(exc).__name__)
             _emit_usage_event(
@@ -1165,13 +1173,13 @@ class CostLedger:
                 ),
             )
         else:
-            if not isinstance(self.store, NonBlockingLedgerStore):
+            if accepted and not isinstance(self.store, NonBlockingLedgerStore):
                 self._mark_inline_success()
                 _emit_usage_event(
                     self.telemetry_sink,
                     UsageTelemetryEvent.from_record(record, export_state="stored"),
                 )
-        if self.usage_sink is not None:
+        if accepted and self.usage_sink is not None:
             try:
                 self.usage_sink.emit_usage_record(record)
             except Exception as exc:
@@ -1195,7 +1203,8 @@ class CostLedger:
 
     def telemetry_health(self) -> Dict[str, Any]:
         """Return prompt-safe ledger export health counters."""
-        health = self._inline_health.as_dict()
+        with self._inline_health_lock:
+            health = self._inline_health.as_dict()
         store_health = getattr(self.store, "telemetry_health", None)
         if callable(store_health):
             for key, value in store_health().items():
@@ -1286,17 +1295,20 @@ class CostLedger:
         return self.store.query(start, end)
 
     def _mark_inline_success(self) -> None:
-        self._inline_health.records_accepted += 1
-        self._inline_health.records_stored += 1
+        with self._inline_health_lock:
+            self._inline_health.records_accepted += 1
+            self._inline_health.records_stored += 1
 
     def _mark_inline_failure(self, error_type: str) -> None:
-        self._inline_health.records_accepted += 1
-        self._inline_health.store_failures += 1
-        self._inline_health.last_error_type = error_type
+        with self._inline_health_lock:
+            self._inline_health.records_accepted += 1
+            self._inline_health.store_failures += 1
+            self._inline_health.last_error_type = error_type
 
     def _mark_inline_export_failure(self, error_type: str) -> None:
-        self._inline_health.export_failures += 1
-        self._inline_health.last_error_type = error_type
+        with self._inline_health_lock:
+            self._inline_health.export_failures += 1
+            self._inline_health.last_error_type = error_type
 
 
 def dimension_catalog() -> List[Dict[str, Any]]:
