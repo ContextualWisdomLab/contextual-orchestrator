@@ -84,9 +84,10 @@ as privacy evidence, and #903 is now main-aligned through a normal merge.
 
 Protected `main` remains
 `b21645116b352967e50fc497b87eb745b9cc8c61`. The open protected queue has
-eight PRs. Every PR below is `MERGEABLE` but still blocked by protected review
-requirements; all have zero unresolved threads and zero qualifying approvals
-on the exact head. No bypass was used.
+eight PRs. The table records mixed mergeability, including a `BEHIND` entry, and
+every PR is still blocked by protected review requirements; all have zero
+unresolved threads and zero qualifying approvals on the exact head. No bypass
+was used.
 
 | PR | Exact head | Current protected evidence |
 | ---: | --- | --- |
