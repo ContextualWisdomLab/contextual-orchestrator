@@ -222,9 +222,9 @@ def test_complete_request_plan_covers_a_127_model_catalog() -> None:
     assert plan == {
         "catalog_request_count": 1,
         "capability_probe_request_count": 127 * 9,
-        "evaluation_reserve_request_count": 230,
+        "evaluation_reserve_request_count": 260,
         "planned_worker_count": 7,
-        "total_required_request_count": 1374,
+        "total_required_request_count": 1404,
     }
 
 
@@ -234,9 +234,9 @@ def test_buyer_facing_request_plan_matches_internal_plan() -> None:
         "catalog_discovery_requests": 1,
         "capability_probe_requests": 127 * 9,
         "evaluation_worker_ceiling": 7,
-        "evaluation_requests": 690,
-        "requests_after_catalog": 127 * 9 + 690,
-        "total_requests": 1834,
+        "evaluation_requests": 780,
+        "requests_after_catalog": 127 * 9 + 780,
+        "total_requests": 1924,
     }
 
 
@@ -261,7 +261,7 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
 
     with pytest.raises(
         nb.BenchmarkBudgetError,
-        match="complete benchmark needs 1834 requests but configured cap is 1833",
+        match="complete benchmark needs 1924 requests but configured cap is 1923",
     ):
         nb.run_benchmark(
             "dry_run",
@@ -269,7 +269,7 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
             None,
             str(tmp_path / "insufficient"),
             endpoint=FAKE_ENDPOINT,
-            max_total_requests=1833,
+            max_total_requests=1923,
             max_eval_models=7,
             transport=transport,
         )
@@ -314,17 +314,17 @@ def test_exact_complete_request_boundary_runs_and_records_plan(tmp_path: Path) -
         None,
         str(tmp_path / "exact_boundary"),
         endpoint=FAKE_ENDPOINT,
-        max_total_requests=21,
+        max_total_requests=24,
         max_eval_models=1,
         transport=transport,
     )
 
-    assert report["request_budget"]["max_total_requests"] == 21
-    assert report["request_budget"]["planned_total_requests"] == 21
+    assert report["request_budget"]["max_total_requests"] == 24
+    assert report["request_budget"]["planned_total_requests"] == 24
     assert report["request_budget"]["catalog_requests"] == 1
     assert report["request_budget"]["capability_probe_requests"] == 9
-    assert report["request_budget"]["evaluation_reserve_requests"] == 11
-    assert report["request_budget"]["requests_spent"] <= 21
+    assert report["request_budget"]["evaluation_reserve_requests"] == 14
+    assert report["request_budget"]["requests_spent"] <= 24
 
 
 def test_video_probe_fixture_is_one_decodable_frame_with_stable_hash() -> None:
@@ -349,7 +349,7 @@ def test_smoke_manifest_cannot_authorize_production_routing(tmp_path: Path) -> N
         TASK_MANIFEST_PATH,
         None,
         str(tmp_path),
-        max_total_requests=500,
+        max_total_requests=600,
         max_eval_models=2,
     )
     evaluation = report["evaluation"]

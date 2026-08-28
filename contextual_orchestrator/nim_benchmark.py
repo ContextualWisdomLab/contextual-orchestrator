@@ -1575,11 +1575,13 @@ def planned_evaluation_requests(worker_count: int, locked_task_count: int) -> in
     """Upper bound on evaluation calls, checked pre-flight so the run fails closed.
 
     Direct baselines, ``route_once``, and cheapest-eligible cells each reserve
-    one worker call plus one real-time judge call. ``conduct`` reserves its
-    five-step workflow envelope, including the model judge.
+    one worker call plus one real-time judge call. ``route_once`` reserves the
+    full equal-call envelope because endpoint races and future failover may use
+    more than one worker attempt. ``conduct`` reserves its five-step workflow
+    envelope, including the model judge.
     """
     return locked_task_count * (
-        worker_count * 2 + 2 + MAX_WORKFLOW_DEPTH + 2
+        worker_count * 2 + MAX_WORKFLOW_DEPTH + MAX_WORKFLOW_DEPTH + 2
     )
 
 

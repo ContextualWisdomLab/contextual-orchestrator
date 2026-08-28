@@ -87,9 +87,10 @@ concurrency; thread scheduling can change completion order but not coverage.
 
 The monthly schedule uses a hard ceiling of 2,000 requests. On the 127-model
 catalog scale observed on 2026-08-05, the current thirty-task, seven-worker
-configuration requires 1,834 requests: one catalog request, 1,143 capability
-probes, and a 690-request worst-case evaluation reserve. The reserve includes
-the real-time judge call on direct and cheapest-worker cells. Catalog growth
+configuration requires 1,924 requests: one catalog request, 1,143 capability
+probes, and a 780-request worst-case evaluation reserve. The reserve includes
+the full equal-call envelope for route-once cells, the five-call conduct
+envelope, and real-time judge calls on direct and cheapest-worker cells. Catalog growth
 beyond the ceiling causes a zero-partial-egress preflight failure rather than
 silent truncation.
 

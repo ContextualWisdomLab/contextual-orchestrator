@@ -882,7 +882,7 @@ def test_cheapest_priced_agent_selection() -> None:
 
 def test_planned_evaluation_requests_formula() -> None:
     assert nb.planned_evaluation_requests(3, 10) == 10 * (
-        3 * 2 + 2 + nb.MAX_WORKFLOW_DEPTH + 2
+        3 * 2 + nb.MAX_WORKFLOW_DEPTH + nb.MAX_WORKFLOW_DEPTH + 2
     )
 
 
@@ -1330,15 +1330,4 @@ def test_cli_live_fails_closed_without_secret() -> None:
 
 
 if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            set_backend(InMemoryCredentialBackend())
-            saved = os.environ.pop(nb.NIM_CREDENTIAL_NAME, None)
-            try:
-                fn()
-            finally:
-                set_backend(None)
-                if saved is not None:
-                    os.environ[nb.NIM_CREDENTIAL_NAME] = saved
-            print(f"ok {name}")
-    print("ok")
+    raise SystemExit(pytest.main([__file__, "-q"]))
