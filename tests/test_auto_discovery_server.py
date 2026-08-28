@@ -1,12 +1,88 @@
 """Server-startup model discovery activates discovered runtime agents."""
 
 import os
-from unittest.mock import patch
 from dataclasses import replace
+from unittest.mock import patch
 
-from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
+from contextual_orchestrator.__main__ import (
+    _auto_discover_runtime_agents,
+    _configured_provider_hosts,
+)
 from contextual_orchestrator.model_discovery import DiscoveredModel
-from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.orchestrator import (
+    ModelAgent,
+    ModelClient,
+    TaskOrchestrator,
+)
+
+
+def test_configured_provider_hosts_reads_the_runtime_allowlist(monkeypatch) -> None:
+    """CLI startup must give runtime discovery the deployment host allowlist."""
+    monkeypatch.setenv(
+        "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS",
+        "gateway.example, secondary.example ",
+    )
+
+    assert _configured_provider_hosts() == ["gateway.example", "secondary.example"]
+
+
+def test_configured_gateway_blank_seed_expands_to_exact_catalog_models(
+    monkeypatch,
+) -> None:
+    """An allowlisted blank seed activates only concrete catalog model IDs."""
+    class CatalogProbeClient(ModelClient):
+        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
+            del messages, kwargs
+            assert agent.model in {"catalog-chat-alpha", "catalog-chat-beta"}
+            return '{"ok":true}'
+
+    discovered = [
+        DiscoveredModel(
+            provider_name="configured_gateway",
+            model_id=model_id,
+            credential_name="LLM_GATEWAY_API_KEY",
+            chat_base_url="https://gateway.example/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat", "response_format"),
+        )
+        for model_id in ("catalog-chat-alpha", "catalog-chat-beta")
+    ]
+    captured_sources = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential",
+        lambda name: "registered" if name == "LLM_GATEWAY_API_KEY" else None,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda sources: (captured_sources.extend(sources) or discovered, []),
+    )
+    blank_seed = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        base_url="https://gateway.example/v1",
+        credential_key="LLM_GATEWAY_API_KEY",
+        provider_name="configured_gateway",
+        tags=("bootstrap_seed",),
+    )
+    orchestrator = TaskOrchestrator(
+        [blank_seed],
+        client=CatalogProbeClient(allowed_provider_hosts={"gateway.example"}),
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert any(source.provider_name == "configured_gateway" for source in captured_sources)
+    assert result["added"] == [
+        "configured_gateway_catalog_chat_alpha",
+        "configured_gateway_catalog_chat_beta",
+    ]
+    assert {agent.model for agent in orchestrator.agents} == {
+        "catalog-chat-alpha",
+        "catalog-chat-beta",
+    }
+    assert all(agent.base_url == "https://gateway.example/v1" for agent in orchestrator.agents)
+    assert all(agent.model for agent in orchestrator.agents)
+    assert orchestrator.probe_structured_workflow(orchestrator.agents[0])["status"] == "ready"
 
 
 def test_auto_discovery_activates_declared_runtime_capabilities(monkeypatch) -> None:
@@ -232,7 +308,7 @@ def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -
 
 
 def test_runtime_auto_discovery_skips_gateway_outside_allowlist(monkeypatch) -> None:
-    """One stale persisted gateway cannot abort otherwise valid discovery."""
+    """A rejected gateway is fail-closed and leaves bounded audit evidence."""
     captured = []
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
@@ -248,6 +324,49 @@ def test_runtime_auto_discovery_skips_gateway_outside_allowlist(monkeypatch) -> 
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert all(source.provider_name != "configured_gateway" for source in captured)
+    event = orchestrator._analytics_events[-1]
+    assert event["event_name"] == "configured_gateway_discovery_unavailable"
+    assert event["event_detail"] == {"reason_code": "source_not_allowlisted"}
+    assert "gateway.example" not in repr(event)
+
+
+def test_discovery_error_is_bounded_and_other_provider_models_activate(
+    monkeypatch,
+) -> None:
+    """One provider failure is observable without suppressing usable discoveries."""
+    from contextual_orchestrator.model_discovery import ProviderDiscoveryError
+
+    available = DiscoveredModel(
+        provider_name="openai",
+        model_id="available-chat-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda _sources: (
+            [available],
+            [ProviderDiscoveryError("configured_gateway", "authentication_failed")],
+        ),
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["added"] == ["openai_available_chat_model"]
+    event = next(
+        event
+        for event in orchestrator._analytics_events
+        if event["event_name"] == "provider_model_discovery_failed"
+    )
+    assert event["event_detail"] == {
+        "provider_name": "configured_gateway",
+        "reason_code": "authentication_failed",
+    }
 def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     monkeypatch,
 ) -> None:

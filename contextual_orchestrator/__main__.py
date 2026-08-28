@@ -101,6 +101,24 @@ def _json_object(value: str) -> dict[str, object]:
     return parsed
 
 
+def _configured_provider_hosts() -> list[str] | None:
+    """Return the deployment allowlist used by both serving and discovery.
+
+    ``configured_gateway_source`` deliberately refuses a runtime source unless
+    its host is allowlisted.  The HTTP client already accepts the same
+    deployment setting, so CLI startup must pass it into ``ModelClient`` rather
+    than silently discarding it and leaving a blank bootstrap agent unexpanded.
+    """
+    hosts = [
+        host.strip()
+        for host in os.environ.get(
+            "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", ""
+        ).split(",")
+        if host.strip()
+    ]
+    return hosts or None
+
+
 def _resolve_auth_token(explicit: str, credential_name: str) -> str:
     """Resolve a server bearer token from an explicit local value or the KV."""
     if explicit:
@@ -245,8 +263,18 @@ def _runtime_discovery_sources(
                 }
             )
         except ValueError:
+            orchestrator.record_analytics_event(
+                "configured_gateway_discovery_unavailable",
+                {"reason_code": "source_not_allowlisted"},
+            )
             continue
-        if source is None or get_credential(source.credential_name) is None:
+        if source is None:
+            continue
+        if get_credential(source.credential_name) is None:
+            orchestrator.record_analytics_event(
+                "configured_gateway_discovery_unavailable",
+                {"reason_code": "credential_unavailable"},
+            )
             continue
         identity = (source.list_url, source.credential_name)
         if identity not in seen:
@@ -371,7 +399,15 @@ def _discover_models_command(argv: list[str]) -> None:
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate chat-capable models, preserving free/ZDR evidence."""
-    discovered, _errors = discover_all_models(_runtime_discovery_sources(orchestrator))
+    discovered, errors = discover_all_models(_runtime_discovery_sources(orchestrator))
+    for error in errors:
+        orchestrator.record_analytics_event(
+            "provider_model_discovery_failed",
+            {
+                "provider_name": error.provider_name,
+                "reason_code": error.error_code,
+            },
+        )
     openrouter_paid_available = openrouter_paid_inference_available()
     chat_models = [model for model in discovered if is_discovered_chat_candidate(model)]
     runtime_models = [
@@ -487,7 +523,7 @@ def main(argv: list[str] | None = None) -> None:
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
-    parser.add_argument("--allowed-provider-host", action="append", dest="allowed_provider_hosts", default=None,
+    parser.add_argument("--allowed-provider-host", action="append", dest="allowed_provider_hosts", default=_configured_provider_hosts(),
                         help="Explicit remote provider host allowlist; repeat for multiple hosts (default: unrestricted public hosts).")
     parser.add_argument(
         "--sampling-temperature",
