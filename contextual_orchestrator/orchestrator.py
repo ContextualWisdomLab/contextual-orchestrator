@@ -5388,7 +5388,7 @@ class TaskOrchestrator:
     ) -> None:
         """Share race completion evidence with normal stability/circuit ledgers."""
         self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
-        if error is not None:
+        if error is not None and not _is_request_too_large_error(error):
             self._group_router.observe_failure(endpoint_id)
             self._record_failure(endpoint_id)
 
@@ -5515,6 +5515,7 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         last_error: Exception | None = None
+        every_failure_was_request_too_large = True
         for agent in candidates:
             payload = {
                 key: value
@@ -5536,7 +5537,10 @@ class TaskOrchestrator:
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
                 last_error = exc
-                self._group_router.observe_failure(agent.id)
+                request_too_large = _is_request_too_large_error(exc)
+                every_failure_was_request_too_large &= request_too_large
+                if not request_too_large:
+                    self._group_router.observe_failure(agent.id)
                 continue
             if selection_sink is not None:
                 selected_result = selection_sink(agent, result)
@@ -5546,6 +5550,10 @@ class TaskOrchestrator:
                 return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
+        if last_error is not None and every_failure_was_request_too_large:
+            raise ProviderRequestTooLargeError(
+                "request body exceeds every eligible provider limit"
+            ) from None
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
