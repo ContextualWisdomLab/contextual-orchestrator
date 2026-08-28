@@ -46,6 +46,29 @@ def _stopped_http_error() -> urllib.error.HTTPError:
     )
 
 
+def _tool_description_too_long_error() -> urllib.error.HTTPError:
+    """Build the provider's bounded tool-description rejection."""
+    return urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        400,
+        "invalid tools",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "invalid_tools",
+                        "message": (
+                            "each tool.function.description must be at most "
+                            "1024 characters"
+                        ),
+                    }
+                }
+            ).encode()
+        ),
+    )
+
+
 def test_transient_classification_matches_status_and_network_errors() -> None:
     for code in (408, 409, 425, 429, 500, 502, 503, 504):
         assert code in TRANSIENT_HTTP_STATUS
@@ -112,6 +135,36 @@ def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -
     stopped = _stopped_http_error()
     assert not is_transient_error(stopped)
     assert is_transient_error(_http_error(409))
+
+
+def test_oversized_tool_description_becomes_provider_request_too_large() -> None:
+    """The provider-specific size contract is normalized by both client paths."""
+    class OversizedToolClient(ModelClient):
+        def _validate_provider(self, agent):  # type: ignore[override]
+            del agent
+            return None
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination, timeout
+            raise _tool_description_too_long_error()
+
+        def _send_raw(self, agent, endpoint, payload, destination=None):  # type: ignore[override]
+            del agent, endpoint, payload, destination
+            raise _tool_description_too_long_error()
+
+    client = OversizedToolClient(max_retries=2, retry_backoff=0.0)
+    agent = ModelAgent(
+        "provider_worker",
+        "provider-model",
+        base_url="https://provider.example/v1",
+        api_key_env="",
+        credential_key="",
+    )
+
+    with pytest.raises(ProviderRequestTooLargeError):
+        client.chat(agent, [{"role": "user", "content": "send"}])
+    with pytest.raises(ProviderRequestTooLargeError):
+        client.proxy_send(agent, "chat/completions", {"model": agent.model, "messages": []})
 
 
 def test_terminal_tool_stop_is_preserved_by_chat_and_passthrough_transport() -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import json
 import socket
 import urllib.error
 from copy import deepcopy
@@ -56,6 +58,49 @@ def _http_error(status: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/v1", status, "failed", None, None)
 
 
+def _tool_description_too_long_error() -> urllib.error.HTTPError:
+    """Build the provider's bounded tool-description rejection."""
+    return urllib.error.HTTPError(
+        "https://provider.example/v1",
+        400,
+        "invalid tools",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "invalid_tools",
+                        "message": (
+                            "each tool.function.description must be at most "
+                            "1024 characters"
+                        ),
+                    }
+                }
+            ).encode()
+        ),
+    )
+
+
+def _invalid_tools_error() -> urllib.error.HTTPError:
+    """Build a non-size tool validation failure that must remain sticky."""
+    return urllib.error.HTTPError(
+        "https://provider.example/v1",
+        400,
+        "invalid tools",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "code": "invalid_tools",
+                        "message": "tool.function.parameters must be an object",
+                    }
+                }
+            ).encode()
+        ),
+    )
+
+
 def _build(client: SequencedProxyClient) -> TaskOrchestrator:
     """Build a two-provider pool with deterministic priority."""
     return TaskOrchestrator(
@@ -97,6 +142,53 @@ def test_virtual_passthrough_advances_once_and_preserves_request(status: int) ->
     assert client.calls[1][1]["stream"] is False
 
 
+def test_virtual_passthrough_advances_on_oversized_tool_description() -> None:
+    """A provider-specific tool length cap is eligible for cross-provider failover."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _tool_description_too_long_error(),
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        }
+    )
+
+    result = _build(client).proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "review code"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
+def test_virtual_passthrough_keeps_non_size_tool_errors_sticky() -> None:
+    """A generic provider invalid_tools response must not hide a bad request."""
+    failure = _invalid_tools_error()
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model", "choices": []},
+        }
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _build(client).proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "review code"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
+
+    assert caught.value is failure
+    assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
 @pytest.mark.parametrize("status", [404, 413, 429])
 def test_explicit_model_never_fails_over(status: int) -> None:
     """A concrete model selection remains sticky even when its provider fails."""
@@ -115,6 +207,29 @@ def test_explicit_model_never_fails_over(status: int) -> None:
 
     assert caught.value is failure
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_explicit_group_model_does_not_count_request_size_as_failure() -> None:
+    """A grouped model's HTTP 413 must not degrade measured provider health."""
+    client = SequencedProxyClient({"primary_agent": _http_error(413)})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                provider_name="primary",
+                group_name="primary_group",
+            )
+        ],
+        client=client,
+    )
+
+    with pytest.raises(urllib.error.HTTPError):
+        orchestrator.proxy_completion(
+            {"model": "primary-model", "messages": [{"role": "user", "content": "x"}]}
+        )
+
+    assert orchestrator._group_router.member_observation_count("primary_agent") == 0
 
 
 @pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])

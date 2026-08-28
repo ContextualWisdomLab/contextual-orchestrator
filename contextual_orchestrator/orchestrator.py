@@ -578,24 +578,64 @@ LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
+def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
+    """Read and cache one bounded JSON error body for downstream classifiers."""
+    cache_key = "_contextual_orchestrator_http_error_payload"
+    missing = object()
+    cached = getattr(error, cache_key, missing)
+    if cached is not missing:
+        return cached if isinstance(cached, dict) else None
+    try:
+        raw = error.read(65536)
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        payload = json.loads(raw)
+    except (
+        AttributeError,
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        TypeError,
+    ):
+        payload = None
+    result = payload if isinstance(payload, dict) else None
+    try:
+        setattr(error, cache_key, result)
+    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
+        pass
+    return result
+
+
 def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     """Return whether an HTTP error carries the terminal tool-stop contract."""
     cache_key = "_contextual_orchestrator_tool_execution_stopped"
     cached = getattr(error, cache_key, None)
     if isinstance(cached, bool):
         return cached
-    try:
-        payload = json.loads(error.read(65536).decode("utf-8"))
-    except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        result = False
-    else:
-        details = payload.get("error") if isinstance(payload, dict) else None
-        result = isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
+    payload = _http_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    result = isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
     try:
         setattr(error, cache_key, result)
     except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
         pass
     return result
+
+
+def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
+    """Recognize the provider-specific 1,024-character tool-description cap."""
+    if error.code != 400:
+        return False
+    payload = _http_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    message = details.get("message") if isinstance(details, dict) else None
+    return (
+        isinstance(details, dict)
+        and details.get("code") == "invalid_tools"
+        and isinstance(message, str)
+        and "tool.function.description" in message.casefold()
+        and "1024" in message
+    )
 
 
 def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
@@ -998,8 +1038,10 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
             return True
         if (
             isinstance(current, urllib.error.HTTPError)
-            and current.code
-            in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+            and (
+                current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+                or _is_oversized_tool_description_error(current)
+            )
         ):
             return True
         if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
@@ -1363,7 +1405,9 @@ class ModelClient:
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
-        if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 413:
+        if isinstance(last_error, urllib.error.HTTPError) and (
+            last_error.code == 413 or _is_oversized_tool_description_error(last_error)
+        ):
             raise ProviderRequestTooLargeError("provider request body is too large") from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
@@ -1788,7 +1832,9 @@ class ModelClient:
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
-        if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 413:
+        if isinstance(last_error, urllib.error.HTTPError) and (
+            last_error.code == 413 or _is_oversized_tool_description_error(last_error)
+        ):
             raise ProviderRequestTooLargeError("provider request body is too large") from None
         if not allow_transient_retries and last_error is not None:
             raise last_error
@@ -3141,8 +3187,11 @@ class TaskOrchestrator:
             started_at = time.perf_counter()
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
-            except Exception:
-                if measured:
+            except Exception as exc:
+                request_too_large = isinstance(exc, ProviderRequestTooLargeError) or (
+                    isinstance(exc, urllib.error.HTTPError) and exc.code == 413
+                )
+                if measured and not request_too_large:
                     self._group_router.observe_failure(agent.id)
                 raise
             if measured:
