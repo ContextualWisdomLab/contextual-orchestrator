@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-29 normalized video job resource slice
+## 2026-08-29 KST normalized video job resource slice
 
 Protected `main` at `b21645116b352967e50fc497b87eb745b9cc8c61` already contains
 PR #883's provider-affine video follow-up contract: the client receives an

@@ -21,9 +21,6 @@ the public ownership key.
 
 ## References
 
-OpenRouter. (2026). *Submit a video generation request*. OpenRouter API
-Reference. https://openrouter.ai/docs/api/api-reference/video-generation/create-videos
-
 OpenRouter. (2026). *Video generation*. OpenRouter documentation.
 https://openrouter.ai/docs/guides/overview/multimodal/video-generation
 

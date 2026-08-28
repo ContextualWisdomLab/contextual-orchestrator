@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import threading
 import time
 from typing import Any
 import uuid
@@ -77,6 +78,7 @@ class VideoJobRegistry:
         self._legacy_owners = job_registry.mapping(
             "video_job_owners", decode=lambda raw: VideoJobOwner(**raw)
         )
+        self._legacy_usage_lock = threading.Lock()
 
     def register(
         self,
@@ -109,11 +111,14 @@ class VideoJobRegistry:
         # must never leave the job without a gateway-addressable owner.
         self._records[gateway_job_id] = record
         if reported_usage is not None:
-            self._store_usage_if_absent(gateway_job_id, VideoJobUsage(
-                prompt_tokens=reported_usage["prompt_tokens"],
-                completion_tokens=reported_usage["completion_tokens"],
-                observed_at=submitted_at,
-            ))
+            self._store_usage_if_absent(
+                gateway_job_id,
+                VideoJobUsage(
+                    prompt_tokens=reported_usage["prompt_tokens"],
+                    completion_tokens=reported_usage["completion_tokens"],
+                    observed_at=submitted_at,
+                ),
+            )
         return self.public_response(provider_result, self._owner_from_record(record))
 
     @staticmethod
@@ -199,25 +204,32 @@ class VideoJobRegistry:
                 return owner
             # Preserve the old payload shape until its configured retention
             # expires; new submissions never write this denormalized mapping.
-            updated = VideoJobOwner(
-                gateway_job_id=owner.gateway_job_id,
-                provider_job_id=owner.provider_job_id,
-                agent_id=owner.agent_id,
-                submitted_at=owner.submitted_at,
-                owner_id=owner.owner_id,
-                usage_measurement_status="measured",
-                provider_usage=usage,
-                agent_affinity_key=owner.agent_affinity_key,
-            )
-            self._legacy_owners[owner.gateway_job_id] = updated
-            return updated
+            with self._legacy_usage_lock:
+                current = self._legacy_owners[owner.gateway_job_id]
+                if current.provider_usage is not None:
+                    return current
+                updated = VideoJobOwner(
+                    gateway_job_id=current.gateway_job_id,
+                    provider_job_id=current.provider_job_id,
+                    agent_id=current.agent_id,
+                    submitted_at=current.submitted_at,
+                    owner_id=current.owner_id,
+                    usage_measurement_status="measured",
+                    provider_usage=usage,
+                    agent_affinity_key=current.agent_affinity_key,
+                )
+                self._legacy_owners[owner.gateway_job_id] = updated
+                return updated
         assert isinstance(record, VideoJobRecord)
         if usage is not None and owner.provider_usage is None:
-            self._store_usage_if_absent(owner.gateway_job_id, VideoJobUsage(
-                prompt_tokens=usage["prompt_tokens"],
-                completion_tokens=usage["completion_tokens"],
-                observed_at=int(time.time()),
-            ))
+            self._store_usage_if_absent(
+                owner.gateway_job_id,
+                VideoJobUsage(
+                    prompt_tokens=usage["prompt_tokens"],
+                    completion_tokens=usage["completion_tokens"],
+                    observed_at=int(time.time()),
+                ),
+            )
         return self._owner_from_record(record)
 
     def _store_usage_if_absent(self, gateway_job_id: str, usage: VideoJobUsage) -> None:

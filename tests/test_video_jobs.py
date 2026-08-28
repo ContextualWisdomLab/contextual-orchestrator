@@ -105,6 +105,32 @@ def test_stale_owner_observation_cannot_replace_first_complete_usage() -> None:
     }
 
 
+def test_legacy_stale_owner_observation_cannot_replace_usage() -> None:
+    factory = _SharedRegistryFactory()
+    legacy = VideoJobOwner(
+        gateway_job_id="videojob_legacy",
+        provider_job_id="provider-job",
+        agent_id="declared_video_agent",
+        submitted_at=1,
+        owner_id="principal_one",
+    )
+    factory.mapping("video_job_owners")[legacy.gateway_job_id] = legacy
+    registry = VideoJobRegistry(factory)
+    stale_owner = registry.owner(legacy.gateway_job_id, "principal_one")
+
+    registry.observe_provider_result(
+        stale_owner, {"usage": {"input_tokens": 7, "output_tokens": 2}}
+    )
+    registry.observe_provider_result(
+        stale_owner, {"usage": {"input_tokens": 9, "output_tokens": 3}}
+    )
+
+    assert registry.owner(legacy.gateway_job_id, "principal_one").provider_usage == {
+        "prompt_tokens": 7,
+        "completion_tokens": 2,
+    }
+
+
 def test_legacy_owner_records_remain_readable_during_normalization() -> None:
     factory = _SharedRegistryFactory()
     legacy = VideoJobOwner(
