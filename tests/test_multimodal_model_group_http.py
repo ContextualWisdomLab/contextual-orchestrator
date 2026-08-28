@@ -374,41 +374,6 @@ def test_untrackable_video_submission_is_not_recorded_as_routing_success() -> No
     assert orchestrator._group_router.member_report(agent.id)["success_count"] == 0
 
 
-def test_binary_capability_size_exhaustion_returns_413_without_health_penalty() -> None:
-    """Media providers rejecting request size must not be recorded as unhealthy."""
-    agents = [
-        ModelAgent(
-            "first_speech",
-            "provider/first-speech",
-            tags=("speech",),
-            group_name="speech_group",
-        ),
-        ModelAgent(
-            "second_speech",
-            "provider/second-speech",
-            tags=("speech",),
-            group_name="speech_group",
-        ),
-    ]
-    orchestrator = TaskOrchestrator(agents)
-    orchestrator.client.proxy_send_bytes = (  # type: ignore[method-assign]
-        lambda _agent, _endpoint, _payload: (_ for _ in ()).throw(_request_too_large_error())
-    )
-
-    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
-        orchestrator.proxy_capability(
-            {"model": orchestrator.AUTO_MODEL, "input": "announce"},
-            capability="speech",
-            endpoint="audio/speech",
-            binary=True,
-        )
-
-    assert all(
-        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
-        for agent in agents
-    )
-
-
 def test_raced_media_size_rejections_do_not_penalize_endpoints() -> None:
     """Immediate-race media size failures keep both endpoint health ledgers clean."""
     agents = [
@@ -523,6 +488,32 @@ def test_openrouter_image_alias_uses_its_dedicated_images_endpoint() -> None:
     )
 
     assert observed == [("images", {"model": "provider/image", "prompt": "diagram"})]
+
+
+def test_capability_request_size_exhaustion_preserves_413_without_penalty() -> None:
+    """Oversized capability requests do not degrade provider health."""
+    agents = [
+        ModelAgent("first_image", "provider/image", tags=("image",), group_name="image_group"),
+        ModelAgent("second_image", "provider/image", tags=("image",), group_name="image_group"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+
+    def reject_size(_agent: ModelAgent, _endpoint: str, _payload: dict) -> dict:
+        raise urllib.error.HTTPError("https://provider.invalid/images", 413, "too large", None, None)
+
+    orchestrator.client.proxy_send = reject_size  # type: ignore[method-assign]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_capability(
+            {"model": "image-group", "prompt": "large image"},
+            capability="image",
+            endpoint="images/generations",
+        )
+
+    assert all(
+        orchestrator._group_router.member_report(agent.id)["failure_count"] == 0
+        for agent in agents
+    )
 
 
 def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:

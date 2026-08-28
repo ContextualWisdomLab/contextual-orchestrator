@@ -5450,6 +5450,8 @@ class TaskOrchestrator:
         """Route one capability request with measured group-member failover."""
         requested_model = body.get("model")
         candidates = self._capability_agents(capability, requested_model)
+        every_failure_was_request_too_large = True
+        saw_failure = False
         race_members = self._equivalent_race_members(candidates, capability=capability)
         # Async video submission creates provider-side work that cannot be
         # raced safely without loser cancellation: every accepted loser would
@@ -5515,7 +5517,6 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         last_error: Exception | None = None
-        every_failure_was_request_too_large = True
         for agent in candidates:
             payload = {
                 key: value
@@ -5537,8 +5538,11 @@ class TaskOrchestrator:
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
                 last_error = exc
+                saw_failure = True
                 request_too_large = _is_request_too_large_error(exc)
-                every_failure_was_request_too_large &= request_too_large
+                every_failure_was_request_too_large = (
+                    every_failure_was_request_too_large and request_too_large
+                )
                 if not request_too_large:
                     self._group_router.observe_failure(agent.id)
                 continue
@@ -5550,10 +5554,10 @@ class TaskOrchestrator:
                 return selected_result
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
-        if last_error is not None and every_failure_was_request_too_large:
+        if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
-            ) from None
+            ) from last_error
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
