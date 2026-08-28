@@ -685,13 +685,25 @@ class CostRoutingCoordinator:
         """
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
+        resolved_model = model
+        if zdr_only:
+            selection_model = (
+                None
+                if model
+                in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
+                else model
+            )
+            with self.orchestrator.request_policy(True):
+                resolved_model = self.orchestrator.select_capability_agent(
+                    "embedding", selection_model
+                ).model
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
-            inputs, model=model, attribution=shared_attribution, zdr_only=zdr_only
+            inputs, model=resolved_model, attribution=shared_attribution, zdr_only=zdr_only
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
-        self._embedding_models[job.job_id] = model
+        self._embedding_models[job.job_id] = resolved_model
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts

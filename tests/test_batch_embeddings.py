@@ -21,6 +21,8 @@ import threading
 import urllib.error
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
@@ -144,6 +146,32 @@ class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
         return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
 
 
+def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",)),
+            ModelAgent(
+                "zdr_embedding",
+                "zdr-embedding",
+                tags=("embedding", "privacy:zdr"),
+            ),
+        ]
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    with pytest.raises(RuntimeError, match="no enabled agent available"):
+        coordinator.submit_embeddings_batch(
+            ["private"], model="paid-embedding", zdr_only=True
+        )
+
+    assert backend.requests == []
+
+
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
     server, port, token, coordinator = _serve()
     base = f"http://127.0.0.1:{port}"
@@ -259,11 +287,11 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
     """Large embedding inputs are mapped into provider-safe parts, then reduced."""
     agents = [
         ModelAgent(
-            id="mock_worker",
-            model="mock-a",
-            base_url="mock://a",
-            provider_name="mock",
-            tags=("reasoning",),
+            id="zdr_embedding",
+            model="text-embedding-test",
+            base_url="mock://embed",
+            provider_name="acme-provider",
+            tags=("embedding", "privacy:zdr"),
             priority=1,
         )
     ]
