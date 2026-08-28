@@ -4830,7 +4830,11 @@ class TaskOrchestrator:
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
             assigned = known_agents.get(agent_id)
-            if assigned is None or not is_general_chat_agent_model_id(assigned.model):
+            if (
+                assigned is None
+                or not is_general_chat_agent_model_id(assigned.model)
+                or not self._zdr_agent_allowed(assigned)
+            ):
                 # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
@@ -4909,7 +4913,8 @@ class TaskOrchestrator:
         candidates = [
             agent
             for agent in source
-            if self._zdr_agent_allowed(agent)
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
             if (not free_only or self._is_free_agent(agent))
             and (not chat_only or is_general_chat_agent_model_id(agent.model))
             and all(tag in agent.tags for tag in required_tags)
@@ -5680,7 +5685,9 @@ class TaskOrchestrator:
         ordered = [
             agent
             for agent in ordered
-            if is_general_chat_agent_model_id(agent.model)
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            and is_general_chat_agent_model_id(agent.model)
             and all(tag in agent.tags for tag in required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]

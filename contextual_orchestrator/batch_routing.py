@@ -162,6 +162,7 @@ class BatchRequest:
     custom_id: str = field(default_factory=lambda: f"req_{uuid.uuid4().hex}")
     attribution: Dict[str, Any] = field(default_factory=dict)
     mode: str = "auto"
+    zdr_only: bool = False
 
     def to_jsonl_line(self, endpoint: str = "/v1/chat/completions") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API JSONL line."""
@@ -169,7 +170,11 @@ class BatchRequest:
             "custom_id": self.custom_id,
             "method": "POST",
             "url": endpoint,
-            "body": {"model": self.model, "messages": self.messages},
+            "body": {
+                "model": self.model,
+                "messages": self.messages,
+                "zdr_only": self.zdr_only,
+            },
         }
 
 
@@ -442,6 +447,7 @@ class EmbeddingBatchRequest:
     part_index: int = 0
     part_count: int = 1
     token_count: int = 0
+    zdr_only: bool = False
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""
@@ -449,7 +455,11 @@ class EmbeddingBatchRequest:
             "custom_id": self.custom_id,
             "method": "POST",
             "url": endpoint,
-            "body": {"model": self.model, "input": self.input_text},
+            "body": {
+                "model": self.model,
+                "input": self.input_text,
+                "zdr_only": self.zdr_only,
+            },
         }
 
 

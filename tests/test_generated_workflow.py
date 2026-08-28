@@ -170,6 +170,23 @@ def test_unknown_agent_id_is_reselected_not_fatal() -> None:
     assert result["trace"][0]["agent_id"] == "general_agent"  # reselected from the real pool
 
 
+def test_generated_plan_reselects_non_zdr_assignment_under_request_policy() -> None:
+    non_zdr = ModelAgent("non_zdr_agent", "non-zdr-model", priority=100)
+    zdr = ModelAgent("zdr_agent", "zdr-model", tags=("privacy:zdr",))
+    orchestrator = TaskOrchestrator([non_zdr, zdr])
+    raw_plan = json.dumps({
+        "steps": [
+            {"id": 0, "role": "worker", "agent_id": non_zdr.id, "subtask": "work", "access": []},
+            {"id": 1, "role": "synthesizer", "agent_id": non_zdr.id, "subtask": "answer", "access": [0]},
+        ]
+    })
+
+    with orchestrator.request_policy(True):
+        steps = orchestrator._parse_workflow_plan(raw_plan)
+
+    assert [step.agent_id for step in steps] == [zdr.id, zdr.id]
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

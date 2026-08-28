@@ -10,9 +10,9 @@ from dataclasses import replace
 
 from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
-from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
+from .chat_capability import is_general_chat_agent_model_id
 from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
@@ -286,9 +286,6 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     """Discover and activate models accepted by the shared chat contract."""
     discovered, _errors = discover_all_models()
     openrouter_paid_available = openrouter_paid_inference_available()
-    # Some OpenAI-compatible model-list APIs omit capability metadata. The
-    # parser already applies the shared negative compatibility contract, so use
-    # that same contract here instead of dropping metadata-free general models.
     chat_models = [
         model for model in discovered if is_general_chat_agent_model_id(model.model_id)
     ]

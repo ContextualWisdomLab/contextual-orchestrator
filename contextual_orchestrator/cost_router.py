@@ -227,6 +227,7 @@ class CostRoutingCoordinator:
         owner_id: Optional[str] = None,
         provider_request: Optional[Dict[str, Any]] = None,
         provider_endpoint: str = "chat/completions",
+        zdr_only: bool = False,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -248,6 +249,8 @@ class CostRoutingCoordinator:
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
+        if type(zdr_only) is not bool:
+            raise TypeError("zdr_only must be a boolean")
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
@@ -258,6 +261,7 @@ class CostRoutingCoordinator:
                 model=model_name,
                 attribution=dict(attribution or {}),
                 mode=mode,
+                zdr_only=zdr_only,
             )
             job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
             return {
@@ -649,6 +653,7 @@ class CostRoutingCoordinator:
         model: str = "contextual-orchestrator",
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        zdr_only: bool = False,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -657,9 +662,11 @@ class CostRoutingCoordinator:
         owned by the orchestrator. Returns the backend job handle; the vectors
         and recorded cost are produced by :meth:`embeddings_batch_document`.
         """
+        if type(zdr_only) is not bool:
+            raise TypeError("zdr_only must be a boolean")
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
-            inputs, model=model, attribution=shared_attribution
+            inputs, model=model, attribution=shared_attribution, zdr_only=zdr_only
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
@@ -676,6 +683,7 @@ class CostRoutingCoordinator:
         *,
         model: str,
         attribution: Dict[str, Any],
+        zdr_only: bool,
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
@@ -698,6 +706,7 @@ class CostRoutingCoordinator:
                         part_index=part_index,
                         part_count=part_count,
                         token_count=token_count,
+                        zdr_only=zdr_only,
                     )
                 )
         return requests, part_counts, {
@@ -952,6 +961,7 @@ class CostRoutingCoordinator:
         model: str = "contextual-orchestrator",
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        zdr_only: bool = False,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -961,7 +971,11 @@ class CostRoutingCoordinator:
         envelope the caller then polls via :meth:`embeddings_batch_document`.
         """
         job = self.submit_embeddings_batch(
-            inputs, model=model, attribution=attribution, metadata=metadata
+            inputs,
+            model=model,
+            attribution=attribution,
+            metadata=metadata,
+            zdr_only=zdr_only,
         )
         return self.embeddings_batch_document(job.job_id)
 

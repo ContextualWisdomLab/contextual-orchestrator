@@ -419,6 +419,8 @@ def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         return set()
     rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return set()
     return {
         row["model_id"].casefold()
         for row in rows or ()

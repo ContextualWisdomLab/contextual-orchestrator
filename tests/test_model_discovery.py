@@ -458,6 +458,17 @@ def test_discover_all_models_applies_openrouter_zdr_evidence_to_other_sources() 
     ]
 
 
+def test_malformed_openrouter_zdr_data_is_ignored(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "contextual_orchestrator.model_discovery._fetch_json",
+        lambda *args, **kwargs: {"data": {"model_id": "not-a-list"}},
+    )
+
+    from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+    assert _openrouter_zdr_model_ids(timeout=1.0) == set()
+
+
 def test_discovery_boundary_contains_raw_connection_reset() -> None:
     """A raw ConnectionResetError (not a URLError) still fails inside the boundary.
 

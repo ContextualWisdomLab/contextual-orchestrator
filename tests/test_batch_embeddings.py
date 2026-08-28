@@ -286,9 +286,11 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
         ["one two three four five six seven eight", "short input"],
         model="text-embedding-test",
         attribution={"provider": "acme-provider", "team": "platform"},
+        zdr_only=True,
     )
 
     assert len(backend.requests) > 2
+    assert all(request.zdr_only is True for request in backend.requests)
     assert all(request.token_count <= 4 for request in backend.requests)
     assert document["part_count"] == len(backend.requests)
     assert document["input_part_counts"][0] > 1

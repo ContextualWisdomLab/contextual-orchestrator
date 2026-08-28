@@ -2993,7 +2993,9 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     return cleaned if cleaned else {}
 
 
-def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
+def _validate_batch_requests(
+    body: dict[str, Any], expose_trace: bool, *, zdr_only: bool
+) -> list[BatchRequest]:
     raw_requests = body.get("requests")
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
@@ -3019,6 +3021,7 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
             "model": model.strip(),
             "attribution": merged,
             "mode": mode,
+            "zdr_only": zdr_only,
         }
         # Caller-supplied custom_id: without it, results cannot be mapped
         # back to requests on backends that do not preserve submission
@@ -5718,7 +5721,8 @@ def build_server(
                 )
                 self._authorize(scope, state_changing=True)
                 body = self._read_json()
-                request_policy = orchestrator.request_policy(_validate_zdr_only(body))
+                zdr_only = _validate_zdr_only(body)
+                request_policy = orchestrator.request_policy(zdr_only)
                 request_policy.__enter__()
                 metadata_values = [
                     value
@@ -5900,6 +5904,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            zdr_only=zdr_only,
                         ))
                     # Batch-channel Completions return a job handle (202), not a
                     # text_completion body — match chat Completions honesty so
@@ -6134,6 +6139,7 @@ def build_server(
                                         hints=structured_routing,
                                         model_name=body["model"],
                                         provider_request=body,
+                                        zdr_only=zdr_only,
                                     )
                                 )
                         if include_trace and not tool_loop:
@@ -6236,6 +6242,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            zdr_only=zdr_only,
                         ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
@@ -6346,6 +6353,7 @@ def build_server(
                                 model=agent.model,
                                 attribution=attribution,
                                 metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
+                                zdr_only=zdr_only,
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
@@ -6425,6 +6433,7 @@ def build_server(
                                 model=agent.model,
                                 attribution=attribution,
                                 metadata=submit_metadata,
+                                zdr_only=zdr_only,
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
@@ -6458,7 +6467,11 @@ def build_server(
                     return
                 if path == "/api/v1/batch_routing_jobs":
                     _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
-                    batch_requests = _validate_batch_requests(body, security.expose_trace_by_default)
+                    batch_requests = _validate_batch_requests(
+                        body,
+                        security.expose_trace_by_default,
+                        zdr_only=zdr_only,
+                    )
                     metadata = {"actor_scope": "inference"}
                     job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
                     orchestrator.record_analytics_event(
@@ -6769,6 +6782,7 @@ def build_server(
                                     model_name=body["model"],
                                     provider_request=body,
                                     provider_endpoint="responses",
+                                    zdr_only=zdr_only,
                                 )
                             )
                     orchestrator.record_analytics_event(
