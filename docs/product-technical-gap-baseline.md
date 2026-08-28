@@ -4,7 +4,7 @@
 
 `gh api user`, `gh pr view 901`, and the review-thread GraphQL query all
 succeeded on August 28, 2026. Live PR `#901`
-(`fix/zdr-only-dynamic-discovery`, exact head `d07b4a70bf7dc23e19a9d7c92daaf6e61584c108`)
+(`fix/zdr-only-dynamic-discovery`, exact head `dcdb04b7adcfc8f57cbf5b13332b504f5c246fed`)
 already covers the earlier ZDR routing defects that had active review threads:
 caller-supplied group filtering, generated-plan ZDR revalidation, batch model
 selection error normalization, and duplicate-model embedding identity. The
@@ -14,9 +14,9 @@ reported `STRIX_PROVIDER_UNAVAILABLE` rather than a repository finding.
 
 The existing `.worktrees/commercial-loop-20260828-pr901-fix` worktree was
 reconciled before new edits. It is 38 commits behind the live PR head and its
-only unpublished useful delta is an omitted-model batch embeddings regression
-test plus an older baseline note. That behavior proof was ported onto a fresh
-worktree rooted at the current PR head instead of reviving the diverged branch.
+omitted-model batch embeddings regression test plus this baseline note were
+ported onto a fresh worktree and are now published on the live PR head instead
+of reviving the diverged branch.
 
 This slice closes one bounded evidence gap in the highest-leverage open product
 area: `POST /v1/batch/embeddings` with omitted `model` and `"zdr_only": true`
