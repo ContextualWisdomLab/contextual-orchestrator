@@ -7061,10 +7061,25 @@ def build_server(
                         if isinstance(instructions, str) and instructions:
                             messages.append({"role": "system", "content": instructions})
                         messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        responses_attribution = dict(
+                            _validate_attribution(body.get("attribution")) or {}
+                        )
+                        responses_user_id = _validate_completions_user(body)
+                        if responses_user_id is not None and not responses_attribution.get("account"):
+                            responses_attribution["account"] = responses_user_id
+                        responses_attribution.setdefault("model_name", body["model"])
+                        responses_attribution.setdefault("service", "responses_api")
                         started_at = time.perf_counter()
                         result = self._run(
-                            lambda: orchestrator.complete(
-                                messages, mode="auto", model_name=model_name
+                            lambda: coordinator.complete(
+                                messages,
+                                mode="auto",
+                                attribution=responses_attribution,
+                                hints=_validate_routing(body.get("routing")),
+                                model_name=model_name,
+                                cache_bypass=cache_bypass,
+                                cache_partition=cache_partition,
+                                zdr_only=zdr_only,
                             )
                         )
                         summaries = [

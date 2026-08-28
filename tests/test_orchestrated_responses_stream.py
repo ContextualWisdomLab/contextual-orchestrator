@@ -11,6 +11,7 @@ import urllib.error
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.server import (
     RequestError,
     SecurityConfig,
@@ -298,15 +299,13 @@ def test_http_zdr_only_request_filters_the_runtime_candidate_pool() -> None:
         group_name="shared_model",
     )
     orchestrator = TaskOrchestrator([paid, private])
-    observed: list[str] = []
-
-    def complete(_messages, *, mode, model_name):
-        selected = orchestrator._select_agent("hello", "worker")
-        observed.append(selected.id)
-        return {"answer": "ok", "trace": []}
-
-    orchestrator.complete = complete  # type: ignore[method-assign]
-    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
     threading.Thread(target=server.serve_forever, daemon=True).start()
     request = urllib.request.Request(
         f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
@@ -324,7 +323,9 @@ def test_http_zdr_only_request_filters_the_runtime_candidate_pool() -> None:
     finally:
         server.shutdown()
 
-    assert observed == [private.id]
+    workflow = orchestrator.get_workflow_run(next(iter(orchestrator._run_order)))
+    assert {step["agent_id"] for step in workflow["trace"]} == {private.id}
+    assert coordinator.ledger.store.query()
 
 
 @pytest.mark.parametrize(
