@@ -24,8 +24,8 @@ sidecar catalog loader still expects a mapping while the generated catalog is
 list-shaped; OpenCode failed closed because no current-head reviewer verdict
 was posted. Full and Atheris remained pending at the last exact-head poll.
 All seven open PRs remain subject to protected review and hosted gates; no PR
-is claimed as protected-main delivery. The docs-only recording PR #900 is at
-`8b5fb4a3` and remains open.
+is claimed as protected-main delivery. The docs-only recording PR #900 remains
+open.
 
 The earlier local merge attempt for #857 at `0aec4a54` was aborted without a
 push; no stale branch evidence is promoted to protected-main evidence. The
