@@ -211,3 +211,97 @@ def test_files_upload_does_not_replicate_to_every_provider() -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_files_upload_skips_provider_excluded_from_files() -> None:
+    """A files tag cannot override the operator's provider exclusion."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "excluded_files_agent",
+                "mock-files",
+                tags=("files",),
+                provider_exclusions=("files",),
+            ),
+            ModelAgent("eligible_files_agent", "mock-files", tags=("files",)),
+        ]
+    )
+    uploaded_by: list[str] = []
+    orchestrator.client.proxy_upload = (  # type: ignore[method-assign]
+        lambda agent, *_args, **_kwargs: uploaded_by.append(agent.id)
+        or {"id": f"provider_file_{agent.id}", "object": "file", "bytes": 5}
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="files-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/files",
+            data=_multipart(),
+            headers={
+                "Authorization": "Bearer files-token",
+                "Content-Type": "multipart/form-data; boundary=test-boundary",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request) as response:
+            assert response.status == 201
+        assert uploaded_by == ["eligible_files_agent"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_files_delete_maps_provider_failure_to_retryable_503() -> None:
+    """A failed provider deletion remains registered and can be retried."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("files_agent", "mock-files", tags=("files",))]
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="files-token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    headers = {"Authorization": "Bearer files-token"}
+    try:
+        upload = urllib.request.Request(
+            base + "/v1/files",
+            data=_multipart(),
+            headers={
+                **headers,
+                "Content-Type": "multipart/form-data; boundary=test-boundary",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(upload) as response:
+            file_id = json.loads(response.read())["id"]
+
+        def unavailable(*_args, **_kwargs):
+            raise urllib.error.HTTPError("provider", 503, "unavailable", {}, None)
+
+        orchestrator.client.proxy_delete_json = unavailable  # type: ignore[method-assign]
+        delete = urllib.request.Request(
+            f"{base}/v1/files/{file_id}", headers=headers, method="DELETE"
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(delete)
+        assert caught.value.code == 503
+        assert json.loads(caught.value.read())["error"]["code"] == "file_provider_unavailable"
+
+        orchestrator.client.proxy_delete_json = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: {"deleted": True}
+        )
+        with urllib.request.urlopen(delete) as response:
+            assert json.loads(response.read())["deleted"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

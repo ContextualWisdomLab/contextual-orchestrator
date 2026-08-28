@@ -5821,7 +5821,11 @@ def build_server(
                         except urllib.error.HTTPError as exc:
                             if exc.code != 404:
                                 files.retain_replicas(gateway_file_id, principal_id, remaining)
-                                raise
+                                raise RequestError(
+                                    503,
+                                    "file_provider_unavailable",
+                                    "the file provider is unavailable",
+                                ) from exc
                         else:
                             if result.get("deleted") is not True:
                                 files.retain_replicas(gateway_file_id, principal_id, remaining)
@@ -5931,6 +5935,7 @@ def build_server(
                             agent
                             for agent in orchestrator.agents
                             if "files" in agent.tags or "capability:files" in agent.tags
+                            if "files" not in agent.provider_exclusions
                         ]
                         # Upload to one provider by default. Replicating caller data
                         # across providers requires a separate explicit contract.
