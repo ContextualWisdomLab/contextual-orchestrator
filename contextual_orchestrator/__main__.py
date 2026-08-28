@@ -32,7 +32,9 @@ from .orchestrator import (
     ModelAgent,
     ModelClient,
     TaskOrchestrator,
+    _configured_endpoint_matches,
     load_agents,
+    normalize_endpoint_selector,
 )
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
@@ -435,6 +437,10 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     )
     if any(model.provider_name == "configured_gateway" for model in chat_models):
         for agent in tuple(orchestrator.candidates):
+            try:
+                normalized_seed_endpoint = normalize_endpoint_selector(agent.base_url)
+            except ValueError:
+                continue
             if (
                 agent.provider_name == "configured_gateway"
                 and not agent.model.strip()
@@ -442,7 +448,9 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     candidate.id != agent.id
                     and candidate.provider_name == "configured_gateway"
                     and bool(candidate.model.strip())
-                    and candidate.base_url.rstrip("/") == agent.base_url.rstrip("/")
+                    and _configured_endpoint_matches(
+                        candidate.base_url, normalized_seed_endpoint
+                    )
                     and not candidate.disabled
                     for candidate in orchestrator.candidates
                 )

@@ -83,7 +83,7 @@ def test_configured_gateway_blank_seed_expands_to_exact_catalog_models(
     blank_seed = ModelAgent(
         "configured_gateway_bootstrap",
         "",
-        base_url="https://gateway.example/v1",
+        base_url="https://gateway.example",
         credential_key="LLM_GATEWAY_API_KEY",
         provider_name="configured_gateway",
         tags=("bootstrap_seed",),
