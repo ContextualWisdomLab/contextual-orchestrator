@@ -456,8 +456,8 @@ def test_probe_status_classification_table() -> None:
     assert nb.classify_probe_status(200) == "supported"
     for status in (400, 404, 405, 415, 422, 501):
         assert nb.classify_probe_status(status) == "unsupported"
-    assert nb.classify_probe_status(401) == "auth_rejected"
-    assert nb.classify_probe_status(403) == "unavailable"
+    for status in (401, 403):
+        assert nb.classify_probe_status(status) == "auth_rejected"
     assert nb.classify_probe_status(408) == "timeout"
     assert nb.classify_probe_status(429) == "rate_limited"
     assert nb.classify_probe_status(500) == "unavailable"
@@ -487,9 +487,10 @@ def test_probe_timeout_and_network_failures() -> None:
     assert row["outcome_reason"].startswith("network_error:")
 
 
-def test_probe_auth_rejection_fails_closed() -> None:
+@pytest.mark.parametrize("status", [401, 403])
+def test_probe_auth_rejection_fails_closed(status: int) -> None:
     with pytest.raises(nb.BenchmarkAuthError):
-        _probe(_fixed_transport(401, b"{}"))
+        _probe(_fixed_transport(status, b"{}"))
 
 
 def test_probe_unsupported_and_rate_limited() -> None:

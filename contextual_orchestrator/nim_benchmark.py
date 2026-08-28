@@ -319,12 +319,50 @@ class RequestBudget:
 class _BudgetedModelClient(ModelClient):
     """ModelClient that charges every chat call against the shared request budget."""
 
-    def __init__(self, request_budget: RequestBudget, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        request_budget: RequestBudget,
+        transport: ProviderTransport | None = None,
+        **kwargs: Any,
+    ) -> None:
         # ponytail: disable hidden provider retries so the hard request budget
         # bounds actual egress rather than only logical chat calls.
         kwargs["max_retries"] = 0
         super().__init__(**kwargs)
         self._request_budget = request_budget
+        self._benchmark_transport = transport
+
+    def _send(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: Any = None,
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        """Send evaluation chat calls through the benchmark's pinned transport."""
+        if self._benchmark_transport is None or agent.base_url.startswith("mock://"):
+            return super()._send(agent, payload, destination, timeout=timeout)
+        url = self._provider_url(agent, "/chat/completions")
+        status, body = self._benchmark_transport(
+            "POST",
+            url,
+            _auth_headers(get_credential(NIM_CREDENTIAL_NAME) or ""),
+            json.dumps(payload).encode("utf-8"),
+        )
+        if status >= 400:
+            raise urllib.error.HTTPError(
+                url,
+                status,
+                "NIM benchmark provider request failed",
+                {},
+                io.BytesIO(body),
+            )
+        data = json.loads(body.decode("utf-8"))
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._local.usage = usage
+        return self._response_content(agent, data)
 
     def chat(
         self,
@@ -932,10 +970,8 @@ def classify_probe_status(status: int) -> str:
         return "supported"
     if status in _UNSUPPORTED_HTTP_STATUS:
         return "unsupported"
-    if status == 401:
+    if status in (401, 403):
         return "auth_rejected"
-    if status == 403:
-        return "unavailable"
     if status == 408:
         return "timeout"
     if status == 429:
@@ -2625,6 +2661,7 @@ def run_benchmark(
         eval_base_url = "mock://nim-dry-run"
         eval_client: ModelClient = _BudgetedModelClient(
             request_budget,
+            transport=active_transport,
             max_output_tokens=max_output_tokens,
         )
     else:
@@ -2641,6 +2678,7 @@ def run_benchmark(
         eval_base_url = endpoint
         eval_client = _BudgetedModelClient(
             request_budget,
+            transport=active_transport,
             timeout=float(timeout_seconds),
             max_output_tokens=max_output_tokens,
         )

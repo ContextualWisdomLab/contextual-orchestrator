@@ -19,6 +19,7 @@ from contextual_orchestrator.credentials import (
     register_credential,
     set_backend,
 )
+from contextual_orchestrator.orchestrator import ModelClient
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -447,6 +448,63 @@ def test_equal_budget_client_validates_and_exposes_delegate_cap() -> None:
 
     client.chat(_budget_agent(), [{"role": "user", "content": "hi"}])
     assert delegate.observed_caps == [11]
+
+
+def test_budgeted_client_uses_the_injected_transport(monkeypatch) -> None:
+    """Live-style evaluation calls stay on the benchmark transport seam."""
+    register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
+    calls: list[tuple[str, str, bytes | None]] = []
+
+    def transport(method, url, headers, body):
+        calls.append((method, url, body))
+        assert headers["authorization"] == "Bearer secret-test-key"
+        return 200, json.dumps(
+            {
+                "choices": [{"message": {"content": "answer"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        ).encode()
+
+    monkeypatch.setattr(ModelClient, "_validate_provider", lambda *_args: None)
+    client = nb._BudgetedModelClient(nb.RequestBudget(1), transport=transport)
+    agent = _budget_agent()
+    agent = agent.__class__(
+        id=agent.id,
+        model=agent.model,
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+        tags=agent.tags,
+    )
+    assert client.chat(agent, [{"role": "user", "content": "hello"}]) == "answer"
+    assert calls and calls[0][0:2] == ("POST", f"{FAKE_ENDPOINT}/chat/completions")
+
+
+def test_budgeted_client_fallback_and_transport_errors(monkeypatch) -> None:
+    """The wrapper preserves the base client seam and normalizes provider errors."""
+    register_credential(nb.NIM_CREDENTIAL_NAME, "secret-test-key")
+    agent = _budget_agent()
+    agent = agent.__class__(
+        id=agent.id,
+        model=agent.model,
+        base_url=FAKE_ENDPOINT,
+        credential_key=nb.NIM_CREDENTIAL_NAME,
+        tags=agent.tags,
+    )
+    monkeypatch.setattr(ModelClient, "_validate_provider", lambda *_args: None)
+    monkeypatch.setattr(
+        ModelClient,
+        "_send",
+        lambda *_args, **_kwargs: "fallback answer",
+    )
+    fallback = nb._BudgetedModelClient(nb.RequestBudget(1))
+    assert fallback.chat(agent, [{"role": "user", "content": "hello"}]) == "fallback answer"
+
+    def failing_transport(*_args, **_kwargs):
+        return 500, b"provider failure"
+
+    failing = nb._BudgetedModelClient(nb.RequestBudget(1), transport=failing_transport)
+    with pytest.raises(RuntimeError, match="provider .* request failed"):
+        failing.chat(agent, [{"role": "user", "content": "hello"}])
 
 
 @pytest.mark.parametrize("value", [True, "3", float("nan"), float("inf"), -1])
