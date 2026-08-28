@@ -579,6 +579,16 @@ class NonBlockingLedgerStore:
             else:
                 if accepted:
                     self._record_stored(record)
+                else:
+                    self._mark("records_dropped", error_type="duplicate")
+                    _emit_usage_event(
+                        self._telemetry_sink,
+                        UsageTelemetryEvent.from_record(
+                            record,
+                            export_state="dropped",
+                            error_type="duplicate",
+                        ),
+                    )
             finally:
                 self._queue.task_done()
 

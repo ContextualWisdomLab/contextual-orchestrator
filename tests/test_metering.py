@@ -479,6 +479,7 @@ def test_non_blocking_billing_export_deduplicates_backend_writes() -> None:
 
     assert ledger.flush(timeout=5)
     assert sink.ids == ["usage_async_duplicate"]
+    assert ledger.telemetry_health()["records_dropped"] == 1
 
 
 def test_non_blocking_billing_export_failure_updates_health() -> None:
