@@ -235,6 +235,47 @@ def test_billing_export_flush_uses_record_id_lookup() -> None:
     )
 
 
+def test_deferred_export_lookup_failure_does_not_fail_current_record() -> None:
+    """A deferred-store read failure must not block a later usage write."""
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    sink = _RecordingUsageSink()
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("openai", "gpt-x", 1.0, 1.0))
+    ledger = CostLedger(price_book, store=store, usage_sink=sink)
+
+    connection.execute("BEGIN")
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_deferred_read",
+    )
+    connection.commit()
+    original_lookup = store.existing_usage_record_ids
+
+    def fail_lookup(_usage_record_ids: list[str]) -> set[str]:
+        raise RuntimeError("temporary read failure")
+
+    store.existing_usage_record_ids = fail_lookup  # type: ignore[method-assign]
+    current = ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=1,
+        completion_tokens=1,
+        usage_record_id="usage_current_write",
+    )
+
+    assert current.usage_record_id == "usage_current_write"
+    assert sink.ids == ["usage_current_write"]
+    assert ledger.telemetry_health()["store_failures"] == 1
+
+    store.existing_usage_record_ids = original_lookup  # type: ignore[method-assign]
+    assert ledger.flush() is True
+    assert sink.ids == ["usage_current_write", "usage_deferred_read"]
+
+
 def test_async_billing_export_preserves_caller_owned_sqlite_transaction() -> None:
     """A caller transaction persists before export and never bills a rollback."""
     connection = sqlite3.connect(":memory:", check_same_thread=False)

@@ -477,7 +477,9 @@ class NonBlockingLedgerStore:
         """Queue a record for background persistence without blocking."""
         has_open_transaction = getattr(self.backend, "has_open_transaction", None)
         if (
-            callable(has_open_transaction) and has_open_transaction()
+            self._usage_record_sink is not None
+            and callable(has_open_transaction)
+            and has_open_transaction()
         ):
             accepted = self.backend.append(record) is not False
             if not accepted:
@@ -532,13 +534,19 @@ class NonBlockingLedgerStore:
             self._deferred_usage_exports = []
         if not pending:
             return True
-        lookup = getattr(self.backend, "existing_usage_record_ids", None)
-        if callable(lookup):
-            persisted_ids = set(lookup([record.usage_record_id for record in pending]))
-        else:
-            persisted_ids = {
-                row.get("usage_record_id") for row in self.backend.query(None, None)
-            }
+        try:
+            lookup = getattr(self.backend, "existing_usage_record_ids", None)
+            if callable(lookup):
+                persisted_ids = set(lookup([record.usage_record_id for record in pending]))
+            else:
+                persisted_ids = {
+                    row.get("usage_record_id") for row in self.backend.query(None, None)
+                }
+        except Exception as exc:
+            with self._deferred_usage_exports_lock:
+                self._deferred_usage_exports = pending + self._deferred_usage_exports
+            self._mark("store_failures", error_type=type(exc).__name__)
+            return True
         for record in pending:
             if record.usage_record_id in persisted_ids:
                 self._record_stored(record)
@@ -1437,6 +1445,12 @@ class CostLedger:
             self._inline_health.store_failures += 1
             self._inline_health.last_error_type = error_type
 
+    def _mark_inline_store_failure(self, error_type: str) -> None:
+        """Record a deferred-store read failure without inventing acceptance."""
+        with self._inline_health_lock:
+            self._inline_health.store_failures += 1
+            self._inline_health.last_error_type = error_type
+
     def _mark_inline_export_failure(self, error_type: str) -> None:
         with self._inline_health_lock:
             self._inline_health.export_failures += 1
@@ -1454,15 +1468,21 @@ class CostLedger:
             self._deferred_usage_exports = []
         if not pending:
             return
-        lookup = getattr(self.store, "existing_usage_record_ids", None)
-        if callable(lookup):
-            persisted_ids = set(lookup([record.usage_record_id for record in pending]))
-        else:
-            # Preserve compatibility with third-party stores that only implement
-            # the original append/query contract.
-            persisted_ids = {
-                row.get("usage_record_id") for row in self.store.query(None, None)
-            }
+        try:
+            lookup = getattr(self.store, "existing_usage_record_ids", None)
+            if callable(lookup):
+                persisted_ids = set(lookup([record.usage_record_id for record in pending]))
+            else:
+                # Preserve compatibility with third-party stores that only implement
+                # the original append/query contract.
+                persisted_ids = {
+                    row.get("usage_record_id") for row in self.store.query(None, None)
+                }
+        except Exception as exc:
+            with self._deferred_usage_exports_lock:
+                self._deferred_usage_exports = pending + self._deferred_usage_exports
+            self._mark_inline_store_failure(type(exc).__name__)
+            return
         for record in pending:
             if record.usage_record_id in persisted_ids:
                 self._emit_usage_record(record)
