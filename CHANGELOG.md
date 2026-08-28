@@ -110,7 +110,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
-- The product and technical gap baseline now records the eight open PRs,
+- The product and technical gap baseline now records the ten open PRs,
   exact-head governance state, and current provider-backed Strix evidence.
 - Web requests now use the native `SOMAXCONN` listen backlog and HTTP/1.1
   persistent connections, while the existing per-request daemon threading and
