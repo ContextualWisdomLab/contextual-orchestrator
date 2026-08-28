@@ -404,6 +404,14 @@ def test_discover_catalog_fails_closed_on_network_error() -> None:
         nb.discover_model_catalog(transport, FAKE_ENDPOINT, "key", nb.RequestBudget(3))
 
 
+def test_discover_catalog_fails_closed_on_dns_error() -> None:
+    def transport(method, url, headers, body):
+        raise socket.gaierror(-2, "name or service not known")
+
+    with pytest.raises(nb.CatalogDiscoveryError):
+        nb.discover_model_catalog(transport, FAKE_ENDPOINT, "key", nb.RequestBudget(3))
+
+
 def test_discover_catalog_fails_closed_on_empty_inventory() -> None:
     with pytest.raises(nb.CatalogDiscoveryError):
         nb.discover_model_catalog(_fixed_transport(*_ok_json({"data": []})), FAKE_ENDPOINT, "key", nb.RequestBudget(3))
@@ -847,6 +855,19 @@ def test_cell_usage_reported_vs_estimated_and_failover() -> None:
     _usage, summary = nb._cell_usage(adversarial_trace, agents_by_id, "prompt text")
     assert summary["token_usage_source"] == "estimated"
     assert summary["total_tokens"] > 0
+
+
+def test_cell_usage_rejects_unknown_agent_as_contract_error() -> None:
+    trace = [
+        {
+            "id": 0,
+            "role": "worker",
+            "agent_id": "worker_missing",
+            "output": "answer",
+        }
+    ]
+    with pytest.raises(nb.BenchmarkContractError, match="unknown agent"):
+        nb._cell_usage(trace, {"worker_one": "vendor/model-a"}, "prompt text")
 
 
 def test_run_error_classification() -> None:

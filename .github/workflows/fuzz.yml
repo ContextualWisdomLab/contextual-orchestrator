@@ -94,7 +94,7 @@ jobs:
         run: python fuzz/fuzz_reasoning_effort_profile.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/reasoning_effort_profile
 
       - name: Fuzz NIM model-catalog parser
-        run: python fuzz/fuzz_nim_catalog.py -max_total_time=${FUZZ_SECONDS} -artifact_prefix=crash- fuzz/corpus/nim_catalog
+        run: python fuzz/fuzz_nim_catalog.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/nim_catalog
 
       - name: Upload crash artifacts
         if: failure()

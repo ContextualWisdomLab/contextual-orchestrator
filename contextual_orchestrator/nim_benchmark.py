@@ -583,7 +583,13 @@ def discover_model_catalog(
     url = f"{endpoint.rstrip('/')}/models"
     try:
         status, body = transport("GET", url, _auth_headers(api_key), None)
-    except (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout) as exc:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        ConnectionError,
+        socket.timeout,
+        socket.gaierror,
+    ) as exc:
         raise CatalogDiscoveryError(f"model catalog request failed: {type(exc).__name__}") from exc
     if status in (401, 403):
         raise BenchmarkAuthError(f"provider rejected the benchmark credential (HTTP {status})")
@@ -1524,7 +1530,12 @@ def _cell_usage(
     models_used: list[dict[str, Any]] = []
     for row in trace:
         agent_id = row.get("served_agent_id") or row["agent_id"]
-        model_id = agents_by_id[agent_id]
+        try:
+            model_id = agents_by_id[agent_id]
+        except (KeyError, TypeError) as exc:
+            raise BenchmarkContractError(
+                f"trace references unknown agent {agent_id!r}"
+            ) from exc
         models_used.append(
             {"step_id": row["id"], "role": row["role"], "agent_id": agent_id, "model_id": model_id}
         )
