@@ -74,3 +74,6 @@ def test_cost_ledger_reports_sink_failure_without_failing_completion() -> None:
 
     assert record.usage_record_id.startswith("usage_")
     assert telemetry.events()[-1].error_type == "RuntimeError"
+    health = ledger.telemetry_health()
+    assert health["export_failures"] == 1
+    assert health["last_error_type"] == "RuntimeError"

@@ -415,6 +415,7 @@ class UsageTelemetryHealth:
     records_stored: int = 0
     records_dropped: int = 0
     store_failures: int = 0
+    export_failures: int = 0
     last_error_type: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
@@ -424,6 +425,7 @@ class UsageTelemetryHealth:
             "records_stored": self.records_stored,
             "records_dropped": self.records_dropped,
             "store_failures": self.store_failures,
+            "export_failures": self.export_failures,
             "last_error_type": self.last_error_type,
         }
 
@@ -1173,6 +1175,7 @@ class CostLedger:
             try:
                 self.usage_sink.emit_usage_record(record)
             except Exception as exc:
+                self._mark_inline_export_failure(type(exc).__name__)
                 _emit_usage_event(
                     self.telemetry_sink,
                     UsageTelemetryEvent.from_record(
@@ -1289,6 +1292,10 @@ class CostLedger:
     def _mark_inline_failure(self, error_type: str) -> None:
         self._inline_health.records_accepted += 1
         self._inline_health.store_failures += 1
+        self._inline_health.last_error_type = error_type
+
+    def _mark_inline_export_failure(self, error_type: str) -> None:
+        self._inline_health.export_failures += 1
         self._inline_health.last_error_type = error_type
 
 
