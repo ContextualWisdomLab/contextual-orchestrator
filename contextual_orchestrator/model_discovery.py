@@ -430,19 +430,23 @@ def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
     }
 
 
-def _apply_zdr_model_evidence(
+def _apply_discovered_model_evidence(
     discovered: list[DiscoveredModel], zdr_model_ids: set[str]
 ) -> list[DiscoveredModel]:
-    """Attach OpenRouter catalog evidence only to matching OpenRouter rows."""
+    """Apply model-level ZDR evidence to matching rows from every provider."""
     if not zdr_model_ids:
         return discovered
     exact_ids = {model_id.strip().casefold() for model_id in zdr_model_ids if model_id.strip()}
+    suffix_counts: dict[str, int] = {}
+    for model_id in exact_ids:
+        suffix = model_id.rsplit("/", 1)[-1]
+        suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
     return [
         replace(
             model,
             zdr_capable=(
-                model.provider_name == "openrouter"
-                and model.model_id.strip().casefold() in exact_ids
+                model.model_id.strip().casefold() in exact_ids
+                or suffix_counts.get(model.model_id.rsplit("/", 1)[-1].strip().casefold()) == 1
             ),
         )
         for model in discovered
@@ -496,8 +500,8 @@ def discover_all_models(
             errors.append(exc)
     # OpenRouter contributes public privacy catalog evidence only. It is not
     # selected as an upstream here; matching model ids can inform ZDR-only
-    # group assembly for OpenRouter rows only; endpoint privacy is provider-scoped.
-    return _apply_zdr_model_evidence(
+    # group assembly for any discovered provider.
+    return _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
     ), errors
