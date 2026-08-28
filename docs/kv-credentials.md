@@ -47,8 +47,9 @@ then asks an already-discovered ZDR-capable model for strict structured analysis
 If either Wardnet credential, a grounded quote, or a ZDR analysis route is
 missing, policy-derived fields remain unknown.
 
-For JavaScript-rendered policies, install the `policy-browser` extra and
-register an authenticated Camoufox MCP Streamable HTTP endpoint and
+For JavaScript-rendered policies, provide a pinned MCP Python SDK in the
+deployment image (this repository intentionally does not declare a
+`policy-browser` extra), then register an authenticated Camoufox MCP Streamable HTTP endpoint and
 `WARDNET_EGRESS_PROXY_URL`. Wardnet must approve the URL first, and every
 Camoufox tab receives the authenticated Wardnet proxy using its dedicated token
 from KV. Deploy Camoufox with Wardnet as its UDP/TCP container DNS resolver,
