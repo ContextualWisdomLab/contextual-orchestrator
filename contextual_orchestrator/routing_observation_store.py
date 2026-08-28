@@ -142,6 +142,7 @@ class SqliteRoutingObservationStore:
         self._validate_member_id(member_id)
         if type(success) is not bool:
             raise TypeError("success must be a boolean")
+        latency: float | None = None
         if success:
             if isinstance(latency_seconds, bool) or not isinstance(latency_seconds, (int, float)):
                 raise TypeError("successful observations require numeric latency_seconds")
@@ -174,7 +175,7 @@ class SqliteRoutingObservationStore:
                         member_id,
                         now,
                         int(success),
-                        None if not success else float(latency_seconds),
+                        latency,
                         None if not success else output_tokens,
                     ),
                 )

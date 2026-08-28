@@ -130,6 +130,11 @@ class ModelGroupRouter:
             "ewma_tps": None,
         }
 
+    @staticmethod
+    def _float_value(value: float | None, default: float = 0.0) -> float:
+        """Read an optional numeric state value without changing valid zeroes."""
+        return default if value is None else float(value)
+
     def forget_members(self, keep_member_ids: set[str]) -> None:
         """Drop ledger rows for members that left every group."""
         removed: set[str]
@@ -177,8 +182,8 @@ class ModelGroupRouter:
                 raise ValueError(f"{name} must be finite and non-negative")
         with self._lock:
             state = self._ensure_locked(member_id)
-            old_alpha = float(state.get("prior_alpha") or 0.0)
-            old_beta = float(state.get("prior_beta") or 0.0)
+            old_alpha = self._float_value(state.get("prior_alpha"))
+            old_beta = self._float_value(state.get("prior_beta"))
             delta_alpha = float(prior_alpha) - old_alpha
             delta_beta = float(prior_beta) - old_beta
             state["prior_alpha"] = float(prior_alpha)
@@ -251,8 +256,12 @@ class ModelGroupRouter:
             member_ids = tuple(self._members)
             prior_by_member = {
                 member_id: (
-                    float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT)),
-                    float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT)),
+                    self._float_value(
+                        state.get("prior_alpha"), BETA_PRIOR_SUCCESS_COUNT
+                    ),
+                    self._float_value(
+                        state.get("prior_beta"), BETA_PRIOR_FAILURE_COUNT
+                    ),
                 )
                 for member_id, state in self._members.items()
             }
@@ -266,9 +275,9 @@ class ModelGroupRouter:
                 state["prior_alpha"] = prior_alpha
                 state["prior_beta"] = prior_beta
             for observation in observations:
-                state = rebuilt.get(observation.member_id)
-                if state is None:
+                if observation.member_id not in rebuilt:
                     continue
+                state = rebuilt[observation.member_id]
                 if observation.success:
                     if observation.latency_seconds is None:
                         continue
@@ -296,8 +305,12 @@ class ModelGroupRouter:
             state = self._members.get(member_id)
             if state is None:
                 return 0
-            alpha = float(state["alpha"]) - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))
-            beta = float(state["beta"]) - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))
+            alpha = self._float_value(state["alpha"]) - self._float_value(
+                state.get("prior_alpha"), BETA_PRIOR_SUCCESS_COUNT
+            )
+            beta = self._float_value(state["beta"]) - self._float_value(
+                state.get("prior_beta"), BETA_PRIOR_FAILURE_COUNT
+            )
             return int(max(alpha, 0.0)) + int(max(beta, 0.0))
 
     def ranked_member_ids(self, member_ids: list[str] | tuple[str, ...]) -> list[str]:
@@ -331,40 +344,41 @@ class ModelGroupRouter:
         throughput_sample: float | None,
     ) -> None:
         """Apply one already-validated success while the router lock is held."""
-        state["alpha"] = float(state["alpha"]) + 1.0
+        state["alpha"] = self._float_value(state["alpha"]) + 1.0
         ewma = state["ewma"]
         state["ewma"] = (
             latency
             if ewma is None
-            else (1.0 - self._ewma_gain) * float(ewma) + self._ewma_gain * latency
+            else (1.0 - self._ewma_gain) * self._float_value(ewma)
+            + self._ewma_gain * latency
         )
         if throughput_sample is not None:
             tps = state["ewma_tps"]
             state["ewma_tps"] = (
                 throughput_sample
                 if tps is None
-                else (1.0 - self._ewma_gain) * float(tps)
+                else (1.0 - self._ewma_gain) * self._float_value(tps)
                 + self._ewma_gain * throughput_sample
             )
 
     @staticmethod
     def _apply_failure_locked(state: dict[str, float | None]) -> None:
         """Apply one already-validated failure while the router lock is held."""
-        state["beta"] = float(state["beta"]) + 1.0
+        state["beta"] = ModelGroupRouter._float_value(state["beta"]) + 1.0
 
     def _score_locked(self, member_id: str) -> float:
         state = self._members.get(member_id)
         if state is None:
             return UNOBSERVED_MEMBER_SCORE
-        alpha = float(state["alpha"])
-        beta = float(state["beta"])
+        alpha = self._float_value(state["alpha"])
+        beta = self._float_value(state["beta"])
         stability = alpha / (alpha + beta)
         ewma = state["ewma"]
         if ewma is None:
             # Unobserved members share one neutral reference latency so their
             # scores are identical and static ordering survives untouched.
             return stability / 1.0
-        return stability / max(float(ewma), self._min_latency_seconds)
+        return stability / max(self._float_value(ewma), self._min_latency_seconds)
 
     def _report_locked(self, member_id: str) -> dict[str, float | int | None]:
         state = self._members.get(member_id)
@@ -377,17 +391,23 @@ class ModelGroupRouter:
                 "failure_count": 0,
                 "score": UNOBSERVED_MEMBER_SCORE,
             }
-        alpha = float(state["alpha"])
-        beta = float(state["beta"])
+        alpha = self._float_value(state["alpha"])
+        beta = self._float_value(state["beta"])
         ewma = state["ewma"]
         ewma_tps = state["ewma_tps"]
         return {
             "success_posterior_mean": round(alpha / (alpha + beta), 6),
-            "ewma_latency_seconds": None if ewma is None else round(float(ewma), 6),
+            "ewma_latency_seconds": None if ewma is None else round(self._float_value(ewma), 6),
             "ewma_tokens_per_second": (
-                None if ewma_tps is None else round(float(ewma_tps), 6)
+                None if ewma_tps is None else round(self._float_value(ewma_tps), 6)
             ),
-            "success_count": int(alpha - float(state.get("prior_alpha", BETA_PRIOR_SUCCESS_COUNT))),
-            "failure_count": int(beta - float(state.get("prior_beta", BETA_PRIOR_FAILURE_COUNT))),
+            "success_count": int(
+                alpha
+                - self._float_value(state.get("prior_alpha"), BETA_PRIOR_SUCCESS_COUNT)
+            ),
+            "failure_count": int(
+                beta
+                - self._float_value(state.get("prior_beta"), BETA_PRIOR_FAILURE_COUNT)
+            ),
             "score": round(self._score_locked(member_id), 9),
         }
