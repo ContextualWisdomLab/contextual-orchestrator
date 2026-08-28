@@ -3508,7 +3508,11 @@ class TaskOrchestrator:
                     return send(candidate, endpoint, candidate_payload), candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     request_too_large = _is_request_too_large_error(exc)
-                    if not request_too_large or not virtual_model:
+                    if request_too_large and not virtual_model:
+                        raise ProviderRequestTooLargeError(
+                            "request body exceeds provider limit"
+                        ) from exc
+                    if not request_too_large:
                         raise
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"

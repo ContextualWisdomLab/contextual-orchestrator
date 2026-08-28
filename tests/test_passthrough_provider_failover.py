@@ -350,6 +350,38 @@ def test_orchestrated_structured_synthesis_advances_on_413(model: str) -> None:
     ]
 
 
+def test_explicit_structured_synthesis_normalizes_413() -> None:
+    """A sticky explicit model still exposes request-size rejection as 413 authority."""
+    client = SequencedProxyClient({"primary_agent": _http_error(413)})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                provider_name="primary",
+                tags=("response_format",),
+            )
+        ],
+        client=client,
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+
+    with pytest.raises(ProviderRequestTooLargeError, match="provider limit"):
+        orchestrator.proxy_completion(
+            {
+                "model": "primary-model",
+                "messages": [{"role": "user", "content": "large structured request"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+
 def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> None:
     """A post-413 provider error must trip the provider that actually failed."""
     client = SequencedProxyClient(
