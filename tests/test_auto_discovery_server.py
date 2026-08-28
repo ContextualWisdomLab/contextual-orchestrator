@@ -119,6 +119,25 @@ def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(m
     assert [agent.id for agent in orchestrator.agents] == ["bootstrap_agent"]
 
 
+def test_auto_discovery_uses_explicit_capabilities_before_model_id_heuristics(monkeypatch) -> None:
+    generic_non_chat = DiscoveredModel(
+        provider_name="openai",
+        model_id="generic-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda: ([generic_non_chat], []),
+    )
+
+    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+
+
 def test_auto_discovery_preserves_sole_real_bootstrap_seed(monkeypatch) -> None:
     """A seed cannot count itself as the replacement that retires it."""
     monkeypatch.setattr(

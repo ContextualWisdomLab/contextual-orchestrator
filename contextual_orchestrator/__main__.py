@@ -35,6 +35,7 @@ from .server import SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+_GENERAL_CHAT_CAPABILITIES = frozenset({"chat", "text", "response_format"})
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -287,7 +288,13 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     discovered, _errors = discover_all_models()
     openrouter_paid_available = openrouter_paid_inference_available()
     chat_models = [
-        model for model in discovered if is_general_chat_agent_model_id(model.model_id)
+        model
+        for model in discovered
+        if (
+            (not model.output_modalities or "text" in model.output_modalities)
+            and set(model.capabilities) <= _GENERAL_CHAT_CAPABILITIES
+            and is_general_chat_agent_model_id(model.model_id)
+        )
     ]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
