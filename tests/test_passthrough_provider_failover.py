@@ -266,6 +266,65 @@ def test_virtual_passthrough_fails_over_on_provider_tool_description_limit() -> 
     ]
 
 
+def test_model_client_preserves_tool_limit_body_for_failover(monkeypatch) -> None:
+    """The real passthrough transport shares its one-read provider error body."""
+    failure = _http_error(
+        400,
+        {
+            "error": {
+                "code": "invalid_tools",
+                "message": "each tool.function.description must be at most 1024 characters",
+            }
+        },
+    )
+    outcomes: list[dict[str, Any] | BaseException] = [
+        failure,
+        {"model": "fallback-model"},
+    ]
+    client = ModelClient()
+
+    def _send_raw(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(
+        client,
+        "_validate_provider",
+        lambda _agent: (socket.AF_INET, ("127.0.0.1", 80)),
+    )
+    monkeypatch.setattr(client, "_send_raw", _send_raw)
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                base_url="https://primary.example/v1",
+                provider_name="primary",
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                base_url="https://fallback.example/v1",
+                provider_name="fallback",
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert outcomes == []
+
+
 def test_wrapped_transient_error_can_fail_over() -> None:
     """Provider SDK wrappers retain their causal failover signal."""
     try:

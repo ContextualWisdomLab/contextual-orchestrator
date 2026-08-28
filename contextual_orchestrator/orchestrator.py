@@ -578,50 +578,42 @@ LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
-def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
-    """Return whether an HTTP error carries the terminal tool-stop contract."""
-    cache_key = "_contextual_orchestrator_tool_execution_stopped"
-    cached = getattr(error, cache_key, None)
-    if isinstance(cached, bool):
+def _provider_error_payload(error: urllib.error.HTTPError) -> Any | None:
+    """Read one bounded provider error body and reuse its parsed payload."""
+    cache_key = "_contextual_orchestrator_provider_error_payload"
+    missing = object()
+    cached = getattr(error, cache_key, missing)
+    if cached is not missing:
         return cached
     try:
-        payload = json.loads(error.read(65536).decode("utf-8"))
+        payload: Any | None = json.loads(error.read(65536).decode("utf-8"))
     except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        result = False
-    else:
-        details = payload.get("error") if isinstance(payload, dict) else None
-        result = isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
+        payload = None
     try:
-        setattr(error, cache_key, result)
+        setattr(error, cache_key, payload)
     except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
         pass
-    return result
+    return payload
+
+
+def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
+    """Return whether an HTTP error carries the terminal tool-stop contract."""
+    payload = _provider_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    return isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
 
 
 def _is_provider_tool_description_limit_error(error: urllib.error.HTTPError) -> bool:
     """Recognize the provider capability error that is safe to fail over."""
     if error.code != 400:
         return False
-    cache_key = "_contextual_orchestrator_tool_description_limit"
-    cached = getattr(error, cache_key, None)
-    if isinstance(cached, bool):
-        return cached
-    try:
-        payload = json.loads(error.read(65536).decode("utf-8"))
-    except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        result = False
-    else:
-        details = payload.get("error") if isinstance(payload, dict) else None
-        result = (
-            isinstance(details, dict)
-            and details.get("code") == "invalid_tools"
-            and details.get("message") == _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE
-        )
-    try:
-        setattr(error, cache_key, result)
-    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
-        pass
-    return result
+    payload = _provider_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    return (
+        isinstance(details, dict)
+        and details.get("code") == "invalid_tools"
+        and details.get("message") == _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE
+    )
 
 
 def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
