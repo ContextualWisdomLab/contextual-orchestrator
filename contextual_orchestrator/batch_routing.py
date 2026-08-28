@@ -26,6 +26,7 @@ import hashlib
 import json
 import time
 import uuid
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
@@ -236,11 +237,13 @@ class LocalBatchBackend:
         *,
         max_concurrency: int = 1,
         job_registry: Any = None,
+        request_context: Optional[Callable[[BatchRequest], Any]] = None,
     ) -> None:
         if type(max_concurrency) is not int or max_concurrency < 1:
             raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
         self.max_concurrency = max_concurrency
+        self._request_context = request_context
         # Computed results survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
         self._results: Dict[str, List[BatchResultItem]] = (
@@ -253,7 +256,13 @@ class LocalBatchBackend:
         """Run every request in-process and stash the results under a job id."""
         job_id = f"localbatch_{uuid.uuid4().hex}"
         def run(request: BatchRequest) -> BatchResultItem:
-            result = self._runner(request.messages, request.mode, request.model)
+            context = (
+                self._request_context(request)
+                if self._request_context is not None
+                else nullcontext()
+            )
+            with context:
+                result = self._runner(request.messages, request.mode, request.model)
             answer = result.get("answer", "")
             return BatchResultItem(
                 custom_id=request.custom_id,

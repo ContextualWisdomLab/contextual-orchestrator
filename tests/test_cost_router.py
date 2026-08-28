@@ -18,7 +18,11 @@ from contextual_orchestrator import (  # noqa: E402
     PriceEntry,
     TaskOrchestrator,
 )
-from contextual_orchestrator.batch_routing import PgLlmBatchBackend  # noqa: E402
+from contextual_orchestrator.batch_routing import (  # noqa: E402
+    BatchJob,
+    BatchRequest,
+    PgLlmBatchBackend,
+)
 
 
 class _FailingLedgerStore:
@@ -604,6 +608,51 @@ def test_batch_backend_can_be_pg_llm_batch() -> None:
     # cost from pg-provided usage: 5/1k*1 + 5/1k*2 = 0.005 + 0.010 = 0.015
     assert row["cost_amount"] == 0.015
     assert row["request_channel"] == "batch"
+
+
+def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() -> None:
+    non_zdr = ModelAgent(
+        "non_zdr_member",
+        "vendor/non-zdr",
+        "mock://non-zdr",
+        provider_name="vendor",
+        priority=99,
+        group_name="shared_reasoning_model",
+    )
+    zdr = ModelAgent(
+        "zdr_member",
+        "vendor/zdr",
+        "mock://zdr",
+        provider_name="vendor",
+        tags=("privacy:zdr",),
+        group_name="shared_reasoning_model",
+    )
+    orchestrator = TaskOrchestrator([non_zdr, zdr])
+    captured: list[BatchRequest] = []
+
+    class _CapturingBackend:
+        name = "capturing"
+
+        def submit(self, requests, metadata=None):
+            captured.extend(requests)
+            return BatchJob("batch-zdr", self.name, status="submitted", request_count=len(requests))
+
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        batch_backend=_CapturingBackend(),
+    )
+    coordinator.submit_batch(
+        [
+            BatchRequest(
+                messages=[{"role": "user", "content": "private batch"}],
+                model=TaskOrchestrator.AUTO_MODEL,
+                zdr_only=True,
+            )
+        ]
+    )
+
+    assert captured[0].model == zdr.model
+    assert captured[0].zdr_only is True
 
 
 if __name__ == "__main__":  # pragma: no cover

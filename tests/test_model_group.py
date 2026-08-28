@@ -131,6 +131,23 @@ def test_zdr_only_filters_the_caller_supplied_model_group_array() -> None:
     assert [agent.id for agent in selected] == [zdr.id]
 
 
+def test_zdr_only_does_not_reinterpret_an_exact_non_zdr_model_as_its_group() -> None:
+    non_zdr = _agent("non_zdr_member", "vendor/non-zdr")
+    zdr = ModelAgent(
+        "zdr_member",
+        "vendor/zdr",
+        "mock://local",
+        provider_name="provider_name",
+        tags=("privacy:zdr",),
+        group_name="vendor_non_zdr",
+    )
+    orchestrator = TaskOrchestrator([non_zdr, zdr])
+
+    with orchestrator.request_policy(True):
+        with pytest.raises(ValueError, match="not configured"):
+            orchestrator._requested_agent(non_zdr.model)
+
+
 def test_request_policy_requires_a_bool_and_restores_previous_scope() -> None:
     orchestrator = TaskOrchestrator([_agent("member_one", "vendor/one")])
 

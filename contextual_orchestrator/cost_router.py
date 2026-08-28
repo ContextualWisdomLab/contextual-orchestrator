@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import re
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
@@ -96,6 +97,7 @@ class CostRoutingCoordinator:
                 ),
                 max_concurrency=local_concurrency,
                 job_registry=registry,
+                request_context=lambda request: orchestrator.request_policy(request.zdr_only),
             )
         else:
             self.batch_backend = batch_backend
@@ -584,9 +586,24 @@ class CostRoutingCoordinator:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> BatchJob:
         """Submit a batch of requests to the configured batch backend."""
-        job = self.batch_backend.submit(requests, metadata=metadata)
+        prepared_requests = [self._resolve_batch_request(request) for request in requests]
+        job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         self._batch_jobs[job.job_id] = job
         return job
+
+    def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
+        """Resolve one batch request through the caller-provided model pool."""
+        with self.orchestrator.request_policy(request.zdr_only):
+            agent = self.orchestrator._requested_agent(request.model)
+            if agent is None:
+                text = self.orchestrator._latest_user_text(request.messages)
+                agent = self.orchestrator._select_agent(
+                    text,
+                    "worker",
+                    free_only=request.model
+                    == getattr(self.orchestrator, "FREE_MODEL", object()),
+                )
+        return replace(request, model=agent.model)
 
     def poll_batch(self, job_id: str) -> Dict[str, Any]:
         """Poll a previously submitted batch job by id."""

@@ -3598,7 +3598,8 @@ class TaskOrchestrator:
             for candidate in self.candidates
             if candidate.model == requested_model and self._zdr_agent_allowed(candidate)
         ]
-        if not matches:
+        configured_exact = any(candidate.model == requested_model for candidate in self.candidates)
+        if not matches and not configured_exact:
             try:
                 requested_group = canonical_group_name(requested_model)
             except ValueError:
@@ -3609,11 +3610,11 @@ class TaskOrchestrator:
                 if candidate.group_name
                 and canonical_group_name(candidate.group_name) == requested_group
             ]
-            matches = (
-                self.select_model_group_members(group_candidates)
-                if group_candidates
-                else []
-            )
+            if group_candidates:
+                try:
+                    matches = self.select_model_group_members(group_candidates)
+                except RuntimeError:
+                    matches = []
         if not matches:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
