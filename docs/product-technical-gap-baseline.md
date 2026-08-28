@@ -47,7 +47,7 @@ approval remains required.
 PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
 at `511956c274109a89af49193d1e6c78260dd2c1eb` has passing ordinary, security,
 fuzz, and coverage checks, but OpenCode lacks a current-head verdict and Strix
-failed closed on provider HTTP 500 responses. Neither PR has qualifying
+failed closed on provider HTTP 500 responses. This PR has no qualifying
 independent approval.
 
 | PR | Exact head | Base / current gate state |
