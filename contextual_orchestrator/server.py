@@ -22,7 +22,7 @@ import uuid
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
-from .cost_router import CostRoutingCoordinator
+from .cost_router import BatchModelSelectionError, CostRoutingCoordinator
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
@@ -6860,6 +6860,12 @@ def build_server(
                 )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
+            except BatchModelSelectionError as exc:
+                self._send_error(
+                    503,
+                    "batch_model_unavailable",
+                    "no eligible model-group member is available for this batch request",
+                )
             except ProviderResponseError:
                 self._send_error(
                     502,

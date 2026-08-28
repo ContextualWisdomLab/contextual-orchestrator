@@ -53,6 +53,10 @@ _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
+class BatchModelSelectionError(RuntimeError):
+    """Raised when a batch request has no eligible model-group member."""
+
+
 class CostRoutingCoordinator:
     """Wire routing + cost accounting around a ``TaskOrchestrator``."""
 
@@ -588,7 +592,12 @@ class CostRoutingCoordinator:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> BatchJob:
         """Submit a batch of requests to the configured batch backend."""
-        prepared_requests = [self._resolve_batch_request(request) for request in requests]
+        try:
+            prepared_requests = [self._resolve_batch_request(request) for request in requests]
+        except RuntimeError as exc:
+            raise BatchModelSelectionError(
+                "no eligible model-group member is available for this batch request"
+            ) from exc
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         self._batch_jobs[job.job_id] = job
         return job

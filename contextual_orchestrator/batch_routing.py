@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
 _ROUTING_CATEGORY = "routing"
+_PROVIDER_CUSTOM_ID_MAX_LENGTH = 64
 
 
 # ---------------------------------------------------------------------------
@@ -458,16 +459,23 @@ class EmbeddingBatchRequest:
     agent_id: Optional[str] = None
 
     def wire_custom_id(self) -> str:
-        """Carry the selected agent through providers' standard custom-id field."""
-        if self.agent_id is None:
+        """Return a provider-safe id while retaining the internal request mapping.
+
+        The provider only needs a unique wire id; ``PgLlmBatchEmbeddingBackend``
+        maps it back to the persisted request, which already carries ``agent_id``.
+        Hashing avoids exposing or lengthening that internal identifier and keeps
+        the OpenAI-compatible 64-character custom-id limit intact.
+        """
+        if self.agent_id is None and len(self.custom_id) <= _PROVIDER_CUSTOM_ID_MAX_LENGTH:
             return self.custom_id
-        return f"{len(self.agent_id)}:{self.agent_id}:{self.custom_id}"
+        identity = self.custom_id if self.agent_id is None else f"{self.agent_id}\x00{self.custom_id}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""
         return {
-            # The provider body stays OpenAI-compatible; custom_id is the
-            # standard per-request carrier for the immutable route identity.
+            # The provider body stays OpenAI-compatible; the backend's tracked
+            # request map carries the immutable route identity separately.
             "custom_id": self.wire_custom_id(),
             "method": "POST",
             "url": endpoint,
