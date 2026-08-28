@@ -14,10 +14,11 @@ completion-token evidence through the existing state database.
 This is deliberately a retention-only slice: the default remains process-local;
 there is no calibrated decay, cross-model quality weighting, inferred provider
 equivalence, or claim of production horizontal-scaling readiness. Persistence
-errors propagate rather than silently converting a configured durable ledger
-into local-only evidence. Focused store/router/orchestrator/CLI coverage is
-maintained in `tests/test_routing_observation_store.py`; protected `main` and
-hosted Checks remain the release boundary for this implementation.
+errors fail closed for non-stream requests; after a stream has emitted provider
+bytes, a write failure is logged and cannot change the completed response.
+Focused store/router/orchestrator/CLI coverage is maintained in
+`tests/test_routing_observation_store.py`; protected `main` and hosted Checks
+remain the release boundary for this implementation.
 
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 
@@ -928,9 +929,9 @@ and re-inventoried the whole open queue at the listed heads.
    Cross-model quality routing must use calibrated evaluation (fast-mlsirm /
    RouteLLM-style learned router) with ablation, not hand weights (RouteLLM;
    FrugalGPT citations in ADR 0026).
-4. **Partially closed — multi-instance telemetry:** an explicit time-window-only
-   SQLite observation store now shares current-window evidence across processes;
-   calibrated decay and production horizontal scaling remain open (ADR 0039).
+4. **Open — multi-instance telemetry:** observation ledger is process-local by
+   design; durable time-windowed aggregation is required before horizontal
+   scaling (ADR 0026 boundary).
 5. **Closed on #835 head `f21da70b7f18`: scheduler pinning and transient-model
    coupling.** OpenCode is pinned to `1.18.22`, actionlint passes, and the loop
    targets the stable gateway alias without creating an implicit model group.
@@ -978,9 +979,8 @@ Buyer-visible gaps now prioritized:
 3. Free-model tests are deterministic catalog-contract tests. Add an opt-in,
    spend-capped live OpenRouter canary selected from current zero-price metadata;
    never pin a transient free model identifier in production or CI.
-4. Multi-instance routing observations now have an opt-in, time-window-only
-   SQLite store. Add calibrated decay, fleet-scale replay evidence, and an
-   explicit production horizontal-scaling decision before making that claim.
+4. Multi-instance routing observations remain process-local. Add a time-windowed
+   durable observation model with calibrated decay before horizontal scaling.
 5. Protected main, not a feature-stack merge, remains the release boundary; do
    not bump or publish a version until #834 has exact terminal gates and an
    independent current-head approval.
