@@ -6632,7 +6632,7 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_group_failure(embedding_agent.id)
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(
@@ -6711,7 +6711,7 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._group_router.observe_failure(embedding_agent.id)
+                            orchestrator._record_group_failure(embedding_agent.id)
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(

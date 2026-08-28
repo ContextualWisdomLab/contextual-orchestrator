@@ -13,9 +13,11 @@ completion-token evidence through the existing state database.
 
 This is deliberately a retention-only slice: the default remains process-local;
 there is no calibrated decay, cross-model quality weighting, inferred provider
-equivalence, or claim of production horizontal-scaling readiness. Persistence
-errors fail closed for non-stream requests; after a stream has emitted provider
-bytes, a write failure is logged and cannot change the completed response.
+equivalence, or claim of production horizontal-scaling readiness. Non-stream
+success-observation persistence errors fail closed; provider-failure recording
+preserves the original failure and logs the durable-evidence outage. After a
+stream has emitted provider bytes, a write failure is logged and cannot change
+the completed response.
 Focused store/router/orchestrator/CLI coverage is maintained in
 `tests/test_routing_observation_store.py`; protected `main` and hosted Checks
 remain the release boundary for this implementation.

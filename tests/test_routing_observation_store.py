@@ -234,6 +234,31 @@ def test_stream_preserves_emitted_answer_when_observation_write_fails(
         orchestrator.close()
 
 
+def test_provider_failure_observation_outage_does_not_mask_active_failure(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("member_a", "mock-model", group_name="shared_model")],
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+
+    def fail_append(*args, **kwargs):
+        raise OSError("simulated storage outage")
+
+    provider_error = RuntimeError("provider failure")
+    try:
+        monkeypatch.setattr(orchestrator._routing_observation_store, "append", fail_append)
+        try:
+            raise provider_error
+        except RuntimeError as error:
+            orchestrator._record_group_failure("member_a")
+            assert error is provider_error
+        assert "durable routing observation failed" in caplog.text
+    finally:
+        orchestrator.close()
+
+
 def test_router_rejects_incomplete_store_contract() -> None:
     with pytest.raises(TypeError):
         ModelGroupRouter(observation_store=object())  # type: ignore[arg-type]

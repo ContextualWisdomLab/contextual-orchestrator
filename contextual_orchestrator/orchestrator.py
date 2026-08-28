@@ -3395,7 +3395,7 @@ class TaskOrchestrator:
             except Exception as exc:
                 request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
-                    self._group_router.observe_failure(agent.id)
+                    self._record_group_failure(agent.id)
                 raise
             if measured:
                 self._group_router.observe_success(
@@ -3487,7 +3487,7 @@ class TaskOrchestrator:
                 if not request_too_large:
                     self._record_failure(candidate.id)
                 if candidate.group_name and not request_too_large:
-                    self._group_router.observe_failure(candidate.id)
+                    self._record_group_failure(candidate.id)
                 continue
             self._record_success(candidate.id)
             if candidate.group_name:
@@ -3771,7 +3771,7 @@ class TaskOrchestrator:
             if not _is_request_too_large_error(exc):
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
-                self._group_router.observe_failure(final_agent.id)
+                self._record_group_failure(final_agent.id)
             raise
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:
@@ -3845,13 +3845,13 @@ class TaskOrchestrator:
                 if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
                 if final_agent.group_name and not _is_request_too_large_error(exc):
-                    self._group_router.observe_failure(final_agent.id)
+                    self._record_group_failure(final_agent.id)
                 raise
             repaired_output = provider_output(repaired)
             if _structured_output_error(repaired_output, response_format) is not None:
                 self._record_failure(final_agent.id)
                 if final_agent.group_name:
-                    self._group_router.observe_failure(final_agent.id)
+                    self._record_group_failure(final_agent.id)
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
@@ -4071,12 +4071,7 @@ class TaskOrchestrator:
                 yield delta
         except Exception:
             if agent.group_name or model_name == self.FREE_MODEL:
-                try:
-                    self._group_router.observe_failure(agent.id)
-                except RoutingObservationPersistenceError:
-                    _LOGGER.error(
-                        "durable routing observation failed after streamed provider failure"
-                    )
+                self._record_group_failure(agent.id)
             raise
         if agent.group_name or model_name == self.FREE_MODEL:
             try:
@@ -5754,7 +5749,7 @@ class TaskOrchestrator:
         """Share race completion evidence with normal stability/circuit ledgers."""
         self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
         if error is not None and not _is_request_too_large_error(error):
-            self._group_router.observe_failure(endpoint_id)
+            self._record_group_failure(endpoint_id)
             self._record_failure(endpoint_id)
 
     def _race_attempt_collector(
@@ -5909,7 +5904,7 @@ class TaskOrchestrator:
                     every_failure_was_request_too_large and request_too_large
                 )
                 if not request_too_large:
-                    self._group_router.observe_failure(agent.id)
+                    self._record_group_failure(agent.id)
                 continue
             if selection_sink is not None:
                 selected_result = selection_sink(agent, result)
@@ -6039,7 +6034,7 @@ class TaskOrchestrator:
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
-                        self._group_router.observe_failure(agent.id)
+                        self._record_group_failure(agent.id)
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
                     decision = classify_tool_failure(exc)
@@ -6182,6 +6177,15 @@ class TaskOrchestrator:
             state["failures"] += 1.0
             if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
                 state["opened_at"] = time.monotonic()
+
+    def _record_group_failure(self, agent_id: str) -> None:
+        """Record provider failure without replacing an already active error."""
+        try:
+            self._group_router.observe_failure(agent_id)
+        except RoutingObservationPersistenceError:
+            _LOGGER.error(
+                "durable routing observation failed while recording provider failure"
+            )
 
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:

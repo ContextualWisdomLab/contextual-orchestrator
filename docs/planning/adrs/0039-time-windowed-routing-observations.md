@@ -46,10 +46,12 @@ completion order, using the existing estimator and priors. Writes prune rows
 outside the window. Separate short-lived SQLite connections and a transactional
 write boundary permit multiple gateway processes to use the same database; a
 storage error propagates so configured durable evidence is never silently
-reported as local-only evidence. Non-stream requests therefore fail closed. A
-stream may already have emitted provider bytes before its post-completion
-observation write; that write failure is logged as degraded durable evidence and
-cannot change the already-emitted response. Removed group members delete their
+reported as local-only evidence. Non-stream success-observation requests
+therefore fail closed. Provider-failure recording preserves the active provider
+failure and logs the durable-evidence outage so failover can continue. A stream
+may already have emitted provider bytes before its post-completion observation
+write; that write failure is logged as degraded durable evidence and cannot
+change the already-emitted response. Removed group members delete their
 persisted rows. The Admin state
 reports whether the policy is enabled, its window, and the literal
 `time_window_only` retention policy.
