@@ -100,10 +100,10 @@ def test_safe_message_collapses_control_characters_and_bounds_length() -> None:
     )
     assert long is not None
     assert len(long) == MAX_SAFE_MESSAGE_CHARS
-    raw = "line1\nline2\ttabbed\x00nul"
+    raw = "line1\nline2\ttabbed\x00nul\x7fdel\x85next"
     collapsed = safe_provider_message(_body_http_error(400, {"error": {"message": raw}}))
     assert collapsed is not None
-    assert "\n" not in collapsed and "\x00" not in collapsed
+    assert all(control not in collapsed for control in ("\n", "\x00", "\x7f", "\x85"))
     assert "\t" in collapsed  # tab is preserved for readability
 
 

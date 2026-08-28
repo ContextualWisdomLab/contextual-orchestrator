@@ -120,7 +120,10 @@ def safe_provider_message(exc: BaseException) -> str | None:
         first_arg = next((part for part in exc.args[:1] if isinstance(part, str)), "")
         raw = first_arg or type(exc).__name__
     collapsed = "".join(
-        char if ord(char) >= 0x20 or char in "\t" else " " for char in str(raw)
+        char
+        if char == "\t" or not (ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F)
+        else " "
+        for char in str(raw)
     ).strip()
     return collapsed[:MAX_SAFE_MESSAGE_CHARS] or None
 
