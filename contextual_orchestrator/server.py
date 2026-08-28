@@ -3107,6 +3107,12 @@ def _validate_routing(
             "invalid_routing",
             "routing.endpoint cannot be combined with deferred batch routing",
         )
+    if "endpoint" in cleaned:
+        # Endpoint identity is request-local and is deliberately absent from
+        # BatchRequest persistence.  Force the effective policy channel to
+        # synchronous before priority or token thresholds can defer the work
+        # and lose the selected data-residency boundary.
+        cleaned["channel"] = "sync"
     return cleaned if cleaned else {}
 
 

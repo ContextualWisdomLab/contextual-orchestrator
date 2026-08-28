@@ -12,6 +12,8 @@ from dataclasses import replace
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
+from contextual_orchestrator.kv_config import InMemoryConfigStore
 from contextual_orchestrator.orchestrator import EndpointUnavailableError, ModelClient
 from contextual_orchestrator.server import (
     RequestError,
@@ -177,6 +179,22 @@ def test_endpoint_cannot_be_dropped_into_deferred_chat_work(
     assert exc_info.value.code == "invalid_routing"
 
 
+def test_endpoint_forces_effective_sync_before_policy_thresholds() -> None:
+    """Bulk priority and token policy cannot defer an endpoint-bound request."""
+
+    assert _validate_routing(
+        {"endpoint": "https://a.example", "priority": "bulk"},
+        allow_endpoint=True,
+    ) == {
+        "endpoint": "https://a.example",
+        "priority": "bulk",
+        "channel": "sync",
+    }
+    assert _validate_routing(
+        {"endpoint": "https://a.example"}, allow_endpoint=True
+    ) == {"endpoint": "https://a.example", "channel": "sync"}
+
+
 def test_same_agent_id_cannot_escape_after_endpoint_reconfiguration() -> None:
     orchestrator = _orchestrator()
     original = orchestrator.agents[0]
@@ -267,6 +285,50 @@ def test_http_chat_rejects_endpoint_with_deferred_routing(
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("routing", "batch_min_tokens"),
+    [
+        ({"priority": "bulk"}, 0),
+        ({"priority": "normal"}, 1),
+    ],
+)
+def test_http_chat_endpoint_cannot_enter_policy_selected_batch(
+    routing: dict, batch_min_tokens: int
+) -> None:
+    """Every implicit batch policy remains synchronous under an endpoint selector."""
+
+    orchestrator = _orchestrator()
+    config = InMemoryConfigStore()
+    config.set("routing", "batch_min_tokens", batch_min_tokens)
+    coordinator = CostRoutingCoordinator(orchestrator, config_store=config)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="endpoint-test-token"),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _post_json(
+            server,
+            "/v1/chat/completions",
+            {
+                "model": "contextual-orchestrator",
+                "messages": [{"role": "user", "content": "answer with enough tokens"}],
+                "routing": {"endpoint": "https://a.example", **routing},
+            },
+        )
+        assert status == 200, document
+        assert document["object"] == "chat.completion"
+        assert orchestrator.client.agent_ids
+        assert set(orchestrator.client.agent_ids) == {"agent_a"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        coordinator.close()
 
 
 @pytest.mark.parametrize(
