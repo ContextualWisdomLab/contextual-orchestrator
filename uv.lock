@@ -430,7 +430,7 @@ requires-dist = [
     { name = "alembic", marker = "extra == 'db'", specifier = ">=1.17" },
     { name = "atheris", marker = "python_full_version >= '3.12' and extra == 'fuzz'", specifier = "==3.1.0" },
     { name = "cryptography", specifier = ">=43.0" },
-    { name = "fast-mlsirm", marker = "python_full_version >= '3.12'", git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git?rev=v0.9.1" },
+    { name = "fast-mlsirm", marker = "python_full_version >= '3.12'", url = "https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.128.0" },
     { name = "greenlet", marker = "extra == 'db'", specifier = ">=3.2" },
     { name = "hypothesis", marker = "extra == 'test'", specifier = ">=6.100" },
@@ -523,10 +523,21 @@ wheels = [
 [[package]]
 name = "fast-mlsirm"
 version = "0.9.1"
-source = { git = "https://github.com/ContextualWisdomLab/fast-mlsirm.git?rev=v0.9.1#09f762ded35786dd1078222a4577ff09d649816f" }
+source = { url = "https://github.com/ContextualWisdomLab/fast-mlsirm/archive/refs/tags/v0.9.1.tar.gz" }
 dependencies = [
     { name = "numpy" },
 ]
+sdist = { hash = "sha256:c43af5151edd6e80546a19f0d8b5afc4b5d636edd8a0563462e329a3659a208b" }
+
+[package.metadata]
+requires-dist = [
+    { name = "atheris", marker = "extra == 'fuzz'", specifier = ">=2.3" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6" },
+    { name = "hypothesis", marker = "extra == 'fuzz'", specifier = ">=6" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+]
+provides-extras = ["dev", "fuzz"]
 
 [[package]]
 name = "fastapi"
