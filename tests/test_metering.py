@@ -69,6 +69,28 @@ def test_record_sink_builds_and_enqueues_without_content() -> None:
     assert queued[0]["identity"] == {"tenant_reference": "urn:cwl:tenant:test"}
 
 
+def test_record_sink_rejects_noncanonical_identity_before_builder() -> None:
+    """Private content cannot enter the canonical builder through identity."""
+    built = False
+
+    def builder(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal built
+        built = True
+        return {}
+
+    try:
+        CanonicalUsageRecordSink(
+            event_builder=builder,
+            enqueue=lambda _event: None,
+            identity={"prompt": "must-not-reach-builder"},
+        )
+    except ValueError as error:
+        assert "prompt" in str(error)
+    else:
+        raise AssertionError("noncanonical identity was accepted")
+    assert built is False
+
+
 def test_cost_ledger_reports_sink_failure_without_failing_completion() -> None:
     """A broken billing export is observable while the existing ledger survives."""
     telemetry = InMemoryUsageTelemetrySink()
