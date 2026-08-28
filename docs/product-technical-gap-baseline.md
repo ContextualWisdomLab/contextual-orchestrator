@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-## 2026-08-28 12:41 KST exact-head PR remediation slice
+## 2026-08-28 13:15 KST exact-head PR remediation slice
 
 Protected `main` is `8d5924f8`. PR #879 is now at `2b1829a8`; its exact tree
 passed **2516 tests** after fixing ambiguous classified passthrough failures so
@@ -12,11 +12,15 @@ whitespace-only embeddings models; its targeted 27-test proof and interrogate
 tests and exposed only the optional MCP test's environment API mismatch
 (`mcp==1.23.3` exports no `Client`), which is not in the project lock files.
 PR #857 is at externally advanced head `b2aedb7b` with all other checks passing
-but the same Strix provider outage. All five open PRs remain `MERGEABLE` but
-`BLOCKED` without an independent approval, so none is claimed as protected-main
-delivery. PR #901 is at exact head `efa0c9fa` and
-adds provider-neutral ZDR-only model-group selection plus catalog evidence;
-its hosted checks are still running.
+but the same Strix provider outage. PR #901 is now at externally advanced head
+`d1bd3626d` and its code checks pass, while Noema, OpenCode, and Strix remain
+failed or unavailable gates. PR #902 is a stacked change on #857 at exact head
+`cb4d5bca`; its available review checks pass, but its own body requires #857 to
+land first. PR #903 adds the governed CEFR language-observation slice at exact
+head `f456393e`; its hosted checks are queued and its local exact tree passed
+2492 tests with 100% interrogate coverage. All seven open PRs remain subject
+to protected review and hosted gates; no PR is claimed as protected-main
+delivery. The docs-only recording PR #900 is at `8b5fb4a3`.
 
 The earlier local merge attempt for #857 at `0aec4a54` was aborted without a
 push; no stale branch evidence is promoted to protected-main evidence. The
