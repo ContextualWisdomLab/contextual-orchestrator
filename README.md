@@ -247,8 +247,9 @@ is read from a **KV config store**, never `os.getenv`.
   dropped, and duplicate writes do not become billing-only events. For a
   caller-owned SQLite transaction, export is deferred until `flush()` observes
   the caller's commit; rollback therefore emits no billing-only event. A
-  non-blocking SQL store rejects a billing-backed append while such a
-  transaction is open because its eventual outcome cannot be observed safely.
+  non-blocking SQL store writes such a billing-backed append synchronously while
+  the transaction is open and defers export until `flush()` confirms the commit,
+  so a background worker cannot race the caller's transaction outcome.
   It exports token counts and bounded provider/model/workflow metadata;
   prompts, answers, and computed prices never enter the event.
 - **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
