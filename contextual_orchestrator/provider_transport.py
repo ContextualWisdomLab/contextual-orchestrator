@@ -11,7 +11,6 @@ import http.client
 import ipaddress
 import socket
 import ssl
-from typing import Any, Iterator
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -45,42 +44,6 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         except Exception:  # noqa: BLE001 - close the raw socket, then preserve the TLS failure.
             raw_socket.close()
             raise
-
-
-class _ProviderHTTPResponse:
-    """Provider response wrapper that deterministically closes its connection."""
-
-    def __init__(self, response: Any, connection: Any) -> None:
-        """Retain the response and direct connection for context-managed cleanup."""
-        self._response = response
-        self._connection = connection
-
-    def __enter__(self) -> "_ProviderHTTPResponse":
-        """Return this response wrapper from a context manager."""
-        return self
-
-    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
-        """Close the response and its connection when leaving the context."""
-        self.close()
-
-    def __iter__(self) -> Iterator[bytes]:
-        """Iterate raw response lines for server-sent-event streaming."""
-        return iter(self._response)
-
-    def __getattr__(self, name: str) -> Any:
-        """Delegate response metadata such as status and headers."""
-        return getattr(self._response, name)
-
-    def read(self, *args: Any, **kwargs: Any) -> bytes:
-        """Read bytes from the underlying provider response."""
-        return self._response.read(*args, **kwargs)
-
-    def close(self) -> None:
-        """Close both resources even when response cleanup raises."""
-        try:
-            self._response.close()
-        finally:
-            self._connection.close()
 
 
 def _validated_public_addresses(hostname: str, port: int, provider_label: str) -> tuple[str, ...]:
