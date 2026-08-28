@@ -132,14 +132,14 @@ def test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free()
     models = [
         _model("openai", "OPENAI_API_KEY", "gpt-expensive", 4.0),
         _model("openai", "OPENAI_API_KEY", "gpt-cheap", 1.0),
-        _model("openrouter", "OPENROUTER_API_KEY", "mistral-router", 2.0),
+        _model("openrouter", "OPENROUTER_API_KEY", "mistral-router", 2.0, evidence_only=True),
         _model("bytez", "BYTEZ_API_KEY", "llama-unknown", None),
     ]
     selected = provider_bootstrap.select_provider_diverse_models(models, limit=3)
     assert [(item.provider_name, item.model_id) for item in selected] == [
         ("openai", "gpt-cheap"),
-        ("openrouter", "mistral-router"),
         ("bytez", "llama-unknown"),
+        ("openai", "gpt-expensive"),
     ]
 
 

@@ -88,6 +88,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
+        evidence_only=True,
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -415,7 +416,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
 
 
 def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
-    """Read public OpenRouter ZDR evidence for discovered provider models."""
+    """Read public ZDR model evidence without making OpenRouter the route."""
     try:
         payload = _fetch_json(OPENROUTER_ZDR_ENDPOINTS_URL, timeout=timeout)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
@@ -513,9 +514,9 @@ def discover_all_models(
             discovered.extend(discover_provider_models(source, timeout=timeout))
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    # The authenticated OpenRouter catalog supplies routable candidates; its
-    # public ZDR endpoint supplies additional privacy evidence for matching
-    # models from any discovered provider.
+    # OpenRouter contributes public privacy catalog evidence only. It is not
+    # selected as an upstream here; matching model ids can inform ZDR-only
+    # group assembly for any discovered provider.
     return _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),

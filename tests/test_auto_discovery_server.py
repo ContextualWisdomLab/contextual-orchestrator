@@ -44,8 +44,8 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert "bootstrap_agent" in result["updated"]
 
 
-def test_auto_discovery_activates_openrouter_catalog_rows(monkeypatch) -> None:
-    """Authenticated OpenRouter catalog rows enter the runtime pool."""
+def test_auto_discovery_never_routes_evidence_only_openrouter_rows(monkeypatch) -> None:
+    """OpenRouter catalog rows remain evidence-only during runtime discovery."""
     router_row = DiscoveredModel(
         provider_name="openrouter",
         model_id="provider/router-chat",
@@ -53,6 +53,7 @@ def test_auto_discovery_activates_openrouter_catalog_rows(monkeypatch) -> None:
         chat_base_url="https://openrouter.ai/api/v1",
         auth_scheme="Bearer",
         capabilities=("chat", "response_format"),
+        evidence_only=True,
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
@@ -64,13 +65,8 @@ def test_auto_discovery_activates_openrouter_catalog_rows(monkeypatch) -> None:
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result == {
-        "added": ["openrouter_provider_router_chat"],
-        "updated": ["bootstrap_agent"],
-    }
-    agent = orchestrator.candidates[-1]
-    assert agent.model == router_row.model_id
-    assert agent.disabled is False
+    assert result == {"added": [], "updated": []}
+    assert [agent.id for agent in orchestrator.candidates] == ["bootstrap_agent"]
 
 
 def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> None:
