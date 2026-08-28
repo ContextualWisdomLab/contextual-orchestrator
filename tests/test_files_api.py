@@ -77,7 +77,7 @@ def test_file_registry_hides_provider_identity_and_enforces_principal_ownership(
 def test_files_http_upload_list_retrieve_content_and_delete() -> None:
     """The public Files lifecycle retains opaque provider affinity end to end."""
     server = build_server(
-        TaskOrchestrator([ModelAgent("files_agent", "mock-files")]),
+        TaskOrchestrator([ModelAgent("files_agent", "mock-files", tags=("files",))]),
         port=0,
         security=SecurityConfig(auth_token="files-token"),
     )

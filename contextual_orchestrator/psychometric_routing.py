@@ -61,6 +61,13 @@ class PsychometricRoutingEvidence:
             values = (int(accepted), *(int(value) for value in irt_row))
             if any(value not in (0, 1) for value in values):
                 raise ValueError("judge IRT rows must be dichotomous")
+            stale = [
+                key
+                for key in self._responses
+                if key[:2] == (agent_id, context_id) and key[2] >= len(values)
+            ]
+            for key in stale:
+                del self._responses[key]
             for item_index, value in enumerate(values):
                 self._responses[(agent_id, context_id, item_index)] = value
             while len(self._contexts) > self.max_contexts:

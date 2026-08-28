@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from typing import Any
@@ -11,6 +11,10 @@ import uuid
 
 class FileContractError(RuntimeError):
     """Raised when a provider response cannot become a gateway file resource."""
+
+
+class FileProviderUnavailableError(FileContractError):
+    """Raised when owned files have no shared provider replica."""
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,16 @@ class FileRegistry:
         del self._owners[gateway_file_id]
         return owner
 
+    def retain_replicas(
+        self,
+        gateway_file_id: str,
+        owner_id: str,
+        replicas: dict[str, dict[str, str]],
+    ) -> None:
+        """Persist replicas still requiring deletion after a partial attempt."""
+        owner = self.owner(gateway_file_id, owner_id)
+        self._owners[gateway_file_id] = replace(owner, replicas=dict(replicas))
+
     def bind_request(
         self, document: dict[str, Any], owner_id: str
     ) -> tuple[dict[str, Any], dict[str, dict[str, str]]]:
@@ -163,7 +177,7 @@ class FileRegistry:
                 *(set(replicas) for replicas in bindings.values())
             )
             if not common_agents:
-                raise FileContractError(
+                raise FileProviderUnavailableError(
                     "referenced files have no common provider replica"
                 )
         return rewritten, bindings

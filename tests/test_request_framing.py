@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
     DEFAULT_MAX_JSON_BODY_BYTES,
+    MAX_MULTIMODAL_JSON_BODY_BYTES,
     RequestError,
     SecurityConfig,
     _request_body_size,
@@ -53,7 +54,8 @@ def test_request_body_size_accepts_absent_zero_and_trimmed_lengths() -> None:
 def test_default_json_body_limit_matches_openai_image_request_contract() -> None:
     """Multimodal JSON reaches routing up to OpenAI's 512 MB request limit."""
     configured = SecurityConfig().max_body_bytes
-    assert configured == DEFAULT_MAX_JSON_BODY_BYTES == 512 * 1024 * 1024
+    assert configured == DEFAULT_MAX_JSON_BODY_BYTES == 64 * 1024
+    assert MAX_MULTIMODAL_JSON_BODY_BYTES == 512 * 1024 * 1024
     assert _request_body_size(_headers(content_length=str(configured)), configured) == configured
     with pytest.raises(RequestError) as exc_info:
         _request_body_size(_headers(content_length=str(configured + 1)), configured)

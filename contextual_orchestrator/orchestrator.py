@@ -2926,6 +2926,23 @@ class _StateStore:
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
 
+    def prune_keyed(self, kind: str, retained_keys: set[str]) -> None:
+        """Delete keyed rows outside the caller's bounded in-memory set."""
+        if kind not in self._KEYED:
+            raise ValueError("only keyed state can be pruned")
+        with self._lock:
+            if retained_keys:
+                placeholders = ",".join("?" for _ in retained_keys)
+                self._conn.execute(
+                    f"DELETE FROM orchestration_records WHERE kind = ? AND key NOT IN ({placeholders})",  # nosec B608 -- placeholders only
+                    (kind, *sorted(retained_keys)),
+                )
+            else:
+                self._conn.execute(
+                    "DELETE FROM orchestration_records WHERE kind = ?", (kind,)
+                )
+            self._conn.commit()
+
     def close(self) -> None:
         """Close the sqlite handle so Windows can release the database file."""
         self._flush_streams()
@@ -3299,15 +3316,20 @@ class TaskOrchestrator:
             if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
                 raise RuntimeError("requested model has no referenced file replica")
             agent = next(
-                candidate
-                for candidate in self._ranked_agents(
+                (
+                    candidate
+                    for candidate in self._ranked_agents(
                     text,
                     "worker",
                     free_only=requested_model == self.FREE_MODEL,
                     prompt_context=prompt_context,
-                )
-                if candidate.id in replica_agent_ids
+                    )
+                    if candidate.id in replica_agent_ids
+                ),
+                None,
             )
+            if agent is None:
+                raise RuntimeError("required file provider is unavailable")
         upstream = {
             key: value
             for key, value in body.items()
@@ -3506,16 +3528,21 @@ class TaskOrchestrator:
             if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
                 raise RuntimeError("requested model has no referenced file replica")
             final_agent = next(
-                candidate
-                for candidate in self._ranked_agents(
+                (
+                    candidate
+                    for candidate in self._ranked_agents(
                     task,
                     "synthesizer",
                     required_tags=selection_tags,
                     free_only=free_only,
                     prompt_context=prompt_context,
-                )
-                if candidate.id in replica_agent_ids
+                    )
+                    if candidate.id in replica_agent_ids
+                ),
+                None,
             )
+            if final_agent is None:
+                raise RuntimeError("required file provider is unavailable")
         elif any(tag not in final_agent.tags for tag in required_tags):
             raise ValueError(
                 f"requested model {requested_model!r} lacks required tags: "
@@ -3809,15 +3836,6 @@ class TaskOrchestrator:
             )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
-        synthesis_quality = self._realtime_route_judge(
-            text=task,
-            answer=synthesis_output,
-            served_id=final_agent.id,
-            latency_seconds=time.perf_counter() - synthesis_started,
-            usage=raw.get("usage") if isinstance(raw.get("usage"), dict) else None,
-            free_only=free_only,
-            prompt_context=prompt_context,
-        )
         echo = raw.get("echo")
         if isinstance(echo, dict):
             if response_request:
@@ -3846,7 +3864,6 @@ class TaskOrchestrator:
                 "trace": trace,
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": workflow.get("verification"),
-                "synthesis_quality_verification": synthesis_quality,
             }
         )
         self._replace_workflow_run(record)
@@ -5311,6 +5328,13 @@ class TaskOrchestrator:
             )
             key = hashlib.sha256(f"{context_id}\0{served_id}".encode()).hexdigest()
             self._store.save("psychometric_observation", key, record)
+            retained = {
+                hashlib.sha256(
+                    f"{item['context_id']}\0{item['agent_id']}".encode()
+                ).hexdigest()
+                for item in self._psychometric_router.records()
+            }
+            self._store.prune_keyed("psychometric_observation", retained)
 
     # --- dual-ledger membership maintenance ---------------------------------
 

@@ -333,12 +333,14 @@ OPENAPI_SPEC = {
         "/v1/files/{file_id}": {
             "get": {
                 "operationId": "retrieve_file",
+                "parameters": [{"name": "file_id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "summary": "Retrieve file metadata",
                 "security": [{"inference_bearer_auth": []}],
                 "responses": {"200": {"description": "File metadata"}, "404": {"description": "File not found"}},
             },
             "delete": {
                 "operationId": "delete_file",
+                "parameters": [{"name": "file_id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "summary": "Delete a file",
                 "security": [{"inference_bearer_auth": []}],
                 "responses": {"200": {"description": "File deleted"}, "404": {"description": "File not found"}},
@@ -347,6 +349,7 @@ OPENAPI_SPEC = {
         "/v1/files/{file_id}/content": {
             "get": {
                 "operationId": "download_file",
+                "parameters": [{"name": "file_id", "in": "path", "required": True, "schema": {"type": "string"}}],
                 "summary": "Download file content",
                 "security": [{"inference_bearer_auth": []}],
                 "responses": {"200": {"description": "File content"}, "404": {"description": "File not found"}},

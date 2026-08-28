@@ -62,13 +62,19 @@ from .video_jobs import (
     VideoJobRegistry,
     video_agent_affinity_key,
 )
-from .file_registry import FileContractError, FileRegistry, file_agent_affinity_key
+from .file_registry import (
+    FileContractError,
+    FileProviderUnavailableError,
+    FileRegistry,
+    file_agent_affinity_key,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 # OpenAI's image-input contract permits a 512 MB total request payload.  That
 # includes JSON requests carrying data-URL/base64 images, not only /files.
-DEFAULT_MAX_JSON_BODY_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_JSON_BODY_BYTES = 64 * 1024
+MAX_MULTIMODAL_JSON_BODY_BYTES = 512 * 1024 * 1024
 MAX_FILE_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_BATCH_FILE_BYTES = 200 * 1024 * 1024
 
@@ -5226,13 +5232,24 @@ def build_server(
                         raise RequestError(503, "file_provider_unavailable", "the file provider is unavailable")
                     agent, provider_file_id = selected
                     if content_request:
-                        raw, content_type = self._run(
-                            lambda: orchestrator.client.proxy_get_bytes(
-                                agent,
-                                f"files/{urllib.parse.quote(provider_file_id, safe='')}/content",
-                                max_response_bytes=MAX_FILE_UPLOAD_BYTES,
+                        try:
+                            raw, content_type = self._run(
+                                lambda: orchestrator.client.proxy_get_bytes(
+                                    agent,
+                                    f"files/{urllib.parse.quote(provider_file_id, safe='')}/content",
+                                    max_response_bytes=MAX_FILE_UPLOAD_BYTES,
+                                )
                             )
-                        )
+                        except urllib.error.HTTPError as exc:
+                            if exc.code == 404:
+                                raise RequestError(
+                                    404, "file_not_found", "file content was not found"
+                                ) from exc
+                            raise RequestError(
+                                503,
+                                "file_provider_unavailable",
+                                "the file provider is unavailable",
+                            ) from exc
                         self._send_bytes(raw, content_type)
                     else:
                         self._send(files.public_response(owner.document, owner))
@@ -5787,16 +5804,27 @@ def build_server(
                     ]
                     if len(targets) != len(replicas):
                         raise RequestError(503, "file_provider_unavailable", "not every file replica provider is available")
+                    remaining = dict(replicas)
                     for agent, provider_file_id in targets:
-                        result = self._run(
-                            lambda agent=agent, provider_file_id=provider_file_id: orchestrator.client.proxy_delete_json(
-                                agent,
-                                f"files/{urllib.parse.quote(provider_file_id, safe='')}",
-                                max_response_bytes=security.max_body_bytes,
+                        try:
+                            result = self._run(
+                                lambda agent=agent, provider_file_id=provider_file_id: orchestrator.client.proxy_delete_json(
+                                    agent,
+                                    f"files/{urllib.parse.quote(provider_file_id, safe='')}",
+                                    max_response_bytes=security.max_body_bytes,
+                                )
                             )
-                        )
-                        if result.get("deleted") is not True:
-                            raise RequestError(502, "invalid_file_response", "file provider did not confirm deletion")
+                        except urllib.error.HTTPError as exc:
+                            if exc.code != 404:
+                                files.retain_replicas(gateway_file_id, principal_id, remaining)
+                                raise
+                        else:
+                            if result.get("deleted") is not True:
+                                files.retain_replicas(gateway_file_id, principal_id, remaining)
+                                raise RequestError(502, "invalid_file_response", "file provider did not confirm deletion")
+                        remaining.pop(agent.id, None)
+                        if remaining:
+                            files.retain_replicas(gateway_file_id, principal_id, remaining)
                     files.delete(gateway_file_id, principal_id)
                     self._send({"id": gateway_file_id, "object": "file", "deleted": True})
                     return
@@ -5884,9 +5912,15 @@ def build_server(
                                     "request_too_large",
                                     "batch files may not exceed 200 MB",
                                 )
-                        last_error: Exception | None = None
+                        saw_failure = False
+                        every_failure_was_request_too_large = True
                         replicas: list[tuple[dict[str, Any], str, str]] = []
-                        for agent in orchestrator.agents:
+                        file_agents = [
+                            agent
+                            for agent in orchestrator.agents
+                            if "files" in agent.tags or "capability:files" in agent.tags
+                        ]
+                        for agent in file_agents:
                             upload.seek(0)
                             try:
                                 provider_result = self._run(
@@ -5907,14 +5941,17 @@ def build_server(
                                     )
                                 )
                             except urllib.error.HTTPError as exc:
-                                last_error = exc
-                                if exc.code == 413:
-                                    continue
+                                saw_failure = True
+                                every_failure_was_request_too_large = (
+                                    every_failure_was_request_too_large
+                                    and exc.code == 413
+                                )
                                 continue
                             except FileContractError:
                                 raise
-                            except Exception as exc:
-                                last_error = exc
+                            except Exception:
+                                saw_failure = True
+                                every_failure_was_request_too_large = False
                                 continue
                         if replicas:
                             response = files.register_replicas(
@@ -5922,7 +5959,7 @@ def build_server(
                             )
                             self._send(response, 201)
                             return
-                    if isinstance(last_error, urllib.error.HTTPError) and last_error.code == 413:
+                    if saw_failure and every_failure_was_request_too_large:
                         raise RequestError(413, "request_too_large", "request body exceeds every eligible provider limit")
                     raise RequestError(503, "file_provider_unavailable", "no eligible file provider accepted the upload")
                 scope = (
@@ -5932,7 +5969,19 @@ def build_server(
                     else "inference"
                 )
                 self._authorize(scope, state_changing=True)
-                body = self._read_json()
+                large_inference_json = path in {
+                    "/v1/chat/completions",
+                    "/v1/responses",
+                    "/v1/images/generations",
+                    "/v1/videos",
+                } or path.startswith("/v1/audio/")
+                body = self._read_json(
+                    max_body_bytes=(
+                        MAX_MULTIMODAL_JSON_BODY_BYTES
+                        if large_inference_json
+                        else security.max_body_bytes
+                    )
+                )
                 metadata_values = [
                     value
                     for key in ("metadata", "client_metadata")
@@ -6856,6 +6905,10 @@ def build_server(
                         body, file_replicas = files.bind_request(
                             body, security.principal_id(self.headers)
                         )
+                    except FileProviderUnavailableError as exc:
+                        raise RequestError(
+                            503, "file_provider_unavailable", str(exc)
+                        ) from exc
                     except FileContractError as exc:
                         raise RequestError(404, "file_not_found", str(exc)) from exc
                     if file_replicas:
@@ -7228,11 +7281,14 @@ def build_server(
                 return None
             return int(raw)
 
-        def _read_json(self) -> dict[str, Any]:
+        def _read_json(self, *, max_body_bytes: int | None = None) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
             try:
-                body_size = _request_body_size(self.headers, security.max_body_bytes)
+                body_size = _request_body_size(
+                    self.headers,
+                    security.max_body_bytes if max_body_bytes is None else max_body_bytes,
+                )
             except RequestError:
                 # Do not let a peer reuse a connection after an ambiguous frame.
                 self.close_connection = True

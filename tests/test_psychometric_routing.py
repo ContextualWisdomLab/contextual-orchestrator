@@ -144,3 +144,11 @@ def test_contextual_judge_observation_survives_restart_without_raw_prompt(
     assert "system secret" not in Path(state_db).read_bytes().decode(
         "utf-8", errors="ignore"
     )
+
+
+def test_replacing_judge_row_removes_stale_trailing_items() -> None:
+    evidence = PsychometricRoutingEvidence()
+    evidence.observe("prompt", "model", True, None, (1, 0, 1))
+    evidence.observe("prompt", "model", False, None, (0,))
+
+    assert evidence.records()[0]["irt_row"] == [0]
