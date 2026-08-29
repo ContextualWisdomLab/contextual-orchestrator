@@ -1,0 +1,17 @@
+name: Refresh PR 910 against protected main
+
+on:
+  push:
+    branches: [fix/production-split-token-gate]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
+    with:
+      pr_number: 910
+      branch: fix/production-split-token-gate
+      caller_file: .github/workflows/resolve-pr-910-refresh.yml
