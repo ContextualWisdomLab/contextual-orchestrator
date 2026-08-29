@@ -16,6 +16,7 @@ primitives use maintained libraries when the enterprise target requires them.
 | Database | [PostgreSQL](https://www.postgresql.org/docs/current/sql-syntax-lexical.html) | Default relational store. | PostgreSQL identifiers allow letters, digits, and underscores; the project standardizes on unquoted lower snake_case. |
 | API contract | [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0.html) | Contract format for API review and client generation. | OAS defines a language-agnostic HTTP API description for humans and machines. |
 | Structured-output validation | `jsonschema` | Use the maintained validator for provider-returned JSON against caller-supplied JSON Schema; keep parsing and the single repair policy in the existing orchestrator. | Reusing `validator_for`, schema checks, and bounded validation avoids an incomplete custom JSON Schema implementation. Provider output and schemas remain untrusted and fail closed. |
+| SSE usage capture | Python stdlib streaming parser already used by `ModelClient._stream_send` | Reuse the existing line-delimited SSE parser and capture only provider-declared usage frames; do not add an SSE or provider SDK dependency. | OpenAI's Responses and Chat Completions references define terminal usage fields, while interrupted streams may omit the final usage frame. |
 
 ## Ponytail Decision
 

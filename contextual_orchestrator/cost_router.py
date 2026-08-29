@@ -4,7 +4,7 @@ This composes the existing :class:`~contextual_orchestrator.orchestrator.TaskOrc
 with the cost ledger and the sync-vs-batch router, so the orchestrator becomes
 the single control point for:
 
-1. **Cost review** — every completion (sync *and* batch) writes a
+1. **Cost review** — every completion (sync, stream, *and* batch) writes a
    :class:`~contextual_orchestrator.cost_ledger.UsageRecord` with token counts +
    computed cost and full multi-dimensional attribution.
 2. **Routing** — :class:`~contextual_orchestrator.batch_routing.RoutingPolicy`
@@ -582,6 +582,68 @@ class CostRoutingCoordinator:
             attribution=attribution,
             measurement_status=measurement_status,
         )
+
+    def record_stream_usage(
+        self,
+        *,
+        result: Dict[str, Any],
+        attribution: Optional[Dict[str, Any]],
+        model_name: str,
+    ) -> Dict[str, Any]:
+        """Record one streamed workflow without estimating missing provider usage."""
+        workflow_run_id = result.get("workflow_run_id")
+        trace = [step for step in result.get("trace") or [] if isinstance(step, dict)]
+        if not trace:
+            trace = [{}]
+        records = []
+        for index, step in enumerate(trace):
+            counts = self._provider_usage(step.get("usage"))
+            provider, model = self._served_provider_model({"trace": [step]}, model_name)
+            usage_record_id = "usage_stream_" + hashlib.sha256(
+                f"{workflow_run_id}:{index}".encode("utf-8")
+            ).hexdigest()
+            records.append(
+                self.ledger.record_usage(
+                    provider=provider,
+                    model=model,
+                    prompt_tokens=counts[0] if counts else 0,
+                    completion_tokens=counts[1] if counts else 0,
+                    request_channel="stream",
+                    route_mode=result.get("mode"),
+                    workflow_run_id=workflow_run_id,
+                    attribution=attribution,
+                    measurement_status="measured" if counts else "unavailable",
+                    usage_record_id=usage_record_id,
+                )
+            )
+        statuses = {record.measurement_status for record in records}
+        measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
+        currencies = {record.currency_code for record in records}
+        return {
+            "usage_record_ids": [record.usage_record_id for record in records],
+            "usage": (
+                {
+                    "input_tokens": sum(record.prompt_tokens for record in records),
+                    "output_tokens": sum(record.completion_tokens for record in records),
+                    "total_tokens": sum(record.total_tokens for record in records),
+                }
+                if measurement_status == "measured"
+                else None
+            ),
+            "cost": {
+                "cost_amount": (
+                    round(sum(record.cost_amount for record in records), 6)
+                    if measurement_status == "measured" and len(currencies) == 1
+                    else None
+                ),
+                "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "measurement_status": measurement_status,
+            },
+        }
 
     # ------------------------------------------------------------------
     # Batch lifecycle

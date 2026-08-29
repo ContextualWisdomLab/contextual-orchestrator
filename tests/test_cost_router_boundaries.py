@@ -66,6 +66,36 @@ def test_sync_attribution_falls_back_when_trace_names_unknown_agent() -> None:
     assert row["model_name"] == "contextual-orchestrator"
 
 
+def test_stream_usage_aggregates_trace_steps_without_text_estimates() -> None:
+    coordinator = _coordinator()
+    stream_result = {
+        "workflow_run_id": "run_stream_usage",
+        "mode": "conduct",
+        "trace": [
+            {"agent_id": "mock_worker", "usage": {"prompt_tokens": 5, "completion_tokens": 7}},
+            {"agent_id": "mock_worker", "usage": {"prompt_tokens": 11, "completion_tokens": 13}},
+        ],
+    }
+    result = coordinator.record_stream_usage(
+        result=stream_result,
+        attribution={"team": "alpha"},
+        model_name="requested-model",
+    )
+
+    assert result["usage"] == {"input_tokens": 16, "output_tokens": 20, "total_tokens": 36}
+    assert result["cost"]["measurement_status"] == "measured"
+    assert len(result["usage_record_ids"]) == 2
+    rows = coordinator.ledger.records()
+    assert [row["request_channel"] for row in rows] == ["stream", "stream"]
+    assert all(row["measurement_status"] == "measured" for row in rows)
+    coordinator.record_stream_usage(
+        result=stream_result,
+        attribution={"team": "alpha"},
+        model_name="requested-model",
+    )
+    assert len(coordinator.ledger.records()) == 2
+
+
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
     coordinator = _coordinator()
     with pytest.raises(TypeError, match="cache_bypass"):

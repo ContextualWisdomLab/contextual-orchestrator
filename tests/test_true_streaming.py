@@ -25,10 +25,13 @@ class _FakeSSEProvider:
     """Emits a fixed list of raw SSE frame strings at POST /chat/completions."""
 
     def __init__(self, frames: list[str]) -> None:
+        self.payloads: list[dict] = []
+        payloads = self.payloads
+
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
-                self.rfile.read(length)
+                payloads.append(json.loads(self.rfile.read(length)))
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")
                 self.end_headers()
@@ -135,6 +138,27 @@ def test_stream_send_ignores_empty_and_missing_choices() -> None:
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["before", "after"]
     assert client.take_usage() == {"completion_tokens": 7}
+
+
+def test_stream_send_preserves_complete_provider_usage_frame() -> None:
+    usage = {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10}
+    frames = [
+        _delta("answer"),
+        _usage_frame(choices=[], usage=usage),
+        "data: [DONE]\n\n",
+    ]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        assert list(
+            client._stream_send(agent, {"model": "gpt-x", "stream": True})
+        ) == ["answer"]
+    assert client.take_usage() == usage
 
 
 def test_stream_chat_requests_and_captures_provider_usage_without_stale_data() -> None:
@@ -288,6 +312,24 @@ def test_stream_chat_mock_yields_chunks() -> None:
     deltas = list(client.stream_chat(agent, messages))
     assert len(deltas) >= 2  # chunked, not one blob
     assert "".join(deltas) == client._mock(agent, messages)  # lossless
+
+
+def test_stream_chat_omits_usage_option_for_local_gateway() -> None:
+    frames = [_delta("local"), "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "gateway_agent",
+            "gateway-model",
+            base_url=(
+                f"local://127.0.0.1:{provider._server.server_address[1]}/v1"
+            ),
+        )
+        assert list(
+            client.stream_chat(agent, [{"role": "user", "content": "ping"}])
+        ) == ["local"]
+
+    assert "stream_options" not in provider.payloads[0]
 
 
 def test_would_route_true_for_route_false_for_conduct() -> None:

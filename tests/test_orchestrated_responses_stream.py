@@ -81,10 +81,69 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         and event["event_detail"]["response_streamed"] is True
         for event in orchestrator._analytics_events
     )
+    runs = list(orchestrator._workflow_runs.values())
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["mode"] == "conduct"
+    assert run["prompt_text"] == "Research, implement, and verify a safe design."
+    assert run["policy_snapshot"] == orchestrator.policy.as_dict()
+    assert orchestrator.get_access_report(run["workflow_run_id"])["policy_snapshot"] == run[
+        "policy_snapshot"
+    ]
+    assert orchestrator.analytics_snapshot()["measurement_status"] == "local_runtime_snapshot"
     if model == "orchestrator/free":
         assert {step["agent_id"] for step in orchestrator.conduct(
             [{"role": "user", "content": "Research and verify this."}], model_name=model
         )["trace"]} == {"free_worker"}
+
+
+def test_streamed_responses_records_unavailable_usage_without_estimating_answer() -> None:
+    token = "responses_stream_usage_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("route_worker", "mock-model", tags=("reasoning", "writing"))
+    ])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({"model": "orchestrator/auto", "input": "hello", "stream": True}).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    all_events = []
+    try:
+        for _ in range(2):
+            with urllib.request.urlopen(request, timeout=5) as response:
+                all_events.append([
+                    json.loads(line[6:])
+                    for line in response.read().decode().splitlines()
+                    if line.startswith("data: {")
+                ])
+    finally:
+        server.shutdown()
+
+    for events in all_events:
+        completed = events[-1]["response"]
+        assert completed["usage"] is None
+        assert completed["cost"]["measurement_status"] == "unavailable"
+        assert completed["cost"]["cost_amount"] is None
+        assert completed["usage_record_ids"]
+    rows = coordinator.ledger.records()
+    assert len(rows) == sum(
+        len(events[-1]["response"]["usage_record_ids"]) for events in all_events
+    )
+    assert len({row["usage_record_id"] for row in rows}) == len(rows)
+    assert all(row["workflow_run_id"] for row in rows)
+    assert len({row["workflow_run_id"] for row in rows}) == 2
+    assert all(row["request_channel"] == "stream" for row in rows)
+    assert all(row["measurement_status"] == "unavailable" for row in rows)
+    assert all(row["prompt_tokens"] == row["completion_tokens"] == 0 for row in rows)
 
 
 def test_conduct_preserves_responses_instructions_for_every_stage() -> None:

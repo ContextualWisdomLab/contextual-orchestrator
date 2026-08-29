@@ -28,6 +28,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   deprecated aliases so existing integrations can migrate without disruption.
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
+- A fail-closed `--production` authentication gate that rejects legacy
+  single-token startup and insecure admin-session cookies; canonical Compose
+  now bootstraps separate admin/inference KV credentials.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and
   `COMPLEX_HINTS` keyword tables are deleted; ordering is now
   eligibility contracts -> declaration priority/capability fit/cosine
@@ -69,6 +72,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
   `batch_route`; omit it to keep today's payload.
+- Streamed `/v1/responses` workflow runs now request provider usage only from
+  agents explicitly marked `stream_usage_supported`, preserve provider-declared
+  SSE usage, record per-step `stream` cost-ledger rows, and expose cost status
+  plus usage-record identities. Missing provider usage is explicitly
+  unavailable; the gateway does not estimate billing tokens from the final
+  answer, and nested gateway upstreams remain compatible (ADR 0038).
+
+### Fixed
+
+- Runtime agent create/PATCH now accepts and persists the explicit
+  `stream_usage_supported` capability, and the admin-safe agent view exposes it.
+- Require `--allow-public-bind` for every non-loopback address, not only wildcard
+  binds, so a specific network interface cannot bypass the public-bind guard.
+- Reject shared or identical split bearer credentials on public binds, while
+  keeping the CLI's preliminary host check independent from final credentials.
 - Experimental CEFR criterion-observation gateway with exact contract checks,
   independent rater blindness, bounded structured-output parsing, replay
   provenance, and human-review routing; it emits no final CEFR level or score.

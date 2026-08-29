@@ -8,6 +8,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
 import mmap
@@ -241,7 +242,7 @@ ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orches
 ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
-    "endpoint_equivalence",
+    "endpoint_equivalence", "stream_usage_supported",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -256,6 +257,7 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_exclusions",
     "group_name",
     "endpoint_equivalence",
+    "stream_usage_supported",
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
@@ -356,6 +358,18 @@ class SecurityConfig:
             raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if self.allow_public_bind and self.bearer_verifier is None and not (
+            self.admin_token and self.inference_token
+        ):
+            raise ValueError(
+                "public bind requires split admin_token and inference_token credentials"
+            )
+        if (
+            self.allow_public_bind
+            and self.bearer_verifier is None
+            and self.admin_token == self.inference_token
+        ):
+            raise ValueError("public bind requires distinct admin_token and inference_token credentials")
         if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
             raise ValueError("max_body_bytes must be a positive integer")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
@@ -384,9 +398,15 @@ class SecurityConfig:
         except (TypeError, ValueError):
             return False
 
-    def check_bind(self, host: str) -> None:
+    def check_bind(self, host: str, *, allow_public_bind: bool | None = None) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
-        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
+        normalized_host = host.strip().lower()
+        try:
+            is_loopback = ipaddress.ip_address(normalized_host).is_loopback
+        except ValueError:
+            is_loopback = normalized_host == "localhost"
+        public_bind_allowed = self.allow_public_bind if allow_public_bind is None else allow_public_bind
+        if not is_loopback and not public_bind_allowed:  # nosec B104 - non-loopback binds require explicit opt-in.
             raise ValueError("public bind requires --allow-public-bind")
 
     def resolve_purpose(self, scope: str, purpose: str | None = None) -> str:
@@ -5157,7 +5177,7 @@ def _orchestrated_response(
     """Build the OpenAI Responses shape for an orchestrated plain-text result."""
     reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
     message_id = message_id or f"msg_{uuid.uuid4().hex}"
-    return {
+    response = {
         "id": response_id,
         "object": "response",
         "created_at": created_at,
@@ -5190,9 +5210,14 @@ def _orchestrated_response(
         "tools": [],
         "top_p": None,
         "truncation": "disabled",
-        "usage": None,
+        "usage": result.get("usage"),
         "metadata": {},
     }
+    if result.get("usage_record_ids"):
+        response["usage_record_ids"] = result["usage_record_ids"]
+    if result.get("cost") is not None:
+        response["cost"] = result["cost"]
+    return response
 
 
 def build_server(
@@ -7084,8 +7109,6 @@ def build_server(
                         _validate_responses_instructions(body)
                     if "metadata" in body:
                         _validate_openai_metadata(body)
-                    if "attribution" in body:
-                        _validate_attribution(body.get("attribution"))
                     if "routing" in body:
                         routing = _validate_routing(body.get("routing"))
                         # Responses passthrough has no batch channel plane yet.
@@ -7162,6 +7185,14 @@ def build_server(
                             )
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
                         _require_pool_model(orchestrator, model_name)
+                    responses_attribution = dict(
+                        _validate_attribution(body.get("attribution")) or {}
+                    )
+                    responses_user_id = _validate_completions_user(body)
+                    if responses_user_id is not None and not responses_attribution.get("account"):
+                        responses_attribution["account"] = responses_user_id
+                    responses_attribution.setdefault("model_name", body["model"])
+                    responses_attribution.setdefault("service", "responses_api")
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
                         if _responses_virtual_requires_provider_path(input_value, body):
                             raise RequestError(
@@ -7192,7 +7223,12 @@ def build_server(
                         messages = _responses_to_chat_payload(body)["messages"]
                         started_at = time.perf_counter()
                         stream_succeeded = self._stream_orchestrated_response(
-                            orchestrator, security, messages, model_name
+                            orchestrator,
+                            security,
+                            messages,
+                            model_name,
+                            coordinator=coordinator,
+                            attribution=responses_attribution,
                         )
                         orchestrator.record_analytics_event(
                             "responses_orchestrated",
@@ -7300,14 +7336,6 @@ def build_server(
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
                     responses_messages = _responses_to_chat_payload(body)["messages"]
-                    responses_attribution = dict(
-                        _validate_attribution(body.get("attribution")) or {}
-                    )
-                    responses_user_id = _validate_completions_user(body)
-                    if responses_user_id is not None and not responses_attribution.get("account"):
-                        responses_attribution["account"] = responses_user_id
-                    responses_attribution.setdefault("model_name", body["model"])
-                    responses_attribution.setdefault("service", "responses_api")
                     response_max_tokens = next(
                         (
                             body.get(key)
@@ -7746,6 +7774,9 @@ def build_server(
             security: Any,
             messages: Any,
             model_name: str,
+            *,
+            coordinator: Any = None,
+            attribution: dict[str, Any] | None = None,
         ) -> bool:
             """Stream orchestration as native Responses reasoning-summary events."""
             response_id = f"resp_{uuid.uuid4().hex}"
@@ -7832,13 +7863,25 @@ def build_server(
                 try:
                     if orchestrator.would_route(messages, "auto", model_name):
                         progress("worker", "started")
-                        parts = list(orchestrator.stream_route(messages, model_name=model_name))
-                        progress("worker", "completed")
-                        result = {"answer": "".join(parts)}
-                    else:
-                        result = orchestrator.conduct(
-                            messages, model_name=model_name, progress=progress
+                        workflow_run_id = f"run_{uuid.uuid4().hex}"
+                        parts = list(
+                            orchestrator.stream_route(
+                                messages,
+                                workflow_run_id=workflow_run_id,
+                                model_name=model_name,
+                            )
                         )
+                        progress("worker", "completed")
+                        result = (
+                            orchestrator.get_workflow_run(workflow_run_id)
+                            if coordinator is not None
+                            else {"answer": "".join(parts)}
+                        )
+                    else:
+                        conduct_kwargs = {"model_name": model_name, "progress": progress}
+                        if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
+                            conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
+                        result = orchestrator.conduct(messages, **conduct_kwargs)
                 except ConnectionAbortedError:
                     raise
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
@@ -7853,6 +7896,15 @@ def build_server(
                     emit("response.failed", response=failed)
                     self._write_sse("data: [DONE]\n\n")
                     return False
+                if coordinator is not None:
+                    result = {
+                        **result,
+                        **coordinator.record_stream_usage(
+                            result=result,
+                            attribution=attribution,
+                            model_name=model_name,
+                        ),
+                    }
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",
