@@ -6568,12 +6568,6 @@ def build_server(
                                 "invalid_stream_options",
                                 "stream_options.include_usage=true is not supported with tools or response_format",
                             )
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use chat without tools or response_format",
-                            )
                         tool_loop = bool(tools_list)
                         if (
                             tool_loop
