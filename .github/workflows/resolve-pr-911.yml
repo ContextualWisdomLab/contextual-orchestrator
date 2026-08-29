@@ -1,5 +1,6 @@
 name: Resolve PR 911 against protected main
 
+# Diagnostic retry: report bounded diff3 hunks for executable conflicts.
 on:
   push:
     branches: [feat/durable-routing-observations-20260829]
