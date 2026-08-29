@@ -1,0 +1,85 @@
+name: Reusable fail-closed PR conflict resolver
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      branch:
+        required: true
+        type: string
+      caller_file:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge protected main and stop on executable conflicts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_BRANCH: ${{ inputs.branch }}
+          CALLER_FILE: ${{ inputs.caller_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "$EXPECTED_BRANCH"
+          original_head="$(git rev-parse HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+          main_head="$(git rev-parse origin/main)"
+
+          set +e
+          git merge --no-ff --no-commit origin/main
+          merge_rc=$?
+          set -e
+
+          if [[ $merge_rc -ne 0 ]]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            unsafe=()
+            for path in "${conflicts[@]}"; do
+              case "$path" in
+                *.md|*.mdx)
+                  tmpdir="$(mktemp -d)"
+                  git show ":2:$path" > "$tmpdir/ours"
+                  git show ":1:$path" > "$tmpdir/base"
+                  git show ":3:$path" > "$tmpdir/theirs"
+                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"
+                  cp "$tmpdir/ours" "$path"
+                  rm -rf "$tmpdir"
+                  git add "$path"
+                  ;;
+                *)
+                  unsafe+=("$path")
+                  ;;
+              esac
+            done
+            if (( ${#unsafe[@]} )); then
+              printf -v unsafe_list '%s\n' "${unsafe[@]}"
+              gh pr comment "$PR_NUMBER" --body "Reusable conflict resolver stopped fail-closed. Executable or structured-data conflicts require semantic resolution at exact head \`$original_head\` against protected main \`$main_head\`:\n\n\`\`\`\n$unsafe_list\`\`\`"
+              git merge --abort
+              exit 1
+            fi
+          fi
+
+          test -z "$(git diff --name-only --diff-filter=U)"
+          rm -f "$CALLER_FILE"
+          git add -A
+          git diff --cached --check
+          python -m compileall -q contextual_orchestrator
+          git commit -m "chore: merge protected main into PR #$PR_NUMBER"
+          git push origin "HEAD:$EXPECTED_BRANCH"
