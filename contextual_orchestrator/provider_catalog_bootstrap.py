@@ -387,7 +387,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--allow-partial-credentials",
         action="store_true",
-        help="Permit a subset of the fixed provider inventory (development only).",
+        help="Permit a subset of the declared provider inventory (development only).",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     report = bootstrap_provider_catalog_runtime(
