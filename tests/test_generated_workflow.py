@@ -76,9 +76,9 @@ def test_access_lists_actually_isolate_context() -> None:
     orchestrator, client = _orch(json.dumps(PLAN))
     orchestrator.conduct([{"role": "user", "content": "solve the hard problem"}])
     # client.calls: [planner, step0, step1, step2, step3]; step outputs are step-output(n).
-    step1_prompt = client.calls[2][1]["content"]
-    step2_prompt = client.calls[3][1]["content"]
-    step3_prompt = client.calls[4][1]["content"]
+    step1_prompt = client.calls[2][-1]["content"]
+    step2_prompt = client.calls[3][-1]["content"]
+    step3_prompt = client.calls[4][-1]["content"]
 
     assert "step-output(1)" not in step1_prompt  # access [] -> sees no prior output
     assert "step-output(1)" in step2_prompt and "step-output(2)" in step2_prompt  # access [0,1]
