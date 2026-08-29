@@ -12,19 +12,18 @@ from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
+from .chat_capability import is_general_chat_agent_model_id
 from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
     free_discovered_models,
-    openrouter_paid_inference_available,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
-    ModelAgent,
     ModelClient,
     TaskOrchestrator,
     load_agents,
@@ -34,6 +33,7 @@ from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+_GENERAL_CHAT_CAPABILITIES = frozenset({"chat", "text", "response_format"})
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -213,8 +213,7 @@ def _discover_models_command(argv: list[str]) -> None:
 
     Never fabricates a credential: a provider with nothing registered in the KV
     (see ``register-credential``) is silently skipped, so running this after
-    registering a subset of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY /
-    NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY still works.
+    registering any subset of the declared provider keys still works.
     """
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
@@ -251,15 +250,25 @@ def _discover_models_command(argv: list[str]) -> None:
 
     enabled_agent_ids: list[str] = []
     if args.agents_db:
+        discovered_agents = [
+            agent_from_discovered(model)
+            for model in reported
+            if not model.evidence_only
+        ]
         bootstrap = TaskOrchestrator(
-            [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
+            discovered_agents,
+            agents_db=args.agents_db,
+            allow_empty_agents=True,
         )
-        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in reported])
-        if args.enable_cheapest:
-            for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
-                agent_id = agent_id_for(model)
-                bootstrap.patch_agent("default", agent_id, {"status": "active"})
-                enabled_agent_ids.append(agent_id)
+        try:
+            bootstrap.sync_discovered_agents(discovered_agents)
+            if args.enable_cheapest:
+                for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
+                    agent_id = agent_id_for(model)
+                    bootstrap.patch_agent("default", agent_id, {"status": "active"})
+                    enabled_agent_ids.append(agent_id)
+        finally:
+            bootstrap.close()
 
     report = {
         "discovered_count": len(reported),
@@ -283,19 +292,23 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover and activate only models with explicit chat capability evidence."""
+    """Discover and activate models accepted by the shared chat contract."""
     discovered, _errors = discover_all_models()
-    openrouter_paid_available = openrouter_paid_inference_available()
-    chat_models = [model for model in discovered if "chat" in model.capabilities]
+    chat_models = [
+        model
+        for model in discovered
+        if (
+            not model.evidence_only
+            and (not model.output_modalities or "text" in model.output_modalities)
+            and set(model.capabilities) <= _GENERAL_CHAT_CAPABILITIES
+            and is_general_chat_agent_model_id(model.model_id)
+        )
+    ]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
         replace(
             agent_from_discovered(model),
-            disabled=(
-                model.provider_name == "openrouter"
-                and not model.is_free
-                and openrouter_paid_available is not True
-            ),
+            disabled=False,
         )
         for model in chat_models
         if agent_id_for(model) not in existing_ids

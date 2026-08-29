@@ -401,7 +401,6 @@ def test_stream_preserves_tool_stop_contract_mid_stream() -> None:
     agent = _streaming_agent()
     client = ModelClient()
     from contextual_orchestrator.tool_fallback import (
-        ToolExecutionError,
         ToolFallbackAction,
         ToolFallbackStoppedError,
         ToolFailureDecision,

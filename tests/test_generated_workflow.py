@@ -76,9 +76,9 @@ def test_access_lists_actually_isolate_context() -> None:
     orchestrator, client = _orch(json.dumps(PLAN))
     orchestrator.conduct([{"role": "user", "content": "solve the hard problem"}])
     # client.calls: [planner, step0, step1, step2, step3]; step outputs are step-output(n).
-    step1_prompt = client.calls[2][1]["content"]
-    step2_prompt = client.calls[3][1]["content"]
-    step3_prompt = client.calls[4][1]["content"]
+    step1_prompt = client.calls[2][-1]["content"]
+    step2_prompt = client.calls[3][-1]["content"]
+    step3_prompt = client.calls[4][-1]["content"]
 
     assert "step-output(1)" not in step1_prompt  # access [] -> sees no prior output
     assert "step-output(1)" in step2_prompt and "step-output(2)" in step2_prompt  # access [0,1]
@@ -92,6 +92,26 @@ def test_planner_prompt_lists_the_agent_pool() -> None:
     planner_system = client.calls[0][0]["content"]
     assert "workflow conductor" in planner_system
     assert "general_agent" in planner_system  # pool advertised to the planner
+
+
+def test_zdr_planner_prompt_lists_only_zdr_agents() -> None:
+    non_zdr = ModelAgent("non_zdr_agent", "gpt-4o", priority=100)
+    zdr = ModelAgent("zdr_agent", "gpt-4o-mini", tags=("privacy:zdr",))
+    client = _PlannerClient(json.dumps({
+        "steps": [
+            {"id": 0, "role": "worker", "agent_id": zdr.id, "subtask": "work", "access": []},
+            {"id": 1, "role": "synthesizer", "agent_id": zdr.id, "subtask": "answer", "access": [0]},
+        ]
+    }))
+    orchestrator = TaskOrchestrator([non_zdr, zdr], client=client)
+
+    with orchestrator.request_policy(True):
+        orchestrator._plan_generated("solve it")
+
+    planner_system = client.calls[0][0]["content"]
+    assert "non_zdr_agent" not in planner_system
+    assert "model=gpt-4o," not in planner_system
+    assert "zdr_agent" in planner_system
 
 
 def test_generated_plan_stops_before_next_call_when_budget_is_spent() -> None:
@@ -168,6 +188,23 @@ def test_unknown_agent_id_is_reselected_not_fatal() -> None:
     result = orchestrator.conduct([{"role": "user", "content": "solve"}])
     assert result["plan_source"] == "generated"
     assert result["trace"][0]["agent_id"] == "general_agent"  # reselected from the real pool
+
+
+def test_generated_plan_reselects_non_zdr_assignment_under_request_policy() -> None:
+    non_zdr = ModelAgent("non_zdr_agent", "non-zdr-model", priority=100)
+    zdr = ModelAgent("zdr_agent", "zdr-model", tags=("privacy:zdr",))
+    orchestrator = TaskOrchestrator([non_zdr, zdr])
+    raw_plan = json.dumps({
+        "steps": [
+            {"id": 0, "role": "worker", "agent_id": non_zdr.id, "subtask": "work", "access": []},
+            {"id": 1, "role": "synthesizer", "agent_id": non_zdr.id, "subtask": "answer", "access": [0]},
+        ]
+    })
+
+    with orchestrator.request_policy(True):
+        steps = orchestrator._parse_workflow_plan(raw_plan)
+
+    assert [step.agent_id for step in steps] == [zdr.id, zdr.id]
 
 
 if __name__ == "__main__":

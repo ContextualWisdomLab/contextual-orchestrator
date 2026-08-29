@@ -154,7 +154,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** â
 One public interface:
 
 - `contextual-orchestrator` is the model-like control-plane candidate exposed to callers. `/v1/models` lists it first, followed by every configured worker candidate, including disabled candidates with their status.
-- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
+- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a provider-reported usage-only chunk after the terminal stop chunk when usage is available; structured `tools`/`response_format` passthrough rejects that combination before provider execution. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline â€” per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
@@ -241,6 +241,19 @@ is read from a **KV config store**, never `os.getenv`.
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
   configured, and fall back to a deterministic heuristic otherwise.
+- **Canonical Billing export.** Install the published `metering_billing`
+  producer SDK, create its durable outbox, and pass
+  `CanonicalUsageRecordSink(event_builder=build_contextual_usage_event,
+  enqueue=outbox.enqueue, identity=...)` as `CostLedger(usage_sink=...)`.
+  The sink runs only after the local ledger accepts a new record, so failed,
+  dropped, and duplicate writes do not become billing-only events. For a
+  caller-owned SQLite transaction, export is deferred until `flush()` observes
+  the caller's commit; rollback therefore emits no billing-only event. A
+  non-blocking SQL store writes such a billing-backed append synchronously while
+  the transaction is open and defers export until `flush()` confirms the commit,
+  so a background worker cannot race the caller's transaction outcome.
+  It exports token counts and bounded provider/model/workflow metadata;
+  prompts, answers, and computed prices never enter the event.
 - **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
   rolls up cost + tokens by any dimension over any time window;
   `GET /api/v1/llm_usage_records` lists raw ledger rows;
