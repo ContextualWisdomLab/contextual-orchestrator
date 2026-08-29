@@ -1,1 +1,1 @@
-Bound HTTP-created batch routing jobs to the authenticated principal, preserved cross-owner not-found behavior, and report an unknown explicit ZDR model as the non-retryable `400 invalid_model` client error instead of a retryable backend outage.
+Bound HTTP-created batch routing jobs to the authenticated principal and preserved cross-owner not-found behavior. An unknown explicit ZDR model is now the non-retryable `400 invalid_model` client error, while a configured model that is ineligible for the requested ZDR policy retains the retryable batch-selection failure contract.
