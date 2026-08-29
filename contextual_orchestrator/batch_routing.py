@@ -187,6 +187,9 @@ class BatchJob:
     status: str = "submitted"
     submitted_at: int = field(default_factory=lambda: int(time.time()))
     request_count: int = 0
+    # HTTP callers bind this opaque digest to the authenticated principal;
+    # library-only jobs may remain unowned for standalone use.
+    owner_id: Optional[str] = None
 
 
 @dataclass

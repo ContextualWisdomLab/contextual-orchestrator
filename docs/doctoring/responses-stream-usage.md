@@ -2,7 +2,7 @@
 title: "Streamed Responses usage and cost evidence"
 status: "implemented on feature branch"
 date: "2026-08-29"
-scope: "ADR 0038"
+scope: "ADR 0040"
 ---
 
 # Streamed Responses usage and cost evidence
