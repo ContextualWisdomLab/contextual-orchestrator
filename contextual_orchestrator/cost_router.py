@@ -659,7 +659,9 @@ class CostRoutingCoordinator:
         """Submit a batch, resolve its targets, and bind its authenticated owner."""
         try:
             prepared_requests = [self._resolve_batch_request(request) for request in requests]
-        except (RuntimeError, ValueError) as exc:
+        except ValueError:
+            raise
+        except RuntimeError as exc:
             raise BatchModelSelectionError(
                 "no eligible model-group member is available for this batch request"
             ) from exc

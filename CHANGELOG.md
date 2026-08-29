@@ -77,7 +77,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   SSE usage, record per-step `stream` cost-ledger rows, and expose cost status
   plus usage-record identities. Missing provider usage is explicitly
   unavailable; the gateway does not estimate billing tokens from the final
-  answer, and nested gateway upstreams remain compatible (ADR 0038).
+  answer, and nested gateway upstreams remain compatible (ADR 0040).
 
 ### Fixed
 

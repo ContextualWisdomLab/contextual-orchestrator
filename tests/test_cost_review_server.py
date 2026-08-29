@@ -539,3 +539,26 @@ if __name__ == "__main__":  # pragma: no cover
             _fn()
             print(f"ok {_name}")
     print("ok")
+
+
+
+def test_batch_routing_rejects_unknown_zdr_model_as_client_error() -> None:
+    """An unknown explicit ZDR model is a non-retryable client error."""
+    server, port, token = _serve()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{port}/api/v1/batch_routing_jobs",
+            token,
+            {
+                "model": "not-configured",
+                "zdr_only": True,
+                "requests": [
+                    {"messages": [{"role": "user", "content": "route securely"}]}
+                ],
+            },
+        )
+    finally:
+        server.shutdown()
+    assert status == 400
+    assert body["error"]["code"] == "invalid_model"

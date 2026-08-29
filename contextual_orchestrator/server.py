@@ -6976,13 +6976,16 @@ def build_server(
                         zdr_only=zdr_only,
                     )
                     metadata = {"actor_scope": "inference"}
-                    job = self._run(
-                        lambda: coordinator.submit_batch(
-                            batch_requests,
-                            metadata=metadata,
-                            owner_id=security.principal_id(self.headers),
+                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
                         )
-                    )
+                    except ValueError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
