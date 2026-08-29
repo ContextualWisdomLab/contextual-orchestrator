@@ -1667,6 +1667,7 @@ class ModelClient:
         messages: list[ChatMessage],
         temperature: float | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
+        include_usage: bool = False,
     ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
@@ -1674,10 +1675,13 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if type(include_usage) is not bool:
+            raise TypeError("include_usage must be a boolean")
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
+        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1695,6 +1699,8 @@ class ModelClient:
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        if include_usage:
+            payload["stream_options"] = {"include_usage": True}
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
         with traced(
@@ -1739,6 +1745,9 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        self._local.usage = usage
                     choices = chunk.get("choices") or [{}]
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
@@ -4169,6 +4178,8 @@ class TaskOrchestrator:
         *,
         model_name: str = "contextual-orchestrator",
         owner_id: str | None = None,
+        include_usage: bool = False,
+        usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
     ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
@@ -4181,11 +4192,12 @@ class TaskOrchestrator:
         )
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
-        stream = (
-            self.client.stream_chat(agent, messages, effort_profile=effort_profile)
-            if effort_profile is not None
-            else self.client.stream_chat(agent, messages)
-        )
+        stream_kwargs: dict[str, Any] = {}
+        if effort_profile is not None:
+            stream_kwargs["effort_profile"] = effort_profile
+        if include_usage:
+            stream_kwargs["include_usage"] = True
+        stream = self.client.stream_chat(agent, messages, **stream_kwargs)
         started_at = time.perf_counter()
         try:
             for delta in stream:
@@ -4195,6 +4207,9 @@ class TaskOrchestrator:
             if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
             raise
+        usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+        if usage_callback is not None:
+            usage_callback(usage)
         if agent.group_name or model_name == self.FREE_MODEL:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
@@ -4208,9 +4223,19 @@ class TaskOrchestrator:
             answer=answer,
             served_id=agent.id,
             latency_seconds=latency_seconds,
-            usage=None,
+            usage=usage,
             free_only=model_name == self.FREE_MODEL,
         )
+        trace_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Direct route (streamed)",
+            "access": [],
+            "output": answer,
+        }
+        if isinstance(usage, dict):
+            trace_step["usage"] = usage
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -4220,8 +4245,7 @@ class TaskOrchestrator:
                 "prompt_text": text,
                 "answer": answer,
                 "trace": [
-                    {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                     "access": [], "output": answer}
+                    trace_step
                 ],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {**verification, "verifier_output": answer},
@@ -13821,15 +13845,25 @@ def chat_completion_chunks(
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
     if include_usage:
-        usage = result.get("usage")
+        reported_usage = result.get("usage")
+        if isinstance(reported_usage, dict):
+            usage = {**reported_usage, "usage_source": "reported"}
+        else:
+            prompt_text = result.get("prompt_text", "")
+            estimated_prompt_tokens = estimate_tokens(
+                prompt_text if isinstance(prompt_text, str) else str(prompt_text)
+            )
+            estimated_completion_tokens = estimate_tokens(answer)
+            usage = {
+                "prompt_tokens": estimated_prompt_tokens,
+                "completion_tokens": estimated_completion_tokens,
+                "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
+                "usage_source": "estimated",
+            }
         chunks.append({
             **base,
             "choices": [],
-            "usage": usage if isinstance(usage, dict) else {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-            },
+            "usage": usage,
         })
     return chunks
 

@@ -35,6 +35,7 @@ from .orchestrator import (
     ModelAgent,
     TaskOrchestrator,
     _coerce_input_text,
+    estimate_tokens,
     _new_chat_completion_id,
     _responses_to_chat_payload,
     chat_completion_chunks,
@@ -6359,6 +6360,12 @@ def build_server(
                     presence_penalty = sampling["presence_penalty"]
                     frequency_penalty = sampling["frequency_penalty"]
                     include_usage = sampling["include_usage"]
+                    if include_usage and (body.get("response_format") or tools_list):
+                        raise RequestError(
+                            400,
+                            "invalid_stream_options",
+                            "stream_options.include_usage=true is not supported with tools or response_format on /v1/chat/completions",
+                        )
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
@@ -7764,6 +7771,12 @@ def build_server(
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = _new_chat_completion_id()
             created = int(time.time())
+            streamed_parts: list[str] = []
+            stream_usage: dict[str, Any] | None = None
+
+            def capture_usage(usage: dict[str, Any] | None) -> None:
+                nonlocal stream_usage
+                stream_usage = usage
 
             def frame(delta: dict[str, Any], finish: str | None = None) -> str:
                 payload = {
@@ -7780,25 +7793,43 @@ def build_server(
                 if not self._begin_sse() or not self._write_sse(frame({"role": "assistant"})):
                     return
                 try:
-                    for delta in orchestrator.stream_route(
-                        messages, workflow_run_id=run_id, model_name=model_name
-                    ):
+                    stream_kwargs: dict[str, Any] = {
+                        "workflow_run_id": run_id,
+                        "model_name": model_name,
+                    }
+                    if include_usage:
+                        stream_kwargs.update(
+                            {"include_usage": True, "usage_callback": capture_usage}
+                        )
+                    for delta in orchestrator.stream_route(messages, **stream_kwargs):
+                        streamed_parts.append(delta)
                         if not self._write_sse(frame({"content": delta})):
                             return
                     if not self._write_sse(frame({}, finish="stop")):
                         return
                     if include_usage:
+                        if isinstance(stream_usage, dict):
+                            usage = {**stream_usage, "usage_source": "reported"}
+                        else:
+                            estimated_prompt_tokens = estimate_tokens(
+                                json.dumps(messages, ensure_ascii=False)
+                            )
+                            estimated_completion_tokens = estimate_tokens(
+                                "".join(streamed_parts)
+                            )
+                            usage = {
+                                "prompt_tokens": estimated_prompt_tokens,
+                                "completion_tokens": estimated_completion_tokens,
+                                "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
+                                "usage_source": "estimated",
+                            }
                         usage_payload = {
                             "id": completion_id,
                             "object": "chat.completion.chunk",
                             "created": created,
                             "model": model_name,
                             "choices": [],
-                            "usage": {
-                                "prompt_tokens": 0,
-                                "completion_tokens": 0,
-                                "total_tokens": 0,
-                            },
+                            "usage": usage,
                         }
                         if not self._write_sse(
                             f"data: {json.dumps(usage_payload, ensure_ascii=False)}\n\n"

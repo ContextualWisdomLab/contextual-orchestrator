@@ -18,12 +18,24 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import chat_completion_chunks, chat_completion_response, sse_stream_body  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient, chat_completion_chunks, chat_completion_response, sse_stream_body  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
 def _build() -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
+
+
+class _UsageStreamClient(ModelClient):
+    def stream_chat(self, agent, messages, temperature=None, effort_profile=None, include_usage=False):  # type: ignore[override]
+        del agent, messages, temperature, effort_profile
+        assert include_usage is True
+        self._local.usage = {
+            "prompt_tokens": 4,
+            "completion_tokens": 6,
+            "total_tokens": 10,
+        }
+        yield "reported stream"
 
 
 def test_chunks_reconstruct_answer_with_openai_shape() -> None:
@@ -70,6 +82,7 @@ def test_include_usage_adds_openai_usage_chunk() -> None:
         "prompt_tokens": 2,
         "completion_tokens": 3,
         "total_tokens": 5,
+        "usage_source": "reported",
     }
 
 
@@ -107,9 +120,9 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, str, str]:
         return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
 
 
-def _serve() -> tuple[object, int, str]:
+def _serve(orchestrator: TaskOrchestrator | None = None) -> tuple[object, int, str]:
     token = "stream_token"
-    server = build_server(_build(), port=0, security=SecurityConfig(auth_token=token))
+    server = build_server(orchestrator or _build(), port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, server.server_address[1], token
@@ -141,6 +154,42 @@ def test_http_stream_true_returns_event_stream_and_reconstructs_answer() -> None
         chunk = json.loads(frame[len("data: ") :])
         streamed += chunk["choices"][0]["delta"].get("content", "")
     assert streamed == reference  # streamed deltas equal the non-streamed answer
+
+
+def test_http_stream_include_usage_preserves_provider_usage() -> None:
+    client = _UsageStreamClient()
+    server, port, token = _serve(
+        TaskOrchestrator(
+            [ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))],
+            client=client,
+        )
+    )
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    payload = {
+        "model": "mock-generalist",
+        "messages": [{"role": "user", "content": "stream usage"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    try:
+        status, content_type, sse = _post(url, payload, token)
+    finally:
+        server.shutdown()
+
+    assert status == 200
+    assert content_type.startswith("text/event-stream")
+    frames = [
+        json.loads(frame[len("data: "):])
+        for frame in sse.split("\n\n")
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    usage = next(frame for frame in frames if frame.get("choices") == [])
+    assert usage["usage"] == {
+        "prompt_tokens": 4,
+        "completion_tokens": 6,
+        "total_tokens": 10,
+        "usage_source": "reported",
+    }
 
 
 def test_http_stream_false_is_unchanged_json() -> None:

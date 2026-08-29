@@ -165,11 +165,43 @@ def test_http_chat_accepts_include_usage_true() -> None:
             if frame.startswith("data: ") and frame != "data: [DONE]"
         ]
         usage = next(frame for frame in frames if frame.get("choices") == [])
-        assert usage["usage"] == {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
+        assert usage["usage"]["usage_source"] == "estimated"
+        assert usage["usage"]["completion_tokens"] > 0
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_include_usage_for_structured_streams() -> None:
+    server, thread, port = _server()
+    try:
+        for structured in (
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ]
+            },
+            {"response_format": {"type": "json_object"}},
+        ):
+            status, body = _post(
+                port,
+                "/v1/chat/completions",
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "structured usage"}],
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                    **structured,
+                },
+            )
+            assert status == 400, (structured, body)
+            assert body["error"]["code"] == "invalid_stream_options"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -200,5 +232,6 @@ if __name__ == "__main__":
     test_http_completions_accepts_stream_options_null_flags_without_stream()
     test_http_responses_accepts_stream_options_null_flags()
     test_http_chat_accepts_include_usage_true()
+    test_http_chat_rejects_include_usage_for_structured_streams()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")
