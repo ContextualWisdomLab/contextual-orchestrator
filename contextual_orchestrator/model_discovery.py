@@ -417,8 +417,13 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
 
 def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
     """Read public OpenRouter ZDR evidence for discovered provider models."""
+    api_key = get_credential("OPENROUTER_API_KEY") or ""
     try:
-        payload = _fetch_json(OPENROUTER_ZDR_ENDPOINTS_URL, timeout=timeout)
+        payload = _fetch_json(
+            OPENROUTER_ZDR_ENDPOINTS_URL,
+            api_key=api_key,
+            timeout=timeout,
+        )
     except (urllib.error.URLError, TimeoutError, ValueError, OSError):
         return set()
     rows = payload.get("data") if isinstance(payload, dict) else None

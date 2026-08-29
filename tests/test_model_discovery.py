@@ -465,6 +465,25 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
     ]
 
 
+def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    seen_requests = []
+
+    def urlopen(request, timeout=None):
+        seen_requests.append(request)
+        return _Response({"data": [{"model_id": "openai/shared-model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+        assert _openrouter_zdr_model_ids(timeout=1.0) == {"openai/shared-model"}
+
+    assert seen_requests[0].get_header("Authorization") == "Bearer sk-openrouter"
+
+
 def test_discover_all_models_matches_a_unique_zdr_model_suffix() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-openrouter")
     other_source = ProviderModelSource(
