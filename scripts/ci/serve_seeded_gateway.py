@@ -18,21 +18,16 @@ Provider key environment variables (all optional; missing ones are skipped):
 from __future__ import annotations
 
 import os
-import sys
 
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     register_credential,
     set_backend,
 )
+from contextual_orchestrator.model_discovery import PROVIDER_MODEL_SOURCES
 
-PROVIDER_KEY_ENV_NAMES = (
-    "OPENAI_API_KEY",
-    "OPENROUTER_API_KEY",
-    "OPENCODE_ZEN_API_KEY",
-    "BYTEZ_API_KEY",
-    "NVIDIA_NIM_API_KEY",
-    "NVIDIA_NIM_API_KEY_SUB",
+PROVIDER_KEY_ENV_NAMES = tuple(
+    dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
 )
 
 

@@ -95,6 +95,7 @@ def test_openapi_capability_requests_have_endpoint_specific_contracts() -> None:
             "application/json"
         ]["schema"]
         assert schema["required"] == required
+        assert schema["properties"]["zdr_only"]["type"] == "boolean"
 
 
 if __name__ == "__main__":  # pragma: no cover

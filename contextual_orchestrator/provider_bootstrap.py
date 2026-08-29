@@ -1,6 +1,6 @@
 """Durable bootstrap for the organization provider credential inventory.
 
-A trusted deployment process may expose the fixed provider-secret inventory to
+A trusted deployment process may expose the provider-secret inventory declared
 this one-shot module. Values are validated as a complete set, written to the
 configured credential KV, and then model discovery runs exclusively through the
 KV-backed runtime seam. Runtime provider calls never read provider API keys from
@@ -19,7 +19,6 @@ import json
 import os
 from typing import Mapping, Sequence
 
-from .chat_capability import is_general_chat_agent_model_id
 from .cost_ledger import PriceBook
 from .credentials import (
     InMemoryCredentialBackend,
@@ -35,15 +34,25 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    is_routable_discovered_model,
     refresh_price_book,
 )
 from .orchestrator import ModelAgent, TaskOrchestrator
 
 
 PROVIDER_CREDENTIAL_NAMES: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        source.credential_name
+        for source in PROVIDER_MODEL_SOURCES
+        if source.bootstrap_required
+    )
+)
+"""Required credential inventory derived from provider source declarations."""
+
+PROVIDER_ACCEPTED_CREDENTIAL_NAMES: tuple[str, ...] = tuple(
     dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
 )
-"""Fixed organization credential inventory accepted by the bootstrap boundary."""
+"""All accepted credentials, including optional provider integrations."""
 
 _GENERIC_SERVING_TAGS = (
     "discovered",
@@ -93,15 +102,15 @@ def _strip_mounted_line_endings(value: str) -> str:
 def collect_provider_credentials(
     environ: Mapping[str, str], *, require_all: bool = True
 ) -> dict[str, str]:
-    """Collect the fixed inventory without rewriting non-line-ending bytes."""
+    """Collect the declared inventory without rewriting non-line-ending bytes."""
     values: dict[str, str] = {}
     missing: list[str] = []
-    for name in PROVIDER_CREDENTIAL_NAMES:
+    for name in PROVIDER_ACCEPTED_CREDENTIAL_NAMES:
         raw = environ.get(name, "")
         value = _strip_mounted_line_endings(raw) if isinstance(raw, str) else ""
         if value and value.strip():
             values[name] = value
-        else:
+        elif name in PROVIDER_CREDENTIAL_NAMES:
             missing.append(name)
     if require_all and missing:
         raise ProviderBootstrapError(
@@ -119,7 +128,7 @@ def register_provider_credentials_atomically(
     """Register a validated credential batch with one commit where supported."""
     if not credentials:
         raise ProviderBootstrapError("provider bootstrap received an empty credential batch")
-    unknown = sorted(set(credentials) - set(PROVIDER_CREDENTIAL_NAMES))
+    unknown = sorted(set(credentials) - set(PROVIDER_ACCEPTED_CREDENTIAL_NAMES))
     if unknown:
         raise ProviderBootstrapError("provider bootstrap rejected unknown credential names")
 
@@ -168,7 +177,7 @@ def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
     Models that survive retain only explicit provider/catalog capability and
     cost evidence in addition to the generic chat-serving tags.
     """
-    return is_general_chat_agent_model_id(model.model_id)
+    return is_routable_discovered_model(model)
 
 
 def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
@@ -178,6 +187,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
             (
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
+                *(("privacy:zdr",) if model.zdr_capable else ()),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
@@ -256,29 +266,33 @@ def _synchronize_durable_agent_pool(
     selected: Sequence[DiscoveredModel],
 ) -> tuple[str, ...]:
     """Activate exactly the selected discovered models in one durable agent pool."""
-    bootstrap = TaskOrchestrator(
-        [ModelAgent("bootstrap_agent", "bootstrap-model")],
-        agents_db=agents_db,
-    )
     agents = [_active_agent_from_discovered(model) for model in selected]
-    selected_ids = {agent.id for agent in agents}
-    bootstrap.sync_discovered_agents(agents)
-
-    for candidate in list(bootstrap.candidates):
-        if candidate.id in selected_ids:
-            continue
-        if candidate.id == "bootstrap_agent" or "discovered" in candidate.tags:
-            if not candidate.disabled:
-                bootstrap.remove_agent("default", candidate.id)
-
-    for agent in agents:
-        bootstrap.patch_agent("default", agent.id, {"status": "active"})
-
-    # The patch loop above raises KeyError if any selected agent is missing from
-    # the pool, so the enabled set equals selected_ids by construction here.
-    return tuple(
-        sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
+    bootstrap = TaskOrchestrator(
+        agents,
+        agents_db=agents_db,
+        allow_empty_agents=True,
     )
+    try:
+        selected_ids = {agent.id for agent in agents}
+        bootstrap.sync_discovered_agents(agents)
+
+        for candidate in list(bootstrap.candidates):
+            if candidate.id in selected_ids:
+                continue
+            if "discovered" in candidate.tags:
+                if not candidate.disabled:
+                    bootstrap.remove_agent("default", candidate.id)
+
+        for agent in agents:
+            bootstrap.patch_agent("default", agent.id, {"status": "active"})
+
+        # The patch loop above raises KeyError if any selected agent is missing from
+        # the pool, so the enabled set equals selected_ids by construction here.
+        return tuple(
+            sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
+        )
+    finally:
+        bootstrap.close()
 
 
 def bootstrap_provider_runtime(
@@ -345,7 +359,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--allow-partial-credentials",
         action="store_true",
-        help="Permit a subset of the fixed provider inventory (development only).",
+        help="Permit a subset of the declared provider inventory (development only).",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
     report = bootstrap_provider_runtime(

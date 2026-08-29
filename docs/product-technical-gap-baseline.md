@@ -17,6 +17,66 @@ review, Checks, and approval gates complete.
 The remaining issue #117 gap is the external authorization adapter's
 tenant/resource/purpose/lifetime context; PR #909 separately carries batch
 routing ownership and is not protected-main evidence here.
+## 2026-08-29 PR #901 routing research grounding
+
+This ZDR slice applies the established cost/performance routing literature to
+the gateway boundary without turning provider names or model ids into policy.
+[FrugalGPT](https://arxiv.org/abs/2305.05176) motivates composing a model
+cascade from heterogeneous providers while reducing inference cost, and
+[RouteLLM](https://arxiv.org/abs/2406.18665) motivates selecting among the
+available candidates at inference time rather than binding the router to a
+fixed model list. In this implementation, Naruon supplies `zdr_only` as a
+Boolean request policy and contextual-orchestrator filters the caller's
+runtime model-group array by verified `privacy:zdr` evidence before measured
+member selection. The public OpenRouter ZDR feed is evidence for matching
+models from other providers; OpenRouter is not selected as the upstream by
+this policy. Missing or failed ZDR evidence fails closed instead of being
+replaced by a stale or hard-coded model list.
+
+The FrugalGPT and RouteLLM PDFs are already vendored under `docs/papers/`; the
+catalog there records their arXiv redistribution license and full citation.
+
+## 2026-08-28 21:42 KST PR #901 provider error-shape compatibility slice
+
+PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
+is at exact head `bcead52a` after a narrow failover repair: provider HTTP 400
+tool-description-limit responses whose `error` field is a string now receive
+the same capability-mismatch failover as the existing `invalid_tools` object
+shape. The focused passthrough suite passed **28 tests**; protected hosted
+checks and independent approval remain authoritative and are not claimed here.
+
+## 2026-08-28 21:20 KST PR #901 ZDR batch omitted-model evidence slice
+
+`gh api user`, `gh pr view 901`, and the review-thread GraphQL query all
+succeeded on August 28, 2026. At that snapshot, PR `#901`
+(`fix/zdr-only-dynamic-discovery`, exact head `dcdb04b7adcfc8f57cbf5b13332b504f5c246fed`)
+already covers the earlier ZDR routing defects that had active review threads:
+caller-supplied group filtering, generated-plan ZDR revalidation, batch model
+selection error normalization, and duplicate-model embedding identity. The
+remaining protected block is external: `opencode-review` is still fail-closed
+pending a current-head verdict, while the last `strix` failure on this branch
+reported `STRIX_PROVIDER_UNAVAILABLE` rather than a repository finding.
+
+The existing `.worktrees/commercial-loop-20260828-pr901-fix` worktree was
+reconciled before new edits. It is 38 commits behind the live PR head and its
+omitted-model batch embeddings regression test plus this baseline note were
+ported onto a fresh worktree and are now published on the live PR head instead
+of reviving the diverged branch.
+
+This slice closes one bounded evidence gap in the highest-leverage open product
+area: `POST /v1/batch/embeddings` with omitted `model` and `"zdr_only": true`
+now has an explicit loopback HTTP regression test proving the gateway selects
+the ZDR-capable embedding member rather than a higher-priority non-ZDR peer.
+The seeded contract server already carried persisted `privacy:zdr` evidence, so
+the change is a missing acceptance test, not a runtime behavior change.
+
+Exact verification on the current-head worktree:
+
+- `uv pip install --python .venv/bin/python -r requirements.lock` → restored the locked runtime packages for the fresh worktree venv.
+- `uv pip install --python .venv/bin/python -r requirements-opencode-review-ci.txt` → installed the repository's pinned pytest toolchain for focused validation.
+- `uv run --python .venv/bin/python -m pytest -q tests/test_batch_embeddings.py -k 'naruon_contract or zdr_only or omitted_model'` → `2 passed, 6 deselected in 8.40s`
+- `uv run --python .venv/bin/python -m pytest -q tests/test_cost_router.py -k 'zdr_only or duplicate_model'` → `1 passed, 24 deselected in 6.77s`
+- `uv run --python .venv/bin/python -m pytest -q tests/test_model_group.py -k 'zdr_only or duplicate_model'` → `4 passed, 24 deselected in 6.84s`
 
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 

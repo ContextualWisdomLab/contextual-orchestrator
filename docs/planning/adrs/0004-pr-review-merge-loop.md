@@ -12,7 +12,7 @@ consulted:
 informed:
   - "contributors"
 affected_components:
-  - ".github/workflows/tests.yml"
+  - ".github/workflows/ci.yml"
   - ".github/workflows/security.yml"
   - "repository branches and pull requests"
   - "ContextualWisdomLab/.github central merge scheduler"
@@ -49,7 +49,7 @@ success_criteria:
 
 The requested work changes a gateway and its evaluation companion, so a local green test run is not enough. The change must survive a current-head review, CI/security checks, and a merge decision that does not bypass repository protections. If a review finds a new issue, the Goal expands and the issue is recorded in an ADR before the next iteration.
 
-> .github/workflows/tests.yml runs the full unit and contract suite on pull requests targeting main.
+> .github/workflows/ci.yml runs the full unit and contract suite on pull requests targeting main.
 >
 > Repository instructions require security checks and prohibit leaking authentication tokens or provider secrets.
 >

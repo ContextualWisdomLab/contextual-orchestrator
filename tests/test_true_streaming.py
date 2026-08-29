@@ -97,6 +97,7 @@ def test_stream_send_ignores_empty_and_missing_choices() -> None:
         agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["before", "after"]
+    assert client.take_usage() == {"completion_tokens": 7}
 
 
 def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
