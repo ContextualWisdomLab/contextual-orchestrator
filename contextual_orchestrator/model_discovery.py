@@ -574,10 +574,29 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 
 def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
-    """Return whether a discovered row may become an upstream model agent."""
-    return not discovered.evidence_only and is_general_chat_agent_model_id(
-        discovered.model_id
-    )
+    """Return whether a discovered row may become an ordinary chat agent.
+
+    Explicit catalog metadata is authoritative when present. A provider may
+    expose a media-only model with a generic identifier, so the model-name
+    heuristic is only a fallback for rows with no capability or modality data.
+    """
+    if discovered.evidence_only:
+        return False
+    output_modalities = {
+        value.strip().casefold()
+        for value in discovered.output_modalities
+        if isinstance(value, str) and value.strip()
+    }
+    if output_modalities:
+        return "text" in output_modalities
+    capabilities = {
+        value.strip().casefold()
+        for value in discovered.capabilities
+        if isinstance(value, str) and value.strip()
+    }
+    if capabilities:
+        return "chat" in capabilities
+    return is_general_chat_agent_model_id(discovered.model_id)
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
