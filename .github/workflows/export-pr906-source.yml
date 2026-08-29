@@ -1,0 +1,36 @@
+name: Export PR 906 exact source
+
+on:
+  push:
+    branches: [feat/nim-benchmark-rebuild-20260828]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-pr906-source
+  cancel-in-progress: true
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Create source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git -czf "$RUNNER_TEMP/pr906-source.tgz" .
+
+      - name: Upload source archive
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: pr906-source-${{ github.sha }}
+          path: ${{ runner.temp }}/pr906-source.tgz
+          retention-days: 1
+          if-no-files-found: error
