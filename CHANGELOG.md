@@ -72,6 +72,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Generated workflow planning now advertises only agents eligible under the
+  active ZDR request policy.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Treat a provider's explicit 1,024-character tool-description rejection as a
@@ -97,6 +99,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   advance once across distinct capability-ranked providers after explicit
   upstream rejection, stale-model responses, or temporary pre-request DNS
   failure; concrete models and ambiguous network outcomes fail closed.
+- Recognize string-form upstream tool-description-limit errors from providers
+  that do not wrap the error in an ``invalid_tools`` object, preserving the
+  bounded passthrough failover contract.
 - Make per-request budget checks constant time while preserving exact parity
   with full spend analytics across persisted, replaced, estimated, and
   provider-reported workflow runs.
