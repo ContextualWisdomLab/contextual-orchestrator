@@ -3353,6 +3353,7 @@ class TaskOrchestrator:
             "attribution",
             "routing",
             "zdr_only",
+            "stream_options",
             "_required_agent_id",
             "_file_replicas",
         }

@@ -19,7 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, chat_completion_chunks, chat_completion_response, sse_stream_body  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    _chat_response_sse_chunks,
+    build_server,
+)
 
 
 def _build() -> TaskOrchestrator:
@@ -36,6 +40,12 @@ class _UsageStreamClient(ModelClient):
             "total_tokens": 10,
         }
         yield "reported stream"
+
+
+class _RejectNonStreamOptionsClient(ModelClient):
+    def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
+        assert "stream_options" not in payload
+        return self._mock_raw(agent, endpoint, payload)
 
 
 def test_chunks_reconstruct_answer_with_openai_shape() -> None:
@@ -104,6 +114,62 @@ def test_sse_body_frames_and_done_terminator() -> None:
     for frame in frames[:-1]:
         assert frame.startswith("data: ")
         json.loads(frame[len("data: ") :])  # every non-terminator frame is valid JSON
+
+
+def test_structured_sse_tool_call_deltas_include_indices() -> None:
+    chunks = _chat_response_sse_chunks(
+        {
+            "id": "chatcmpl-tools",
+            "model": "tool-model",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {}},
+                        {"id": "call-2", "type": "function", "function": {}},
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        },
+        model="tool-model",
+        include_usage=False,
+        prompt_text="tool call",
+    )
+
+    tool_deltas = [
+        chunk["choices"][0]["delta"]["tool_calls"][0]
+        for chunk in chunks
+        if chunk["choices"] and "tool_calls" in chunk["choices"][0]["delta"]
+    ]
+    assert [tool_call["index"] for tool_call in tool_deltas] == [0, 1]
+
+
+def test_structured_nonstream_provider_drops_gateway_stream_options() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("structured_agent", "structured-model")],
+        client=_RejectNonStreamOptionsClient(),
+    )
+    for structured in (
+        {
+            "tools": [{
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object"}},
+            }],
+        },
+        {"response_format": {"type": "json_object"}},
+    ):
+        response = orchestrator.proxy_completion(
+            {
+                "model": "structured-model",
+                "messages": [{"role": "user", "content": "structured"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                **structured,
+            }
+        )
+        assert response["object"] == "chat.completion"
 
 
 def _post(url: str, payload: dict, token: str) -> tuple[int, str, str]:

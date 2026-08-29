@@ -4966,15 +4966,18 @@ def _chat_response_sse_chunks(
         )
     tool_calls = message.get("tool_calls")
     if isinstance(tool_calls, list):
-        for tool_call in tool_calls:
+        for tool_call_index, tool_call in enumerate(tool_calls):
             if isinstance(tool_call, dict):
+                tool_call_delta = dict(tool_call)
+                if type(tool_call_delta.get("index")) is not int:
+                    tool_call_delta["index"] = tool_call_index
                 chunks.append(
                     {
                         **base,
                         "choices": [
                             {
                                 "index": 0,
-                                "delta": {"tool_calls": [tool_call]},
+                                "delta": {"tool_calls": [tool_call_delta]},
                                 "finish_reason": None,
                             }
                         ],
