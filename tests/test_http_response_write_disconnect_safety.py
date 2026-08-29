@@ -94,7 +94,7 @@ def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
 
 
 def test_stream_route_emits_provider_usage_when_requested() -> None:
-    """A successful live route includes provider usage before its stop frame."""
+    """A successful live route includes provider usage after its stop frame."""
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     frames: list[str] = []
 
@@ -105,8 +105,9 @@ def test_stream_route_emits_provider_usage_when_requested() -> None:
     class Orchestrator:
         client = Client()
 
-        def stream_route(self, messages, workflow_run_id, *, model_name):
+        def stream_route(self, messages, workflow_run_id, *, model_name, include_usage=False):
             del messages, workflow_run_id, model_name
+            assert include_usage is True
             yield "answer"
 
     class Security:
@@ -136,8 +137,14 @@ def test_stream_route_emits_provider_usage_when_requested() -> None:
     finally:
         server.server_close()
 
-    usage_frames = [json.loads(frame[6:]) for frame in frames if '"usage"' in frame]
+    payloads = [
+        json.loads(frame[6:])
+        for frame in frames
+        if frame.startswith("data: ") and frame != "data: [DONE]\n\n"
+    ]
+    usage_frames = [payload for payload in payloads if payload.get("choices") == []]
     assert len(usage_frames) == 1
+    assert payloads[-2]["choices"][0]["finish_reason"] == "stop"
     usage_frame = usage_frames[0]
     assert usage_frame["object"] == "chat.completion.chunk"
     assert usage_frame["model"] == "model-group"
