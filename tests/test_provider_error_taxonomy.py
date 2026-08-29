@@ -54,7 +54,7 @@ def test_safe_message_prefers_nested_provider_error_fields() -> None:
     coded = safe_provider_message(_body_http_error(400, {"error": {"code": "context_length_exceeded"}}))
     assert coded == "context_length_exceeded"
     plain_string = safe_provider_message(_body_http_error(400, {"error": "invalid api key"}))
-    assert plain_string == "invalid api key"
+    assert plain_string is None
     top_level = safe_provider_message(_body_http_error(429, {"message": "rate limit reached"}))
     assert top_level == "rate limit reached"
     detail = safe_provider_message(_body_http_error(422, {"detail": "validation failed"}))
@@ -450,3 +450,19 @@ def test_guidance_table_covers_every_documented_code() -> None:
     )
     message = server_module._provider_upstream_message(exotic)
     assert "contact the operator" in message
+
+
+def test_safe_message_discards_sensitive_provider_diagnostics() -> None:
+    """Credentials, request content, URLs, and private topology never reach callers."""
+    diagnostics = (
+        "authorization: Bearer provider-secret-value",
+        "prompt=private customer message",
+        "request failed at http://10.0.0.9/internal",
+        "token=abc123456789012345",
+    )
+    for diagnostic in diagnostics:
+        error = _body_http_error(400, {"error": {"message": diagnostic}})
+        assert safe_provider_message(error) is None
+        classified = classify_provider_failure(error, agent_id="a", model="m")
+        assert diagnostic not in str(classified)
+        assert str(classified) == "provider rejected the request with HTTP 400"

@@ -141,8 +141,28 @@ class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
 
 
-class ProviderRequestTooLargeError(RuntimeError):
-    """Raised after every eligible provider rejects the request as too large."""
+class ProviderRequestTooLargeError(ProviderUpstreamError):
+    """Preserve request-size taxonomy across transport and telemetry boundaries."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        agent_id: str = "",
+        model: str = "",
+        provider_status: int | None = None,
+        transport: str = "chat",
+    ) -> None:
+        super().__init__(
+            agent_id=agent_id,
+            model=model,
+            error_code="request_too_large",
+            message=message,
+            client_status=413,
+            provider_status=provider_status,
+            retryable=False,
+            transport=transport,
+        )
 
 
 def _structured_output_error(
@@ -1564,7 +1584,13 @@ class ModelClient:
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
         ):
-            raise ProviderRequestTooLargeError("provider request body is too large") from None
+            raise ProviderRequestTooLargeError(
+                "provider request body is too large",
+                agent_id=agent.id,
+                model=agent.model,
+                provider_status=last_error.code,
+                transport="chat",
+            ) from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
         # Classify instead of collapsing: a 401/404/429 upstream failure is
@@ -2092,7 +2118,13 @@ class ModelClient:
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
         ):
-            raise ProviderRequestTooLargeError("provider request body is too large") from None
+            raise ProviderRequestTooLargeError(
+                "provider request body is too large",
+                agent_id=agent.id,
+                model=agent.model,
+                provider_status=last_error.code,
+                transport="passthrough",
+            ) from None
         if last_error is None:  # pragma: no cover - the loop always attempts once
             raise RuntimeError(f"provider {agent.id} passthrough request failed")
         if not allow_transient_retries:
@@ -4578,14 +4610,23 @@ class TaskOrchestrator:
             requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
 
         answers: dict[int, dict[str, Any]] = {}
+        batch_latency_ms_by_agent: dict[str, float] = {}
         for agent_id, requests in requests_by_agent.items():
             effort_profile = self._role_effort_profile("worker")
+            batch_started_at = time.perf_counter()
             batch = (
                 self.client.batch_chat(
                     agents_by_id[agent_id], requests, effort_profile=effort_profile
                 )
                 if effort_profile is not None
                 else self.client.batch_chat(agents_by_id[agent_id], requests)
+            )
+            # One provider batch call covers every request in this group. Record
+            # its shared elapsed time on each trace row without claiming
+            # unavailable per-request timing precision.
+            batch_latency_ms_by_agent[agent_id] = round(
+                (time.perf_counter() - batch_started_at) * 1000,
+                2,
             )
             results = _validate_batch_results(requests, batch)
             for custom_id, result in results.items():
@@ -4612,6 +4653,7 @@ class TaskOrchestrator:
                 "id": 0, "role": "worker", "agent_id": agent.id,
                 "model": agent.model,
                 "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+                "latency_ms": batch_latency_ms_by_agent[agent.id],
                 "subtask": "Direct route (batched)", "access": [], "output": result["content"],
             }
             if result.get("usage") is not None:

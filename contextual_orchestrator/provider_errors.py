@@ -20,6 +20,7 @@ References
 from __future__ import annotations
 
 import json as _json
+import re as _re
 import socket
 import ssl
 import urllib.error
@@ -40,6 +41,17 @@ MAX_SAFE_MESSAGE_CHARS = 300
 
 #: Maximum provider response bytes inspected for one caller-safe diagnostic.
 MAX_PROVIDER_ERROR_BODY_BYTES = 65_536
+
+#: Provider-controlled text containing any likely secret, request content, URL,
+#: or network address is discarded wholesale. Partial masking is unsafe because
+#: adjacent diagnostic text can still identify credentials or private topology.
+_SENSITIVE_PROVIDER_MESSAGE = _re.compile(
+    r"(?ix)(?:"
+    r"https?://|"
+    r"(?:^|[^0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?:[^0-9]|$)|"
+    r"\b(?:api[_ -]?key|authorization|bearer|password|secret|token|prompt|input|messages?)\b"
+    r")"
+)
 
 #: Upstream HTTP status -> ``(client_status, error_code, retryable)`` surface.
 #: The client status is what this gateway returns; ``error_code`` follows the
@@ -125,7 +137,10 @@ def safe_provider_message(exc: BaseException) -> str | None:
         else " "
         for char in str(raw)
     ).strip()
-    return collapsed[:MAX_SAFE_MESSAGE_CHARS] or None
+    collapsed = collapsed[:MAX_SAFE_MESSAGE_CHARS]
+    if not collapsed or _SENSITIVE_PROVIDER_MESSAGE.search(collapsed):
+        return None
+    return collapsed
 
 
 class ProviderUpstreamError(RuntimeError):
