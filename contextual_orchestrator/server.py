@@ -6903,8 +6903,6 @@ def build_server(
                         _validate_responses_instructions(body)
                     if "metadata" in body:
                         _validate_openai_metadata(body)
-                    if "attribution" in body:
-                        _validate_attribution(body.get("attribution"))
                     if "routing" in body:
                         routing = _validate_routing(body.get("routing"))
                         # Responses passthrough has no batch channel plane yet.
@@ -7573,9 +7571,17 @@ def build_server(
                             else {"answer": "".join(parts)}
                         )
                     else:
-                        result = orchestrator.conduct(
-                            messages, model_name=model_name, progress=progress
-                        )
+                        if coordinator is None:
+                            result = orchestrator.conduct(
+                                messages, model_name=model_name, progress=progress
+                            )
+                        else:
+                            result = orchestrator.conduct(
+                                messages,
+                                model_name=model_name,
+                                progress=progress,
+                                workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            )
                 except ConnectionAbortedError:
                     raise
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event

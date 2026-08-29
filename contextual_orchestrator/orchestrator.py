@@ -4926,8 +4926,9 @@ class TaskOrchestrator:
         *,
         model_name: str = "contextual-orchestrator",
         progress: Any = None,
+        workflow_run_id: str | None = None,
     ) -> dict[str, Any]:
-        """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
+        """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
@@ -5072,15 +5073,42 @@ class TaskOrchestrator:
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
-        return self._with_effort_snapshot(
+        result = {
+            "mode": "conduct",
+            "answer": answer,
+            "trace": trace,
+            "verification": verification,
+            "plan_source": plan_source,
+        }
+        if workflow_run_id is None:
+            return self._with_effort_snapshot(result)
+        record = self._with_effort_snapshot(
             {
-                "mode": "conduct",
-                "answer": answer,
-                "trace": trace,
-                "verification": verification,
-                "plan_source": plan_source,
+                "workflow_run_id": workflow_run_id,
+                "created_at": int(time.time()),
+                "policy_mode": "conduct",
+                **result,
             }
         )
+        self._replace_workflow_run(record)
+        self._run_order.appendleft(workflow_run_id)
+        if self._store is not None:
+            self._store.save("workflow_run", workflow_run_id, record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "run_mode": "conduct",
+                "policy_mode": "conduct",
+                "trace_step_count": len(trace),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        return record
 
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
         """Return the opt-in profile bound to one workflow role."""

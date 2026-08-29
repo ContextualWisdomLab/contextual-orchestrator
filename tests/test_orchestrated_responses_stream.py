@@ -105,23 +105,30 @@ def test_streamed_responses_records_unavailable_usage_without_estimating_answer(
         headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
         method="POST",
     )
+    all_events = []
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            events = [
-                json.loads(line[6:])
-                for line in response.read().decode().splitlines()
-                if line.startswith("data: {")
-            ]
+        for _ in range(2):
+            with urllib.request.urlopen(request, timeout=5) as response:
+                all_events.append([
+                    json.loads(line[6:])
+                    for line in response.read().decode().splitlines()
+                    if line.startswith("data: {")
+                ])
     finally:
         server.shutdown()
 
-    completed = events[-1]["response"]
+    completed = all_events[-1][-1]["response"]
     assert completed["usage"] is None
     assert completed["cost"]["measurement_status"] == "unavailable"
     assert completed["cost"]["cost_amount"] is None
     assert completed["usage_record_ids"]
     rows = coordinator.ledger.records()
-    assert len(rows) == len(completed["usage_record_ids"])
+    assert len(rows) == sum(
+        len(events[-1]["response"]["usage_record_ids"]) for events in all_events
+    )
+    assert len({row["usage_record_id"] for row in rows}) == len(rows)
+    assert all(row["workflow_run_id"] for row in rows)
+    assert len({row["workflow_run_id"] for row in rows}) == 2
     assert all(row["request_channel"] == "stream" for row in rows)
     assert all(row["measurement_status"] == "unavailable" for row in rows)
     assert all(row["prompt_tokens"] == row["completion_tokens"] == 0 for row in rows)
