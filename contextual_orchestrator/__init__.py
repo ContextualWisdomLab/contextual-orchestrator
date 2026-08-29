@@ -30,10 +30,12 @@ from .cost_ledger import (
     SqlLedgerStore,
     UsageTelemetryEvent,
     UsageTelemetryHealth,
+    UsageRecordSink,
     UsageTelemetrySink,
     UsageRecord,
     dimension_catalog,
 )
+from .metering import CanonicalUsageRecordSink
 from .cost_router import CostRoutingCoordinator
 from .cefr_language_observation import (
     CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1,
@@ -109,7 +111,9 @@ __all__ = [
     "UsageRecord",
     "UsageTelemetryEvent",
     "UsageTelemetryHealth",
+    "UsageRecordSink",
     "UsageTelemetrySink",
+    "CanonicalUsageRecordSink",
     "dimension_catalog",
     # config / tokens
     "InMemoryConfigStore",

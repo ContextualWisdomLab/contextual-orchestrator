@@ -75,6 +75,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Billing usage-export failures now appear in the operator-safe telemetry health
+  counters instead of only in emitted error events.
+- Billing usage export now follows accepted ledger writes and skips duplicate,
+  failed, or queue-dropped records.
+- Billing export from a caller-owned SQLite transaction now waits for
+  `CostLedger.flush()` after commit, so rollback cannot leave a billing-only
+  event.
+- A billing-backed non-blocking SQL store now writes appends synchronously while
+  a caller-owned SQLite transaction is open and defers billing export until
+  commit confirmation, rather than moving them outside the caller's transaction.
 - Generated workflow planning now advertises only agents eligible under the
   active ZDR request policy.
 - Accept function-tool descriptions up to the existing bounded request-body
