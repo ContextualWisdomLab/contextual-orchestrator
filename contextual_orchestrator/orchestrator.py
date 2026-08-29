@@ -1383,18 +1383,27 @@ class ModelClient:
         agent: ModelAgent,
         payload: dict[str, Any],
         profile: ReasoningEffortProfile | None,
+        *,
+        api_surface: str = "chat.completions",
     ) -> dict[str, Any]:
         """Apply an opt-in profile while proving provider support before egress."""
+        if api_surface not in {"chat.completions", "responses"}:
+            raise ValueError("api_surface must be chat.completions or responses")
         supports = (
             agent.reasoning_effort_supported is True
             or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
         )
-        return apply_request_profile(
+        applied = apply_request_profile(
             payload,
             profile,
             supports_reasoning_effort=supports,
             default_max_output_tokens=self.max_output_tokens,
         )
+        if api_surface == "responses":
+            applied["max_output_tokens"] = applied.pop("max_tokens")
+            if "reasoning_effort" in applied:
+                applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
+        return applied
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
@@ -1677,11 +1686,11 @@ class ModelClient:
         """
         if type(include_usage) is not bool:
             raise TypeError("include_usage must be a boolean")
+        self._local.usage = None
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
-        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1745,10 +1754,14 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    choices = chunk.get("choices")
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         self._local.usage = usage
-                    choices = chunk.get("choices") or [{}]
+                    if choices == []:
+                        continue
+                    if not isinstance(choices, list) or not choices:
+                        continue
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
@@ -3379,6 +3392,7 @@ class TaskOrchestrator:
         contract.
         """
         normalized_endpoint = endpoint.strip("/")
+        api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
             normalized_endpoint == "responses"
             or any(
@@ -3476,7 +3490,9 @@ class TaskOrchestrator:
             if isinstance(file_replicas, dict):
                 upstream = _bind_provider_file_ids(upstream, file_replicas, agent.id)
             if effort_profile is not None:
-                upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+                upstream = self.client.apply_effort_profile(
+                    agent, upstream, effort_profile, api_surface=api_surface
+                )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
             try:
@@ -3565,7 +3581,10 @@ class TaskOrchestrator:
                 )
             if effort_profile is not None:
                 candidate_payload = self.client.apply_effort_profile(
-                    candidate, candidate_payload, effort_profile
+                    candidate,
+                    candidate_payload,
+                    effort_profile,
+                    api_surface=api_surface,
                 )
             try:
                 send_once = getattr(self.client, "proxy_send_once", None)
@@ -3615,6 +3634,7 @@ class TaskOrchestrator:
         generation; other synthesis failures remain single-shot and fail closed.
         """
         response_request = endpoint == "responses"
+        api_surface = "responses" if response_request else "chat.completions"
         chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
         messages = chat_body.get("messages")
         if not isinstance(messages, list) or not messages:
@@ -3862,7 +3882,10 @@ class TaskOrchestrator:
                     )
                 if active_profile is not None:
                     candidate_payload = self.client.apply_effort_profile(
-                        candidate, candidate_payload, active_profile
+                        candidate,
+                        candidate_payload,
+                        active_profile,
+                        api_surface=api_surface,
                     )
                 try:
                     send = self.client.proxy_send
@@ -13819,23 +13842,41 @@ def chat_completion_chunks(
     include_trace: bool = False,
     include_usage: bool = False,
 ) -> list[dict[str, Any]]:
-    """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
+    """Frame an orchestration result as OpenAI-compatible chat completion chunks.
 
-    The engine produces the full answer before framing, so this yields a correct-shape
-    SSE stream (role delta, content deltas, terminal stop delta) rather than true
-    token-by-token streaming — real token streaming requires a streaming ModelClient.
+    Only provider-reported usage may be emitted. Gateway estimates remain internal
+    because presenting estimates as provider usage would violate the wire contract.
     """
     answer = result.get("answer", "")
     completion_id = _new_chat_completion_id()
     created = int(time.time())
-    base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+    }
+    if include_usage:
+        base["usage"] = None
 
     chunks: list[dict[str, Any]] = [
-        {**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+        {
+            **base,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        }
     ]
-    for start in range(0, len(answer), _STREAM_CHUNK_SIZE):
-        piece = answer[start : start + _STREAM_CHUNK_SIZE]
-        chunks.append({**base, "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]})
+    for offset in range(0, len(answer), _STREAM_CHUNK_SIZE):
+        piece = answer[offset : offset + _STREAM_CHUNK_SIZE]
+        chunks.append(
+            {
+                **base,
+                "choices": [
+                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
+                ],
+            }
+        )
 
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -13844,30 +13885,25 @@ def chat_completion_chunks(
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
-    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
-    final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
+
+    final = {
+        **base,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "orchestration": {
+            key: value for key, value in orchestration.items() if value is not None
+        },
+    }
     chunks.append(final)
-    if include_usage:
-        reported_usage = result.get("usage")
-        if isinstance(reported_usage, dict):
-            usage = {**reported_usage, "usage_source": "reported"}
-        else:
-            prompt_text = result.get("prompt_text", "")
-            estimated_prompt_tokens = estimate_tokens(
-                prompt_text if isinstance(prompt_text, str) else str(prompt_text)
-            )
-            estimated_completion_tokens = estimate_tokens(answer)
-            usage = {
-                "prompt_tokens": estimated_prompt_tokens,
-                "completion_tokens": estimated_completion_tokens,
-                "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
-                "usage_source": "estimated",
-            }
-        chunks.append({
-            **base,
-            "choices": [],
-            "usage": usage,
-        })
+
+    usage = result.get("usage")
+    cost = result.get("cost")
+    if (
+        include_usage
+        and isinstance(cost, dict)
+        and cost.get("measurement_status") == "measured"
+        and isinstance(usage, dict)
+    ):
+        chunks.append({**base, "choices": [], "usage": usage})
     return chunks
 
 

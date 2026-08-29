@@ -73,9 +73,28 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Add deterministic no-egress benchmark dry runs, secret-redacted JSON/CSV/Markdown evidence artifacts, paired bootstrap uncertainty, quality-latency and quality-hypothetical-cost Pareto frontiers, all-modality catalog fuzzing, and a manually gated benchmark workflow.
 - Add a validated deterministic one-frame H.264 MP4 probe fixture, complete preflight reservation for every discovered model-capability cell plus the full evaluation envelope, and explicit evidence-sufficiency fields that keep the bundled smoke manifest from authorizing production routing.
 - Add direct benchmark quality gates for 100% production statement/branch coverage, 100% public docstrings, wheel build/install/import smoke testing, and optional-import isolation.
+- Experimental CEFR criterion-observation gateway with exact contract checks,
+  independent rater blindness, bounded structured-output parsing, replay
+  provenance, and human-review routing; it emits no final CEFR level or score.
 
 ### Fixed
 
+- Accept the standard Chat Completions `stream_options.include_usage=true`
+  request and emit provider-reported usage in a usage-only SSE chunk when
+  available after the terminal stop chunk; pass the option through live provider
+  streams, and reject structured `tools`/`response_format` passthrough before
+  execution because it cannot emit that SSE contract; keep unsupported
+  obfuscation flags fail-closed.
+- Billing usage-export failures now appear in the operator-safe telemetry health
+  counters instead of only in emitted error events.
+- Billing usage export now follows accepted ledger writes and skips duplicate,
+  failed, or queue-dropped records.
+- Billing export from a caller-owned SQLite transaction now waits for
+  `CostLedger.flush()` after commit, so rollback cannot leave a billing-only
+  event.
+- A billing-backed non-blocking SQL store now writes appends synchronously while
+  a caller-owned SQLite transaction is open and defers billing export until
+  commit confirmation, rather than moving them outside the caller's transaction.
 - Generated workflow planning now advertises only agents eligible under the
   active ZDR request policy.
 - Accept function-tool descriptions up to the existing bounded request-body
@@ -119,6 +138,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- The product and technical gap baseline now records the ten open PRs,
+  exact-head governance state, and current provider-backed Strix evidence.
 - Web requests now use the native `SOMAXCONN` listen backlog and HTTP/1.1
   persistent connections, while the existing per-request daemon threading and
   explicit run-slot admission keep slow provider I/O from blocking liveness.

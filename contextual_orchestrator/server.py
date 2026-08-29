@@ -6492,6 +6492,12 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        if stream and include_usage:
+                            raise RequestError(
+                                400,
+                                "invalid_stream_options",
+                                "stream_options.include_usage=true is not supported with tools or response_format",
+                            )
                         if explicit_trace:
                             raise RequestError(
                                 400,
@@ -7923,11 +7929,10 @@ def build_server(
             *,
             include_usage: bool = False,
         ) -> None:
-            """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
+            """Pipe live provider deltas as OpenAI chat-completion SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = _new_chat_completion_id()
             created = int(time.time())
-            streamed_parts: list[str] = []
             stream_usage: dict[str, Any] | None = None
 
             def capture_usage(usage: dict[str, Any] | None) -> None:
@@ -7940,13 +7945,30 @@ def build_server(
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model_name,
-                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                    "choices": [
+                        {"index": 0, "delta": delta, "finish_reason": finish}
+                    ],
+                }
+                if include_usage:
+                    payload["usage"] = None
+                return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            def usage_frame(usage: dict[str, Any]) -> str:
+                payload = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [],
+                    "usage": usage,
                 }
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             security.acquire_run_slot()
             try:
-                if not self._begin_sse() or not self._write_sse(frame({"role": "assistant"})):
+                if not self._begin_sse() or not self._write_sse(
+                    frame({"role": "assistant"})
+                ):
                     return
                 try:
                     stream_kwargs: dict[str, Any] = {
@@ -7958,39 +7980,16 @@ def build_server(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
                     for delta in orchestrator.stream_route(messages, **stream_kwargs):
-                        streamed_parts.append(delta)
                         if not self._write_sse(frame({"content": delta})):
                             return
                     if not self._write_sse(frame({}, finish="stop")):
                         return
-                    if include_usage:
-                        if isinstance(stream_usage, dict):
-                            usage = {**stream_usage, "usage_source": "reported"}
-                        else:
-                            estimated_prompt_tokens = estimate_tokens(
-                                json.dumps(messages, ensure_ascii=False)
-                            )
-                            estimated_completion_tokens = estimate_tokens(
-                                "".join(streamed_parts)
-                            )
-                            usage = {
-                                "prompt_tokens": estimated_prompt_tokens,
-                                "completion_tokens": estimated_completion_tokens,
-                                "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
-                                "usage_source": "estimated",
-                            }
-                        usage_payload = {
-                            "id": completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": model_name,
-                            "choices": [],
-                            "usage": usage,
-                        }
-                        if not self._write_sse(
-                            f"data: {json.dumps(usage_payload, ensure_ascii=False)}\n\n"
-                        ):
-                            return
+                    if (
+                        include_usage
+                        and isinstance(stream_usage, dict)
+                        and not self._write_sse(usage_frame(stream_usage))
+                    ):
+                        return
                 except ToolFallbackStoppedError as exc:
                     detail = {
                         "request_id": uuid.uuid4().hex,
@@ -8007,7 +8006,7 @@ def build_server(
                         return
                     if not self._write_sse(frame({}, finish="error")):
                         return
-                except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
+                except Exception:  # noqa: BLE001 - headers already sent
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 self._write_sse("data: [DONE]\n\n")
