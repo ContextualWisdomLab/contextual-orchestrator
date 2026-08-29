@@ -34,7 +34,7 @@ jobs:
 
       - name: Apply, validate, and commit the final review contracts
         env:
-          EXPECTED_PARENT: b87a75ce807593aa501e643a46906cc8a06b2411
+          EXPECTED_PARENT: 2283f4c92dbed1eb6ff1570ef1fb30c10e5faefa
           BRANCH: fix/batch-routing-owner-20260829
         shell: bash
         run: |
