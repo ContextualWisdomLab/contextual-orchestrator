@@ -225,9 +225,16 @@ def test_http_route_stream_returns_provider_usage_without_stale_data() -> None:
         if frame.startswith("data: ") and frame != "data: [DONE]"
     ]
     assert first_payloads[-2]["choices"][0]["finish_reason"] == "stop"
+    assert all(payload.get("usage") is None for payload in first_payloads[:-1])
     assert first_payloads[-1]["choices"] == []
     assert first_payloads[-1]["usage"] == usage
-    assert '"usage"' not in second
+    second_payloads = [
+        json.loads(frame[len("data: "):])
+        for frame in second.split("\n\n")
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    assert all(payload.get("usage") is None for payload in second_payloads)
+    assert not any(payload.get("choices") == [] for payload in second_payloads)
 
 
 def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:

@@ -70,6 +70,7 @@ def test_chunks_include_requested_provider_usage_after_stop() -> None:
     assert chunks[-2]["choices"][0]["finish_reason"] == "stop"
     assert chunks[-1]["choices"] == []
     assert chunks[-1]["usage"] == usage
+    assert all(chunk.get("usage") is None for chunk in chunks[:-1])
 
 
 def test_chunks_omit_estimated_usage_even_when_requested() -> None:
@@ -83,7 +84,7 @@ def test_chunks_omit_estimated_usage_even_when_requested() -> None:
         include_usage=True,
     )
 
-    assert all("usage" not in chunk for chunk in chunks)
+    assert all(chunk.get("usage") is None for chunk in chunks)
 
 
 def test_completion_ids_remain_unique_when_created_in_one_millisecond() -> None:

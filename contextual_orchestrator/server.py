@@ -7666,6 +7666,8 @@ def build_server(
                     "model": model_name,
                     "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
                 }
+                if include_usage:
+                    payload["usage"] = None
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             def usage_frame(usage: dict[str, Any]) -> str:

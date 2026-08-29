@@ -13632,6 +13632,8 @@ def chat_completion_chunks(
     completion_id = _new_chat_completion_id()
     created = int(time.time())
     base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+    if include_usage:
+        base["usage"] = None
 
     chunks: list[dict[str, Any]] = [
         {**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
