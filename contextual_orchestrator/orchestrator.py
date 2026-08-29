@@ -690,10 +690,17 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
         return False
     payload = _http_error_payload(error)
     details = payload.get("error") if isinstance(payload, dict) else None
-    message = details.get("message") if isinstance(details, dict) else None
+    message = (
+        details.get("message")
+        if isinstance(details, dict)
+        else details
+        if isinstance(details, str)
+        else None
+    )
     return (
-        isinstance(details, dict)
-        and details.get("code") == "invalid_tools"
+        (isinstance(details, str) or (
+            isinstance(details, dict) and details.get("code") == "invalid_tools"
+        ))
         and isinstance(message, str)
         and "tool.function.description" in message.casefold()
         and "1024" in message
