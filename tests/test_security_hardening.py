@@ -253,6 +253,15 @@ def test_single_and_split_token_modes_cannot_be_combined() -> None:
         raise AssertionError("mixed single and split token modes must be rejected")
 
 
+def test_public_bind_rejects_shared_token_at_security_boundary() -> None:
+    try:
+        SecurityConfig(auth_token="shared_secret", allow_public_bind=True)
+    except ValueError as exc:
+        assert str(exc) == "public bind requires split admin_token and inference_token credentials"
+    else:  # pragma: no cover
+        raise AssertionError("public bind must not accept one shared bearer token")
+
+
 def test_scope_token_precedes_mutated_shared_token() -> None:
     security = SecurityConfig(admin_token="admin_secret", inference_token="inference_secret")
     security.auth_token = "mutated_shared_secret"
