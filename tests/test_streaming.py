@@ -83,6 +83,7 @@ def test_include_usage_adds_openai_usage_chunk() -> None:
             "answer": "abc",
             "mode": "route",
             "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+            "cost": {"measurement_status": "measured"},
         },
         include_usage=True,
     )
@@ -92,7 +93,6 @@ def test_include_usage_adds_openai_usage_chunk() -> None:
         "prompt_tokens": 2,
         "completion_tokens": 3,
         "total_tokens": 5,
-        "usage_source": "reported",
     }
 
 
@@ -254,7 +254,6 @@ def test_http_stream_include_usage_preserves_provider_usage() -> None:
         "prompt_tokens": 4,
         "completion_tokens": 6,
         "total_tokens": 10,
-        "usage_source": "reported",
     }
 
 

@@ -13,17 +13,18 @@ public control-plane model; it is not just an HTTP gateway.
 
 ## Docker Compose
 
-The canonical path is `compose.yaml`. It starts PostgreSQL, seeds the server
-token into the encrypted KV from a Compose secret, and binds the gateway to
-loopback:
+The canonical path is `compose.yaml`. It starts PostgreSQL, seeds separate
+admin and inference tokens into the encrypted KV from Compose secrets, and
+binds the gateway to loopback:
 
 ```bash
 umask 077
 mkdir -p .secrets
 chmod 700 .secrets
-printf '%s' 'replace-with-a-long-random-token' > .secrets/server-token
-chmod 600 .secrets/server-token
-export TOKEN="$(cat .secrets/server-token)"
+printf '%s' 'replace-with-a-long-random-admin-token' > .secrets/admin-token
+printf '%s' 'replace-with-a-long-random-inference-token' > .secrets/inference-token
+chmod 600 .secrets/admin-token .secrets/inference-token
+export INFERENCE_TOKEN="$(cat .secrets/inference-token)"
 export CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD='replace-with-a-database-password'
 export CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE='replace-with-an-encryption-passphrase'
 docker compose up --build --wait
@@ -38,7 +39,7 @@ For orchestration with OpenAI Responses-native reasoning summaries, select
 
 ```bash
 curl -N http://127.0.0.1:8000/v1/responses \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $INFERENCE_TOKEN" -H 'Content-Type: application/json' \
   -d '{"model":"orchestrator/free","input":"Research and verify this","reasoning":{"summary":"auto"},"stream":true}'
 ```
 
@@ -72,9 +73,10 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one token. Explicit `--auth-token`/split-token values are local-development escape hatches; the CLI no longer reads auth secrets from environment variables.
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one local token. Explicit `--auth-token`/split-token values are local-development escape hatches; `--production` and `--allow-public-bind` reject single-token mode and insecure admin-session cookies, and the CLI never reads auth secrets from environment variables.
 - A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
-- Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
+- Binding to a non-loopback address requires `--allow-public-bind`; loopback
+  addresses and `localhost` remain available for local development.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - `/healthz` is a minimal unauthenticated process probe; use the administrator-authenticated `/readyz` endpoint for secret-free orchestration, sync-routing, and optional batch dependency status. Liveness stays available during optional dependency degradation.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
@@ -152,7 +154,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** â
 One public interface:
 
 - `contextual-orchestrator` is the model-like control-plane candidate exposed to callers. `/v1/models` lists it first, followed by every configured worker candidate, including disabled candidates with their status.
-- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
+- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a provider-reported usage-only chunk after the terminal stop chunk when usage is available; structured `tools`/`response_format` passthrough rejects that combination before provider execution. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline â€” per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
@@ -239,6 +241,19 @@ is read from a **KV config store**, never `os.getenv`.
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
   configured, and fall back to a deterministic heuristic otherwise.
+- **Canonical Billing export.** Install the published `metering_billing`
+  producer SDK, create its durable outbox, and pass
+  `CanonicalUsageRecordSink(event_builder=build_contextual_usage_event,
+  enqueue=outbox.enqueue, identity=...)` as `CostLedger(usage_sink=...)`.
+  The sink runs only after the local ledger accepts a new record, so failed,
+  dropped, and duplicate writes do not become billing-only events. For a
+  caller-owned SQLite transaction, export is deferred until `flush()` observes
+  the caller's commit; rollback therefore emits no billing-only event. A
+  non-blocking SQL store writes such a billing-backed append synchronously while
+  the transaction is open and defers export until `flush()` confirms the commit,
+  so a background worker cannot race the caller's transaction outcome.
+  It exports token counts and bounded provider/model/workflow metadata;
+  prompts, answers, and computed prices never enter the event.
 - **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
   rolls up cost + tokens by any dimension over any time window;
   `GET /api/v1/llm_usage_records` lists raw ledger rows;

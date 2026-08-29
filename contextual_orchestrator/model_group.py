@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 import re
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 from .conventions import require_object_name
 

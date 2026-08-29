@@ -371,6 +371,11 @@ def main(argv: list[str] | None = None) -> None:
                         help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument(
+        "--production",
+        action="store_true",
+        help="Require split admin/inference server credentials; single-token mode is local-only.",
+    )
+    parser.add_argument(
         "--rate-limit-requests",
         type=_positive_int,
         default=None,
@@ -489,6 +494,19 @@ def main(argv: list[str] | None = None) -> None:
                 "provided by --admin-token/--inference-token or "
                 "--admin-token-key/--inference-token-key"
             )
+        if (args.production or args.allow_public_bind) and not split_requested:
+            parser.error(
+                "--production/--allow-public-bind requires split "
+                "--admin-token/--inference-token credentials; single-token mode is local-only"
+            )
+        if (args.production or args.allow_public_bind) and args.insecure_admin_session_cookie:
+            parser.error(
+                "--production/--allow-public-bind cannot use --insecure-admin-session-cookie"
+            )
+        try:
+            SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
+        except ValueError as exc:
+            parser.error(str(exc))
         try:
             auth_token = (
                 _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)
