@@ -48,9 +48,13 @@ class SequencedProxyClient:
         agent: ModelAgent,
         payload: dict[str, Any],
         profile: ReasoningEffortProfile,
+        *,
+        api_surface: str = "chat.completions",
     ) -> dict[str, Any]:
         """Reuse the production profile contract for mixed-provider coverage."""
-        return ModelClient().apply_effort_profile(agent, payload, profile)
+        return ModelClient().apply_effort_profile(
+            agent, payload, profile, api_surface=api_surface
+        )
 
 
 def _http_error(status: int, body: dict[str, Any] | None = None) -> urllib.error.HTTPError:
@@ -1111,6 +1115,30 @@ def test_virtual_effort_profile_selects_a_supported_provider() -> None:
 
     assert result["model"] == "supported-model"
     assert [agent_id for agent_id, _ in client.calls] == ["supported_agent"]
+
+
+def test_virtual_responses_effort_profile_uses_responses_wire_shape() -> None:
+    """Responses passthrough maps effort and output tokens to its native fields."""
+    client = SequencedProxyClient({"primary_agent": {"model": "primary-model"}})
+    orchestrator = _build(client)
+    profile = ReasoningEffortProfile(
+        reasoning_effort="medium",
+        max_output_tokens=321,
+        unsupported_provider_fallback="error",
+    )
+
+    result = orchestrator.proxy_completion(
+        {"model": "primary-model", "input": "x"},
+        endpoint="responses",
+        effort_profile=profile,
+    )
+
+    assert result["model"] == "primary-model"
+    payload = client.calls[0][1]
+    assert payload["max_output_tokens"] == 321
+    assert payload["reasoning"] == {"effort": "medium"}
+    assert "max_tokens" not in payload
+    assert "reasoning_effort" not in payload
 
 
 def test_effort_support_filter_precedes_same_provider_deduplication() -> None:

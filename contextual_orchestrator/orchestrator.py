@@ -1383,18 +1383,27 @@ class ModelClient:
         agent: ModelAgent,
         payload: dict[str, Any],
         profile: ReasoningEffortProfile | None,
+        *,
+        api_surface: str = "chat.completions",
     ) -> dict[str, Any]:
         """Apply an opt-in profile while proving provider support before egress."""
+        if api_surface not in {"chat.completions", "responses"}:
+            raise ValueError("api_surface must be chat.completions or responses")
         supports = (
             agent.reasoning_effort_supported is True
             or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
         )
-        return apply_request_profile(
+        applied = apply_request_profile(
             payload,
             profile,
             supports_reasoning_effort=supports,
             default_max_output_tokens=self.max_output_tokens,
         )
+        if api_surface == "responses":
+            applied["max_output_tokens"] = applied.pop("max_tokens")
+            if "reasoning_effort" in applied:
+                applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
+        return applied
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
@@ -3379,6 +3388,7 @@ class TaskOrchestrator:
         contract.
         """
         normalized_endpoint = endpoint.strip("/")
+        api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
             normalized_endpoint == "responses"
             or any(
@@ -3476,7 +3486,9 @@ class TaskOrchestrator:
             if isinstance(file_replicas, dict):
                 upstream = _bind_provider_file_ids(upstream, file_replicas, agent.id)
             if effort_profile is not None:
-                upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+                upstream = self.client.apply_effort_profile(
+                    agent, upstream, effort_profile, api_surface=api_surface
+                )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
             try:
@@ -3565,7 +3577,10 @@ class TaskOrchestrator:
                 )
             if effort_profile is not None:
                 candidate_payload = self.client.apply_effort_profile(
-                    candidate, candidate_payload, effort_profile
+                    candidate,
+                    candidate_payload,
+                    effort_profile,
+                    api_surface=api_surface,
                 )
             try:
                 send_once = getattr(self.client, "proxy_send_once", None)
@@ -3615,6 +3630,7 @@ class TaskOrchestrator:
         generation; other synthesis failures remain single-shot and fail closed.
         """
         response_request = endpoint == "responses"
+        api_surface = "responses" if response_request else "chat.completions"
         chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
         messages = chat_body.get("messages")
         if not isinstance(messages, list) or not messages:
@@ -3862,7 +3878,10 @@ class TaskOrchestrator:
                     )
                 if active_profile is not None:
                     candidate_payload = self.client.apply_effort_profile(
-                        candidate, candidate_payload, active_profile
+                        candidate,
+                        candidate_payload,
+                        active_profile,
+                        api_surface=api_surface,
                     )
                 try:
                     send = self.client.proxy_send
