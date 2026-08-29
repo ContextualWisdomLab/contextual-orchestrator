@@ -69,8 +69,63 @@ jobs:
               esac
             done
             if (( ${#unsafe[@]} )); then
-              printf -v unsafe_list '%s\n' "${unsafe[@]}"
-              gh pr comment "$PR_NUMBER" --body "Reusable conflict resolver stopped fail-closed. Executable or structured-data conflicts require semantic resolution at exact head \`$original_head\` against protected main \`$main_head\`:\n\n\`\`\`\n$unsafe_list\`\`\`"
+              report="$(mktemp)"
+              {
+                echo "Reusable conflict resolver stopped fail-closed."
+                echo
+                echo "Exact PR head: \`$original_head\`"
+                echo "Protected main: \`$main_head\`"
+                echo
+                echo "Executable or structured-data conflicts require semantic resolution:"
+              } > "$report"
+              for path in "${unsafe[@]}"; do
+                git checkout --conflict=diff3 -- "$path"
+                {
+                  echo
+                  echo "#### \`$path\`"
+                  echo
+                  echo '```diff'
+                } >> "$report"
+                python - "$path" <<'PY' >> "$report"
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+          emitted = 0
+          cursor = 0
+          while cursor < len(lines):
+              if not lines[cursor].startswith("<<<<<<<"):
+                  cursor += 1
+                  continue
+              end = cursor + 1
+              while end < len(lines) and not lines[end].startswith(">>>>>>>"):
+                  end += 1
+              end = min(end, len(lines) - 1)
+              start_context = max(0, cursor - 6)
+              end_context = min(len(lines), end + 7)
+              block = lines[start_context:end_context]
+              if emitted + len(block) > 320:
+                  print("... additional conflict context omitted ...")
+                  break
+              for line_number, line in enumerate(block, start_context + 1):
+                  print(f"{line_number:>6} {line}")
+              emitted += len(block)
+              cursor = end_context
+          PY
+                echo '```' >> "$report"
+              done
+              python - "$report" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding="utf-8")
+          if len(text) > 60000:
+              text = text[:60000] + "\n\n... report truncated at 60,000 characters ...\n"
+          path.write_text(text, encoding="utf-8")
+          PY
+              gh pr comment "$PR_NUMBER" --body-file "$report"
               git merge --abort
               exit 1
             fi
