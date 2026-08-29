@@ -260,12 +260,15 @@ def _discover_models_command(argv: list[str]) -> None:
             agents_db=args.agents_db,
             allow_empty_agents=True,
         )
-        bootstrap.sync_discovered_agents(discovered_agents)
-        if args.enable_cheapest:
-            for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
-                agent_id = agent_id_for(model)
-                bootstrap.patch_agent("default", agent_id, {"status": "active"})
-                enabled_agent_ids.append(agent_id)
+        try:
+            bootstrap.sync_discovered_agents(discovered_agents)
+            if args.enable_cheapest:
+                for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
+                    agent_id = agent_id_for(model)
+                    bootstrap.patch_agent("default", agent_id, {"status": "active"})
+                    enabled_agent_ids.append(agent_id)
+        finally:
+            bootstrap.close()
 
     report = {
         "discovered_count": len(reported),
