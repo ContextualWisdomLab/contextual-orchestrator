@@ -50,18 +50,37 @@ jobs:
 
           if [[ $merge_rc -ne 0 ]]; then
             mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            names_report="$(mktemp)"
+            {
+              echo "Conflict inventory (fail-closed diagnostic)."
+              echo
+              echo "Exact PR head: \`$original_head\`"
+              echo "Protected main: \`$main_head\`"
+              echo
+              echo '```text'
+              printf '%s\n' "${conflicts[@]}"
+              echo '```'
+            } > "$names_report"
+            gh pr comment "$PR_NUMBER" --body-file "$names_report"
+
             unsafe=()
             for path in "${conflicts[@]}"; do
               case "$path" in
                 *.md|*.mdx)
-                  tmpdir="$(mktemp -d)"
-                  git show ":2:$path" > "$tmpdir/ours"
-                  git show ":1:$path" > "$tmpdir/base"
-                  git show ":3:$path" > "$tmpdir/theirs"
-                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"
-                  cp "$tmpdir/ours" "$path"
-                  rm -rf "$tmpdir"
-                  git add "$path"
+                  if git cat-file -e ":1:$path" 2>/dev/null \
+                    && git cat-file -e ":2:$path" 2>/dev/null \
+                    && git cat-file -e ":3:$path" 2>/dev/null; then
+                    tmpdir="$(mktemp -d)"
+                    git show ":2:$path" > "$tmpdir/ours"
+                    git show ":1:$path" > "$tmpdir/base"
+                    git show ":3:$path" > "$tmpdir/theirs"
+                    git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"
+                    cp "$tmpdir/ours" "$path"
+                    rm -rf "$tmpdir"
+                    git add "$path"
+                  else
+                    unsafe+=("$path")
+                  fi
                   ;;
                 *)
                   unsafe+=("$path")
@@ -76,17 +95,17 @@ jobs:
                 echo "Exact PR head: \`$original_head\`"
                 echo "Protected main: \`$main_head\`"
                 echo
-                echo "Executable or structured-data conflicts require semantic resolution:"
+                echo "Executable, structured-data, or non-three-way conflicts require semantic resolution:"
               } > "$report"
               for path in "${unsafe[@]}"; do
-                git checkout --conflict=diff3 -- "$path"
                 {
                   echo
                   echo "#### \`$path\`"
                   echo
-                  echo '```diff'
                 } >> "$report"
-                python - "$path" <<'PY' >> "$report"
+                if git checkout --conflict=diff3 -- "$path" 2>/dev/null; then
+                  echo '```diff' >> "$report"
+                  python - "$path" <<'PY' >> "$report"
           from pathlib import Path
           import sys
 
@@ -105,7 +124,7 @@ jobs:
               start_context = max(0, cursor - 6)
               end_context = min(len(lines), end + 7)
               block = lines[start_context:end_context]
-              if emitted + len(block) > 320:
+              if emitted + len(block) > 180:
                   print("... additional conflict context omitted ...")
                   break
               for line_number, line in enumerate(block, start_context + 1):
@@ -113,7 +132,15 @@ jobs:
               emitted += len(block)
               cursor = end_context
           PY
-                echo '```' >> "$report"
+                  echo '```' >> "$report"
+                else
+                  {
+                    echo '```text'
+                    echo "diff3 context unavailable (add/delete, rename, binary, or missing merge stage)"
+                    git status --short -- "$path"
+                    echo '```'
+                  } >> "$report"
+                fi
               done
               python - "$report" <<'PY'
           from pathlib import Path
