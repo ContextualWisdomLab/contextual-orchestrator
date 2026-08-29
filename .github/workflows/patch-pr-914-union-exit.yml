@@ -25,8 +25,8 @@ jobs:
 
           path = Path('.github/workflows/resolve-pr-914.yml')
           text = path.read_text(encoding='utf-8')
-          old = '                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"\n'
-          new = '                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs" || true\n'
+          old = 'git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"'
+          new = old + ' || true'
           if text.count(old) != 1:
               raise SystemExit(f'expected one union anchor, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
