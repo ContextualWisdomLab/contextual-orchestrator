@@ -1,5 +1,6 @@
 name: Resolve PR 868 against protected main
 
+# Hardened diagnostic retry after resolver correction.
 on:
   push:
     branches: [fix/gateway-default-chat-model]
