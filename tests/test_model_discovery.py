@@ -640,7 +640,11 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
         capabilities=("embedding",),
     )
 
-    assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
+    assert agent_from_discovered(discovered).tags == (
+        "discovered",
+        "embedding",
+        "capability:embedding",
+    )
 
 
 def test_response_format_metadata_does_not_make_non_chat_model_eligible() -> None:

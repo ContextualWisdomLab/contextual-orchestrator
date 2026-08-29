@@ -36,7 +36,7 @@ from jsonschema.validators import validator_for
 
 from .chat_capability import (
     is_chat_compatible_model_id,
-    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
@@ -501,6 +501,23 @@ class ModelAgent:
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
         )
+
+
+def _is_general_chat_agent(agent: ModelAgent) -> bool:
+    """Apply persisted provider capability tags before model-name fallback."""
+    return is_general_chat_candidate(
+        agent.model,
+        capabilities=(
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("capability:")
+        ),
+        output_modalities=(
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("output:")
+        ),
+    )
 
 
 def _validate_batch_results(
@@ -5249,7 +5266,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if is_general_chat_agent_model_id(agent.model) and self._zdr_agent_allowed(agent)
+            if _is_general_chat_agent(agent) and self._zdr_agent_allowed(agent)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -5299,7 +5316,7 @@ class TaskOrchestrator:
             assigned = known_agents.get(agent_id)
             if (
                 assigned is None
-                or not is_general_chat_agent_model_id(assigned.model)
+                or not _is_general_chat_agent(assigned)
                 or not self._zdr_agent_allowed(assigned)
             ):
                 # Unknown or stale ineligible assignments are reselected honestly.
@@ -5384,7 +5401,7 @@ class TaskOrchestrator:
             if not agent.disabled
             and self._zdr_agent_allowed(agent)
             if (not free_only or self._is_free_agent(agent))
-            and (not chat_only or is_general_chat_agent_model_id(agent.model))
+            and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
         if not candidates:
@@ -5698,7 +5715,7 @@ class TaskOrchestrator:
 
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
         excluded by the capability contract enforced by
-        :func:`is_general_chat_agent_model_id`; this is an endpoint-compatibility
+        :func:`is_general_chat_candidate`; this is an endpoint-compatibility
         gate, not a task-keyword heuristic.
         """
         ranked = [
@@ -5710,7 +5727,7 @@ class TaskOrchestrator:
                 required_tags=required_tags,
                 prompt_context=prompt_context,
             )
-            if is_general_chat_agent_model_id(agent.model)
+            if _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
         if not ranked:
@@ -6254,7 +6271,7 @@ class TaskOrchestrator:
             for agent in ordered
             if not agent.disabled
             and self._zdr_agent_allowed(agent)
-            and is_general_chat_agent_model_id(agent.model)
+            and _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]

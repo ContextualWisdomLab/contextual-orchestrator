@@ -10,6 +10,7 @@ speech-only models cannot.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import re
 
 _MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -94,3 +95,32 @@ def is_general_chat_agent_model_id(model_id: str) -> bool:
         or token.startswith("nemoguard")
         for token in tokens
     )
+
+
+def is_general_chat_candidate(
+    model_id: str,
+    *,
+    capabilities: Iterable[str] = (),
+    output_modalities: Iterable[str] = (),
+) -> bool:
+    """Apply explicit catalog evidence before falling back to the model name.
+
+    A generic model identifier cannot identify a media-only endpoint. When a
+    provider supplies capability or output-modality metadata, that metadata is
+    therefore authoritative; absent metadata keeps the legacy name heuristic.
+    """
+    outputs = {
+        value.strip().casefold()
+        for value in output_modalities
+        if isinstance(value, str) and value.strip()
+    }
+    if outputs:
+        return "text" in outputs
+    declared_capabilities = {
+        value.strip().casefold()
+        for value in capabilities
+        if isinstance(value, str) and value.strip()
+    }
+    if declared_capabilities:
+        return "chat" in declared_capabilities
+    return is_general_chat_agent_model_id(model_id)

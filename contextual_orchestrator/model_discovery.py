@@ -22,7 +22,7 @@ import urllib.request
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from .chat_capability import is_general_chat_agent_model_id
+from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
 from .credentials import get_credential
 from .orchestrator import ModelAgent
 
@@ -580,23 +580,11 @@ def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
     expose a media-only model with a generic identifier, so the model-name
     heuristic is only a fallback for rows with no capability or modality data.
     """
-    if discovered.evidence_only:
-        return False
-    output_modalities = {
-        value.strip().casefold()
-        for value in discovered.output_modalities
-        if isinstance(value, str) and value.strip()
-    }
-    if output_modalities:
-        return "text" in output_modalities
-    capabilities = {
-        value.strip().casefold()
-        for value in discovered.capabilities
-        if isinstance(value, str) and value.strip()
-    }
-    if capabilities:
-        return "chat" in capabilities
-    return is_general_chat_agent_model_id(discovered.model_id)
+    return not discovered.evidence_only and is_general_chat_candidate(
+        discovered.model_id,
+        capabilities=discovered.capabilities,
+        output_modalities=discovered.output_modalities,
+    )
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
@@ -622,6 +610,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(("cost:free",) if discovered.is_free else ()),
             *(("privacy:zdr",) if discovered.zdr_capable else ()),
             *discovered.capabilities,
+            *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
         ),

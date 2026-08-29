@@ -143,6 +143,30 @@ def test_zdr_only_filters_the_caller_supplied_model_group_array() -> None:
     assert [agent.id for agent in selected] == [zdr.id]
 
 
+def test_chat_only_filters_the_caller_supplied_media_model_array() -> None:
+    orchestrator = TaskOrchestrator([_agent("configured_member", "vendor/configured")])
+    video = ModelAgent(
+        "runtime_video",
+        "wan-3.0",
+        "mock://local",
+        tags=("output:video",),
+    )
+    text = ModelAgent(
+        "runtime_text",
+        "future-text-model",
+        "mock://local",
+        tags=("output:text",),
+    )
+
+    selected = orchestrator.select_model_group_members(
+        [video, text],
+        chat_only=True,
+        zdr_only=False,
+    )
+
+    assert [agent.id for agent in selected] == [text.id]
+
+
 def test_zdr_only_reports_when_the_caller_supplied_array_has_no_eligible_member() -> None:
     orchestrator = TaskOrchestrator([_agent("configured_member", "vendor/configured")])
 
