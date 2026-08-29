@@ -225,7 +225,7 @@ def test_http_route_stream_returns_provider_usage_without_stale_data() -> None:
         if frame.startswith("data: ") and frame != "data: [DONE]"
     ]
     assert first_payloads[-2]["choices"][0]["finish_reason"] == "stop"
-    assert all(payload.get("usage") is None for payload in first_payloads[:-1])
+    assert all("usage" in payload and payload["usage"] is None for payload in first_payloads[:-1])
     assert first_payloads[-1]["choices"] == []
     assert first_payloads[-1]["usage"] == usage
     second_payloads = [
