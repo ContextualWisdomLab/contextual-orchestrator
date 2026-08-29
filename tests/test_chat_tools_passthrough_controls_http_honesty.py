@@ -146,6 +146,28 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
         thread.join(timeout=5)
 
 
+def test_http_structured_stream_usage_fails_closed_before_execution() -> None:
+    """Structured passthrough cannot emit usage SSE, so reject it before provider work."""
+    server, thread, port = _server()
+    try:
+        for payload in (
+            _base(stream=True, stream_options={"include_usage": True}),
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+        ):
+            status, body = _post(port, payload)
+            assert status == 400, (payload, body)
+            assert "invalid_stream_options" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_tools_passthrough_accepts_coerced_sampling() -> None:
     server, thread, port = _server()
     try:
@@ -185,6 +207,7 @@ if __name__ == "__main__":
     test_http_tools_passthrough_rejects_invalid_temperature()
     test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n()
     test_http_tools_passthrough_rejects_invalid_user_and_stream_options()
+    test_http_structured_stream_usage_fails_closed_before_execution()
     test_http_tools_passthrough_accepts_coerced_sampling()
     test_http_response_format_passthrough_rejects_seed()
     print("ok")

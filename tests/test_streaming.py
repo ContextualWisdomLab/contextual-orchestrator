@@ -55,7 +55,7 @@ def test_empty_answer_produces_role_and_stop_only() -> None:
     assert chunks[1]["choices"][0]["finish_reason"] == "stop"
 
 
-def test_chunks_include_requested_provider_usage_before_stop() -> None:
+def test_chunks_include_requested_provider_usage_after_stop() -> None:
     usage = {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}
     chunks = chat_completion_chunks(
         {
@@ -67,9 +67,9 @@ def test_chunks_include_requested_provider_usage_before_stop() -> None:
         include_usage=True,
     )
 
-    assert chunks[-2]["choices"] == []
-    assert chunks[-2]["usage"] == usage
-    assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+    assert chunks[-2]["choices"][0]["finish_reason"] == "stop"
+    assert chunks[-1]["choices"] == []
+    assert chunks[-1]["usage"] == usage
 
 
 def test_chunks_omit_estimated_usage_even_when_requested() -> None:

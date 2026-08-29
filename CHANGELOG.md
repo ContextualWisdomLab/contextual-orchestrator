@@ -74,7 +74,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Accept the standard Chat Completions `stream_options.include_usage=true`
   request and emit provider-reported usage in a usage-only SSE chunk when
-  available; keep unsupported obfuscation flags fail-closed.
+  available after the terminal stop chunk; pass the option through live provider
+  streams, and reject structured `tools`/`response_format` passthrough before
+  execution because it cannot emit that SSE contract; keep unsupported
+  obfuscation flags fail-closed.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Treat a provider's explicit 1,024-character tool-description rejection as a

@@ -1614,6 +1614,7 @@ class ModelClient:
         messages: list[ChatMessage],
         temperature: float | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
+        include_usage: bool = False,
     ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
@@ -1621,6 +1622,9 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if type(include_usage) is not bool:
+            raise TypeError("include_usage must be a boolean")
+        self._local.usage = None
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
@@ -1640,6 +1644,8 @@ class ModelClient:
             "stream": True,
             "max_tokens": settings["max_output_tokens"],
         }
+        if include_usage:
+            payload["stream_options"] = {"include_usage": True}
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
@@ -1686,7 +1692,13 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    choices = chunk.get("choices") or [{}]
+                    choices = chunk.get("choices")
+                    usage = chunk.get("usage")
+                    if choices == [] and isinstance(usage, dict):
+                        self._local.usage = usage
+                        continue
+                    if not isinstance(choices, list) or not choices:
+                        continue
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
@@ -4009,6 +4021,7 @@ class TaskOrchestrator:
         *,
         model_name: str = "contextual-orchestrator",
         owner_id: str | None = None,
+        include_usage: bool = False,
     ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
@@ -4021,11 +4034,12 @@ class TaskOrchestrator:
         )
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
-        stream = (
-            self.client.stream_chat(agent, messages, effort_profile=effort_profile)
-            if effort_profile is not None
-            else self.client.stream_chat(agent, messages)
-        )
+        stream_kwargs: dict[str, Any] = {}
+        if effort_profile is not None:
+            stream_kwargs["effort_profile"] = effort_profile
+        if include_usage:
+            stream_kwargs["include_usage"] = True
+        stream = self.client.stream_chat(agent, messages, **stream_kwargs)
         started_at = time.perf_counter()
         try:
             for delta in stream:
@@ -13635,16 +13649,19 @@ def chat_completion_chunks(
         orchestration["trace"] = redact_value(result["trace"])
     usage = result.get("usage")
     cost = result.get("cost")
+    usage_chunk = None
     if (
         include_usage
         and isinstance(cost, dict)
         and cost.get("measurement_status") == "measured"
         and isinstance(usage, dict)
     ):
-        chunks.append({**base, "choices": [], "usage": usage})
+        usage_chunk = {**base, "choices": [], "usage": usage}
     final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
+    if usage_chunk is not None:
+        chunks.append(usage_chunk)
     return chunks
 
 

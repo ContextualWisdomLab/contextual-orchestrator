@@ -6342,6 +6342,12 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        if stream and include_usage:
+                            raise RequestError(
+                                400,
+                                "invalid_stream_options",
+                                "stream_options.include_usage=true is not supported with tools or response_format",
+                            )
                         if explicit_trace:
                             raise RequestError(
                                 400,
@@ -7678,17 +7684,21 @@ def build_server(
                 if not self._begin_sse() or not self._write_sse(frame({"role": "assistant"})):
                     return
                 try:
-                    for delta in orchestrator.stream_route(
-                        messages, workflow_run_id=run_id, model_name=model_name
-                    ):
+                    stream_kwargs: dict[str, Any] = {
+                        "workflow_run_id": run_id,
+                        "model_name": model_name,
+                    }
+                    if include_usage:
+                        stream_kwargs["include_usage"] = True
+                    for delta in orchestrator.stream_route(messages, **stream_kwargs):
                         if not self._write_sse(frame({"content": delta})):
                             return
+                    if not self._write_sse(frame({}, finish="stop")):
+                        return
                     if include_usage:
                         usage = orchestrator.client.take_usage()
                         if isinstance(usage, dict) and not self._write_sse(usage_frame(usage)):
                             return
-                    if not self._write_sse(frame({}, finish="stop")):
-                        return
                 except ToolFallbackStoppedError as exc:
                     detail = {
                         "request_id": uuid.uuid4().hex,
