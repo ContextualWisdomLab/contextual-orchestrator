@@ -2615,7 +2615,7 @@ class _AgentPoolStore:
                         model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
                         priority = ?, disabled = ?, provider_name = ?,
                         local_credential_key = ?, auth_scheme = ?,
-                        reasoning_effort_supported = ?
+                        reasoning_effort_supported = ?, stream_usage_supported = ?
                     WHERE agent_id = ?
                     """,
                     (
@@ -2629,6 +2629,7 @@ class _AgentPoolStore:
                         config["local_credential_key"],
                         config["auth_scheme"],
                         config["reasoning_effort_supported"],
+                        int(config["stream_usage_supported"]),
                         agent.id,
                     ),
                 )
@@ -4536,6 +4537,10 @@ class TaskOrchestrator:
             if value is not None and not isinstance(value, dict):
                 raise ValueError("endpoint_equivalence must be an object or null")
             patched = replace(patched, endpoint_equivalence=value)
+        if "stream_usage_supported" in patch:
+            patched = replace(
+                patched, stream_usage_supported=patch["stream_usage_supported"]
+            )
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -6456,6 +6461,7 @@ class TaskOrchestrator:
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
+            "stream_usage_supported": agent.stream_usage_supported,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }

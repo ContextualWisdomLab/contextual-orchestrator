@@ -81,6 +81,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Runtime agent create/PATCH now accepts and persists the explicit
+  `stream_usage_supported` capability, and the admin-safe agent view exposes it.
 - Require `--allow-public-bind` for every non-loopback address, not only wildcard
   binds, so a specific network interface cannot bypass the public-bind guard.
 - Accept function-tool descriptions up to the existing bounded request-body

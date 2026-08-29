@@ -421,6 +421,7 @@ OPENAPI_SPEC = {
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "provider_exclusions": {"type": "array", "items": {"type": "string"}},
                                     "group_name": {"type": "string"},
+                                    "stream_usage_supported": {"type": "boolean"},
                                 },
                             },
                         },
