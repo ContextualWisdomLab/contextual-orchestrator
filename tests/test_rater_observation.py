@@ -8,8 +8,10 @@ import pytest
 
 from contextual_orchestrator.rater_observation import (
     GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
+    MAX_RATER_EVIDENCE_REFERENCES,
     MAX_RATER_OBSERVATIONS,
     MAX_RATER_REFERENCE_LENGTH,
+    MAX_RATER_REVIEW_SIGNALS,
     CriterionObservation,
     RaterConfigurationIdentity,
     RaterInvocation,
@@ -123,6 +125,12 @@ def test_configuration_requires_exact_fields_and_bounded_references() -> None:
         "unknown_field"
     )
 
+    decision = _configuration()
+    decision["score"] = "forbidden"
+    assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(decision)) == (
+        "decision_leakage"
+    )
+
     missing = _configuration()
     del missing["provider_ref"]
     assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(missing)) == (
@@ -185,8 +193,10 @@ def test_observation_schema_is_exact_and_status_is_bounded() -> None:
         "invalid_uncertainty"
     )
 
+    assert _error_code(lambda: CriterionObservation.from_mapping([])) == "invalid_object"
 
-def test_observed_state_requires_unique_evidence_and_no_reason() -> None:
+
+def test_observed_state_requires_unique_bounded_evidence_and_no_reason() -> None:
     no_evidence = _observed()
     no_evidence["evidence_reference_ids"] = []
     assert _error_code(lambda: CriterionObservation.from_mapping(no_evidence)) == (
@@ -202,6 +212,14 @@ def test_observed_state_requires_unique_evidence_and_no_reason() -> None:
     bad_evidence_type = _observed()
     bad_evidence_type["evidence_reference_ids"] = "not-an-array"
     assert _error_code(lambda: CriterionObservation.from_mapping(bad_evidence_type)) == (
+        "invalid_references"
+    )
+
+    oversized_evidence = _observed()
+    oversized_evidence["evidence_reference_ids"] = [
+        f"evidence-{index}" for index in range(MAX_RATER_EVIDENCE_REFERENCES + 1)
+    ]
+    assert _error_code(lambda: CriterionObservation.from_mapping(oversized_evidence)) == (
         "invalid_references"
     )
 
@@ -239,6 +257,20 @@ def test_abstention_has_reason_but_no_category_or_evidence() -> None:
         "duplicate_reference"
     )
 
+    wrong_signal_type = _abstained()
+    wrong_signal_type["review_signal_refs"] = "review"
+    assert _error_code(lambda: CriterionObservation.from_mapping(wrong_signal_type)) == (
+        "invalid_references"
+    )
+
+    oversized_signals = _abstained()
+    oversized_signals["review_signal_refs"] = [
+        f"signal-{index}" for index in range(MAX_RATER_REVIEW_SIGNALS + 1)
+    ]
+    assert _error_code(lambda: CriterionObservation.from_mapping(oversized_signals)) == (
+        "invalid_references"
+    )
+
 
 def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> None:
     incompatible = _invocation()
@@ -271,6 +303,18 @@ def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> No
     wrong_container["observations"] = "observation"
     assert _error_code(lambda: RaterInvocation.from_mapping(wrong_container)) == (
         "invalid_observations"
+    )
+
+    wrong_observation = _invocation()
+    wrong_observation["observations"] = ["observation"]
+    assert _error_code(lambda: RaterInvocation.from_mapping(wrong_observation)) == (
+        "invalid_object"
+    )
+
+    wrong_configuration = _invocation()
+    wrong_configuration["configuration"] = []
+    assert _error_code(lambda: RaterInvocation.from_mapping(wrong_configuration)) == (
+        "invalid_object"
     )
 
 
