@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
@@ -18,7 +20,12 @@ from contextual_orchestrator import (  # noqa: E402
     PriceEntry,
     TaskOrchestrator,
 )
-from contextual_orchestrator.batch_routing import PgLlmBatchBackend  # noqa: E402
+from contextual_orchestrator.batch_routing import (  # noqa: E402
+    BatchJob,
+    BatchRequest,
+    PgLlmBatchBackend,
+)
+from contextual_orchestrator.cost_router import BatchModelSelectionError  # noqa: E402
 
 
 class _FailingLedgerStore:
@@ -80,6 +87,59 @@ def test_sync_completion_preserves_provider_reported_usage() -> None:
     assert result["cost"]["measurement_status"] == "measured"
     assert "currency_components" not in result["cost"]
     assert record["measurement_status"] == "measured"
+
+
+def test_sync_completion_scopes_zdr_policy_to_direct_run() -> None:
+    coordinator = _coordinator()
+    agent = coordinator.orchestrator.agents[0]
+    observed: list[bool] = []
+
+    def run(*_args, **_kwargs):
+        observed.append(coordinator.orchestrator._zdr_agent_allowed(agent))
+        return {
+            "workflow_run_id": "run_direct_zdr",
+            "mode": "route",
+            "answer": "answer",
+            "trace": [{"agent_id": agent.id, "output": "answer"}],
+        }
+
+    coordinator.orchestrator.run = run  # type: ignore[method-assign]
+    coordinator.complete(
+        [{"role": "user", "content": "private request"}],
+        mode="route",
+        zdr_only=True,
+    )
+
+    assert observed == [False]
+
+
+def test_provider_completion_scopes_zdr_policy_to_direct_proxy() -> None:
+    coordinator = _coordinator()
+    agent = coordinator.orchestrator.agents[0]
+    observed: list[bool] = []
+
+    def proxy_completion(*_args, **_kwargs):
+        observed.append(coordinator.orchestrator._zdr_agent_allowed(agent))
+        return {
+            "model": agent.model,
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "orchestration": {"workflow_run_id": "run_proxy_zdr"},
+        }
+
+    coordinator.orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    coordinator.orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_proxy_zdr",
+        "mode": "route",
+        "answer": "answer",
+        "trace": [],
+    }
+    coordinator.complete(
+        [{"role": "user", "content": "private provider request"}],
+        provider_request={"model": agent.model, "messages": []},
+        zdr_only=True,
+    )
+
+    assert observed == [False]
 
 
 def test_sync_empty_trace_preserves_top_level_provider_usage() -> None:
@@ -604,6 +664,149 @@ def test_batch_backend_can_be_pg_llm_batch() -> None:
     # cost from pg-provided usage: 5/1k*1 + 5/1k*2 = 0.005 + 0.010 = 0.015
     assert row["cost_amount"] == 0.015
     assert row["request_channel"] == "batch"
+
+
+def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() -> None:
+    non_zdr = ModelAgent(
+        "non_zdr_member",
+        "vendor/non-zdr",
+        "mock://non-zdr",
+        provider_name="vendor",
+        priority=99,
+        group_name="shared_reasoning_model",
+    )
+    zdr = ModelAgent(
+        "zdr_member",
+        "vendor/zdr",
+        "mock://zdr",
+        provider_name="vendor",
+        tags=("privacy:zdr",),
+        group_name="shared_reasoning_model",
+    )
+    orchestrator = TaskOrchestrator([non_zdr, zdr])
+    captured: list[BatchRequest] = []
+
+    class _CapturingBackend:
+        name = "capturing"
+
+        def submit(self, requests, metadata=None):
+            captured.extend(requests)
+            return BatchJob("batch-zdr", self.name, status="submitted", request_count=len(requests))
+
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        batch_backend=_CapturingBackend(),
+    )
+    coordinator.submit_batch(
+        [
+            BatchRequest(
+                messages=[{"role": "user", "content": "private batch"}],
+                model=TaskOrchestrator.AUTO_MODEL,
+                zdr_only=True,
+            )
+        ]
+    )
+
+    assert captured[0].model == zdr.model
+    assert captured[0].zdr_only is True
+
+
+def test_zdr_batch_rejects_an_explicit_non_zdr_configured_model() -> None:
+    non_zdr = ModelAgent(
+        "non_zdr_member",
+        "vendor/non-zdr",
+        "mock://non-zdr",
+        provider_name="vendor",
+    )
+    coordinator = CostRoutingCoordinator(TaskOrchestrator([non_zdr]))
+
+    with pytest.raises(BatchModelSelectionError):
+        coordinator.submit_batch(
+            [
+                BatchRequest(
+                    messages=[{"role": "user", "content": "private batch"}],
+                    model=non_zdr.model,
+                    zdr_only=True,
+                )
+            ]
+        )
+
+
+def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -> None:
+    """A retry member must not be re-resolved to the first duplicate model."""
+    from contextual_orchestrator.batch_routing import EmbeddingBatchResultItem
+
+    first = ModelAgent(
+        "first_zdr_member",
+        "shared-embedding",
+        "mock://first",
+        provider_name="first-provider",
+        tags=("embedding", "privacy:zdr"),
+    )
+    second = ModelAgent(
+        "second_zdr_member",
+        "shared-embedding",
+        "mock://second",
+        provider_name="second-provider",
+        tags=("embedding", "privacy:zdr"),
+    )
+
+    class _RecordingEmbeddingBackend:
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def submit(self, requests, metadata=None):
+            self.requests.extend(requests)
+            return BatchJob("duplicate-model", self.name, status="completed", request_count=len(requests))
+
+        def poll(self, job):
+            return {"is_complete": True, "status": "completed"}
+
+        def retrieve(self, job):
+            return [EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model) for request in self.requests]
+
+    backend = _RecordingEmbeddingBackend()
+    orchestrator = TaskOrchestrator([first, second])
+
+    def fail_reselection(*_args, **_kwargs):
+        raise AssertionError("the selected embedding member must not be re-resolved")
+
+    orchestrator.select_capability_agent = fail_reselection  # type: ignore[method-assign]
+    coordinator = CostRoutingCoordinator(orchestrator, embedding_batch_backend=backend)
+    document = coordinator.complete_embeddings_batch(
+        ["private"], model=second.model, zdr_only=True, agent_id=second.id
+    )
+
+    assert document["status"] == "completed"
+    assert backend.requests[0].model == second.model
+    assert backend.requests[0].agent_id == second.id
+
+
+def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
+    """The ZDR resolver must not change ordinary batch passthrough behavior."""
+    captured: list[BatchRequest] = []
+
+    class _CapturingBackend:
+        name = "capturing"
+
+        def submit(self, requests, metadata=None):
+            captured.extend(requests)
+            return BatchJob("batch-ordinary", self.name, status="submitted", request_count=len(requests))
+
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([ModelAgent("configured_agent", "configured-model", "mock://configured")]),
+        batch_backend=_CapturingBackend(),
+    )
+    request = BatchRequest(
+        messages=[{"role": "user", "content": "ordinary batch"}],
+        model="unconfigured-provider-model",
+    )
+
+    coordinator.submit_batch([request])
+
+    assert captured == [request]
 
 
 if __name__ == "__main__":  # pragma: no cover

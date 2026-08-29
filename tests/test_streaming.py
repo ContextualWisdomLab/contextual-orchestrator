@@ -18,12 +18,34 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import chat_completion_chunks, chat_completion_response, sse_stream_body  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient, chat_completion_chunks, chat_completion_response, sse_stream_body  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    _chat_response_sse_chunks,
+    build_server,
+)
 
 
 def _build() -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
+
+
+class _UsageStreamClient(ModelClient):
+    def stream_chat(self, agent, messages, temperature=None, effort_profile=None, include_usage=False):  # type: ignore[override]
+        del agent, messages, temperature, effort_profile
+        assert include_usage is True
+        self._local.usage = {
+            "prompt_tokens": 4,
+            "completion_tokens": 6,
+            "total_tokens": 10,
+        }
+        yield "reported stream"
+
+
+class _RejectNonStreamOptionsClient(ModelClient):
+    def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
+        assert "stream_options" not in payload
+        return self._mock_raw(agent, endpoint, payload)
 
 
 def test_chunks_reconstruct_answer_with_openai_shape() -> None:
@@ -55,6 +77,25 @@ def test_empty_answer_produces_role_and_stop_only() -> None:
     assert chunks[1]["choices"][0]["finish_reason"] == "stop"
 
 
+def test_include_usage_adds_openai_usage_chunk() -> None:
+    chunks = chat_completion_chunks(
+        {
+            "answer": "abc",
+            "mode": "route",
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        },
+        include_usage=True,
+    )
+
+    assert chunks[-1]["choices"] == []
+    assert chunks[-1]["usage"] == {
+        "prompt_tokens": 2,
+        "completion_tokens": 3,
+        "total_tokens": 5,
+        "usage_source": "reported",
+    }
+
+
 def test_completion_ids_remain_unique_when_created_in_one_millisecond() -> None:
     result = {"answer": "OK", "mode": "route"}
     with patch("contextual_orchestrator.orchestrator.time.time", return_value=1_786_698_100.0):
@@ -75,6 +116,62 @@ def test_sse_body_frames_and_done_terminator() -> None:
         json.loads(frame[len("data: ") :])  # every non-terminator frame is valid JSON
 
 
+def test_structured_sse_tool_call_deltas_include_indices() -> None:
+    chunks = _chat_response_sse_chunks(
+        {
+            "id": "chatcmpl-tools",
+            "model": "tool-model",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {}},
+                        {"id": "call-2", "type": "function", "function": {}},
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+        },
+        model="tool-model",
+        include_usage=False,
+        prompt_text="tool call",
+    )
+
+    tool_deltas = [
+        chunk["choices"][0]["delta"]["tool_calls"][0]
+        for chunk in chunks
+        if chunk["choices"] and "tool_calls" in chunk["choices"][0]["delta"]
+    ]
+    assert [tool_call["index"] for tool_call in tool_deltas] == [0, 1]
+
+
+def test_structured_nonstream_provider_drops_gateway_stream_options() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("structured_agent", "structured-model")],
+        client=_RejectNonStreamOptionsClient(),
+    )
+    for structured in (
+        {
+            "tools": [{
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {"type": "object"}},
+            }],
+        },
+        {"response_format": {"type": "json_object"}},
+    ):
+        response = orchestrator.proxy_completion(
+            {
+                "model": "structured-model",
+                "messages": [{"role": "user", "content": "structured"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                **structured,
+            }
+        )
+        assert response["object"] == "chat.completion"
+
+
 def _post(url: str, payload: dict, token: str) -> tuple[int, str, str]:
     request = urllib.request.Request(
         url,
@@ -89,9 +186,9 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, str, str]:
         return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
 
 
-def _serve() -> tuple[object, int, str]:
+def _serve(orchestrator: TaskOrchestrator | None = None) -> tuple[object, int, str]:
     token = "stream_token"
-    server = build_server(_build(), port=0, security=SecurityConfig(auth_token=token))
+    server = build_server(orchestrator or _build(), port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, server.server_address[1], token
@@ -123,6 +220,42 @@ def test_http_stream_true_returns_event_stream_and_reconstructs_answer() -> None
         chunk = json.loads(frame[len("data: ") :])
         streamed += chunk["choices"][0]["delta"].get("content", "")
     assert streamed == reference  # streamed deltas equal the non-streamed answer
+
+
+def test_http_stream_include_usage_preserves_provider_usage() -> None:
+    client = _UsageStreamClient()
+    server, port, token = _serve(
+        TaskOrchestrator(
+            [ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))],
+            client=client,
+        )
+    )
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    payload = {
+        "model": "mock-generalist",
+        "messages": [{"role": "user", "content": "stream usage"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    try:
+        status, content_type, sse = _post(url, payload, token)
+    finally:
+        server.shutdown()
+
+    assert status == 200
+    assert content_type.startswith("text/event-stream")
+    frames = [
+        json.loads(frame[len("data: "):])
+        for frame in sse.split("\n\n")
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    usage = next(frame for frame in frames if frame.get("choices") == [])
+    assert usage["usage"] == {
+        "prompt_tokens": 4,
+        "completion_tokens": 6,
+        "total_tokens": 10,
+        "usage_source": "reported",
+    }
 
 
 def test_http_stream_false_is_unchanged_json() -> None:
