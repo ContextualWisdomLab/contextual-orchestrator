@@ -1,5 +1,6 @@
 name: Resolve PR 914 against protected main
 
+# Diagnostic retry: report bounded diff3 hunks for executable conflicts.
 on:
   push:
     branches: [fix/chat-stream-usage-compat]
