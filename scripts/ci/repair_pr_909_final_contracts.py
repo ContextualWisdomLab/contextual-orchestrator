@@ -73,11 +73,29 @@ class CostRoutingCoordinator:
     )
     replace_once(
         "contextual_orchestrator/server.py",
-        '''                    except ValueError as exc:
+        '''                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
+                        )
+                    except ValueError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
+                    orchestrator.record_analytics_event(
 ''',
-        '''                    except InvalidBatchModelError as exc:
+        '''                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
+                        )
+                    except InvalidBatchModelError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
+                    orchestrator.record_analytics_event(
 ''',
     )
     replace_once(
