@@ -1,5 +1,24 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-29 PR #901 routing research grounding
+
+This ZDR slice applies the established cost/performance routing literature to
+the gateway boundary without turning provider names or model ids into policy.
+[FrugalGPT](https://arxiv.org/abs/2305.05176) motivates composing a model
+cascade from heterogeneous providers while reducing inference cost, and
+[RouteLLM](https://arxiv.org/abs/2406.18665) motivates selecting among the
+available candidates at inference time rather than binding the router to a
+fixed model list. In this implementation, Naruon supplies `zdr_only` as a
+Boolean request policy and contextual-orchestrator filters the caller's
+runtime model-group array by verified `privacy:zdr` evidence before measured
+member selection. The public OpenRouter ZDR feed is evidence for matching
+models from other providers; OpenRouter is not selected as the upstream by
+this policy. Missing or failed ZDR evidence fails closed instead of being
+replaced by a stale or hard-coded model list.
+
+The papers are cited and summarized here rather than copied into the
+repository because redistribution rights for the PDFs were not established.
+
 ## 2026-08-28 21:42 KST PR #901 provider error-shape compatibility slice
 
 PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
