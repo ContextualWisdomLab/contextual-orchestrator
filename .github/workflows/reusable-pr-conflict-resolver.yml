@@ -22,12 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Check out exact PR head
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Merge protected main and stop on executable conflicts
+      - name: Merge protected main or report semantic conflicts
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
@@ -43,6 +42,11 @@ jobs:
           git fetch --no-tags origin main
           main_head="$(git rev-parse origin/main)"
 
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "Protected main is already an ancestor of this branch."
+            exit 0
+          fi
+
           set +e
           git merge --no-ff --no-commit origin/main
           merge_rc=$?
@@ -50,7 +54,7 @@ jobs:
 
           if [[ $merge_rc -ne 0 ]]; then
             mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
-            names_report="$(mktemp)"
+            inventory="$(mktemp)"
             {
               echo "Conflict inventory (fail-closed diagnostic)."
               echo
@@ -60,8 +64,8 @@ jobs:
               echo '```text'
               printf '%s\n' "${conflicts[@]}"
               echo '```'
-            } > "$names_report"
-            gh pr comment "$PR_NUMBER" --body-file "$names_report"
+            } > "$inventory"
+            gh pr comment "$PR_NUMBER" --body-file "$inventory"
 
             unsafe=()
             for path in "${conflicts[@]}"; do
@@ -74,7 +78,7 @@ jobs:
                     git show ":2:$path" > "$tmpdir/ours"
                     git show ":1:$path" > "$tmpdir/base"
                     git show ":3:$path" > "$tmpdir/theirs"
-                    git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"
+                    git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs" || true
                     cp "$tmpdir/ours" "$path"
                     rm -rf "$tmpdir"
                     git add "$path"
@@ -82,21 +86,21 @@ jobs:
                     unsafe+=("$path")
                   fi
                   ;;
-                *)
-                  unsafe+=("$path")
-                  ;;
+                *) unsafe+=("$path") ;;
               esac
             done
+
             if (( ${#unsafe[@]} )); then
               report="$(mktemp)"
               {
-                echo "Reusable conflict resolver stopped fail-closed."
+                echo "Reusable resolver stopped fail-closed."
                 echo
                 echo "Exact PR head: \`$original_head\`"
                 echo "Protected main: \`$main_head\`"
                 echo
-                echo "Executable, structured-data, or non-three-way conflicts require semantic resolution:"
+                echo "Executable, structured-data, add/delete, or rename conflicts require semantic resolution."
               } > "$report"
+
               for path in "${unsafe[@]}"; do
                 {
                   echo
@@ -109,39 +113,38 @@ jobs:
           from pathlib import Path
           import sys
 
-          path = Path(sys.argv[1])
-          lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
           emitted = 0
-          cursor = 0
-          while cursor < len(lines):
-              if not lines[cursor].startswith("<<<<<<<"):
-                  cursor += 1
+          index = 0
+          while index < len(lines):
+              if not lines[index].startswith("<<<<<<<"):
+                  index += 1
                   continue
-              end = cursor + 1
+              end = index + 1
               while end < len(lines) and not lines[end].startswith(">>>>>>>"):
                   end += 1
-              end = min(end, len(lines) - 1)
-              start_context = max(0, cursor - 6)
-              end_context = min(len(lines), end + 7)
+              start_context = max(0, index - 5)
+              end_context = min(len(lines), end + 6)
               block = lines[start_context:end_context]
-              if emitted + len(block) > 180:
+              if emitted + len(block) > 160:
                   print("... additional conflict context omitted ...")
                   break
-              for line_number, line in enumerate(block, start_context + 1):
-                  print(f"{line_number:>6} {line}")
+              for number, line in enumerate(block, start_context + 1):
+                  print(f"{number:>6} {line}")
               emitted += len(block)
-              cursor = end_context
+              index = end_context
           PY
                   echo '```' >> "$report"
                 else
                   {
                     echo '```text'
-                    echo "diff3 context unavailable (add/delete, rename, binary, or missing merge stage)"
+                    echo "diff3 context unavailable"
                     git status --short -- "$path"
                     echo '```'
                   } >> "$report"
                 fi
               done
+
               python - "$report" <<'PY'
           from pathlib import Path
           import sys
@@ -149,8 +152,7 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
           if len(text) > 60000:
-              text = text[:60000] + "\n\n... report truncated at 60,000 characters ...\n"
-          path.write_text(text, encoding="utf-8")
+              path.write_text(text[:60000] + "\n\n... report truncated ...\n", encoding="utf-8")
           PY
               gh pr comment "$PR_NUMBER" --body-file "$report"
               git merge --abort
