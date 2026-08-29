@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 
 from contextual_orchestrator.credentials import get_credential
+from contextual_orchestrator.model_discovery import PROVIDER_MODEL_SOURCES
 
 
 def _bootstrap_module():
@@ -19,6 +20,9 @@ def _bootstrap_module():
 
 def test_seed_credentials_copies_present_provider_keys_into_kv(monkeypatch) -> None:
     module = _bootstrap_module()
+    assert module.PROVIDER_KEY_ENV_NAMES == tuple(
+        dict.fromkeys(source.credential_name for source in PROVIDER_MODEL_SOURCES)
+    )
     for name in module.PROVIDER_KEY_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "router-secret")

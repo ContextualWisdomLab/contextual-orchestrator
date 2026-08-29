@@ -4,7 +4,7 @@ This composes the existing :class:`~contextual_orchestrator.orchestrator.TaskOrc
 with the cost ledger and the sync-vs-batch router, so the orchestrator becomes
 the single control point for:
 
-1. **Cost review** — every completion (sync *and* batch) writes a
+1. **Cost review** — every completion (sync, stream, *and* batch) writes a
    :class:`~contextual_orchestrator.cost_ledger.UsageRecord` with token counts +
    computed cost and full multi-dimensional attribution.
 2. **Routing** — :class:`~contextual_orchestrator.batch_routing.RoutingPolicy`
@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import re
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
@@ -50,6 +51,10 @@ _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
+
+
+class BatchModelSelectionError(RuntimeError):
+    """Raised when a batch request has no eligible model-group member."""
 
 
 class CostRoutingCoordinator:
@@ -96,6 +101,7 @@ class CostRoutingCoordinator:
                 ),
                 max_concurrency=local_concurrency,
                 job_registry=registry,
+                request_context=lambda request: orchestrator.request_policy(request.zdr_only),
             )
         else:
             self.batch_backend = batch_backend
@@ -227,6 +233,7 @@ class CostRoutingCoordinator:
         owner_id: Optional[str] = None,
         provider_request: Optional[Dict[str, Any]] = None,
         provider_endpoint: str = "chat/completions",
+        zdr_only: bool = False,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -248,6 +255,8 @@ class CostRoutingCoordinator:
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
+        if type(zdr_only) is not bool:
+            raise TypeError("zdr_only must be a boolean")
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
@@ -258,6 +267,7 @@ class CostRoutingCoordinator:
                 model=model_name,
                 attribution=dict(attribution or {}),
                 mode=mode,
+                zdr_only=zdr_only,
             )
             job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
             return {
@@ -283,11 +293,12 @@ class CostRoutingCoordinator:
             }
             race_token = self._race_usage_context.set(race_context)
             try:
-                provider_response = self.orchestrator.proxy_completion(
-                    provider_request,
-                    endpoint=provider_endpoint,
-                    single_agent=False,
-                )
+                with self.orchestrator.request_policy(zdr_only):
+                    provider_response = self.orchestrator.proxy_completion(
+                        provider_request,
+                        endpoint=provider_endpoint,
+                        single_agent=False,
+                    )
                 lineage = provider_response.get("orchestration")
                 if isinstance(lineage, dict) and isinstance(
                     lineage.get("workflow_run_id"), str
@@ -409,7 +420,8 @@ class CostRoutingCoordinator:
         }
         race_token = self._race_usage_context.set(race_context)
         try:
-            result = self.orchestrator.run(messages, **run_kwargs)
+            with self.orchestrator.request_policy(zdr_only):
+                result = self.orchestrator.run(messages, **run_kwargs)
             if isinstance(result.get("workflow_run_id"), str):
                 race_context["workflow_run_id"] = result["workflow_run_id"]
             race_context["workflow_ready"] = True
@@ -571,6 +583,68 @@ class CostRoutingCoordinator:
             measurement_status=measurement_status,
         )
 
+    def record_stream_usage(
+        self,
+        *,
+        result: Dict[str, Any],
+        attribution: Optional[Dict[str, Any]],
+        model_name: str,
+    ) -> Dict[str, Any]:
+        """Record one streamed workflow without estimating missing provider usage."""
+        workflow_run_id = result.get("workflow_run_id")
+        trace = [step for step in result.get("trace") or [] if isinstance(step, dict)]
+        if not trace:
+            trace = [{}]
+        records = []
+        for index, step in enumerate(trace):
+            counts = self._provider_usage(step.get("usage"))
+            provider, model = self._served_provider_model({"trace": [step]}, model_name)
+            usage_record_id = "usage_stream_" + hashlib.sha256(
+                f"{workflow_run_id}:{index}".encode("utf-8")
+            ).hexdigest()
+            records.append(
+                self.ledger.record_usage(
+                    provider=provider,
+                    model=model,
+                    prompt_tokens=counts[0] if counts else 0,
+                    completion_tokens=counts[1] if counts else 0,
+                    request_channel="stream",
+                    route_mode=result.get("mode"),
+                    workflow_run_id=workflow_run_id,
+                    attribution=attribution,
+                    measurement_status="measured" if counts else "unavailable",
+                    usage_record_id=usage_record_id,
+                )
+            )
+        statuses = {record.measurement_status for record in records}
+        measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
+        currencies = {record.currency_code for record in records}
+        return {
+            "usage_record_ids": [record.usage_record_id for record in records],
+            "usage": (
+                {
+                    "input_tokens": sum(record.prompt_tokens for record in records),
+                    "output_tokens": sum(record.completion_tokens for record in records),
+                    "total_tokens": sum(record.total_tokens for record in records),
+                }
+                if measurement_status == "measured"
+                else None
+            ),
+            "cost": {
+                "cost_amount": (
+                    round(sum(record.cost_amount for record in records), 6)
+                    if measurement_status == "measured" and len(currencies) == 1
+                    else None
+                ),
+                "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "measurement_status": measurement_status,
+            },
+        }
+
     # ------------------------------------------------------------------
     # Batch lifecycle
     # ------------------------------------------------------------------
@@ -580,9 +654,31 @@ class CostRoutingCoordinator:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> BatchJob:
         """Submit a batch of requests to the configured batch backend."""
-        job = self.batch_backend.submit(requests, metadata=metadata)
+        try:
+            prepared_requests = [self._resolve_batch_request(request) for request in requests]
+        except (RuntimeError, ValueError) as exc:
+            raise BatchModelSelectionError(
+                "no eligible model-group member is available for this batch request"
+            ) from exc
+        job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         self._batch_jobs[job.job_id] = job
         return job
+
+    def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
+        """Resolve only ZDR batch requests through the caller-provided model pool."""
+        if not request.zdr_only:
+            return request
+        with self.orchestrator.request_policy(request.zdr_only):
+            agent = self.orchestrator._requested_agent(request.model)
+            if agent is None:
+                text = self.orchestrator._latest_user_text(request.messages)
+                agent = self.orchestrator._select_agent(
+                    text,
+                    "worker",
+                    free_only=request.model
+                    == getattr(self.orchestrator, "FREE_MODEL", object()),
+                )
+        return replace(request, model=agent.model)
 
     def poll_batch(self, job_id: str) -> Dict[str, Any]:
         """Poll a previously submitted batch job by id."""
@@ -649,6 +745,8 @@ class CostRoutingCoordinator:
         model: str = "contextual-orchestrator",
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        zdr_only: bool = False,
+        agent_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -657,18 +755,47 @@ class CostRoutingCoordinator:
         owned by the orchestrator. Returns the backend job handle; the vectors
         and recorded cost are produced by :meth:`embeddings_batch_document`.
         """
+        if type(zdr_only) is not bool:
+            raise TypeError("zdr_only must be a boolean")
+        if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
+            raise TypeError("agent_id must be a non-empty string when provided")
+        resolved_model, resolved_agent_id = self._resolve_embedding_target(model, zdr_only, agent_id)
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
-            inputs, model=model, attribution=shared_attribution
+            inputs,
+            model=resolved_model,
+            attribution=shared_attribution,
+            zdr_only=zdr_only,
+            agent_id=resolved_agent_id,
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
-        self._embedding_models[job.job_id] = model
+        self._embedding_models[job.job_id] = resolved_model
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
         self._embedding_part_limits[job.job_id] = part_limits
         return job
+
+    def _resolve_embedding_target(
+        self, model: str, zdr_only: bool, agent_id: Optional[str]
+    ) -> tuple[str, Optional[str]]:
+        """Resolve one embedding member without losing a caller's member choice."""
+        if agent_id is None and not zdr_only:
+            return model, None
+        selection_model = (
+            None
+            if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
+            else model
+        )
+        with self.orchestrator.request_policy(zdr_only):
+            candidates = self.orchestrator._capability_agents("embedding", selection_model)
+        if agent_id is None:
+            return candidates[0].model, candidates[0].id
+        for candidate in candidates:
+            if candidate.id == agent_id:
+                return candidate.model, candidate.id
+        raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
 
     def _build_embedding_requests(
         self,
@@ -676,6 +803,8 @@ class CostRoutingCoordinator:
         *,
         model: str,
         attribution: Dict[str, Any],
+        zdr_only: bool,
+        agent_id: Optional[str],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
@@ -698,6 +827,8 @@ class CostRoutingCoordinator:
                         part_index=part_index,
                         part_count=part_count,
                         token_count=token_count,
+                        zdr_only=zdr_only,
+                        agent_id=agent_id,
                     )
                 )
         return requests, part_counts, {
@@ -952,6 +1083,8 @@ class CostRoutingCoordinator:
         model: str = "contextual-orchestrator",
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        zdr_only: bool = False,
+        agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -961,7 +1094,12 @@ class CostRoutingCoordinator:
         envelope the caller then polls via :meth:`embeddings_batch_document`.
         """
         job = self.submit_embeddings_batch(
-            inputs, model=model, attribution=attribution, metadata=metadata
+            inputs,
+            model=model,
+            attribution=attribution,
+            metadata=metadata,
+            zdr_only=zdr_only,
+            agent_id=agent_id,
         )
         return self.embeddings_batch_document(job.job_id)
 

@@ -35,6 +35,19 @@ These stories are derived from the product planning reboot, not from generic adm
 
 - As a localization manager, I want locale bundles to be first-class API resources so that Korean and English UI changes can be reviewed independently from code.
 
+## Language Assessment Reviewer
+
+- As a language-assessment reviewer, I want each criterion observation tied to
+  exact task, rubric, anchor, evidence, rater, and replay references so that I
+  can audit the evidence without exposing candidate content in gateway traces.
+- As a language-assessment reviewer, I want malformed, uncertain,
+  out-of-distribution, disagreeing, and failed rater panels to produce stable
+  human-review reasons so that incomplete evidence is not mistaken for a low
+  proficiency result.
+- As a psychometric owner, I want the gateway to emit criterion evidence only,
+  with no CEFR level or score, so that fast-mlsirm and the assessment contract
+  remain the numerical authorities.
+
 ## Backlog Stories
 
 - As a platform operator, I want SSO and RBAC so that only authorized operators can change routing policy.

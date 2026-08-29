@@ -11,7 +11,6 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
 import threading
@@ -37,6 +36,7 @@ NEW_AGENT = {
     "credential_key": "OPENAI_API_KEY",
     "tags": ["coding", "reasoning"],
     "priority": 2,
+    "stream_usage_supported": True,
 }
 
 
@@ -133,6 +133,26 @@ def test_add_patch_remove_survive_restart() -> None:
         assert {a.id for a in third.agents} == {"general_agent"}  # removal survived restart
 
 
+def test_stream_usage_capability_patch_survives_restart() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        agent = ModelAgent("persisted_agent", "model-x")
+        first = TaskOrchestrator([agent], agents_db=db)
+
+        updated = first.patch_agent(
+            "default", "persisted_agent", {"stream_usage_supported": True}
+        )
+        assert updated["stream_usage_supported"] is True
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT stream_usage_supported FROM agent_pool WHERE agent_id = ?",
+                (agent.id,),
+            ).fetchone() == (1,)
+
+        restored = TaskOrchestrator([agent], agents_db=db)
+        assert restored._agent(agent.id).stream_usage_supported is True
+
+
 def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")
@@ -189,6 +209,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
             tags=("second", "first"),
             provider_exclusions=("provider-b", "provider-a"),
             reasoning_effort_supported=False,
+            stream_usage_supported=True,
         )
         first = TaskOrchestrator([agent], agents_db=db)
         first._pool_store.save(agent)
@@ -197,6 +218,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
             columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_pool)")}
             assert "payload" not in columns
             assert "reasoning_effort_supported" in columns
+            assert "stream_usage_supported" in columns
             assert connection.execute("SELECT COUNT(*) FROM agent_pool").fetchone() == (1,)
             assert connection.execute("SELECT COUNT(*) FROM agent_pool_tags").fetchone() == (2,)
             assert connection.execute(
@@ -370,7 +392,25 @@ def test_http_create_and_delete_worker_agents() -> None:
     base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/default/worker_agents"
     try:
         status, created = _call(base, "POST", token, NEW_AGENT)
-        assert status == 201 and created["id"] == "coding_agent" and created["status"] == "active"
+        assert (
+            status == 201
+            and created["id"] == "coding_agent"
+            and created["status"] == "active"
+            and created["stream_usage_supported"] is True
+        )
+
+        status, patched = _call(
+            f"{base}/general_agent", "PATCH", token, {"stream_usage_supported": True}
+        )
+        assert status == 200 and patched["stream_usage_supported"] is True
+
+        status, invalid_capability = _call(
+            f"{base}/general_agent", "PATCH", token, {"stream_usage_supported": 1}
+        )
+        assert status == 400 and invalid_capability["error"]["code"] == "invalid_request"
+
+        status, read = _call(f"{base}/general_agent", "GET", token)
+        assert status == 200 and read["stream_usage_supported"] is True
 
         status, dup = _call(base, "POST", token, NEW_AGENT)
         assert status == 400  # duplicate rejected

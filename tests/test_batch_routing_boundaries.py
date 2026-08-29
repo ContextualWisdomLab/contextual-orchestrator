@@ -78,6 +78,23 @@ def test_embedding_request_jsonl_line_shape() -> None:
     assert custom["url"] == "/v1/custom_embeddings"
 
 
+def test_embedding_request_jsonl_preserves_zdr_policy() -> None:
+    request = EmbeddingBatchRequest(input_text="private", zdr_only=True)
+
+    assert request.zdr_only is True
+    assert "zdr_only" not in request.to_jsonl_line()["body"]
+
+
+def test_chat_request_jsonl_preserves_zdr_policy() -> None:
+    request = BatchRequest(
+        messages=[{"role": "user", "content": "private"}],
+        zdr_only=True,
+    )
+
+    assert request.zdr_only is True
+    assert "zdr_only" not in request.to_jsonl_line()["body"]
+
+
 def test_build_embeddings_jsonl_body_joins_lines() -> None:
     requests = [
         EmbeddingBatchRequest(input_text="one", custom_id="emb_1"),

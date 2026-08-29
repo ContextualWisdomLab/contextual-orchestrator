@@ -1,7 +1,8 @@
 # Contextual Orchestrator OpenAI-compatible server with the Postgres KV driver.
 #
 # Build:  docker build -t contextual-orchestrator .
-# Run  :  seed CONTEXTUAL_ORCHESTRATOR_TOKEN and provider credentials into the KV
+# Run  :  seed CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN,
+#        CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN, and provider credentials into the KV
 #        registry first, then use:
 #        docker run --rm -p 8000:8000 contextual-orchestrator
 # Runtime secrets are never passed through the container environment or argv;
@@ -30,4 +31,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD ["python", "-c", "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/healthz', timeout=2)"]
 
 # --allow-public-bind: 컨테이너 내부 0.0.0.0 바인딩 필요(외부 노출은 호스트 포트 매핑이 결정)
-CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_FILE\" --host 0.0.0.0 --port \"$PORT\" --allow-public-bind --auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN"]
+CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_FILE\" --host 0.0.0.0 --port \"$PORT\" --allow-public-bind --production --admin-token-key CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN --inference-token-key CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"]

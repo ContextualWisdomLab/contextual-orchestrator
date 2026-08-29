@@ -108,11 +108,11 @@ def _b64decode(value: Any) -> bytes:
 def _field_names(fields: Iterable[str]) -> tuple[str, ...]:
     """Validate and de-duplicate declared top-level field names."""
     names: list[str] = []
-    for field in fields:
-        if not isinstance(field, str) or not field or field == ENCRYPTED_FIELDS_KEY:
+    for field_name in fields:
+        if not isinstance(field_name, str) or not field_name or field_name == ENCRYPTED_FIELDS_KEY:
             raise PiiProtectionError("PII field names must be non-empty strings")
-        if field not in names:
-            names.append(field)
+        if field_name not in names:
+            names.append(field_name)
     return tuple(names)
 
 
@@ -160,20 +160,20 @@ class PiiFieldEncryptor:
         result = dict(detail)
         encrypted: dict[str, dict[str, str]] = {}
         cipher = AESGCM(self.key)
-        for field in names:
+        for field_name in names:
             try:
                 plaintext = json.dumps(
-                    detail[field], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+                    detail[field_name], ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
                 ).encode("utf-8")
             except (TypeError, ValueError) as exc:
                 raise PiiProtectionError("PII field is not JSON serializable") from exc
             nonce = os.urandom(12)
-            aad = _field_aad(self.key_name, field, ENCRYPTED_FIELDS_VERSION)
-            encrypted[field] = {
+            aad = _field_aad(self.key_name, field_name, ENCRYPTED_FIELDS_VERSION)
+            encrypted[field_name] = {
                 "nonce": _b64encode(nonce),
                 "ciphertext": _b64encode(cipher.encrypt(nonce, plaintext, aad)),
             }
-            del result[field]
+            del result[field_name]
         result[ENCRYPTED_FIELDS_KEY] = {
             "version": ENCRYPTED_FIELDS_VERSION,
             "algorithm": ENCRYPTED_FIELDS_ALGORITHM,
@@ -202,15 +202,15 @@ class PiiFieldEncryptor:
             raise PiiProtectionError("encrypted field metadata is invalid")
         result = {key: value for key, value in detail.items() if key != ENCRYPTED_FIELDS_KEY}
         cipher = AESGCM(self.key)
-        for field, envelope in encrypted.items():
-            if not isinstance(field, str) or not isinstance(envelope, dict):
+        for field_name, envelope in encrypted.items():
+            if not isinstance(field_name, str) or not isinstance(envelope, dict):
                 raise PiiProtectionError("encrypted field metadata is invalid")
             nonce = _b64decode(envelope.get("nonce"))
             ciphertext = _b64decode(envelope.get("ciphertext"))
-            aad = _field_aad(self.key_name, field, version)
+            aad = _field_aad(self.key_name, field_name, version)
             try:
                 value = cipher.decrypt(nonce, ciphertext, aad)
-                result[field] = json.loads(value.decode("utf-8"))
+                result[field_name] = json.loads(value.decode("utf-8"))
             except (InvalidTag, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise PiiProtectionError("encrypted PII field failed authentication") from exc
         return result
