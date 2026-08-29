@@ -892,7 +892,12 @@ OPENAPI_SPEC = {
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],
-                "responses": {"200": {"description": "Batch routing job status"}},
+                "responses": {
+                    "200": {"description": "Batch routing job status"},
+                    "404": {
+                        "description": "Batch job is missing or is not owned by the authenticated principal"
+                    },
+                },
             }
         },
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results": {
@@ -903,7 +908,12 @@ OPENAPI_SPEC = {
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],
-                "responses": {"200": {"description": "Batch results with recorded usage"}},
+                "responses": {
+                    "200": {"description": "Batch results with recorded usage"},
+                    "404": {
+                        "description": "Batch job is missing or is not owned by the authenticated principal"
+                    },
+                },
             }
         },
         "/v1/batch/embeddings": {

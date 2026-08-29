@@ -26,7 +26,11 @@ import uuid
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
-from .cost_router import BatchModelSelectionError, CostRoutingCoordinator
+from .cost_router import (
+    BatchModelSelectionError,
+    CostRoutingCoordinator,
+    InvalidBatchModelError,
+)
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
@@ -6984,7 +6988,7 @@ def build_server(
                                 owner_id=security.principal_id(self.headers),
                             )
                         )
-                    except ValueError as exc:
+                    except InvalidBatchModelError as exc:
                         raise RequestError(400, "invalid_model", str(exc)) from exc
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
@@ -7926,14 +7930,25 @@ def build_server(
                     self._write_sse("data: [DONE]\n\n")
                     return False
                 if coordinator is not None:
-                    result = {
-                        **result,
-                        **coordinator.record_stream_usage(
+                    try:
+                        stream_usage = coordinator.record_stream_usage(
                             result=result,
                             attribution=attribution,
                             model_name=model_name,
-                        ),
-                    }
+                        )
+                    except Exception:  # noqa: BLE001 - headers sent; remain inside SSE
+                        failed = {
+                            **created_response,
+                            "status": "failed",
+                            "error": {
+                                "code": "usage_recording_failed",
+                                "message": "Usage evidence could not be recorded for this response.",
+                            },
+                        }
+                        emit("response.failed", response=failed)
+                        self._write_sse("data: [DONE]\n\n")
+                        return False
+                    result = {**result, **stream_usage}
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",
