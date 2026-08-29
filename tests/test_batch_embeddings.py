@@ -21,6 +21,8 @@ import threading
 import urllib.error
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
@@ -62,7 +64,7 @@ def _serve():
             model="text-embedding-test",
             base_url="mock://embed",
             provider_name="acme-provider",
-            tags=("embedding", "offline_test"),
+            tags=("embedding", "offline_test", "privacy:zdr"),
             priority=2,
         ),
     ]
@@ -144,6 +146,32 @@ class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
         return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
 
 
+def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",)),
+            ModelAgent(
+                "zdr_embedding",
+                "zdr-embedding",
+                tags=("embedding", "privacy:zdr"),
+            ),
+        ]
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    with pytest.raises(RuntimeError, match="no enabled agent available"):
+        coordinator.submit_embeddings_batch(
+            ["private"], model="paid-embedding", zdr_only=True
+        )
+
+    assert backend.requests == []
+
+
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
     server, port, token, coordinator = _serve()
     base = f"http://127.0.0.1:{port}"
@@ -156,6 +184,7 @@ def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
         # ledger prices the priced provider/model above (non-zero cost).
         payload = {
             "model": request["model"],
+            "zdr_only": request["zdr_only"],
             "endpoint": request["endpoint"],
             "inputs": request["inputs"],
             "metadata": {**request["metadata"], "provider": "acme-provider"},
@@ -230,6 +259,38 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         server.shutdown()
 
 
+def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_agent() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("plain_embedding", "plain-embedding", tags=("embedding",), priority=10),
+            ModelAgent(
+                "zdr_embedding",
+                "zdr-embedding",
+                tags=("embedding", "privacy:zdr"),
+                priority=1,
+            ),
+        ]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+    token = "zdr_batch_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}/v1/batch/embeddings",
+            token,
+            {"inputs": ["alpha", "beta"], "zdr_only": True},
+        )
+        assert status == 200, body
+        assert body["model"] == "zdr-embedding"
+    finally:
+        server.shutdown()
+
+
 def test_pending_batch_preserves_resolved_model_identity() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
     coordinator = CostRoutingCoordinator(
@@ -258,11 +319,11 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
     """Large embedding inputs are mapped into provider-safe parts, then reduced."""
     agents = [
         ModelAgent(
-            id="mock_worker",
-            model="mock-a",
-            base_url="mock://a",
-            provider_name="mock",
-            tags=("reasoning",),
+            id="zdr_embedding",
+            model="text-embedding-test",
+            base_url="mock://embed",
+            provider_name="acme-provider",
+            tags=("embedding", "privacy:zdr"),
             priority=1,
         )
     ]
@@ -285,9 +346,11 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
         ["one two three four five six seven eight", "short input"],
         model="text-embedding-test",
         attribution={"provider": "acme-provider", "team": "platform"},
+        zdr_only=True,
     )
 
     assert len(backend.requests) > 2
+    assert all(request.zdr_only is True for request in backend.requests)
     assert all(request.token_count <= 4 for request in backend.requests)
     assert document["part_count"] == len(backend.requests)
     assert document["input_part_counts"][0] > 1

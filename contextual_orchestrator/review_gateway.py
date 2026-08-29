@@ -1,6 +1,6 @@
 """Bootstrap a local authenticated gateway for trusted CI model reviews.
 
-The five provider keys arrive from a deployment environment only as bootstrap
+The declared provider keys arrive from a deployment environment only as bootstrap
 transport. They are immediately registered in the process-local KV, after
 which model discovery and every provider request use the normal credential
 registry path. This keeps the review sidecar useful without pretending that a
@@ -16,7 +16,6 @@ from typing import Mapping
 
 from .credentials import NotConfigured, get_credential, register_credential
 from .cost_ledger import PriceBook
-from .chat_capability import is_general_chat_agent_model_id
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     agent_from_discovered,
@@ -25,15 +24,10 @@ from .model_discovery import (
     select_bootstrap_discovered_agents,
 )
 from .orchestrator import ModelClient, TaskOrchestrator
+from .provider_bootstrap import PROVIDER_CREDENTIAL_NAMES, is_chat_serving_candidate
 from .server import SecurityConfig, serve
 
-REVIEW_CREDENTIAL_NAMES: tuple[str, ...] = (
-    "BYTEZ_API_KEY",
-    "NVIDIA_NIM_API_KEY",
-    "NVIDIA_NIM_API_KEY_SUB",
-    "OPENROUTER_API_KEY",
-    "OPENAI_API_KEY",
-)
+REVIEW_CREDENTIAL_NAMES = PROVIDER_CREDENTIAL_NAMES
 DEFAULT_REVIEW_AGENT_LIMIT = 12
 REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
@@ -81,7 +75,7 @@ def build_review_orchestrator(
         detail = f"; failed providers: {providers}" if providers else ""
         raise NotConfigured(f"review gateway discovered no provider models{detail}")
 
-    chat_discovered = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
+    chat_discovered = [model for model in discovered if is_chat_serving_candidate(model)]
     if not chat_discovered:
         raise NotConfigured("review gateway discovered no general chat models")
     price_book = PriceBook(InMemoryConfigStore())
