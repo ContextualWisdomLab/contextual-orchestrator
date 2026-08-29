@@ -16,8 +16,9 @@ OpenAI's Chat Completions reference also warns that an interrupted stream may
 not receive its final usage chunk. The gateway therefore treats missing usage
 as an evidence state, not as a zero-cost response.
 
-The implementation keeps provider usage on each completed workflow trace step,
-records it through the existing cost ledger, and returns standard Responses
+The implementation asks Chat Completions-compatible upstream streams for
+their terminal usage frame, keeps provider usage on each completed workflow
+trace step, records it through the existing cost ledger, and returns standard Responses
 usage only when all steps have measured counts. Any missing step yields
 `measurement_status=unavailable`, `usage=null`, and `cost.cost_amount=null` in
 the completed gateway response. No prompt or answer text is copied into the

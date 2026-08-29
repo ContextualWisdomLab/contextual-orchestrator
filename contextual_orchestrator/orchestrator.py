@@ -1639,6 +1639,7 @@ class ModelClient:
             "messages": messages,
             "temperature": settings["temperature"] if temperature is None else temperature,
             "stream": True,
+            "stream_options": {"include_usage": True},
             "max_tokens": settings["max_output_tokens"],
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
