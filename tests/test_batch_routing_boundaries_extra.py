@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from contextual_orchestrator.batch_routing import (
     EmbeddingBatchRequest,
     LocalEmbeddingBatchBackend,
