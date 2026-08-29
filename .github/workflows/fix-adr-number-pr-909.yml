@@ -33,7 +33,7 @@ jobs:
 
       - name: Repair ADR numbering and invalid-model semantics
         env:
-          EXPECTED_PARENT: 34c5b80ede093ef364942696d8816acda70780a9
+          EXPECTED_PARENT: 97eb8d5a0a0ed1ba1f4d5a6a34367652c18288fe
           BRANCH: fix/batch-routing-owner-20260829
           SELF: .github/workflows/fix-adr-number-pr-909.yml
         shell: bash
@@ -48,15 +48,27 @@ jobs:
           git mv "$old" "$new"
           python - <<'PY'
           from pathlib import Path
+          import re
 
           def replace_exact(path: str, old: str, new: str) -> None:
               target = Path(path)
               text = target.read_text(encoding="utf-8")
-              if text.count(old) != 1:
+              count = text.count(old)
+              if count != 1:
                   raise SystemExit(
-                      f"expected exactly one replacement target in {path}; found {text.count(old)}"
+                      f"expected exactly one replacement target in {path}; found {count}"
                   )
               target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def replace_regex(path: str, pattern: str, replacement: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
+              if count != 1:
+                  raise SystemExit(
+                      f"expected exactly one structural replacement in {path}; found {count}"
+                  )
+              target.write_text(updated, encoding="utf-8")
 
           replace_exact(
               "docs/planning/adrs/0040-streamed-responses-usage-boundary.md",
@@ -73,46 +85,33 @@ jobs:
               "answer, and nested gateway upstreams remain compatible (ADR 0038).",
               "answer, and nested gateway upstreams remain compatible (ADR 0040).",
           )
-          replace_exact(
+          replace_regex(
               "contextual_orchestrator/cost_router.py",
+              r'''^        try:\n            prepared_requests = \[self\._resolve_batch_request\(request\) for request in requests\]\n        except \(RuntimeError, ValueError\) as exc:\n            raise BatchModelSelectionError\(\n                "no eligible model-group member is available for this batch request"\n            \) from exc\n''',
               '''        try:
-              prepared_requests = [self._resolve_batch_request(request) for request in requests]
-          except (RuntimeError, ValueError) as exc:
-              raise BatchModelSelectionError(
-                  "no eligible model-group member is available for this batch request"
-              ) from exc
-          ''',
-              '''        try:
-              prepared_requests = [self._resolve_batch_request(request) for request in requests]
-          except ValueError:
-              raise
-          except RuntimeError as exc:
-              raise BatchModelSelectionError(
-                  "no eligible model-group member is available for this batch request"
-              ) from exc
-          ''',
+            prepared_requests = [self._resolve_batch_request(request) for request in requests]
+        except ValueError:
+            raise
+        except RuntimeError as exc:
+            raise BatchModelSelectionError(
+                "no eligible model-group member is available for this batch request"
+            ) from exc
+''',
           )
-          replace_exact(
+          replace_regex(
               "contextual_orchestrator/server.py",
-              '''                    job = self._run(
-                          lambda: coordinator.submit_batch(
-                              batch_requests,
-                              metadata=metadata,
-                              owner_id=security.principal_id(self.headers),
-                          )
-                      )
-          ''',
+              r'''^                    job = self\._run\(\n                        lambda: coordinator\.submit_batch\(\n                            batch_requests,\n                            metadata=metadata,\n                            owner_id=security\.principal_id\(self\.headers\),\n                        \)\n                    \)\n''',
               '''                    try:
-                          job = self._run(
-                              lambda: coordinator.submit_batch(
-                                  batch_requests,
-                                  metadata=metadata,
-                                  owner_id=security.principal_id(self.headers),
-                              )
-                          )
-                      except ValueError as exc:
-                          raise RequestError(400, "invalid_model", str(exc)) from exc
-          ''',
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
+                        )
+                    except ValueError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
+''',
           )
 
           tests = Path("tests/test_cost_review_server.py")
@@ -124,27 +123,28 @@ jobs:
               test_text
               + '''
 
-          def test_batch_routing_rejects_unknown_zdr_model_as_client_error() -> None:
-              """An unknown explicit ZDR model is a non-retryable client error."""
-              server, port, token = _serve()
-              try:
-                  status, body = _request(
-                      "POST",
-                      f"http://127.0.0.1:{port}/api/v1/batch_routing_jobs",
-                      token,
-                      {
-                          "model": "not-configured",
-                          "zdr_only": True,
-                          "requests": [
-                              {"messages": [{"role": "user", "content": "route securely"}]}
-                          ],
-                      },
-                  )
-              finally:
-                  server.shutdown()
-              assert status == 400
-              assert body["error"]["code"] == "invalid_model"
-          ''',
+
+def test_batch_routing_rejects_unknown_zdr_model_as_client_error() -> None:
+    """An unknown explicit ZDR model is a non-retryable client error."""
+    server, port, token = _serve()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{port}/api/v1/batch_routing_jobs",
+            token,
+            {
+                "model": "not-configured",
+                "zdr_only": True,
+                "requests": [
+                    {"messages": [{"role": "user", "content": "route securely"}]}
+                ],
+            },
+        )
+    finally:
+        server.shutdown()
+    assert status == 400
+    assert body["error"]["code"] == "invalid_model"
+''',
               encoding="utf-8",
           )
           PY
