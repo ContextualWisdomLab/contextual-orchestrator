@@ -1,0 +1,17 @@
+name: Resolve PR 857 against protected main
+
+on:
+  push:
+    branches: [fix/provider-backed-embedding-batch]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
+    with:
+      pr_number: 857
+      branch: fix/provider-backed-embedding-batch
+      caller_file: .github/workflows/resolve-pr-857.yml
