@@ -69,9 +69,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
   `batch_route`; omit it to keep today's payload.
+- Experimental CEFR criterion-observation gateway with exact contract checks,
+  independent rater blindness, bounded structured-output parsing, replay
+  provenance, and human-review routing; it emits no final CEFR level or score.
 
 ### Fixed
 
+- Billing usage-export failures now appear in the operator-safe telemetry health
+  counters instead of only in emitted error events.
+- Billing usage export now follows accepted ledger writes and skips duplicate,
+  failed, or queue-dropped records.
+- Billing export from a caller-owned SQLite transaction now waits for
+  `CostLedger.flush()` after commit, so rollback cannot leave a billing-only
+  event.
+- A billing-backed non-blocking SQL store now writes appends synchronously while
+  a caller-owned SQLite transaction is open and defers billing export until
+  commit confirmation, rather than moving them outside the caller's transaction.
 - Generated workflow planning now advertises only agents eligible under the
   active ZDR request policy.
 - Accept function-tool descriptions up to the existing bounded request-body
@@ -115,6 +128,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- The product and technical gap baseline now records the ten open PRs,
+  exact-head governance state, and current provider-backed Strix evidence.
 - Web requests now use the native `SOMAXCONN` listen backlog and HTTP/1.1
   persistent connections, while the existing per-request daemon threading and
   explicit run-slot admission keep slow provider I/O from blocking liveness.
