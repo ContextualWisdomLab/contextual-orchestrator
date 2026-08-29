@@ -1,0 +1,17 @@
+name: Resolve PR 905 against protected main
+
+on:
+  push:
+    branches: [docs/refresh-gap-baseline-20260828]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
+    with:
+      pr_number: 905
+      branch: docs/refresh-gap-baseline-20260828
+      caller_file: .github/workflows/resolve-pr-905.yml
