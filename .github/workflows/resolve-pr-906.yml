@@ -1,5 +1,6 @@
 name: Resolve PR 906 against protected main
 
+# Robust diagnostic retry for add/delete and structured-data conflicts.
 on:
   push:
     branches: [feat/nim-benchmark-rebuild-20260828]
