@@ -127,11 +127,12 @@ def test_streamed_responses_records_unavailable_usage_without_estimating_answer(
     finally:
         server.shutdown()
 
-    completed = all_events[-1][-1]["response"]
-    assert completed["usage"] is None
-    assert completed["cost"]["measurement_status"] == "unavailable"
-    assert completed["cost"]["cost_amount"] is None
-    assert completed["usage_record_ids"]
+    for events in all_events:
+        completed = events[-1]["response"]
+        assert completed["usage"] is None
+        assert completed["cost"]["measurement_status"] == "unavailable"
+        assert completed["cost"]["cost_amount"] is None
+        assert completed["usage_record_ids"]
     rows = coordinator.ledger.records()
     assert len(rows) == sum(
         len(events[-1]["response"]["usage_record_ids"]) for events in all_events
