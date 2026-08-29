@@ -172,7 +172,7 @@ def test_http_chat_accepts_include_usage_true() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_include_usage_for_structured_streams() -> None:
+def test_http_chat_structured_streams_include_usage() -> None:
     server, thread, port = _server()
     try:
         for structured in (
@@ -189,7 +189,7 @@ def test_http_chat_rejects_include_usage_for_structured_streams() -> None:
             },
             {"response_format": {"type": "json_object"}},
         ):
-            status, body = _post(
+            status, content_type, sse = _post_raw(
                 port,
                 "/v1/chat/completions",
                 {
@@ -200,8 +200,16 @@ def test_http_chat_rejects_include_usage_for_structured_streams() -> None:
                     **structured,
                 },
             )
-            assert status == 400, (structured, body)
-            assert body["error"]["code"] == "invalid_stream_options"
+            assert status == 200, (structured, sse)
+            assert content_type.startswith("text/event-stream")
+            frames = [
+                json.loads(frame[len("data: "):])
+                for frame in sse.split("\n\n")
+                if frame.startswith("data: ") and frame != "data: [DONE]"
+            ]
+            usage = next(frame for frame in frames if frame.get("choices") == [])
+            assert usage["usage"]["usage_source"] in {"reported", "estimated"}
+            assert usage["usage"]["total_tokens"] >= 0
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -232,6 +240,6 @@ if __name__ == "__main__":
     test_http_completions_accepts_stream_options_null_flags_without_stream()
     test_http_responses_accepts_stream_options_null_flags()
     test_http_chat_accepts_include_usage_true()
-    test_http_chat_rejects_include_usage_for_structured_streams()
+    test_http_chat_structured_streams_include_usage()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")

@@ -4885,6 +4885,101 @@ def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str,
     return _strip_trace(public_payload)
 
 
+def _chat_response_sse_chunks(
+    payload: dict[str, Any],
+    *,
+    model: str,
+    include_usage: bool,
+    prompt_text: str,
+) -> list[dict[str, Any]]:
+    """Frame a completed provider-shaped chat response as OpenAI SSE chunks."""
+    completion_id = payload.get("id")
+    if not isinstance(completion_id, str) or not completion_id:
+        completion_id = _new_chat_completion_id()
+    created = payload.get("created")
+    if type(created) is not int or created < 0:
+        created = int(time.time())
+    response_model = payload.get("model")
+    if not isinstance(response_model, str) or not response_model:
+        response_model = model
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": response_model,
+    }
+    choices = payload.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else {}
+    if not isinstance(choice, dict):
+        choice = {}
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        message = {}
+    chunks: list[dict[str, Any]] = [
+        {
+            **base,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        }
+    ]
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        chunks.append(
+            {
+                **base,
+                "choices": [
+                    {"index": 0, "delta": {"content": content}, "finish_reason": None}
+                ],
+            }
+        )
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tool_call in tool_calls:
+            if isinstance(tool_call, dict):
+                chunks.append(
+                    {
+                        **base,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"tool_calls": [tool_call]},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+    finish_reason = choice.get("finish_reason")
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason = "tool_calls" if tool_calls else "stop"
+    final = {
+        **base,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+    }
+    orchestration = payload.get("orchestration")
+    if isinstance(orchestration, dict):
+        final["orchestration"] = orchestration
+    chunks.append(final)
+    if include_usage:
+        reported_usage = payload.get("usage")
+        if isinstance(reported_usage, dict):
+            usage = {**reported_usage, "usage_source": "reported"}
+        else:
+            completion_text = content if isinstance(content, str) else ""
+            if tool_calls:
+                completion_text += json.dumps(tool_calls, ensure_ascii=False)
+            prompt_tokens = estimate_tokens(prompt_text)
+            completion_tokens = estimate_tokens(completion_text)
+            usage = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                "usage_source": "estimated",
+            }
+        chunks.append({**base, "choices": [], "usage": usage})
+    return chunks
+
+
 def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, Any], int]:
     """Build secret-free operator readiness without probing external providers."""
     checks: dict[str, dict[str, Any]] = {}
@@ -6360,12 +6455,6 @@ def build_server(
                     presence_penalty = sampling["presence_penalty"]
                     frequency_penalty = sampling["frequency_penalty"]
                     include_usage = sampling["include_usage"]
-                    if include_usage and (body.get("response_format") or tools_list):
-                        raise RequestError(
-                            400,
-                            "invalid_stream_options",
-                            "stream_options.include_usage=true is not supported with tools or response_format on /v1/chat/completions",
-                        )
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
@@ -6473,11 +6562,26 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
-                        self._send(
+                        response_payload = (
                             proxied
                             if tool_loop
                             else _response_payload(proxied, include_trace)
                         )
+                        if stream:
+                            self._send_sse(
+                                sse_stream_body(
+                                    _chat_response_sse_chunks(
+                                        response_payload,
+                                        model=model_name,
+                                        include_usage=include_usage,
+                                        prompt_text=json.dumps(
+                                            body.get("messages", []), ensure_ascii=False
+                                        ),
+                                    )
+                                )
+                            )
+                        else:
+                            self._send(response_payload)
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
