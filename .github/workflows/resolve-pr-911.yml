@@ -1,6 +1,5 @@
-name: Resolve PR 911 against protected main
+name: Resolve PR 911 semantically against protected main
 
-# Diagnostic retry: report bounded diff3 hunks for executable conflicts.
 on:
   push:
     branches: [feat/durable-routing-observations-20260829]
@@ -9,10 +8,154 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: resolve-pr-911-semantic
+  cancel-in-progress: false
+
 jobs:
   resolve:
-    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
-    with:
-      pr_number: 911
-      branch: feat/durable-routing-observations-20260829
-      caller_file: .github/workflows/resolve-pr-911.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge main and compose durable observations with streaming usage
+        env:
+          EXPECTED_BRANCH: feat/durable-routing-observations-20260829
+          CALLER_FILE: .github/workflows/resolve-pr-911.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "$EXPECTED_BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+
+          set +e
+          git merge --no-ff --no-commit origin/main
+          merge_rc=$?
+          set -e
+          if [[ $merge_rc -ne 0 ]]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            unsafe=()
+            for path in "${conflicts[@]}"; do
+              case "$path" in
+                *.md|*.mdx)
+                  tmpdir="$(mktemp -d)"
+                  git show ":2:$path" > "$tmpdir/ours"
+                  git show ":1:$path" > "$tmpdir/base"
+                  git show ":3:$path" > "$tmpdir/theirs"
+                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"
+                  cp "$tmpdir/ours" "$path"
+                  rm -rf "$tmpdir"
+                  git add "$path"
+                  ;;
+                contextual_orchestrator/orchestrator.py)
+                  git checkout --conflict=diff3 -- "$path"
+                  ;;
+                *) unsafe+=("$path") ;;
+              esac
+            done
+            if (( ${#unsafe[@]} )); then
+              printf 'Unexpected conflicts:\n%s\n' "${unsafe[*]}"
+              git merge --abort
+              exit 1
+            fi
+
+            python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+
+          path = Path("contextual_orchestrator/orchestrator.py")
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          output: list[str] = []
+          cursor = 0
+          conflict_index = 0
+          while cursor < len(lines):
+              if not lines[cursor].startswith("<<<<<<<"):
+                  output.append(lines[cursor])
+                  cursor += 1
+                  continue
+              ours_start = cursor + 1
+              base_marker = next(
+                  i for i in range(ours_start, len(lines)) if lines[i].startswith("|||||||")
+              )
+              split_marker = next(
+                  i for i in range(base_marker + 1, len(lines)) if lines[i].startswith("=======")
+              )
+              end_marker = next(
+                  i for i in range(split_marker + 1, len(lines)) if lines[i].startswith(">>>>>>>")
+              )
+              ours = "".join(lines[ours_start:base_marker])
+              theirs = "".join(lines[split_marker + 1:end_marker])
+
+              if conflict_index == 0:
+                  if "routing_observation_window_seconds" not in ours:
+                      raise RuntimeError("routing observation constructor option changed")
+                  if "allow_empty_agents" not in theirs:
+                      raise RuntimeError("allow-empty constructor option changed")
+                  replacement = ours + theirs
+              elif conflict_index == 1:
+                  if "usage=usage" not in theirs or "trace_step =" not in theirs:
+                      raise RuntimeError("streaming usage side changed")
+                  call = (
+                      "        verification = self._realtime_route_judge(\n"
+                      "            text=text,\n"
+                      "            answer=answer,\n"
+                      "            served_id=agent.id,\n"
+                      "            latency_seconds=latency_seconds,\n"
+                      "            usage=usage,\n"
+                      "            free_only=model_name == self.FREE_MODEL,\n"
+                      "        )\n"
+                  )
+                  guarded = (
+                      "        try:\n"
+                      "            verification = self._realtime_route_judge(\n"
+                      "                text=text,\n"
+                      "                answer=answer,\n"
+                      "                served_id=agent.id,\n"
+                      "                latency_seconds=latency_seconds,\n"
+                      "                usage=usage,\n"
+                      "                free_only=model_name == self.FREE_MODEL,\n"
+                      "            )\n"
+                      "        except RoutingObservationPersistenceError:\n"
+                      "            _LOGGER.error(\n"
+                      "                \"durable routing observation failed after streamed response completion\"\n"
+                      "            )\n"
+                      "            verification = {\n"
+                      "                \"accepted\": False,\n"
+                      "                \"reason\": \"routing observation persistence failed after stream completion\",\n"
+                      "                \"verifier_output\": \"\",\n"
+                      "            }\n"
+                  )
+                  if theirs.count(call) != 1:
+                      raise RuntimeError("stream verification anchor changed")
+                  replacement = theirs.replace(call, guarded, 1)
+              else:
+                  raise RuntimeError(f"unexpected orchestrator conflict {conflict_index}")
+
+              output.append(replacement)
+              conflict_index += 1
+              cursor = end_marker + 1
+
+          if conflict_index != 2:
+              raise RuntimeError(f"expected 2 orchestrator conflicts, found {conflict_index}")
+          merged = "".join(output)
+          if any(marker in merged for marker in ("<<<<<<<", "|||||||", "=======", ">>>>>>>")):
+              raise RuntimeError("orchestrator conflict marker remains")
+          path.write_text(merged, encoding="utf-8")
+          PY
+            git add contextual_orchestrator/orchestrator.py
+          fi
+
+          test -z "$(git diff --name-only --diff-filter=U)"
+          rm -f "$CALLER_FILE"
+          git add -A
+          git diff --cached --check
+          python -m compileall -q contextual_orchestrator
+          git commit -m "chore: merge protected main into PR #911"
+          git push origin "HEAD:$EXPECTED_BRANCH"
