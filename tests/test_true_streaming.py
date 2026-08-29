@@ -25,10 +25,13 @@ class _FakeSSEProvider:
     """Emits a fixed list of raw SSE frame strings at POST /chat/completions."""
 
     def __init__(self, frames: list[str]) -> None:
+        self.payloads: list[dict] = []
+        payloads = self.payloads
+
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
-                self.rfile.read(length)
+                payloads.append(json.loads(self.rfile.read(length)))
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")
                 self.end_headers()
@@ -47,6 +50,43 @@ class _FakeSSEProvider:
         return self
 
     def __exit__(self, *exc: object) -> None:
+        self._server.shutdown()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_address[1]}"
+
+
+class _CapturingSSEProvider:
+    """Emits different streams per request and records the outbound JSON body."""
+
+    def __init__(self, streams: list[list[str]]) -> None:
+        self.payloads: list[dict] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(inner_self) -> None:  # noqa: N802
+                length = int(inner_self.headers.get("content-length", 0))
+                self.payloads.append(json.loads(inner_self.rfile.read(length).decode("utf-8")))
+                frames = streams[min(len(self.payloads) - 1, len(streams) - 1)]
+                inner_self.send_response(200)
+                inner_self.send_header("content-type", "text/event-stream")
+                inner_self.end_headers()
+                for frame in frames:
+                    inner_self.wfile.write(frame.encode("utf-8"))
+                    inner_self.wfile.flush()
+
+            def log_message(inner_self, *args: object) -> None:
+                del inner_self, args
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    def __enter__(self) -> "_CapturingSSEProvider":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        del exc
         self._server.shutdown()
 
     @property
@@ -100,6 +140,128 @@ def test_stream_send_ignores_empty_and_missing_choices() -> None:
     assert client.take_usage() == {"completion_tokens": 7}
 
 
+def test_stream_send_preserves_complete_provider_usage_frame() -> None:
+    usage = {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10}
+    frames = [
+        _delta("answer"),
+        _usage_frame(choices=[], usage=usage),
+        "data: [DONE]\n\n",
+    ]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        assert list(
+            client._stream_send(agent, {"model": "gpt-x", "stream": True})
+        ) == ["answer"]
+    assert client.take_usage() == usage
+
+
+def test_stream_chat_requests_and_captures_provider_usage_without_stale_data() -> None:
+    usage = {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6}
+    streams = [
+        [_delta("first"), _usage_frame(choices=[], usage=usage), "data: [DONE]\n\n"],
+        [_delta("second"), "data: [DONE]\n\n"],
+    ]
+    with _CapturingSSEProvider(streams) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent", "gpt-x", base_url=provider.base_url.replace("http://", "local://")
+        )
+        assert list(
+            client.stream_chat(
+                agent, [{"role": "user", "content": "first"}], include_usage=True
+            )
+        ) == ["first"]
+        assert client.take_usage() == usage
+        client._local.usage = {"completion_tokens": 999}
+        assert list(
+            client.stream_chat(
+                agent, [{"role": "user", "content": "second"}], include_usage=True
+            )
+        ) == ["second"]
+        assert client.take_usage() is None
+
+    assert provider.payloads[0]["stream"] is True
+    assert provider.payloads[0]["stream_options"] == {"include_usage": True}
+    assert provider.payloads[1]["stream_options"] == {"include_usage": True}
+
+
+def test_http_route_stream_returns_provider_usage_without_stale_data() -> None:
+    usage = {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6}
+    streams = [
+        [_delta("first"), _usage_frame(choices=[], usage=usage), "data: [DONE]\n\n"],
+        [_delta("second"), "data: [DONE]\n\n"],
+    ]
+    token = "real_stream_usage_token"
+    with _CapturingSSEProvider(streams) as provider:
+        orchestrator = TaskOrchestrator(
+            [
+                ModelAgent(
+                    "worker_agent",
+                    "gpt-x",
+                    base_url=provider.base_url.replace("http://", "local://"),
+                )
+            ]
+        )
+        server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+
+            def post() -> str:
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps(
+                        {
+                            "model": "gpt-x",
+                            "messages": [{"role": "user", "content": "stream"}],
+                            "mode": "route",
+                            "stream": True,
+                            "stream_options": {"include_usage": True},
+                        }
+                    ).encode("utf-8"),
+                    headers={
+                        "content-type": "application/json",
+                        "authorization": f"Bearer {token}",
+                        "connection": "close",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    assert response.headers.get_content_type() == "text/event-stream"
+                    return response.read().decode("utf-8")
+
+            first = post()
+            second = post()
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    first_frames = [frame for frame in first.split("\n\n") if frame]
+    first_payloads = [
+        json.loads(frame[len("data: "):])
+        for frame in first_frames
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    assert first_payloads[-2]["choices"][0]["finish_reason"] == "stop"
+    assert all("usage" in payload and payload["usage"] is None for payload in first_payloads[:-1])
+    assert first_payloads[-1]["choices"] == []
+    assert first_payloads[-1]["usage"] == usage
+    second_payloads = [
+        json.loads(frame[len("data: "):])
+        for frame in second.split("\n\n")
+        if frame.startswith("data: ") and frame != "data: [DONE]"
+    ]
+    assert all(payload.get("usage") is None for payload in second_payloads)
+    assert not any(payload.get("choices") == [] for payload in second_payloads)
+
+
 def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
     """A mid-stream provider failure surfaces one package-owned error (CWE-209).
 
@@ -150,6 +312,24 @@ def test_stream_chat_mock_yields_chunks() -> None:
     deltas = list(client.stream_chat(agent, messages))
     assert len(deltas) >= 2  # chunked, not one blob
     assert "".join(deltas) == client._mock(agent, messages)  # lossless
+
+
+def test_stream_chat_omits_usage_option_for_local_gateway() -> None:
+    frames = [_delta("local"), "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "gateway_agent",
+            "gateway-model",
+            base_url=(
+                f"local://127.0.0.1:{provider._server.server_address[1]}/v1"
+            ),
+        )
+        assert list(
+            client.stream_chat(agent, [{"role": "user", "content": "ping"}])
+        ) == ["local"]
+
+    assert "stream_options" not in provider.payloads[0]
 
 
 def test_would_route_true_for_route_false_for_conduct() -> None:

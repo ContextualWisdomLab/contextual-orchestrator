@@ -68,6 +68,12 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- Streamed `/v1/responses` workflow runs preserve optional provider usage on
+  each trace step and record one `stream` cost-ledger row per completed step.
+  Missing provider counts remain `unavailable`; the gateway never derives
+  billing tokens from the final answer. The final Responses event uses the
+  standard `input_tokens`/`output_tokens`/`total_tokens` usage shape only when
+  all workflow steps are measured. See [ADR 0038](planning/adrs/0038-streamed-responses-usage-boundary.md).
 - `ResponsiveThreadingHTTPServer`: I/O-bound provider waits run in independent
   daemon request threads, the accept queue uses the operating system's native
   `SOMAXCONN`, and fixed-length responses use HTTP/1.1 persistent connections.

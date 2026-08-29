@@ -441,6 +441,8 @@ class ModelAgent:
     reasoning_effort_supported: bool | None = None
     # Explicit reviewed replica contract. A group never races when this is absent.
     endpoint_equivalence: dict[str, Any] | None = None
+    # Provider-declared support for the Chat Completions terminal usage frame.
+    stream_usage_supported: bool = False
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -454,6 +456,8 @@ class ModelAgent:
             raise ValueError("auth_scheme must be a non-empty string")
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
+        if type(self.stream_usage_supported) is not bool:
+            raise TypeError("stream_usage_supported must be a boolean")
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
@@ -476,6 +480,7 @@ class ModelAgent:
             "group_name": self.group_name,
             "reasoning_effort_supported": self.reasoning_effort_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
+            "stream_usage_supported": self.stream_usage_supported,
         }
 
     @property
@@ -508,6 +513,7 @@ class ModelAgent:
             group_name=value.get("group_name", ""),
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
+            stream_usage_supported=value.get("stream_usage_supported", False),
         )
 
 
@@ -1391,18 +1397,27 @@ class ModelClient:
         agent: ModelAgent,
         payload: dict[str, Any],
         profile: ReasoningEffortProfile | None,
+        *,
+        api_surface: str = "chat.completions",
     ) -> dict[str, Any]:
         """Apply an opt-in profile while proving provider support before egress."""
+        if api_surface not in {"chat.completions", "responses"}:
+            raise ValueError("api_surface must be chat.completions or responses")
         supports = (
             agent.reasoning_effort_supported is True
             or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
         )
-        return apply_request_profile(
+        applied = apply_request_profile(
             payload,
             profile,
             supports_reasoning_effort=supports,
             default_max_output_tokens=self.max_output_tokens,
         )
+        if api_surface == "responses":
+            applied["max_output_tokens"] = applied.pop("max_tokens")
+            if "reasoning_effort" in applied:
+                applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
+        return applied
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
@@ -1685,6 +1700,7 @@ class ModelClient:
         """
         if type(include_usage) is not bool:
             raise TypeError("include_usage must be a boolean")
+        self._local.usage = None
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
@@ -1705,6 +1721,8 @@ class ModelClient:
             "stream": True,
             "max_tokens": settings["max_output_tokens"],
         }
+        if agent.stream_usage_supported:
+            payload["stream_options"] = {"include_usage": True}
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         if include_usage:
@@ -1728,6 +1746,7 @@ class ModelClient:
         self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
+        self._local.usage = None
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -1753,10 +1772,14 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    choices = chunk.get("choices")
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         self._local.usage = usage
-                    choices = chunk.get("choices") or [{}]
+                    if choices == []:
+                        continue
+                    if not isinstance(choices, list) or not choices:
+                        continue
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
@@ -2427,6 +2450,7 @@ class _AgentPoolStore:
             "local_credential_key",
             "auth_scheme",
             "reasoning_effort_supported",
+            "stream_usage_supported",
         }
     )
 
@@ -2463,9 +2487,12 @@ class _AgentPoolStore:
                 local_credential_key TEXT NOT NULL,
                 auth_scheme TEXT NOT NULL,
                 reasoning_effort_supported INTEGER,
+                stream_usage_supported INTEGER NOT NULL DEFAULT 0,
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_reasoning_effort_flag_check
-                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))
+                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1)),
+                CONSTRAINT agent_pool_stream_usage_flag_check
+                    CHECK (stream_usage_supported IN (0, 1))
             )
             """
         )
@@ -2504,8 +2531,8 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                reasoning_effort_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reasoning_effort_supported, stream_usage_supported
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -2519,6 +2546,7 @@ class _AgentPoolStore:
                 config["local_credential_key"],
                 config["auth_scheme"],
                 config["reasoning_effort_supported"],
+                int(config["stream_usage_supported"]),
             ),
         )
         conn.executemany(
@@ -2570,6 +2598,12 @@ class _AgentPoolStore:
                 "CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))"
             )
             columns.add("reasoning_effort_supported")
+        if "stream_usage_supported" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN stream_usage_supported INTEGER NOT NULL DEFAULT 0 "
+                "CHECK (stream_usage_supported IN (0, 1))"
+            )
+            columns.add("stream_usage_supported")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
             raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
@@ -2664,7 +2698,7 @@ class _AgentPoolStore:
                         model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
                         priority = ?, disabled = ?, provider_name = ?,
                         local_credential_key = ?, auth_scheme = ?,
-                        reasoning_effort_supported = ?
+                        reasoning_effort_supported = ?, stream_usage_supported = ?
                     WHERE agent_id = ?
                     """,
                     (
@@ -2678,6 +2712,7 @@ class _AgentPoolStore:
                         config["local_credential_key"],
                         config["auth_scheme"],
                         config["reasoning_effort_supported"],
+                        int(config["stream_usage_supported"]),
                         agent.id,
                     ),
                 )
@@ -2773,7 +2808,7 @@ class _AgentPoolStore:
                     """
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
-                           reasoning_effort_supported
+                           reasoning_effort_supported, stream_usage_supported
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -2836,6 +2871,7 @@ class _AgentPoolStore:
                 local_credential_key=row[8],
                 auth_scheme=row[9],
                 reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
+                stream_usage_supported=bool(row[11]),
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -3417,6 +3453,7 @@ class TaskOrchestrator:
         contract.
         """
         normalized_endpoint = endpoint.strip("/")
+        api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
             normalized_endpoint == "responses"
             or any(
@@ -3514,7 +3551,9 @@ class TaskOrchestrator:
             if isinstance(file_replicas, dict):
                 upstream = _bind_provider_file_ids(upstream, file_replicas, agent.id)
             if effort_profile is not None:
-                upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+                upstream = self.client.apply_effort_profile(
+                    agent, upstream, effort_profile, api_surface=api_surface
+                )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
             try:
@@ -3603,7 +3642,10 @@ class TaskOrchestrator:
                 )
             if effort_profile is not None:
                 candidate_payload = self.client.apply_effort_profile(
-                    candidate, candidate_payload, effort_profile
+                    candidate,
+                    candidate_payload,
+                    effort_profile,
+                    api_surface=api_surface,
                 )
             try:
                 send_once = getattr(self.client, "proxy_send_once", None)
@@ -3653,6 +3695,7 @@ class TaskOrchestrator:
         generation; other synthesis failures remain single-shot and fail closed.
         """
         response_request = endpoint == "responses"
+        api_surface = "responses" if response_request else "chat.completions"
         chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
         messages = chat_body.get("messages")
         if not isinstance(messages, list) or not messages:
@@ -3900,7 +3943,10 @@ class TaskOrchestrator:
                     )
                 if active_profile is not None:
                     candidate_payload = self.client.apply_effort_profile(
-                        candidate, candidate_payload, active_profile
+                        candidate,
+                        candidate_payload,
+                        active_profile,
+                        api_surface=api_surface,
                     )
                 try:
                     send = self.client.proxy_send
@@ -4747,6 +4793,10 @@ class TaskOrchestrator:
             if value is not None and not isinstance(value, dict):
                 raise ValueError("endpoint_equivalence must be an object or null")
             patched = replace(patched, endpoint_equivalence=value)
+        if "stream_usage_supported" in patch:
+            patched = replace(
+                patched, stream_usage_supported=patch["stream_usage_supported"]
+            )
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -5161,8 +5211,9 @@ class TaskOrchestrator:
         *,
         model_name: str = "contextual-orchestrator",
         progress: Any = None,
+        workflow_run_id: str | None = None,
     ) -> dict[str, Any]:
-        """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
+        """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
@@ -5313,15 +5364,44 @@ class TaskOrchestrator:
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
-        return self._with_effort_snapshot(
+        result = {
+            "mode": "conduct",
+            "answer": answer,
+            "trace": trace,
+            "verification": verification,
+            "plan_source": plan_source,
+        }
+        if workflow_run_id is None:
+            return self._with_effort_snapshot(result)
+        record = self._with_effort_snapshot(
             {
-                "mode": "conduct",
-                "answer": answer,
-                "trace": trace,
-                "verification": verification,
-                "plan_source": plan_source,
+                "workflow_run_id": workflow_run_id,
+                "created_at": int(time.time()),
+                "policy_mode": "conduct",
+                "prompt_text": task,
+                "policy_snapshot": self.policy.as_dict(),
+                **result,
             }
         )
+        self._replace_workflow_run(record)
+        self._run_order.appendleft(workflow_run_id)
+        if self._store is not None:
+            self._store.save("workflow_run", workflow_run_id, record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "run_mode": "conduct",
+                "policy_mode": "conduct",
+                "trace_step_count": len(trace),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        return record
 
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
         """Return the opt-in profile bound to one workflow role."""
@@ -6682,6 +6762,7 @@ class TaskOrchestrator:
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
+            "stream_usage_supported": agent.stream_usage_supported,
             "group_name": agent.group_name,
             "group_routing": (
                 self._group_router.member_report(agent.id, refresh=refresh)
@@ -13917,23 +13998,41 @@ def chat_completion_chunks(
     include_trace: bool = False,
     include_usage: bool = False,
 ) -> list[dict[str, Any]]:
-    """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
+    """Frame an orchestration result as OpenAI-compatible chat completion chunks.
 
-    The engine produces the full answer before framing, so this yields a correct-shape
-    SSE stream (role delta, content deltas, terminal stop delta) rather than true
-    token-by-token streaming — real token streaming requires a streaming ModelClient.
+    Only provider-reported usage may be emitted. Gateway estimates remain internal
+    because presenting estimates as provider usage would violate the wire contract.
     """
     answer = result.get("answer", "")
     completion_id = _new_chat_completion_id()
     created = int(time.time())
-    base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+    }
+    if include_usage:
+        base["usage"] = None
 
     chunks: list[dict[str, Any]] = [
-        {**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+        {
+            **base,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        }
     ]
-    for start in range(0, len(answer), _STREAM_CHUNK_SIZE):
-        piece = answer[start : start + _STREAM_CHUNK_SIZE]
-        chunks.append({**base, "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]})
+    for offset in range(0, len(answer), _STREAM_CHUNK_SIZE):
+        piece = answer[offset : offset + _STREAM_CHUNK_SIZE]
+        chunks.append(
+            {
+                **base,
+                "choices": [
+                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
+                ],
+            }
+        )
 
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -13942,30 +14041,25 @@ def chat_completion_chunks(
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
-    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
-    final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
+
+    final = {
+        **base,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "orchestration": {
+            key: value for key, value in orchestration.items() if value is not None
+        },
+    }
     chunks.append(final)
-    if include_usage:
-        reported_usage = result.get("usage")
-        if isinstance(reported_usage, dict):
-            usage = {**reported_usage, "usage_source": "reported"}
-        else:
-            prompt_text = result.get("prompt_text", "")
-            estimated_prompt_tokens = estimate_tokens(
-                prompt_text if isinstance(prompt_text, str) else str(prompt_text)
-            )
-            estimated_completion_tokens = estimate_tokens(answer)
-            usage = {
-                "prompt_tokens": estimated_prompt_tokens,
-                "completion_tokens": estimated_completion_tokens,
-                "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
-                "usage_source": "estimated",
-            }
-        chunks.append({
-            **base,
-            "choices": [],
-            "usage": usage,
-        })
+
+    usage = result.get("usage")
+    cost = result.get("cost")
+    if (
+        include_usage
+        and isinstance(cost, dict)
+        and cost.get("measurement_status") == "measured"
+        and isinstance(usage, dict)
+    ):
+        chunks.append({**base, "choices": [], "usage": usage})
     return chunks
 
 

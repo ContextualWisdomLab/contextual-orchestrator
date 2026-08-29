@@ -164,9 +164,9 @@ def test_http_chat_accepts_include_usage_true() -> None:
             for frame in sse.split("\n\n")
             if frame.startswith("data: ") and frame != "data: [DONE]"
         ]
-        usage = next(frame for frame in frames if frame.get("choices") == [])
-        assert usage["usage"]["usage_source"] == "estimated"
-        assert usage["usage"]["completion_tokens"] > 0
+        assert frames
+        assert all(frame.get("usage") is None for frame in frames)
+        assert not any(frame.get("choices") == [] for frame in frames)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -189,27 +189,21 @@ def test_http_chat_structured_streams_include_usage() -> None:
             },
             {"response_format": {"type": "json_object"}},
         ):
-            status, content_type, sse = _post_raw(
+            status, _, body = _post_raw(
                 port,
                 "/v1/chat/completions",
                 {
                     "model": "mock-planner",
-                    "messages": [{"role": "user", "content": "structured usage"}],
+                    "messages": [
+                        {"role": "user", "content": "structured usage"}
+                    ],
                     "stream": True,
                     "stream_options": {"include_usage": True},
                     **structured,
                 },
             )
-            assert status == 200, (structured, sse)
-            assert content_type.startswith("text/event-stream")
-            frames = [
-                json.loads(frame[len("data: "):])
-                for frame in sse.split("\n\n")
-                if frame.startswith("data: ") and frame != "data: [DONE]"
-            ]
-            usage = next(frame for frame in frames if frame.get("choices") == [])
-            assert usage["usage"]["usage_source"] in {"reported", "estimated"}
-            assert usage["usage"]["total_tokens"] >= 0
+            assert status == 400, (structured, body)
+            assert "invalid_stream_options" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
