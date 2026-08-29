@@ -9,6 +9,7 @@
   },
   "request": {
     "model": "text-embedding-test",
+    "zdr_only": true,
     "endpoint": "primary_gateway",
     "inputs": ["alpha body", "beta attachment", "gamma attachment"],
     "metadata": {
@@ -21,7 +22,7 @@
       "company": "acme-corp"
     }
   },
-  "request_required_keys": ["model", "inputs", "metadata"],
+  "request_required_keys": ["model", "zdr_only", "inputs", "metadata"],
   "attribution_dimensions_in_metadata": ["service", "team", "group", "company"],
   "response": {
     "required_keys": ["batch_id", "status", "embeddings", "cost_micro_usd", "token_counts"],
