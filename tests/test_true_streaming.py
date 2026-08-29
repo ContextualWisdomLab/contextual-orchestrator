@@ -25,10 +25,13 @@ class _FakeSSEProvider:
     """Emits a fixed list of raw SSE frame strings at POST /chat/completions."""
 
     def __init__(self, frames: list[str]) -> None:
+        self.payloads: list[dict] = []
+        payloads = self.payloads
+
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
-                self.rfile.read(length)
+                payloads.append(json.loads(self.rfile.read(length)))
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")
                 self.end_headers()
@@ -162,6 +165,20 @@ def test_stream_chat_mock_yields_chunks() -> None:
     deltas = list(client.stream_chat(agent, messages))
     assert len(deltas) >= 2  # chunked, not one blob
     assert "".join(deltas) == client._mock(agent, messages)  # lossless
+
+
+def test_stream_chat_omits_usage_option_for_local_gateway() -> None:
+    frames = [_delta("local"), "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "gateway_agent",
+            "gateway-model",
+            base_url=f"local://127.0.0.1:{provider._server.server_address[1]}/v1",
+        )
+        assert list(client.stream_chat(agent, [{"role": "user", "content": "ping"}])) == ["local"]
+
+    assert "stream_options" not in provider.payloads[0]
 
 
 def test_would_route_true_for_route_false_for_conduct() -> None:

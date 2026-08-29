@@ -35,10 +35,11 @@ would claim precision the provider did not report.
 ## Decision
 
 The existing stdlib SSE parser records a provider-declared usage object on the
-served trace step. Chat Completions-compatible upstream streams receive the
-internal `stream_options.include_usage=true` request so they can emit their
-terminal usage frame; the public gateway stream-options contracts remain
-unchanged. The server gives a streamed route a workflow id, waits for
+served trace step. An agent requests the internal
+`stream_options.include_usage=true` option only when its explicit
+`stream_usage_supported` capability is true; local gateway upstreams leave it
+off because the public gateway stream-options contracts reject that flag. The
+server gives a streamed route a workflow id, waits for
 the existing workflow persistence boundary, and asks the cost coordinator to
 record one ledger row per completed trace step with `request_channel=stream`.
 Valid non-negative provider counts are `measured`. A missing or malformed

@@ -429,6 +429,8 @@ class ModelAgent:
     reasoning_effort_supported: bool | None = None
     # Explicit reviewed replica contract. A group never races when this is absent.
     endpoint_equivalence: dict[str, Any] | None = None
+    # Provider-declared support for the Chat Completions terminal usage frame.
+    stream_usage_supported: bool = False
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -442,6 +444,8 @@ class ModelAgent:
             raise ValueError("auth_scheme must be a non-empty string")
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
+        if type(self.stream_usage_supported) is not bool:
+            raise TypeError("stream_usage_supported must be a boolean")
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
@@ -464,6 +468,7 @@ class ModelAgent:
             "group_name": self.group_name,
             "reasoning_effort_supported": self.reasoning_effort_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
+            "stream_usage_supported": self.stream_usage_supported,
         }
 
     @property
@@ -496,6 +501,7 @@ class ModelAgent:
             group_name=value.get("group_name", ""),
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
+            stream_usage_supported=value.get("stream_usage_supported", False),
         )
 
 
@@ -1639,9 +1645,10 @@ class ModelClient:
             "messages": messages,
             "temperature": settings["temperature"] if temperature is None else temperature,
             "stream": True,
-            "stream_options": {"include_usage": True},
             "max_tokens": settings["max_output_tokens"],
         }
+        if agent.stream_usage_supported:
+            payload["stream_options"] = {"include_usage": True}
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
@@ -2360,6 +2367,7 @@ class _AgentPoolStore:
             "local_credential_key",
             "auth_scheme",
             "reasoning_effort_supported",
+            "stream_usage_supported",
         }
     )
 
@@ -2396,9 +2404,12 @@ class _AgentPoolStore:
                 local_credential_key TEXT NOT NULL,
                 auth_scheme TEXT NOT NULL,
                 reasoning_effort_supported INTEGER,
+                stream_usage_supported INTEGER NOT NULL DEFAULT 0,
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_reasoning_effort_flag_check
-                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))
+                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1)),
+                CONSTRAINT agent_pool_stream_usage_flag_check
+                    CHECK (stream_usage_supported IN (0, 1))
             )
             """
         )
@@ -2437,8 +2448,8 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                reasoning_effort_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reasoning_effort_supported, stream_usage_supported
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -2452,6 +2463,7 @@ class _AgentPoolStore:
                 config["local_credential_key"],
                 config["auth_scheme"],
                 config["reasoning_effort_supported"],
+                int(config["stream_usage_supported"]),
             ),
         )
         conn.executemany(
@@ -2503,6 +2515,12 @@ class _AgentPoolStore:
                 "CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))"
             )
             columns.add("reasoning_effort_supported")
+        if "stream_usage_supported" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN stream_usage_supported INTEGER NOT NULL DEFAULT 0 "
+                "CHECK (stream_usage_supported IN (0, 1))"
+            )
+            columns.add("stream_usage_supported")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
             raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
@@ -2706,7 +2724,7 @@ class _AgentPoolStore:
                     """
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
-                           reasoning_effort_supported
+                           reasoning_effort_supported, stream_usage_supported
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -2769,6 +2787,7 @@ class _AgentPoolStore:
                 local_credential_key=row[8],
                 auth_scheme=row[9],
                 reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
+                stream_usage_supported=bool(row[11]),
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )

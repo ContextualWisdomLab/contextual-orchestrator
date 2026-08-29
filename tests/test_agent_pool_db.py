@@ -11,7 +11,6 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
 import threading
@@ -189,6 +188,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
             tags=("second", "first"),
             provider_exclusions=("provider-b", "provider-a"),
             reasoning_effort_supported=False,
+            stream_usage_supported=True,
         )
         first = TaskOrchestrator([agent], agents_db=db)
         first._pool_store.save(agent)
@@ -197,6 +197,7 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
             columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_pool)")}
             assert "payload" not in columns
             assert "reasoning_effort_supported" in columns
+            assert "stream_usage_supported" in columns
             assert connection.execute("SELECT COUNT(*) FROM agent_pool").fetchone() == (1,)
             assert connection.execute("SELECT COUNT(*) FROM agent_pool_tags").fetchone() == (2,)
             assert connection.execute(
