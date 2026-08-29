@@ -110,8 +110,8 @@ class ModelGroupRouter:
         self._observation_store = observation_store
         self._ledger_name = ledger_name.strip()
         self._lock = threading.Lock()
-        # ponytail: one per-router I/O lock preserves store/apply ordering
-        # without holding the memory lock during bounded SQLite waits.
+        # Store I/O stays serialized with in-memory updates under the same lock
+        # ordering so refresh=False reads never observe a partially refreshed row set.
         self._observation_io_lock = threading.Lock()
         # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
         # None until the first observation of each kind arrives.
@@ -150,11 +150,10 @@ class ModelGroupRouter:
                     if member_id not in keep_member_ids:
                         del self._members[member_id]
             return
-        with self._observation_io_lock:
-            with self._lock:
+        with self._lock:
+            with self._observation_io_lock:
                 removed = set(self._members) - keep_member_ids
-            self._observation_store.delete_members(self._ledger_name, removed)
-            with self._lock:
+                self._observation_store.delete_members(self._ledger_name, removed)
                 for member_id in removed:
                     if member_id not in keep_member_ids:
                         self._members.pop(member_id, None)
@@ -166,9 +165,9 @@ class ModelGroupRouter:
                 for member_id in member_ids:
                     self._members.pop(member_id, None)
             return
-        with self._observation_io_lock:
-            self._observation_store.delete_members(self._ledger_name, member_ids)
-            with self._lock:
+        with self._lock:
+            with self._observation_io_lock:
+                self._observation_store.delete_members(self._ledger_name, member_ids)
                 for member_id in member_ids:
                     self._members.pop(member_id, None)
 
@@ -242,22 +241,22 @@ class ModelGroupRouter:
             raise ValueError("output_tokens must be representable as a finite float") from None
         if throughput_sample is not None and not math.isfinite(throughput_sample):
             raise ValueError("output_tokens must be representable as a finite float")
-        with self._observation_io_lock:
-            self._persist_observation(
-                member_id,
-                success=True,
-                latency_seconds=latency,
-                output_tokens=output_tokens,
-            )
-            with self._lock:
+        with self._lock:
+            with self._observation_io_lock:
+                self._persist_observation(
+                    member_id,
+                    success=True,
+                    latency_seconds=latency,
+                    output_tokens=output_tokens,
+                )
                 state = self._ensure_locked(member_id)
                 self._apply_success_locked(state, clamped, throughput_sample)
 
     def observe_failure(self, member_id: str) -> None:
         """Record one failed attempt (stability evidence only; no latency)."""
-        with self._observation_io_lock:
-            self._persist_observation(member_id, success=False)
-            with self._lock:
+        with self._lock:
+            with self._observation_io_lock:
+                self._persist_observation(member_id, success=False)
                 state = self._ensure_locked(member_id)
                 self._apply_failure_locked(state)
 
@@ -289,9 +288,9 @@ class ModelGroupRouter:
         """Reload current-window observations from the shared store."""
         if self._observation_store is None:
             return
-        with self._observation_io_lock:
-            observations = self._observation_store.load(self._ledger_name)
-            with self._lock:
+        with self._lock:
+            with self._observation_io_lock:
+                observations = self._observation_store.load(self._ledger_name)
                 # ponytail: replay the bounded window for cross-process
                 # correctness; add a sequence cursor only after measured fleet
                 # load requires it.

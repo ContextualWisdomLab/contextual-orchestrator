@@ -5625,12 +5625,14 @@ class TaskOrchestrator:
         caller's input order survives untouched. No synthetic scores.
         """
         self._quality_router.refresh()
+        quality_order = self._quality_router.ranked_member_ids(member_ids, refresh=False)
         if any(
             self._quality_router.member_observation_count(member_id, refresh=False) > 0
             for member_id in member_ids
         ):
-            return self._quality_router.ranked_member_ids(member_ids, refresh=False)
-        return self._group_router.ranked_member_ids(member_ids)
+            return quality_order
+        self._group_router.refresh()
+        return self._group_router.ranked_member_ids(member_ids, refresh=False)
 
     def _psychometric_order(
         self, candidates: list[ModelAgent], prompt_context: str | None

@@ -146,20 +146,20 @@ def test_router_serializes_store_operations_with_memory_updates() -> None:
     class _LockCheckingStore:
         router: ModelGroupRouter | None = None
 
-        def _assert_observation_io_locked(self) -> None:
+        def _assert_lock_order(self) -> None:
             assert self.router is not None
+            assert self.router._lock.locked()
             assert self.router._observation_io_lock.locked()
-            assert not self.router._lock.locked()
 
         def append(self, *args, **kwargs) -> None:
-            self._assert_observation_io_locked()
+            self._assert_lock_order()
 
         def load(self, ledger_name: str) -> list:
-            self._assert_observation_io_locked()
+            self._assert_lock_order()
             return []
 
         def delete_members(self, ledger_name: str, member_ids) -> None:
-            self._assert_observation_io_locked()
+            self._assert_lock_order()
 
     store = _LockCheckingStore()
     router = ModelGroupRouter(observation_store=store)

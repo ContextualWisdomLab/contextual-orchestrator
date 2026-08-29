@@ -1,5 +1,5 @@
 ---
-id: "0038"
+id: "0040"
 title: "Record streamed Responses usage at the workflow boundary"
 status: accepted
 proposed_date: "2026-08-29"
@@ -22,7 +22,7 @@ success_criteria:
     source: "tests/test_orchestrated_responses_stream.py"
 ---
 
-# Record streamed Responses usage at the workflow boundary
+# ADR 0040: Record streamed Responses usage at the workflow boundary
 
 ## Context
 
