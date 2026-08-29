@@ -1,0 +1,1 @@
+Transient check trigger for PR #879 after the conflict resolver's GITHUB_TOKEN-authored merge commit.
