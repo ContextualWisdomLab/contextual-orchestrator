@@ -2,7 +2,8 @@ name: Repair PR 909 merge-result regressions
 
 on:
   push:
-    branches: [fix/batch-routing-owner-20260829]
+    branches:
+      - fix/batch-routing-owner-20260829
 
 permissions:
   contents: write
@@ -31,124 +32,19 @@ jobs:
         with:
           version: "0.12.5"
 
-      - name: Repair ADR numbering and invalid-model semantics
+      - name: Apply, validate, and commit the bounded repair
         env:
-          EXPECTED_PARENT: 97eb8d5a0a0ed1ba1f4d5a6a34367652c18288fe
+          EXPECTED_PARENT: 0130f94c24c108e8a1f9d5d1b56c4dd1d3ff772f
           BRANCH: fix/batch-routing-owner-20260829
-          SELF: .github/workflows/fix-adr-number-pr-909.yml
         shell: bash
         run: |
           set -euo pipefail
           test "$(git branch --show-current)" = "$BRANCH"
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
-          old='docs/planning/adrs/0038-streamed-responses-usage-boundary.md'
-          new='docs/planning/adrs/0040-streamed-responses-usage-boundary.md'
-          test -f "$old"
-          test ! -e "$new"
-          git mv "$old" "$new"
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          def replace_exact(path: str, old: str, new: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(
-                      f"expected exactly one replacement target in {path}; found {count}"
-                  )
-              target.write_text(text.replace(old, new, 1), encoding="utf-8")
-
-          def replace_regex(path: str, pattern: str, replacement: str) -> None:
-              target = Path(path)
-              text = target.read_text(encoding="utf-8")
-              updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
-              if count != 1:
-                  raise SystemExit(
-                      f"expected exactly one structural replacement in {path}; found {count}"
-                  )
-              target.write_text(updated, encoding="utf-8")
-
-          replace_exact(
-              "docs/planning/adrs/0040-streamed-responses-usage-boundary.md",
-              'id: "0038"',
-              'id: "0040"',
-          )
-          replace_exact(
-              "docs/architecture.md",
-              "See [ADR 0038](planning/adrs/0038-streamed-responses-usage-boundary.md).",
-              "See [ADR 0040](planning/adrs/0040-streamed-responses-usage-boundary.md).",
-          )
-          replace_exact(
-              "CHANGELOG.md",
-              "answer, and nested gateway upstreams remain compatible (ADR 0038).",
-              "answer, and nested gateway upstreams remain compatible (ADR 0040).",
-          )
-          replace_regex(
-              "contextual_orchestrator/cost_router.py",
-              r'''^        try:\n            prepared_requests = \[self\._resolve_batch_request\(request\) for request in requests\]\n        except \(RuntimeError, ValueError\) as exc:\n            raise BatchModelSelectionError\(\n                "no eligible model-group member is available for this batch request"\n            \) from exc\n''',
-              '''        try:
-            prepared_requests = [self._resolve_batch_request(request) for request in requests]
-        except ValueError:
-            raise
-        except RuntimeError as exc:
-            raise BatchModelSelectionError(
-                "no eligible model-group member is available for this batch request"
-            ) from exc
-''',
-          )
-          replace_regex(
-              "contextual_orchestrator/server.py",
-              r'''^                    job = self\._run\(\n                        lambda: coordinator\.submit_batch\(\n                            batch_requests,\n                            metadata=metadata,\n                            owner_id=security\.principal_id\(self\.headers\),\n                        \)\n                    \)\n''',
-              '''                    try:
-                        job = self._run(
-                            lambda: coordinator.submit_batch(
-                                batch_requests,
-                                metadata=metadata,
-                                owner_id=security.principal_id(self.headers),
-                            )
-                        )
-                    except ValueError as exc:
-                        raise RequestError(400, "invalid_model", str(exc)) from exc
-''',
-          )
-
-          tests = Path("tests/test_cost_review_server.py")
-          test_text = tests.read_text(encoding="utf-8")
-          test_name = "test_batch_routing_rejects_unknown_zdr_model_as_client_error"
-          if test_name in test_text:
-              raise SystemExit(f"{test_name} already exists")
-          tests.write_text(
-              test_text
-              + '''
-
-
-def test_batch_routing_rejects_unknown_zdr_model_as_client_error() -> None:
-    """An unknown explicit ZDR model is a non-retryable client error."""
-    server, port, token = _serve()
-    try:
-        status, body = _request(
-            "POST",
-            f"http://127.0.0.1:{port}/api/v1/batch_routing_jobs",
-            token,
-            {
-                "model": "not-configured",
-                "zdr_only": True,
-                "requests": [
-                    {"messages": [{"role": "user", "content": "route securely"}]}
-                ],
-            },
-        )
-    finally:
-        server.shutdown()
-    assert status == 400
-    assert body["error"]["code"] == "invalid_model"
-''',
-              encoding="utf-8",
-          )
-          PY
-          rm -f "$SELF"
+          python scripts/ci/repair_pr_909.py
+          rm -f \
+            scripts/ci/repair_pr_909.py \
+            .github/workflows/fix-adr-number-pr-909.yml
           git add -A
           git diff --cached --check
           uv run --locked --extra api --extra db --extra queue --group dev \
