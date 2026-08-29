@@ -11,6 +11,7 @@ import urllib.error
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.server import (
     RequestError,
     SecurityConfig,
@@ -223,6 +224,21 @@ def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
         )
 
 
+def test_virtual_capability_auto_rejects_non_zdr_pool() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",))]
+    )
+
+    with orchestrator.request_policy(True), pytest.raises(
+        RequestError, match="no enabled embedding model"
+    ) as raised:
+        _require_pool_model(
+            orchestrator, TaskOrchestrator.AUTO_MODEL, required_capability="embedding"
+        )
+
+    assert raised.value.status == 400
+
+
 def test_virtual_text_models_require_an_enabled_eligible_pool() -> None:
     """AUTO and FREE fail as client errors before an empty pool reaches routing."""
     empty = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")])
@@ -270,6 +286,108 @@ def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
         server.shutdown()
     assert raised.value.code == 400
     assert "no enabled zero-cost model" in raised.value.read().decode()
+
+
+def test_http_zdr_only_request_filters_the_runtime_candidate_pool() -> None:
+    """The request bool, not a provider-specific model list, controls selection."""
+    token = "zdr_request_token"
+    paid = ModelAgent("paid_worker", "paid-model", group_name="shared_model")
+    private = ModelAgent(
+        "zdr_worker",
+        "zdr-model",
+        tags=("privacy:zdr",),
+        group_name="shared_model",
+    )
+    orchestrator = TaskOrchestrator([paid, private])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({
+            "model": "orchestrator/auto",
+            "input": "hello",
+            "zdr_only": True,
+        }).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+    finally:
+        server.shutdown()
+
+    workflow = orchestrator.get_workflow_run(next(iter(orchestrator._run_order)))
+    assert {step["agent_id"] for step in workflow["trace"]} == {private.id}
+    assert coordinator.ledger.store.query()
+
+
+def test_http_virtual_responses_preserves_message_array_and_sampling_controls() -> None:
+    token = "responses_array_controls_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
+    ])
+    observed_messages: list[list[dict]] = []
+    observed_settings: list[dict] = []
+    original_chat = orchestrator.client.chat
+
+    def recording_chat(agent, messages, *args, **kwargs):
+        observed_messages.append(messages)
+        observed_settings.append(orchestrator.client.request_settings_snapshot())
+        return original_chat(agent, messages, *args, **kwargs)
+
+    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps(
+            {
+                "model": "orchestrator/free",
+                "input": [
+                    {"type": "message", "role": "system", "content": "context"},
+                    {"type": "message", "role": "user", "content": "question"},
+                    {"type": "message", "role": "assistant", "content": "history"},
+                ],
+                "temperature": 0.73,
+                "top_p": 0.81,
+                "presence_penalty": 0.2,
+                "frequency_penalty": -0.3,
+                "max_output_tokens": 33,
+            }
+        ).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert observed_messages
+    assert any(
+        [message.get("role") for message in messages][1:4]
+        == ["system", "user", "assistant"]
+        for messages in observed_messages
+    )
+    assert observed_settings
+    assert all(
+        settings["temperature"] == 0.73
+        and settings["top_p"] == 0.81
+        and settings["presence_penalty"] == 0.2
+        and settings["frequency_penalty"] == -0.3
+        and settings["max_output_tokens"] == 33
+        for settings in observed_settings
+    )
 
 
 @pytest.mark.parametrize(

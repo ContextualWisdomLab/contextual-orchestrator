@@ -154,6 +154,32 @@ def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     assert set(client.agent_ids) == {"free_verifier"}
 
 
+def test_zdr_conduct_limits_model_judge_allowlist_to_zdr_members() -> None:
+    client = _ScriptedClient('{"decision":"ACCEPT","reason":"ZDR verification passed."}')
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("free_non_zdr", "free-non-zdr", tags=("verification", "cost:free")),
+            ModelAgent(
+                "free_zdr",
+                "free-zdr",
+                tags=("verification", "cost:free", "privacy:zdr"),
+            ),
+        ],
+        client=client,
+    )
+    captured: dict[str, object] = {}
+
+    def judge(*_args: object, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"accepted": True, "verifier_output": "verified", "judge": "model"}
+
+    with patch.object(orchestrator, "_model_judge_verification", side_effect=judge):
+        with orchestrator.request_policy(True):
+            orchestrator.conduct(MESSAGES, model_name="orchestrator/free")
+
+    assert captured["allowed_agent_ids"] == {"free_zdr"}
+
+
 def test_group_conduct_keeps_model_judge_inside_requested_group() -> None:
     class _RecordingClient(_ScriptedClient):
         def __init__(self) -> None:

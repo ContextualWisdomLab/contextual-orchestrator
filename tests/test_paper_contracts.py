@@ -60,8 +60,8 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     client = RecordingClient()
     build(client).conduct([{"role": "user", "content": "Analyze, implement, verify, and synthesize."}])
 
-    worker_prompt = client.calls[1][1][1]["content"]
-    verifier_prompt = client.calls[2][1][1]["content"]
+    worker_prompt = client.calls[1][1][-1]["content"]
+    verifier_prompt = client.calls[2][1][-1]["content"]
 
     assert "Step 0: planner_agent:1" in worker_prompt
     assert "Step 1: builder_agent:2" not in worker_prompt

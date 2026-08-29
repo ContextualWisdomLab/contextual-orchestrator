@@ -152,6 +152,10 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "messages": {"type": "array", "items": {"type": "object"}},
                                     "stream": {"type": "boolean"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                     "response_format": {"type": "object"},
                                     "include_orchestration_trace": {
                                         "type": "boolean",
@@ -184,6 +188,10 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "prompt": {"oneOf": [{"type": "string"}, {"type": "array"}]},
                                     "stream": {"type": "boolean"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }
@@ -217,6 +225,10 @@ OPENAPI_SPEC = {
                                             {"type": "string"},
                                             {"type": "array", "items": {"type": "string"}},
                                         ]
+                                    },
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only embedding-capable model-group members with ZDR evidence.",
                                     },
                                 },
                             }
@@ -255,12 +267,12 @@ OPENAPI_SPEC = {
                 }
             }
             for path, operation_id, summary, schema in (
-                ("/v1/images/generations", "create_image", "Generate an image", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
-                ("/v1/videos", "create_video", "Submit video generation", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}}}),
-                ("/v1/audio/speech", "create_speech", "Synthesize speech", {"type": "object", "required": ["input", "voice"], "properties": {"model": {"type": "string"}, "input": {"type": "string"}, "voice": {"type": "string"}}}),
-                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio", {"type": "object", "required": ["input_audio"], "properties": {"model": {"type": "string"}, "input_audio": {"type": "object", "required": ["data", "format"]}}}),
-                ("/v1/rerank", "create_rerank", "Rerank documents", {"type": "object", "required": ["query", "documents"], "properties": {"model": {"type": "string"}, "query": {"type": "string"}, "documents": {"type": "array", "minItems": 1}}}),
-                ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}}}),
+                ("/v1/images/generations", "create_image", "Generate an image", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/videos", "create_video", "Submit video generation", {"type": "object", "required": ["prompt"], "properties": {"model": {"type": "string"}, "prompt": {"type": "string"}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/audio/speech", "create_speech", "Synthesize speech", {"type": "object", "required": ["input", "voice"], "properties": {"model": {"type": "string"}, "input": {"type": "string"}, "voice": {"type": "string"}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/audio/transcriptions", "create_transcription", "Transcribe audio", {"type": "object", "required": ["input_audio"], "properties": {"model": {"type": "string"}, "input_audio": {"type": "object", "required": ["data", "format"]}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/rerank", "create_rerank", "Rerank documents", {"type": "object", "required": ["query", "documents"], "properties": {"model": {"type": "string"}, "query": {"type": "string"}, "documents": {"type": "array", "minItems": 1}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
+                ("/v1/audio/generations", "create_audio", "Generate audio", {"type": "object", "required": ["messages"], "properties": {"model": {"type": "string"}, "messages": {"type": "array", "minItems": 1}, "zdr_only": {"type": "boolean", "description": "When true, select only capable model-group members with ZDR evidence."}}}),
             )
         },
         "/v1/videos/{video_job_id}": {
@@ -371,6 +383,10 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "input": {"oneOf": [{"type": "string"}, {"type": "array"}]},
                                     "stream": {"type": "boolean"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }
@@ -477,7 +493,7 @@ OPENAPI_SPEC = {
                                         "minItems": 1,
                                         "uniqueItems": True,
                                         "items": {"type": "string"},
-                                    }
+                                    },
                                 },
                             }
                         }
@@ -855,6 +871,10 @@ OPENAPI_SPEC = {
                                     "requests": {"type": "array", "items": {"type": "object"}},
                                     "attribution": {"type": "object"},
                                     "model": {"type": "string"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }
@@ -914,6 +934,10 @@ OPENAPI_SPEC = {
                                         "description": "observability + attribution dims (service, team, group, company, provider)",
                                     },
                                     "attribution": {"type": "object"},
+                                    "zdr_only": {
+                                        "type": "boolean",
+                                        "description": "When true, select only embedding-capable model-group members with ZDR evidence.",
+                                    },
                                 },
                             }
                         }
