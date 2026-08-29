@@ -1,0 +1,17 @@
+name: Resolve PR 879 against protected main
+
+on:
+  push:
+    branches: [fix/provider-error-taxonomy-telemetry]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
+    with:
+      pr_number: 879
+      branch: fix/provider-error-taxonomy-telemetry
+      caller_file: .github/workflows/resolve-pr-879.yml
