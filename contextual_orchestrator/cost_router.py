@@ -675,7 +675,18 @@ class CostRoutingCoordinator:
         if not request.zdr_only:
             return request
         with self.orchestrator.request_policy(request.zdr_only):
-            agent = self.orchestrator._requested_agent(request.model)
+            try:
+                agent = self.orchestrator._requested_agent(request.model)
+            except ValueError as exc:
+                configured_exact = any(
+                    candidate.model == request.model
+                    for candidate in self.orchestrator.candidates
+                )
+                if configured_exact:
+                    raise RuntimeError(
+                        "requested model is configured but not eligible for ZDR batch routing"
+                    ) from exc
+                raise
             if agent is None:
                 text = self.orchestrator._latest_user_text(request.messages)
                 agent = self.orchestrator._select_agent(
