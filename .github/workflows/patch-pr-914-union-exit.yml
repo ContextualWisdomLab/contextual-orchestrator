@@ -1,0 +1,40 @@
+name: Patch PR 914 resolver union exit handling
+
+on:
+  push:
+    branches: [fix/chat-stream-usage-compat]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-pr-914-union-exit
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Accept merge-file union conflict count
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/resolve-pr-914.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"\n'
+          new = '                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs" || true\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one union anchor, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm -f .github/workflows/patch-pr-914-union-exit.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "chore: accept union conflict-count exit status for PR #914"
+          git push origin HEAD:fix/chat-stream-usage-compat
