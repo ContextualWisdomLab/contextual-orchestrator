@@ -57,9 +57,10 @@ class SequencedProxyClient:
         )
 
 
-def _http_error(status: int) -> urllib.error.HTTPError:
+def _http_error(status: int, body: dict[str, Any] | None = None) -> urllib.error.HTTPError:
     """Build a provider-shaped HTTP failure."""
-    return urllib.error.HTTPError("https://provider.example/v1", status, "failed", None, None)
+    response_body = io.BytesIO(json.dumps(body).encode("utf-8")) if body is not None else None
+    return urllib.error.HTTPError("https://provider.example/v1", status, "failed", None, response_body)
 
 
 def _tool_description_too_long_error() -> urllib.error.HTTPError:
@@ -300,6 +301,26 @@ def test_provider_affine_file_request_does_not_escape_to_another_provider() -> N
     assert result["model"] == "fallback-model"
     assert [agent_id for agent_id, _ in client.calls] == ["fallback_agent"]
     assert "_required_agent_id" not in client.calls[0][1]
+
+
+def test_zdr_only_rejects_a_non_zdr_required_file_provider() -> None:
+    client = SequencedProxyClient({"paid_agent": {"model": "paid-model"}})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("paid_agent", "paid-model")],
+        client=client,
+    )
+
+    with orchestrator.request_policy(True), pytest.raises(
+        RuntimeError, match="required file provider is unavailable"
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "private"}],
+                "_required_agent_id": "paid_agent",
+            }
+        )
+    assert client.calls == []
 
 
 @pytest.mark.parametrize("status", [404, 413, 429])
@@ -711,6 +732,177 @@ def test_non_transient_error_is_not_replayed() -> None:
 
     assert caught.value is failure
     assert [agent_id for agent_id, _ in client.calls] == ["primary_agent"]
+
+
+def test_virtual_passthrough_fails_over_on_provider_tool_description_limit() -> None:
+    """A provider-only tool limit advances the caller's request to the next provider."""
+    failure = _http_error(
+        400,
+        {
+            "error": {
+                "code": "invalid_tools",
+                "message": "each tool.function.description must be at most 1024 characters",
+            }
+        },
+    )
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect", "description": "x" * 1025}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        "each tool.function.description must be at most 1024 characters",
+        "Bytez rejected the request: each tool.function.description must be at most 1024 characters",
+    ],
+)
+def test_virtual_passthrough_fails_over_on_string_tool_description_limit(
+    provider_error: str,
+) -> None:
+    """Provider APIs that encode ``error`` as text still prove capability mismatch."""
+    failure = _http_error(400, {"error": provider_error})
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": {"model": "fallback-model"},
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.FREE_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "primary_agent",
+        "fallback_agent",
+    ]
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        "each tool.function.description must be at most 1024 characters",
+        "Bytez rejected the request: each tool.function.description must be at most 1024 characters",
+    ],
+)
+def test_exhausted_string_tool_description_limit_returns_413_without_penalty(
+    provider_error: str,
+) -> None:
+    """A string-form capability limit is request-size neutral for provider health."""
+    failure = _http_error(400, {"error": provider_error})
+    client = SequencedProxyClient(
+        {
+            "primary_agent": failure,
+            "fallback_agent": _http_error(400, {"error": provider_error}),
+        }
+    )
+    orchestrator = _build(client)
+    orchestrator.agents = [
+        replace(agent, tags=(*agent.tags, "cost:free")) for agent in orchestrator.agents
+    ]
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.FREE_MODEL,
+                "messages": [{"role": "user", "content": "use the tool"}],
+                "tools": [{"type": "function", "function": {"name": "inspect"}}],
+            }
+        )
+
+    assert orchestrator._circuit == {}
+    assert orchestrator._group_router.member_observation_count("primary_agent") == 0
+    assert orchestrator._group_router.member_observation_count("fallback_agent") == 0
+
+
+def test_model_client_preserves_tool_limit_body_for_failover(monkeypatch) -> None:
+    """The real passthrough transport shares its one-read provider error body."""
+    failure = _http_error(
+        400,
+        {
+            "error": {
+                "code": "invalid_tools",
+                "message": "each tool.function.description must be at most 1024 characters",
+            }
+        },
+    )
+    outcomes: list[dict[str, Any] | BaseException] = [
+        failure,
+        {"model": "fallback-model"},
+    ]
+    client = ModelClient()
+
+    def _send_raw(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(
+        client,
+        "_validate_provider",
+        lambda _agent: (socket.AF_INET, ("127.0.0.1", 80)),
+    )
+    monkeypatch.setattr(client, "_send_raw", _send_raw)
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                base_url="https://primary.example/v1",
+                provider_name="primary",
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                base_url="https://fallback.example/v1",
+                provider_name="fallback",
+            ),
+        ],
+        client=client,
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "use the tool"}],
+            "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert outcomes == []
 
 
 def test_wrapped_transient_error_can_fail_over() -> None:

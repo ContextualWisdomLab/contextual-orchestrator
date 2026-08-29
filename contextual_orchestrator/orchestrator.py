@@ -36,7 +36,7 @@ from jsonschema.validators import validator_for
 
 from .chat_capability import (
     is_chat_compatible_model_id,
-    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
@@ -79,6 +79,9 @@ ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
+_PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
+    "each tool.function.description must be at most 1024 characters"
+)
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
@@ -209,6 +212,7 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     "commercial_report_cache",
     default=None,
 )
+_REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -499,6 +503,23 @@ class ModelAgent:
         )
 
 
+def _is_general_chat_agent(agent: ModelAgent) -> bool:
+    """Apply persisted provider capability tags before model-name fallback."""
+    return is_general_chat_candidate(
+        agent.model,
+        capabilities=(
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("capability:")
+        ),
+        output_modalities=(
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("output:")
+        ),
+    )
+
+
 def _validate_batch_results(
     requests: Mapping[str, list[ChatMessage]],
     results: Mapping[str, Mapping[str, Any]],
@@ -643,16 +664,43 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     return result
 
 
+def _provider_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
+    """Keep the older provider-error helper aligned with the shared cache."""
+    return _http_error_payload(error)
+
+
+def _is_provider_tool_description_limit_error(error: urllib.error.HTTPError) -> bool:
+    """Recognize the provider capability error that is safe to fail over."""
+    if error.code != 400:
+        return False
+    payload = _provider_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(details, str):
+        return _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE in details.casefold()
+    return (
+        isinstance(details, dict)
+        and details.get("code") == "invalid_tools"
+        and details.get("message") == _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE
+    )
+
+
 def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
     """Recognize the provider-specific 1,024-character tool-description cap."""
     if error.code != 400:
         return False
     payload = _http_error_payload(error)
     details = payload.get("error") if isinstance(payload, dict) else None
-    message = details.get("message") if isinstance(details, dict) else None
+    message = (
+        details.get("message")
+        if isinstance(details, dict)
+        else details
+        if isinstance(details, str)
+        else None
+    )
     return (
-        isinstance(details, dict)
-        and details.get("code") == "invalid_tools"
+        (isinstance(details, str) or (
+            isinstance(details, dict) and details.get("code") == "invalid_tools"
+        ))
         and isinstance(message, str)
         and "tool.function.description" in message.casefold()
         and "1024" in message
@@ -1085,6 +1133,11 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         if (
             isinstance(current, urllib.error.HTTPError)
             and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+        ):
+            return True
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and _is_provider_tool_description_limit_error(current)
         ):
             return True
         if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
@@ -1623,6 +1676,7 @@ class ModelClient:
         messages: list[ChatMessage],
         temperature: float | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
+        include_usage: bool = False,
     ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
@@ -1630,10 +1684,13 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if type(include_usage) is not bool:
+            raise TypeError("include_usage must be a boolean")
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
+        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1651,6 +1708,8 @@ class ModelClient:
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        if include_usage:
+            payload["stream_options"] = {"include_usage": True}
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
         with traced(
@@ -1695,6 +1754,9 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        self._local.usage = usage
                     choices = chunk.get("choices") or [{}]
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
@@ -2329,10 +2391,13 @@ def _coerce_message_content_text(content: Any) -> str:
 
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
-    """Load model agent definitions from an agents JSON file."""
+    """Load model agent definitions from an object- or list-shaped JSON file."""
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
-    return [ModelAgent.from_dict(item) for item in data["agents"]]
+    items = data.get("agents") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise ValueError("agents JSON must contain a list of agent definitions")
+    return [ModelAgent.from_dict(item) for item in items]
 
 
 class _AgentPoolStore:
@@ -3046,6 +3111,7 @@ class TaskOrchestrator:
         cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
+        allow_empty_agents: bool = False,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -3055,7 +3121,7 @@ class TaskOrchestrator:
             agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
         self.candidates = list(agents)
         self.agents = [agent for agent in self.candidates if not agent.disabled]
-        if not self.agents:  # pragma: no cover
+        if not self.agents and not allow_empty_agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         # Measured speed/stability routing inside model groups (global: every
         # selection path below funnels through _ranked_agents). Ledger state is
@@ -3170,6 +3236,55 @@ class TaskOrchestrator:
         if self._store is not None:
             self._store.close()
 
+    @contextmanager
+    def request_policy(self, zdr_only: bool = False):
+        """Scope request selection to models carrying verified ZDR evidence."""
+        if type(zdr_only) is not bool:
+            raise TypeError("zdr_only must be a boolean")
+        token = _REQUEST_ZDR_ONLY.set(zdr_only)
+        try:
+            yield
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+
+    @staticmethod
+    def _zdr_agent_allowed(agent: ModelAgent) -> bool:
+        """Return whether one agent is eligible under the active privacy policy."""
+        return not _REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags
+
+    def select_model_group_members(
+        self,
+        candidate_pool: Iterable[ModelAgent],
+        *,
+        text: str = "",
+        role: str = "worker",
+        free_only: bool = False,
+        chat_only: bool = True,
+        zdr_only: bool | None = None,
+    ) -> list[ModelAgent]:
+        """Select from the caller-supplied model-group array.
+
+        The configured pool is only the default request source. Callers such as
+        naruon may pass any discovered/configured group array; the active
+        request policy then filters that array without inventing candidates.
+        """
+        if zdr_only is not None:
+            with self.request_policy(zdr_only):
+                return self.select_model_group_members(
+                    candidate_pool,
+                    text=text,
+                    role=role,
+                    free_only=free_only,
+                    chat_only=chat_only,
+                )
+        return self._ranked_agents(
+            text,
+            role,
+            free_only=free_only,
+            chat_only=chat_only,
+            candidate_pool=candidate_pool,
+        )
+
     def provider_readiness_report(
         self,
         *,
@@ -3247,6 +3362,8 @@ class TaskOrchestrator:
             "include_orchestration_trace",
             "attribution",
             "routing",
+            "zdr_only",
+            "stream_options",
             "_required_agent_id",
             "_file_replicas",
         }
@@ -3303,11 +3420,21 @@ class TaskOrchestrator:
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
         agent = (
-            next((candidate for candidate in self.agents if candidate.id == required_agent_id), None)
+            next(
+                (
+                    candidate
+                    for candidate in self.agents
+                    if candidate.id == required_agent_id
+                ),
+                None,
+            )
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and agent is None:
+        if (
+            isinstance(required_agent_id, str)
+            and (agent is None or not self._zdr_agent_allowed(agent))
+        ):
             raise RuntimeError("required file provider is unavailable")
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
@@ -3378,10 +3505,18 @@ class TaskOrchestrator:
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
-            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
             if requested_model == self.FREE_MODEL
             else (
-                {candidate.id for candidate in self.agents}
+                {
+                    candidate.id
+                    for candidate in self.agents
+                    if self._zdr_agent_allowed(candidate)
+                }
                 if requested_model == self.AUTO_MODEL
                 else None
             )
@@ -3516,11 +3651,21 @@ class TaskOrchestrator:
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
         final_agent = (
-            next((agent for agent in self.agents if agent.id == required_agent_id), None)
+            next(
+                (
+                    agent
+                    for agent in self.agents
+                    if agent.id == required_agent_id
+                ),
+                None,
+            )
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and final_agent is None:
+        if (
+            isinstance(required_agent_id, str)
+            and (final_agent is None or not self._zdr_agent_allowed(final_agent))
+        ):
             raise RuntimeError("required file provider is unavailable")
         if final_agent is None:
             try:
@@ -3664,9 +3809,21 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
             if free_only
-            else ({candidate.id for candidate in self.agents} if virtual_model else None)
+            else (
+                {
+                    candidate.id
+                    for candidate in self.agents
+                    if self._zdr_agent_allowed(candidate)
+                }
+                if virtual_model
+                else None
+            )
         ))
         if replica_agent_ids is not None:
             allowed_agent_ids = (
@@ -3922,18 +4079,32 @@ class TaskOrchestrator:
             return None
         if type(requested_model) is not str or not requested_model:
             raise ValueError("requested model must be a configured non-empty string")
-        matches = [candidate for candidate in self.candidates if candidate.model == requested_model]
-        if not matches:
+        matches = [
+            candidate
+            for candidate in self.candidates
+            if (
+                candidate.model == requested_model
+                and self._zdr_agent_allowed(candidate)
+                and (not _REQUEST_ZDR_ONLY.get() or not candidate.disabled)
+            )
+        ]
+        configured_exact = any(candidate.model == requested_model for candidate in self.candidates)
+        if not matches and not configured_exact:
             try:
                 requested_group = canonical_group_name(requested_model)
             except ValueError:
                 requested_group = ""
-            matches = [
+            group_candidates = [
                 candidate
-                for candidate in self._ranked_agents("", "worker")
+                for candidate in self.candidates
                 if candidate.group_name
                 and canonical_group_name(candidate.group_name) == requested_group
             ]
+            if group_candidates:
+                try:
+                    matches = self.select_model_group_members(group_candidates)
+                except RuntimeError:
+                    matches = []
         if not matches:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
@@ -4028,6 +4199,8 @@ class TaskOrchestrator:
         *,
         model_name: str = "contextual-orchestrator",
         owner_id: str | None = None,
+        include_usage: bool = False,
+        usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
     ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
@@ -4040,11 +4213,12 @@ class TaskOrchestrator:
         )
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
-        stream = (
-            self.client.stream_chat(agent, messages, effort_profile=effort_profile)
-            if effort_profile is not None
-            else self.client.stream_chat(agent, messages)
-        )
+        stream_kwargs: dict[str, Any] = {}
+        if effort_profile is not None:
+            stream_kwargs["effort_profile"] = effort_profile
+        if include_usage:
+            stream_kwargs["include_usage"] = True
+        stream = self.client.stream_chat(agent, messages, **stream_kwargs)
         started_at = time.perf_counter()
         try:
             for delta in stream:
@@ -4054,6 +4228,9 @@ class TaskOrchestrator:
             if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
             raise
+        usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+        if usage_callback is not None:
+            usage_callback(usage)
         if agent.group_name or model_name == self.FREE_MODEL:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
@@ -4067,9 +4244,19 @@ class TaskOrchestrator:
             answer=answer,
             served_id=agent.id,
             latency_seconds=latency_seconds,
-            usage=None,
+            usage=usage,
             free_only=model_name == self.FREE_MODEL,
         )
+        trace_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Direct route (streamed)",
+            "access": [],
+            "output": answer,
+        }
+        if isinstance(usage, dict):
+            trace_step["usage"] = usage
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -4079,8 +4266,7 @@ class TaskOrchestrator:
                 "prompt_text": text,
                 "answer": answer,
                 "trace": [
-                    {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                     "access": [], "output": answer}
+                    trace_step
                 ],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {**verification, "verifier_output": answer},
@@ -4115,6 +4301,7 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
+        parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
         return build_response_cache_key(
             messages,
             mode,
@@ -4777,7 +4964,11 @@ class TaskOrchestrator:
         ) or self._ranked_agents(
             text, "worker", free_only=free_only, prompt_context=prompt_context
         )
-        free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+        free_ids = {
+            candidate.id
+            for candidate in self.agents
+            if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+        }
         allowed_agent_ids = free_ids if free_only else None
 
         max_attempts = 1 + min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
@@ -4959,13 +5150,18 @@ class TaskOrchestrator:
             steps = self._plan(task)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
-        free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+        free_ids = {
+            candidate.id
+            for candidate in self.agents
+            if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+        }
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
             {
                 candidate.id
                 for candidate in self.agents
                 if candidate.group_name == requested_agent.group_name
+                and self._zdr_agent_allowed(candidate)
             }
             if requested_agent is not None and requested_agent.group_name
             else {requested_agent.id}
@@ -5018,6 +5214,7 @@ class TaskOrchestrator:
                         + (f"\n\nCaller instructions:\n{caller_instructions}" if caller_instructions else "")
                     ),
                 },
+                *copy.deepcopy(messages),
                 {
                     "role": "user",
                     "content": user_content,
@@ -5122,7 +5319,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if is_general_chat_agent_model_id(agent.model)
+            if _is_general_chat_agent(agent) and self._zdr_agent_allowed(agent)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -5170,7 +5367,11 @@ class TaskOrchestrator:
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
             assigned = known_agents.get(agent_id)
-            if assigned is None or not is_general_chat_agent_model_id(assigned.model):
+            if (
+                assigned is None
+                or not _is_general_chat_agent(assigned)
+                or not self._zdr_agent_allowed(assigned)
+            ):
                 # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
@@ -5232,6 +5433,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         free_only: bool = False,
         chat_only: bool = True,
+        candidate_pool: Iterable[ModelAgent] | None = None,
         prompt_context: str | None = None,
     ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group.
@@ -5245,14 +5447,19 @@ class TaskOrchestrator:
            order (:meth:`_measured_member_order`: judged quality first, then
            successful responses per second).
         """
+        source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
             agent
-            for agent in self.agents
+            for agent in source
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
             if (not free_only or self._is_free_agent(agent))
-            and (not chat_only or is_general_chat_agent_model_id(agent.model))
+            and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
         if not candidates:
+            if _REQUEST_ZDR_ONLY.get():
+                raise RuntimeError("no ZDR-eligible agent is available for the active privacy policy")
             if free_only:
                 raise RuntimeError("no enabled zero-cost model is available")
             if chat_only:
@@ -5516,7 +5723,9 @@ class TaskOrchestrator:
         assurance; an absent triage agent degrades to the direct path because
         no evidence source exists at all. Verdicts are cached by content hash.
         """
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(
+            (text + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")).encode("utf-8")
+        ).hexdigest()
         with self._evidence_lock:
             cached = self._triage_cache.get(digest)
         if cached is not None:
@@ -5531,7 +5740,7 @@ class TaskOrchestrator:
             candidates = self._ranked_agents(text, "worker", free_only=True)
         except RuntimeError:
             candidates = []
-        if not candidates:
+        if not candidates and not _REQUEST_ZDR_ONLY.get():
             candidates = list(self.agents)
         if not candidates:
             return False
@@ -5559,7 +5768,7 @@ class TaskOrchestrator:
 
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
         excluded by the capability contract enforced by
-        :func:`is_general_chat_agent_model_id`; this is an endpoint-compatibility
+        :func:`is_general_chat_candidate`; this is an endpoint-compatibility
         gate, not a task-keyword heuristic.
         """
         ranked = [
@@ -5571,7 +5780,7 @@ class TaskOrchestrator:
                 required_tags=required_tags,
                 prompt_context=prompt_context,
             )
-            if is_general_chat_agent_model_id(agent.model)
+            if _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
         if not ranked:
@@ -6113,7 +6322,9 @@ class TaskOrchestrator:
         ordered = [
             agent
             for agent in ordered
-            if is_general_chat_agent_model_id(agent.model)
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            and _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
@@ -13625,6 +13836,7 @@ def chat_completion_chunks(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    include_usage: bool = False,
 ) -> list[dict[str, Any]]:
     """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
 
@@ -13654,6 +13866,27 @@ def chat_completion_chunks(
     final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
+    if include_usage:
+        reported_usage = result.get("usage")
+        if isinstance(reported_usage, dict):
+            usage = {**reported_usage, "usage_source": "reported"}
+        else:
+            prompt_text = result.get("prompt_text", "")
+            estimated_prompt_tokens = estimate_tokens(
+                prompt_text if isinstance(prompt_text, str) else str(prompt_text)
+            )
+            estimated_completion_tokens = estimate_tokens(answer)
+            usage = {
+                "prompt_tokens": estimated_prompt_tokens,
+                "completion_tokens": estimated_completion_tokens,
+                "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
+                "usage_source": "estimated",
+            }
+        chunks.append({
+            **base,
+            "choices": [],
+            "usage": usage,
+        })
     return chunks
 
 

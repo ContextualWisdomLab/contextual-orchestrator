@@ -382,6 +382,24 @@ def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
         server.shutdown()
 
 
+def test_zdr_batch_without_an_eligible_member_returns_service_unavailable() -> None:
+    server, port, token = _serve()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{port}/api/v1/batch_routing_jobs",
+            token,
+            {
+                "zdr_only": True,
+                "requests": [{"messages": [{"role": "user", "content": "private"}]}],
+            },
+        )
+    finally:
+        server.shutdown()
+    assert status == 503
+    assert body["error"]["code"] == "batch_model_unavailable"
+
+
 def test_batch_routing_jobs_round_trip_caller_supplied_custom_ids() -> None:
     """Without caller custom_ids, results cannot be mapped back to requests
     on backends that do not preserve submission order (the OpenAI Batch
