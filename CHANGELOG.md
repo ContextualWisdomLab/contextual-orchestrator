@@ -75,6 +75,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Accept the standard Chat Completions `stream_options.include_usage=true`
+  request and emit provider-reported usage in a usage-only SSE chunk when
+  available after the terminal stop chunk; pass the option through live provider
+  streams, and reject structured `tools`/`response_format` passthrough before
+  execution because it cannot emit that SSE contract; keep unsupported
+  obfuscation flags fail-closed.
 - Billing usage-export failures now appear in the operator-safe telemetry health
   counters instead of only in emitted error events.
 - Billing usage export now follows accepted ledger writes and skips duplicate,

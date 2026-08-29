@@ -1686,11 +1686,11 @@ class ModelClient:
         """
         if type(include_usage) is not bool:
             raise TypeError("include_usage must be a boolean")
+        self._local.usage = None
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
-        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1754,10 +1754,14 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    choices = chunk.get("choices")
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         self._local.usage = usage
-                    choices = chunk.get("choices") or [{}]
+                    if choices == []:
+                        continue
+                    if not isinstance(choices, list) or not choices:
+                        continue
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
@@ -13838,23 +13842,41 @@ def chat_completion_chunks(
     include_trace: bool = False,
     include_usage: bool = False,
 ) -> list[dict[str, Any]]:
-    """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
+    """Frame an orchestration result as OpenAI-compatible chat completion chunks.
 
-    The engine produces the full answer before framing, so this yields a correct-shape
-    SSE stream (role delta, content deltas, terminal stop delta) rather than true
-    token-by-token streaming — real token streaming requires a streaming ModelClient.
+    Only provider-reported usage may be emitted. Gateway estimates remain internal
+    because presenting estimates as provider usage would violate the wire contract.
     """
     answer = result.get("answer", "")
     completion_id = _new_chat_completion_id()
     created = int(time.time())
-    base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+    }
+    if include_usage:
+        base["usage"] = None
 
     chunks: list[dict[str, Any]] = [
-        {**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+        {
+            **base,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        }
     ]
-    for start in range(0, len(answer), _STREAM_CHUNK_SIZE):
-        piece = answer[start : start + _STREAM_CHUNK_SIZE]
-        chunks.append({**base, "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]})
+    for offset in range(0, len(answer), _STREAM_CHUNK_SIZE):
+        piece = answer[offset : offset + _STREAM_CHUNK_SIZE]
+        chunks.append(
+            {
+                **base,
+                "choices": [
+                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
+                ],
+            }
+        )
 
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -13863,30 +13885,25 @@ def chat_completion_chunks(
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
-    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
-    final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
+
+    final = {
+        **base,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "orchestration": {
+            key: value for key, value in orchestration.items() if value is not None
+        },
+    }
     chunks.append(final)
-    if include_usage:
-        reported_usage = result.get("usage")
-        if isinstance(reported_usage, dict):
-            usage = {**reported_usage, "usage_source": "reported"}
-        else:
-            prompt_text = result.get("prompt_text", "")
-            estimated_prompt_tokens = estimate_tokens(
-                prompt_text if isinstance(prompt_text, str) else str(prompt_text)
-            )
-            estimated_completion_tokens = estimate_tokens(answer)
-            usage = {
-                "prompt_tokens": estimated_prompt_tokens,
-                "completion_tokens": estimated_completion_tokens,
-                "total_tokens": estimated_prompt_tokens + estimated_completion_tokens,
-                "usage_source": "estimated",
-            }
-        chunks.append({
-            **base,
-            "choices": [],
-            "usage": usage,
-        })
+
+    usage = result.get("usage")
+    cost = result.get("cost")
+    if (
+        include_usage
+        and isinstance(cost, dict)
+        and cost.get("measurement_status") == "measured"
+        and isinstance(usage, dict)
+    ):
+        chunks.append({**base, "choices": [], "usage": usage})
     return chunks
 
 
