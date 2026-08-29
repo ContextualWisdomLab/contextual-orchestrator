@@ -17,6 +17,7 @@ from contextual_orchestrator.credentials import (
 )
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
+    PROVIDER_MODEL_SOURCES,
     agent_from_discovered,
 )
 from contextual_orchestrator import provider_bootstrap
@@ -43,6 +44,8 @@ def _model(
     credential: str,
     model_id: str,
     prompt: float | None,
+    *,
+    evidence_only: bool = False,
 ) -> DiscoveredModel:
     """Build a deterministic provider-catalog row for bootstrap tests."""
     return DiscoveredModel(
@@ -53,17 +56,24 @@ def _model(
         auth_scheme="Bearer",
         prompt_price_per_1k=prompt,
         completion_price_per_1k=prompt,
+        evidence_only=evidence_only,
     )
 
 
 def test_fixed_inventory_matches_all_five_organization_secrets():
     """The bootstrap inventory must not silently lose an organization provider key."""
+    assert provider_bootstrap.PROVIDER_CREDENTIAL_NAMES == tuple(
+        dict.fromkeys(
+            source.credential_name
+            for source in PROVIDER_MODEL_SOURCES
+            if source.bootstrap_required
+        )
+    )
     assert set(provider_bootstrap.PROVIDER_CREDENTIAL_NAMES) == {
         "NVIDIA_NIM_API_KEY",
         "NVIDIA_NIM_API_KEY_SUB",
         "BYTEZ_API_KEY",
         "OPENROUTER_API_KEY",
-        "OPENCODE_ZEN_API_KEY",
         "OPENAI_API_KEY",
     }
 
@@ -80,6 +90,15 @@ def test_collect_requires_complete_inventory_without_leaking_values():
         get_credential(name) is None
         for name in provider_bootstrap.PROVIDER_CREDENTIAL_NAMES
     )
+
+
+def test_collect_accepts_optional_provider_credentials_without_requiring_them():
+    environment = _complete_environment()
+    environment["OPENCODE_ZEN_API_KEY"] = "optional-zen-secret\n"
+
+    collected = provider_bootstrap.collect_provider_credentials(environment)
+
+    assert collected["OPENCODE_ZEN_API_KEY"] == "optional-zen-secret"
 
 
 def test_atomic_memory_registration_strips_mounted_secret_newlines():
@@ -130,14 +149,14 @@ def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
         _model("bytez", "BYTEZ_API_KEY", "partial-model", None),
         prompt_price_per_1k=0.001,
     )
-    complete = _model("openrouter", "OPENROUTER_API_KEY", "complete-model", 1.0)
+    complete = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "complete-model", 1.0)
 
     selected = provider_bootstrap.select_provider_diverse_models(
         [partial, complete], limit=2
     )
 
     assert [(item.provider_name, item.model_id) for item in selected] == [
-        ("openrouter", "complete-model"),
+        ("nvidia_nim", "complete-model"),
         ("bytez", "partial-model"),
     ]
 
@@ -145,7 +164,7 @@ def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
 def test_non_usd_price_cannot_outrank_a_comparable_usd_price():
     """A cheap non-USD row must not beat a pricier USD row on face value alone."""
     cheap_foreign = replace(
-        _model("openrouter", "OPENROUTER_API_KEY", "cheap-foreign", 0.001),
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "cheap-foreign", 0.001),
         currency_code="EUR",
     )
     priced_usd = _model("openai", "OPENAI_API_KEY", "priced-usd", 1.0)
@@ -156,7 +175,7 @@ def test_non_usd_price_cannot_outrank_a_comparable_usd_price():
 
     assert [(item.provider_name, item.model_id) for item in selected] == [
         ("openai", "priced-usd"),
-        ("openrouter", "cheap-foreign"),
+        ("nvidia_nim", "cheap-foreign"),
     ]
 
 
@@ -182,15 +201,15 @@ def test_provider_bootstrap_collapses_nim_credentials_to_one_outage_domain():
     """Primary and secondary NIM credentials cannot displace an independent provider."""
     nim_primary = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "primary-model", 0.01)
     nim_secondary = _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "secondary-model", 0.02)
-    openrouter = _model("openrouter", "OPENROUTER_API_KEY", "router-model", 0.5)
+    independent = _model("bytez", "BYTEZ_API_KEY", "independent-model", 0.5)
 
     selected = provider_bootstrap.select_provider_diverse_models(
-        [nim_secondary, openrouter, nim_primary], limit=2
+        [nim_secondary, independent, nim_primary], limit=2
     )
 
     assert [(item.provider_name, item.model_id) for item in selected] == [
         ("nvidia_nim", "primary-model"),
-        ("openrouter", "router-model"),
+        ("bytez", "independent-model"),
     ]
 
 
@@ -208,15 +227,15 @@ def test_non_chat_catalog_rows_are_never_selected_for_chat_service():
             0.1,
         ),
         _model(
-            "openrouter",
-            "OPENROUTER_API_KEY",
+            "openai",
+            "OPENAI_API_KEY",
             "openai/gpt-4.1-mini",
             2.0,
         ),
     ]
     selected = provider_bootstrap.select_provider_diverse_models(models, limit=10)
     assert [(item.provider_name, item.model_id) for item in selected] == [
-        ("openrouter", "openai/gpt-4.1-mini")
+        ("openai", "openai/gpt-4.1-mini")
     ]
 
 
@@ -380,7 +399,7 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
     assert report.durable_agent_pool is True
 
     restarted = TaskOrchestrator(
-        [ModelAgent("bootstrap_agent", "bootstrap-model")],
+        [],
         agents_db=agents_db,
     )
     assert {agent.id for agent in restarted.agents} == {
