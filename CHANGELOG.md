@@ -85,6 +85,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `stream_usage_supported` capability, and the admin-safe agent view exposes it.
 - Require `--allow-public-bind` for every non-loopback address, not only wildcard
   binds, so a specific network interface cannot bypass the public-bind guard.
+- Reject shared or identical split bearer credentials on public binds, while
+  keeping the CLI's preliminary host check independent from final credentials.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Treat a provider's explicit 1,024-character tool-description rejection as a
