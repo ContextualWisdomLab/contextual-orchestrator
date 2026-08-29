@@ -1799,11 +1799,11 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
 
 
 def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[str, Any] | None:
-    """Chat Completions ``stream_options`` — requires stream=true; include_usage unsupported.
+    """Chat Completions ``stream_options`` — validate supported streaming flags.
 
     Shape matches OpenAI (include_usage / include_obfuscation booleans). This
-    gateway's SSE route path does not emit a final usage chunk and does not
-    apply stream obfuscation, so include_usage/include_obfuscation=true fail closed.
+    gateway's SSE route path emits a final usage chunk but does not apply stream
+    obfuscation, so only include_obfuscation=true fails closed.
     Explicit JSON null on *allowed* flag keys is treat-as-omit (SDK optional defaults).
     Unknown keys fail closed even when their value is null so clients cannot smuggle
     unsupported flags past the allow-list via null serialization.
@@ -1853,12 +1853,6 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
             400,
             "invalid_stream_options",
             "stream_options requires stream=true on /v1/chat/completions",
-        )
-    if opts.get("include_usage") is True:
-        raise RequestError(
-            400,
-            "invalid_stream_options",
-            "stream_options.include_usage=true is not supported on /v1/chat/completions",
         )
     if opts.get("include_obfuscation") is True:
         # SSE obfuscation is not applied by this gateway; fail closed.
@@ -3407,8 +3401,10 @@ def _validate_chat_sampling_and_control_fields(
         _validate_service_tier(body, endpoint_path="/v1/chat/completions")
     if "user" in body:
         _validate_completions_user(body)
-    if "stream_options" in body:
-        _validate_chat_stream_options(body, stream)
+    stream_options = _validate_chat_stream_options(body, stream) if "stream_options" in body else None
+    sampling["include_usage"] = bool(
+        stream_options and stream_options.get("include_usage") is True
+    )
     return sampling
 
 
@@ -6362,6 +6358,7 @@ def build_server(
                     max_tokens = sampling["max_tokens"]
                     presence_penalty = sampling["presence_penalty"]
                     frequency_penalty = sampling["frequency_penalty"]
+                    include_usage = sampling["include_usage"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
@@ -6521,7 +6518,13 @@ def build_server(
                         frequency_penalty=frequency_penalty,
                     ):
                         if route_stream:
-                            self._stream_route_completion(orchestrator, security, messages, model_name)
+                            self._stream_route_completion(
+                                orchestrator,
+                                security,
+                                messages,
+                                model_name,
+                                include_usage=include_usage,
+                            )
                             orchestrator.record_analytics_event(
                                 "chat_completion_requested",
                                 {
@@ -6574,7 +6577,12 @@ def build_server(
                         },
                     )
                     if stream:
-                        chunks = chat_completion_chunks(result, model=model_name, include_trace=include_trace)
+                        chunks = chat_completion_chunks(
+                            result,
+                            model=model_name,
+                            include_trace=include_trace,
+                            include_usage=include_usage,
+                        )
                         self._send_sse(sse_stream_body(chunks))
                         return
                     self._send(chat_completion_response(
@@ -7743,7 +7751,15 @@ def build_server(
             finally:
                 security.release_run_slot()
 
-        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+        def _stream_route_completion(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            *,
+            include_usage: bool = False,
+        ) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = _new_chat_completion_id()
@@ -7771,6 +7787,23 @@ def build_server(
                             return
                     if not self._write_sse(frame({}, finish="stop")):
                         return
+                    if include_usage:
+                        usage_payload = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model_name,
+                            "choices": [],
+                            "usage": {
+                                "prompt_tokens": 0,
+                                "completion_tokens": 0,
+                                "total_tokens": 0,
+                            },
+                        }
+                        if not self._write_sse(
+                            f"data: {json.dumps(usage_payload, ensure_ascii=False)}\n\n"
+                        ):
+                            return
                 except ToolFallbackStoppedError as exc:
                     detail = {
                         "request_id": uuid.uuid4().hex,

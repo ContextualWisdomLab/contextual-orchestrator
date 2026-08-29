@@ -55,6 +55,24 @@ def test_empty_answer_produces_role_and_stop_only() -> None:
     assert chunks[1]["choices"][0]["finish_reason"] == "stop"
 
 
+def test_include_usage_adds_openai_usage_chunk() -> None:
+    chunks = chat_completion_chunks(
+        {
+            "answer": "abc",
+            "mode": "route",
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        },
+        include_usage=True,
+    )
+
+    assert chunks[-1]["choices"] == []
+    assert chunks[-1]["usage"] == {
+        "prompt_tokens": 2,
+        "completion_tokens": 3,
+        "total_tokens": 5,
+    }
+
+
 def test_completion_ids_remain_unique_when_created_in_one_millisecond() -> None:
     result = {"answer": "OK", "mode": "route"}
     with patch("contextual_orchestrator.orchestrator.time.time", return_value=1_786_698_100.0):
