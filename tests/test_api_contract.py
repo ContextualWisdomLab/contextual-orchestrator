@@ -66,6 +66,9 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (
         "bearer"
     )
+    assert OPENAPI_SPEC["paths"]["/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"]["post"][
+        "security"
+    ] == [{"inference_bearer_auth": [], "trace_bearer_auth": []}]
 
 
 def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> None:
@@ -107,3 +110,17 @@ if __name__ == "__main__":  # pragma: no cover
     test_openapi_uses_resource_oriented_operation_ids()
     test_openapi_documents_orchestrator_owned_embedding_model_selection()
     print("ok")
+
+
+
+def test_batch_job_openapi_documents_principal_hiding_404s() -> None:
+    """Missing and foreign batch jobs share the documented not-found surface."""
+    status = OPENAPI_SPEC["paths"][
+        "/api/v1/batch_routing_jobs/{batch_routing_job_id}"
+    ]["get"]["responses"]
+    results = OPENAPI_SPEC["paths"][
+        "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"
+    ]["post"]["responses"]
+    assert "404" in status
+    assert "not owned" in status["404"]["description"]
+    assert results["404"] == status["404"]

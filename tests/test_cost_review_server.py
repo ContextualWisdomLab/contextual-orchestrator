@@ -359,6 +359,51 @@ def test_batch_routing_via_chat_completion_and_results_retrieval() -> None:
         server.shutdown()
 
 
+def test_batch_routing_jobs_are_principal_bound_for_poll_and_results() -> None:
+    """A second bearer cannot confirm or retrieve another principal's job."""
+    token_a = "batch-owner-a"
+    token_b = "batch-owner-b"
+    security = SecurityConfig(
+        bearer_verifier=lambda presented, scope: presented in {token_a, token_b}
+        and scope in {"admin", "inference", "trace"}
+    )
+    server, port, _ = _serve(security)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, submitted = _request(
+            "POST",
+            f"{base}/api/v1/batch_routing_jobs",
+            token_a,
+            {"requests": [{"messages": [{"role": "user", "content": "owned"}]}]},
+        )
+        assert status == 201, submitted
+        job_id = submitted["job_id"]
+
+        status, body = _request(
+            "GET", f"{base}/api/v1/batch_routing_jobs/{job_id}", token_b
+        )
+        assert status == 404
+        assert body["error"]["code"] == "batch_job_not_found"
+        status, body = _request(
+            "POST", f"{base}/api/v1/batch_routing_jobs/{job_id}/results", token_b
+        )
+        assert status == 404
+        assert body["error"]["code"] == "batch_job_not_found"
+
+        status, polled = _request(
+            "GET", f"{base}/api/v1/batch_routing_jobs/{job_id}", token_a
+        )
+        assert status == 200
+        assert polled["is_complete"] is True
+        status, retrieved = _request(
+            "POST", f"{base}/api/v1/batch_routing_jobs/{job_id}/results", token_a
+        )
+        assert status == 200
+        assert retrieved["result_count"] == 1
+    finally:
+        server.shutdown()
+
+
 def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
     server, port, token = _serve()
     base = f"http://127.0.0.1:{port}"
@@ -494,3 +539,26 @@ if __name__ == "__main__":  # pragma: no cover
             _fn()
             print(f"ok {_name}")
     print("ok")
+
+
+
+def test_batch_routing_rejects_unknown_zdr_model_as_client_error() -> None:
+    """An unknown explicit ZDR model is a non-retryable client error."""
+    server, port, token = _serve()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{port}/api/v1/batch_routing_jobs",
+            token,
+            {
+                "model": "not-configured",
+                "zdr_only": True,
+                "requests": [
+                    {"messages": [{"role": "user", "content": "route securely"}]}
+                ],
+            },
+        )
+    finally:
+        server.shutdown()
+    assert status == 400
+    assert body["error"]["code"] == "invalid_model"

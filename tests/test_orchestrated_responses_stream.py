@@ -505,3 +505,39 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     assert event["event_detail"]["status_code"] == 500
     assert event["event_detail"]["transport_status_code"] == 200
     assert event["event_detail"]["response_status"] == "failed"
+
+
+
+def test_stream_usage_failure_remains_inside_the_started_sse_protocol(monkeypatch) -> None:
+    """A post-header ledger failure emits Responses failure framing, never JSON HTTP."""
+    token = "responses_stream_usage_failure_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("workflow_agent", "mock-model", base_url="mock://provider")
+    ])
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    def fail_usage(**_kwargs):
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(coordinator, "record_stream_usage", fail_usage)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        stream = _post(server, token, "orchestrator/auto")
+    finally:
+        server.shutdown()
+
+    events = [
+        json.loads(line[6:])
+        for line in stream.splitlines()
+        if line.startswith("data: {")
+    ]
+    assert events[-1]["type"] == "response.failed"
+    assert events[-1]["response"]["error"]["code"] == "usage_recording_failed"
+    assert all(event["type"] != "response.completed" for event in events)
+    assert stream.rstrip().endswith("data: [DONE]")

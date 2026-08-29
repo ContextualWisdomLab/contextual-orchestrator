@@ -26,7 +26,11 @@ import uuid
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
-from .cost_router import BatchModelSelectionError, CostRoutingCoordinator
+from .cost_router import (
+    BatchModelSelectionError,
+    CostRoutingCoordinator,
+    InvalidBatchModelError,
+)
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
@@ -346,6 +350,9 @@ class SecurityConfig:
     # relying-party adapter). The core deliberately does not decode JWTs with
     # an unsafe hand-rolled parser or own Keycloak admin credentials.
     bearer_verifier: Callable[[str, str], bool] | None = None
+    # Optional companion seam for external verifiers that can expose a stable,
+    # tenant-scoped principal key without exposing the bearer itself.
+    principal_resolver: Callable[[str], str | None] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -471,13 +478,27 @@ class SecurityConfig:
                 if principal:
                     return principal
             raise RequestError(401, "unauthorized", "authenticated principal is required")
+        return self._principal_digest(token)
+
+    def _principal_digest(self, token: str) -> str:
+        """Hash a stable deployment principal without retaining bearer material."""
         if self.bearer_verifier is None:
             if self.admin_token and self.inference_token:
                 principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
             else:
                 principal_material = f"single:{self.auth_token}"
-        else:
+        elif self.principal_resolver is None:
+            # Back-compatible fallback for adapters that only return bool;
+            # token rotation can intentionally revoke old resource access.
             principal_material = f"bearer:{token}"
+        else:
+            try:
+                resolved = self.principal_resolver(token)
+            except Exception as exc:  # noqa: BLE001 - identity adapter failure denies access
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable") from exc
+            if not isinstance(resolved, str) or not resolved.strip():
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable")
+            principal_material = f"principal:{resolved}"
         return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -514,14 +535,7 @@ class SecurityConfig:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         session_id = secrets.token_urlsafe(32)
         expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
-        if self.bearer_verifier is None:
-            if self.admin_token and self.inference_token:
-                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
-            else:
-                principal_material = f"single:{self.auth_token}"
-        else:
-            principal_material = f"bearer:{presented_token}"
-        principal = hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
+        principal = self._principal_digest(presented_token)
         with self._session_lock:
             self._purge_expired_admin_sessions_locked(time.monotonic())
             overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
@@ -5551,7 +5565,11 @@ def build_server(
                 if path.startswith("/api/v1/batch_routing_jobs/"):
                     job_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(coordinator.poll_batch(job_id))
+                        self._send(
+                            coordinator.poll_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
@@ -6356,6 +6374,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
                         ))
                     # Batch-channel Completions return a job handle (202), not a
@@ -6722,6 +6741,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
                         ))
                     # Latency-tolerant requests get dispatched to the batch backend.
@@ -6960,7 +6980,16 @@ def build_server(
                         zdr_only=zdr_only,
                     )
                     metadata = {"actor_scope": "inference"}
-                    job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
+                        )
+                    except InvalidBatchModelError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
@@ -6983,7 +7012,11 @@ def build_server(
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
                     self._authorize_trace_access()
                     try:
-                        retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                        retrieved = self._run(
+                            lambda: coordinator.retrieve_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
@@ -7897,14 +7930,25 @@ def build_server(
                     self._write_sse("data: [DONE]\n\n")
                     return False
                 if coordinator is not None:
-                    result = {
-                        **result,
-                        **coordinator.record_stream_usage(
+                    try:
+                        stream_usage = coordinator.record_stream_usage(
                             result=result,
                             attribution=attribution,
                             model_name=model_name,
-                        ),
-                    }
+                        )
+                    except Exception:  # noqa: BLE001 - headers sent; remain inside SSE
+                        failed = {
+                            **created_response,
+                            "status": "failed",
+                            "error": {
+                                "code": "usage_recording_failed",
+                                "message": "Usage evidence could not be recorded for this response.",
+                            },
+                        }
+                        emit("response.failed", response=failed)
+                        self._write_sse("data: [DONE]\n\n")
+                        return False
+                    result = {**result, **stream_usage}
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",

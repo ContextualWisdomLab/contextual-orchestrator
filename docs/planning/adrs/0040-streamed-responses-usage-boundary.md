@@ -1,5 +1,5 @@
 ---
-id: "0038"
+id: "0040"
 title: "Record streamed Responses usage at the workflow boundary"
 status: accepted
 proposed_date: "2026-08-29"

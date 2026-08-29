@@ -146,6 +146,26 @@ def test_retrieve_batch_requires_known_job_id() -> None:
         coordinator.retrieve_batch("nope_missing_job")
 
 
+def test_batch_poll_and_retrieve_require_the_bound_owner() -> None:
+    """An opaque job identifier cannot cross the authenticated owner boundary."""
+    coordinator = _coordinator()
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "owned"}],
+        hints={"channel": "batch"},
+        owner_id="principal-a",
+    )
+    job_id = submitted["job_id"]
+    job = coordinator._batch_jobs[job_id]
+
+    assert job.owner_id == "principal-a"
+    assert coordinator.poll_batch(job_id, owner_id="principal-a")["is_complete"] is True
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.poll_batch(job_id, owner_id="principal-b")
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.retrieve_batch(job_id, owner_id="principal-b")
+    assert coordinator.retrieve_batch(job_id, owner_id="principal-a")["result_count"] == 1
+
+
 # --- embedding input splitting --------------------------------------------------------
 
 
@@ -423,3 +443,33 @@ def test_complete_embeddings_batch_round_trips_locally() -> None:
     assert document["status"] == "completed"
     assert document["embeddings"][0]["index"] == 0
     assert document["cost_micro_usd"] >= 0
+
+
+
+def test_batch_model_identity_error_does_not_capture_backend_value_errors() -> None:
+    """Only model resolution receives the client-facing invalid-model category."""
+    from contextual_orchestrator.batch_routing import BatchRequest
+    from contextual_orchestrator.cost_router import InvalidBatchModelError
+
+    class RejectingBackend:
+        name = "rejecting-backend"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del requests, metadata
+            raise ValueError("backend payload validation failed")
+
+    coordinator = _coordinator(batch_backend=RejectingBackend())
+    with pytest.raises(ValueError, match="backend payload validation failed") as backend_error:
+        coordinator.submit_batch([
+            BatchRequest(messages=[{"role": "user", "content": "valid"}], model="mock-a")
+        ])
+    assert type(backend_error.value) is ValueError
+
+    with pytest.raises(InvalidBatchModelError, match="not configured"):
+        coordinator.submit_batch([
+            BatchRequest(
+                messages=[{"role": "user", "content": "private"}],
+                model="not-configured",
+                zdr_only=True,
+            )
+        ])
