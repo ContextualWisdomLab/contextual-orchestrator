@@ -59,6 +59,10 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
         "security"
     ] == [{"admin_bearer_auth": [], "trace_bearer_auth": []}]
+    patch_schema = OPENAPI_SPEC["paths"][
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}"
+    ]["patch"]["requestBody"]["content"]["application/json"]["schema"]
+    assert patch_schema["properties"]["stream_usage_supported"]["type"] == "boolean"
     assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (
         "bearer"
     )
