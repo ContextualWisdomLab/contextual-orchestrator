@@ -443,9 +443,10 @@ def _apply_discovered_model_evidence(
 ) -> list[DiscoveredModel]:
     """Apply model-level ZDR evidence to matching rows from every provider.
 
-    Providers may expose a bare model id while OpenRouter namespaces the same
-    model. Exact ids win; a namespaced evidence id may qualify a different
-    provider row only when its final model component is unique in the feed.
+    Providers may expose the same canonical model id as OpenRouter while using
+    a different upstream endpoint. Exact canonical ids are the only portable
+    identity; suffix matching would transfer privacy evidence to an unrelated
+    model that merely shares a display name.
     """
     if not zdr_model_ids:
         return discovered
@@ -453,15 +454,7 @@ def _apply_discovered_model_evidence(
 
     def matches(model_id: str) -> bool:
         normalized = model_id.strip().casefold()
-        if normalized in exact_ids:
-            return True
-        suffix = normalized.rsplit("/", 1)[-1]
-        suffix_matches = {
-            candidate
-            for candidate in exact_ids
-            if candidate.rsplit("/", 1)[-1] == suffix
-        }
-        return bool(suffix) and len(suffix_matches) == 1
+        return normalized in exact_ids
 
     return [
         replace(

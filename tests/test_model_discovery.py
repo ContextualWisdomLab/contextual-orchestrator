@@ -484,7 +484,7 @@ def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-openrouter"
 
 
-def test_discover_all_models_matches_a_unique_zdr_model_suffix() -> None:
+def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-openrouter")
     other_source = ProviderModelSource(
         provider_name="nvidia_nim",
@@ -511,7 +511,7 @@ def test_discover_all_models_matches_a_unique_zdr_model_suffix() -> None:
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
         ("openrouter", False),
-        ("nvidia_nim", True),
+        ("nvidia_nim", False),
     ]
 
 
