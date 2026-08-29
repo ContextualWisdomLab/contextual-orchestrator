@@ -1,0 +1,17 @@
+name: Resolve PR 868 against protected main
+
+on:
+  push:
+    branches: [fix/gateway-default-chat-model]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
+    with:
+      pr_number: 868
+      branch: fix/gateway-default-chat-model
+      caller_file: .github/workflows/resolve-pr-868.yml
