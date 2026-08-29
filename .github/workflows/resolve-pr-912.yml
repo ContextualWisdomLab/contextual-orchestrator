@@ -1,0 +1,17 @@
+name: Resolve PR 912 against protected main
+
+on:
+  push:
+    branches: [feat/normalized-video-job-resource-20260829]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
+    with:
+      pr_number: 912
+      branch: feat/normalized-video-job-resource-20260829
+      caller_file: .github/workflows/resolve-pr-912.yml
