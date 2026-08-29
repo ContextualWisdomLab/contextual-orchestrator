@@ -84,6 +84,7 @@ OPENROUTER_SOURCE = ProviderModelSource(
     list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
     chat_base_url="https://openrouter.ai/api/v1",
     capabilities=("chat",),
+    evidence_only=True,
 )
 
 BYTEZ_SOURCE = ProviderModelSource(
@@ -153,7 +154,10 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
-    assert "response_format" in agent_from_discovered(discovered[0]).tags
+    assert all(model.evidence_only for model in discovered)
+    assert "response_format" in agent_from_discovered(
+        replace(discovered[0], evidence_only=False)
+    ).tags
 
 
 def test_openrouter_discovery_preserves_every_declared_modality() -> None:
@@ -189,7 +193,9 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert "audio" in generated_audio.capabilities
     embedding = next(model for model in discovered if "embedding" in model.capabilities)
     assert embedding.output_modalities == ("embeddings",)
-    assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
+    assert {"input:text", "output:embeddings"} <= set(
+        agent_from_discovered(replace(embedding, evidence_only=False)).tags
+    )
 
 
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:
@@ -264,7 +270,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(discovered[0]).group_name == ""
+    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
 
 
 def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
@@ -345,6 +351,7 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
+    assert sources["openrouter"].evidence_only is True
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
@@ -427,6 +434,136 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].__cause__ is None
 
 
+def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
+            return _Response({"data": [{"model_id": "openai/shared-model"}]})
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "openai/shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openrouter", False),
+        ("nvidia_nim", True),
+    ]
+
+
+def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    seen_requests = []
+
+    def urlopen(request, timeout=None):
+        seen_requests.append(request)
+        return _Response({"data": [{"model_id": "openai/shared-model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+        assert _openrouter_zdr_model_ids(timeout=1.0) == {"openai/shared-model"}
+
+    assert seen_requests[0].get_header("Authorization") == "Bearer sk-openrouter"
+
+
+def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
+            return _Response({"data": [{"model_id": "openai/shared-model"}]})
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openrouter", False),
+        ("nvidia_nim", False),
+    ]
+
+
+def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
+            return _Response(
+                {
+                    "data": [
+                        {"model_id": "openai/shared-model"},
+                        {"model_id": "other/shared-model"},
+                    ]
+                }
+            )
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openrouter", False),
+        ("nvidia_nim", False),
+    ]
+
+
+def test_malformed_openrouter_zdr_data_is_ignored(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "contextual_orchestrator.model_discovery._fetch_json",
+        lambda *args, **kwargs: {"data": {"model_id": "not-a-list"}},
+    )
+
+    from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+    assert _openrouter_zdr_model_ids(timeout=1.0) == set()
+
+
 def test_discovery_boundary_contains_raw_connection_reset() -> None:
     """A raw ConnectionResetError (not a URLError) still fails inside the boundary.
 
@@ -479,6 +616,20 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
     assert "discovered" in agent.tags
 
 
+def test_agent_from_discovered_rejects_evidence_only_rows() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/evidence-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        evidence_only=True,
+    )
+
+    with pytest.raises(ValueError, match="evidence-only"):
+        agent_from_discovered(discovered)
+
+
 def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
     discovered = DiscoveredModel(
         provider_name="openai",
@@ -489,7 +640,11 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
         capabilities=("embedding",),
     )
 
-    assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
+    assert agent_from_discovered(discovered).tags == (
+        "discovered",
+        "embedding",
+        "capability:embedding",
+    )
 
 
 def test_response_format_metadata_does_not_make_non_chat_model_eligible() -> None:
