@@ -5019,7 +5019,7 @@ def _orchestrated_response(
     """Build the OpenAI Responses shape for an orchestrated plain-text result."""
     reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
     message_id = message_id or f"msg_{uuid.uuid4().hex}"
-    return {
+    response = {
         "id": response_id,
         "object": "response",
         "created_at": created_at,
@@ -5052,9 +5052,14 @@ def _orchestrated_response(
         "tools": [],
         "top_p": None,
         "truncation": "disabled",
-        "usage": None,
+        "usage": result.get("usage"),
         "metadata": {},
     }
+    if result.get("usage_record_ids"):
+        response["usage_record_ids"] = result["usage_record_ids"]
+    if result.get("cost") is not None:
+        response["cost"] = result["cost"]
+    return response
 
 
 def build_server(
@@ -6976,6 +6981,14 @@ def build_server(
                             )
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
                         _require_pool_model(orchestrator, model_name)
+                    responses_attribution = dict(
+                        _validate_attribution(body.get("attribution")) or {}
+                    )
+                    responses_user_id = _validate_completions_user(body)
+                    if responses_user_id is not None and not responses_attribution.get("account"):
+                        responses_attribution["account"] = responses_user_id
+                    responses_attribution.setdefault("model_name", body["model"])
+                    responses_attribution.setdefault("service", "responses_api")
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
                         if body.get("tools"):
                             raise RequestError(
@@ -7004,7 +7017,12 @@ def build_server(
                         messages.append({"role": "user", "content": _coerce_input_text(input_value)})
                         started_at = time.perf_counter()
                         stream_succeeded = self._stream_orchestrated_response(
-                            orchestrator, security, messages, model_name
+                            orchestrator,
+                            security,
+                            messages,
+                            model_name,
+                            coordinator=coordinator,
+                            attribution=responses_attribution,
                         )
                         orchestrator.record_analytics_event(
                             "responses_orchestrated",
@@ -7023,14 +7041,6 @@ def build_server(
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
                     responses_messages = _responses_to_chat_payload(body)["messages"]
-                    responses_attribution = dict(
-                        _validate_attribution(body.get("attribution")) or {}
-                    )
-                    responses_user_id = _validate_completions_user(body)
-                    if responses_user_id is not None and not responses_attribution.get("account"):
-                        responses_attribution["account"] = responses_user_id
-                    responses_attribution.setdefault("model_name", body["model"])
-                    responses_attribution.setdefault("service", "responses_api")
                     response_max_tokens = next(
                         (
                             body.get(key)
@@ -7459,6 +7469,9 @@ def build_server(
             security: Any,
             messages: Any,
             model_name: str,
+            *,
+            coordinator: Any = None,
+            attribution: dict[str, Any] | None = None,
         ) -> bool:
             """Stream orchestration as native Responses reasoning-summary events."""
             response_id = f"resp_{uuid.uuid4().hex}"
@@ -7545,9 +7558,20 @@ def build_server(
                 try:
                     if orchestrator.would_route(messages, "auto", model_name):
                         progress("worker", "started")
-                        parts = list(orchestrator.stream_route(messages, model_name=model_name))
+                        workflow_run_id = f"run_{uuid.uuid4().hex}"
+                        parts = list(
+                            orchestrator.stream_route(
+                                messages,
+                                workflow_run_id=workflow_run_id,
+                                model_name=model_name,
+                            )
+                        )
                         progress("worker", "completed")
-                        result = {"answer": "".join(parts)}
+                        result = (
+                            orchestrator.get_workflow_run(workflow_run_id)
+                            if coordinator is not None
+                            else {"answer": "".join(parts)}
+                        )
                     else:
                         result = orchestrator.conduct(
                             messages, model_name=model_name, progress=progress
@@ -7566,6 +7590,15 @@ def build_server(
                     emit("response.failed", response=failed)
                     self._write_sse("data: [DONE]\n\n")
                     return False
+                if coordinator is not None:
+                    result = {
+                        **result,
+                        **coordinator.record_stream_usage(
+                            result=result,
+                            attribution=attribution,
+                            model_name=model_name,
+                        ),
+                    }
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",

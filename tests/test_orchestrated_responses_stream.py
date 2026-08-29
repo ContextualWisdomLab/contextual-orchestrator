@@ -10,7 +10,7 @@ import urllib.error
 
 import pytest
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import (
     RequestError,
     SecurityConfig,
@@ -84,6 +84,47 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         assert {step["agent_id"] for step in orchestrator.conduct(
             [{"role": "user", "content": "Research and verify this."}], model_name=model
         )["trace"]} == {"free_worker"}
+
+
+def test_streamed_responses_records_unavailable_usage_without_estimating_answer() -> None:
+    token = "responses_stream_usage_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("route_worker", "mock-model", tags=("reasoning", "writing"))
+    ])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({"model": "orchestrator/auto", "input": "hello", "stream": True}).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            events = [
+                json.loads(line[6:])
+                for line in response.read().decode().splitlines()
+                if line.startswith("data: {")
+            ]
+    finally:
+        server.shutdown()
+
+    completed = events[-1]["response"]
+    assert completed["usage"] is None
+    assert completed["cost"]["measurement_status"] == "unavailable"
+    assert completed["cost"]["cost_amount"] is None
+    assert completed["usage_record_ids"]
+    rows = coordinator.ledger.records()
+    assert len(rows) == len(completed["usage_record_ids"])
+    assert all(row["request_channel"] == "stream" for row in rows)
+    assert all(row["measurement_status"] == "unavailable" for row in rows)
+    assert all(row["prompt_tokens"] == row["completion_tokens"] == 0 for row in rows)
 
 
 def test_conduct_preserves_responses_instructions_for_every_stage() -> None:

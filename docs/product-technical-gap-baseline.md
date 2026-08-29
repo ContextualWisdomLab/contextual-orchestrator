@@ -1,5 +1,29 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-29 streamed Responses usage boundary
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. This branch closes the bounded
+Responses streaming cost-accounting gap: provider SSE usage, when supplied, is
+kept on the served workflow trace; every completed trace step is recorded as a
+`request_channel=stream` ledger row; and a provider that omits usage produces
+an explicit `measurement_status=unavailable` row with no token estimate from
+the synthesized answer. The final Responses event exposes standard
+`input_tokens`/`output_tokens`/`total_tokens` only when every step is measured,
+plus gateway cost status and usage-record identifiers.
+
+This follows the Responses API's `response.completed` usage shape and the
+OpenTelemetry GenAI input/output usage vocabulary. A stream can end before a
+provider's final usage frame, so unavailable is retained as an honest state;
+it is never represented as free or estimated. The exact branch proof is the
+focused streaming, ledger, disconnect, and cost-router tests; protected
+Checks, independent approval, and normal merge remain required.
+
+The remaining customer-visible gaps are unchanged: true answer-token
+streaming still needs a cancellable asynchronous dependency graph; routing
+observations remain process-local; and live NIM quality/cost evidence remains
+open under issue #86.
+
 ## 2026-08-29 legacy single-token production gate
 
 Protected `main` remains

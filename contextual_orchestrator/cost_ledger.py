@@ -251,7 +251,7 @@ class UsageRecord:
     usage_record_id: str
     created_at: int
     workflow_run_id: Optional[str]
-    request_channel: str  # "sync" | "batch"
+    request_channel: str  # "sync" | "stream" | "batch"
     route_mode: Optional[str]  # "route" | "conduct"
     provider_name: str
     model_name: str

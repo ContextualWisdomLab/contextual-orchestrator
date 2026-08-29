@@ -72,6 +72,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
   `batch_route`; omit it to keep today's payload.
+- Streamed `/v1/responses` workflow runs now preserve provider-declared SSE
+  usage, record per-step `stream` cost-ledger rows, and expose cost status plus
+  usage-record identities. Missing provider usage is explicitly unavailable;
+  the gateway does not estimate billing tokens from the final answer (ADR 0038).
 
 ### Fixed
 

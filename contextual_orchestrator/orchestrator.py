@@ -1625,6 +1625,7 @@ class ModelClient:
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
+        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1661,6 +1662,7 @@ class ModelClient:
         self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
+        self._local.usage = None
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -1686,6 +1688,9 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        self._local.usage = usage
                     choices = chunk.get("choices") or [{}]
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
@@ -4035,6 +4040,7 @@ class TaskOrchestrator:
             if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
             raise
+        usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
         if agent.group_name or model_name == self.FREE_MODEL:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
@@ -4048,9 +4054,19 @@ class TaskOrchestrator:
             answer=answer,
             served_id=agent.id,
             latency_seconds=latency_seconds,
-            usage=None,
+            usage=usage,
             free_only=model_name == self.FREE_MODEL,
         )
+        trace_step: dict[str, Any] = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Direct route (streamed)",
+            "access": [],
+            "output": answer,
+        }
+        if isinstance(usage, dict):
+            trace_step["usage"] = usage
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -4059,10 +4075,7 @@ class TaskOrchestrator:
                 "policy_mode": "route",
                 "prompt_text": text,
                 "answer": answer,
-                "trace": [
-                    {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                     "access": [], "output": answer}
-                ],
+                "trace": [trace_step],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {**verification, "verifier_output": answer},
             }
