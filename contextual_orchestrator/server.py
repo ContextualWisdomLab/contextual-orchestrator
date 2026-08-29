@@ -364,6 +364,12 @@ class SecurityConfig:
             raise ValueError(
                 "public bind requires split admin_token and inference_token credentials"
             )
+        if (
+            self.allow_public_bind
+            and self.bearer_verifier is None
+            and self.admin_token == self.inference_token
+        ):
+            raise ValueError("public bind requires distinct admin_token and inference_token credentials")
         if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
             raise ValueError("max_body_bytes must be a positive integer")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:

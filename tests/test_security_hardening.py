@@ -262,6 +262,15 @@ def test_public_bind_rejects_shared_token_at_security_boundary() -> None:
         raise AssertionError("public bind must not accept one shared bearer token")
 
 
+def test_public_bind_rejects_identical_split_tokens() -> None:
+    try:
+        SecurityConfig(admin_token="same_secret", inference_token="same_secret", allow_public_bind=True)
+    except ValueError as exc:
+        assert str(exc) == "public bind requires distinct admin_token and inference_token credentials"
+    else:  # pragma: no cover
+        raise AssertionError("public bind must not reuse one bearer for both scopes")
+
+
 def test_scope_token_precedes_mutated_shared_token() -> None:
     security = SecurityConfig(admin_token="admin_secret", inference_token="inference_secret")
     security.auth_token = "mutated_shared_secret"
