@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 
@@ -90,6 +91,62 @@ def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
         assert security.acquired == security.released == 1
     finally:
         server.server_close()
+
+
+def test_stream_route_emits_provider_usage_when_requested() -> None:
+    """A successful live route includes provider usage before its stop frame."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    frames: list[str] = []
+
+    class Client:
+        def take_usage(self):
+            return {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6}
+
+    class Orchestrator:
+        client = Client()
+
+        def stream_route(self, messages, workflow_run_id, *, model_name):
+            del messages, workflow_run_id, model_name
+            yield "answer"
+
+    class Security:
+        def acquire_run_slot(self):
+            return None
+
+        def release_run_slot(self):
+            return None
+
+    class Handler:
+        def _begin_sse(self):
+            return True
+
+        def _write_sse(self, frame):
+            frames.append(frame)
+            return True
+
+    try:
+        server.RequestHandlerClass._stream_route_completion(
+            Handler(),
+            Orchestrator(),
+            Security(),
+            [],
+            "model-group",
+            include_usage=True,
+        )
+    finally:
+        server.server_close()
+
+    usage_frames = [json.loads(frame[6:]) for frame in frames if '"usage"' in frame]
+    assert len(usage_frames) == 1
+    usage_frame = usage_frames[0]
+    assert usage_frame["object"] == "chat.completion.chunk"
+    assert usage_frame["model"] == "model-group"
+    assert usage_frame["choices"] == []
+    assert usage_frame["usage"] == {
+        "prompt_tokens": 2,
+        "completion_tokens": 4,
+        "total_tokens": 6,
+    }
 
 
 def test_responses_stream_does_not_start_orchestration_after_header_disconnect() -> None:

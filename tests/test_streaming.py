@@ -55,6 +55,37 @@ def test_empty_answer_produces_role_and_stop_only() -> None:
     assert chunks[1]["choices"][0]["finish_reason"] == "stop"
 
 
+def test_chunks_include_requested_provider_usage_before_stop() -> None:
+    usage = {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}
+    chunks = chat_completion_chunks(
+        {
+            "answer": "OK",
+            "mode": "route",
+            "usage": usage,
+            "cost": {"measurement_status": "measured"},
+        },
+        include_usage=True,
+    )
+
+    assert chunks[-2]["choices"] == []
+    assert chunks[-2]["usage"] == usage
+    assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+
+
+def test_chunks_omit_estimated_usage_even_when_requested() -> None:
+    chunks = chat_completion_chunks(
+        {
+            "answer": "OK",
+            "mode": "conduct",
+            "usage": {"prompt_tokens": 3, "completion_tokens": 5},
+            "cost": {"measurement_status": "estimated"},
+        },
+        include_usage=True,
+    )
+
+    assert all("usage" not in chunk for chunk in chunks)
+
+
 def test_completion_ids_remain_unique_when_created_in_one_millisecond() -> None:
     result = {"answer": "OK", "mode": "route"}
     with patch("contextual_orchestrator.orchestrator.time.time", return_value=1_786_698_100.0):

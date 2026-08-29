@@ -41,6 +41,24 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def _post_text(port: int, path: str, payload: dict) -> tuple[int, str]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.status, response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8")
+
+
 def _server():
     server = build_server(
         build(),
@@ -122,23 +140,22 @@ def test_http_responses_accepts_stream_options_null_flags() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_include_usage_true() -> None:
+def test_http_chat_accepts_include_usage_true_from_openai_sdk() -> None:
     server, thread, port = _server()
     try:
-        status, body = _post(
+        status, body = _post_text(
             port,
             "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "usage true"}],
+                "messages": [{"role": "user", "content": "usage compatibility"}],
                 "stream": True,
                 "stream_options": {"include_usage": True},
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_stream_options" in blob
-        assert "unknown_fields" not in blob
+        assert status == 200, body
+        assert body.startswith("data: ")
+        assert body.endswith("data: [DONE]\n\n")
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -168,6 +185,6 @@ if __name__ == "__main__":
     test_http_chat_accepts_stream_options_null_flags_without_stream()
     test_http_completions_accepts_stream_options_null_flags_without_stream()
     test_http_responses_accepts_stream_options_null_flags()
-    test_http_chat_still_rejects_include_usage_true()
+    test_http_chat_accepts_include_usage_true_from_openai_sdk()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")

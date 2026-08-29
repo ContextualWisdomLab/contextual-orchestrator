@@ -13606,6 +13606,7 @@ def chat_completion_chunks(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    include_usage: bool = False,
 ) -> list[dict[str, Any]]:
     """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
 
@@ -13632,6 +13633,15 @@ def chat_completion_chunks(
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
+    usage = result.get("usage")
+    cost = result.get("cost")
+    if (
+        include_usage
+        and isinstance(cost, dict)
+        and cost.get("measurement_status") == "measured"
+        and isinstance(usage, dict)
+    ):
+        chunks.append({**base, "choices": [], "usage": usage})
     final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
