@@ -520,7 +520,8 @@ def discover_all_models(
         except ProviderDiscoveryError as exc:
             errors.append(exc)
     # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
-    # privacy evidence for matching models from other discovered providers.
+    # matching privacy evidence for discovered models from other providers. It
+    # is never selected as an inference upstream here.
     return _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),

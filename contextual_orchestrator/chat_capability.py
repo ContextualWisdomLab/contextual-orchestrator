@@ -115,12 +115,12 @@ def is_general_chat_candidate(
         if isinstance(value, str) and value.strip()
     }
     if outputs:
-        return "text" in outputs
+        return "text" in outputs and is_general_chat_agent_model_id(model_id)
     declared_capabilities = {
         value.strip().casefold()
         for value in capabilities
         if isinstance(value, str) and value.strip()
     }
     if declared_capabilities:
-        return "chat" in declared_capabilities
+        return "chat" in declared_capabilities and is_general_chat_agent_model_id(model_id)
     return is_general_chat_agent_model_id(model_id)

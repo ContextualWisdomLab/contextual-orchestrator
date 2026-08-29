@@ -5193,6 +5193,7 @@ class TaskOrchestrator:
                         + (f"\n\nCaller instructions:\n{caller_instructions}" if caller_instructions else "")
                     ),
                 },
+                *copy.deepcopy(messages),
                 {
                     "role": "user",
                     "content": user_content,

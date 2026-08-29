@@ -328,6 +328,68 @@ def test_http_zdr_only_request_filters_the_runtime_candidate_pool() -> None:
     assert coordinator.ledger.store.query()
 
 
+def test_http_virtual_responses_preserves_message_array_and_sampling_controls() -> None:
+    token = "responses_array_controls_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
+    ])
+    observed_messages: list[list[dict]] = []
+    observed_settings: list[dict] = []
+    original_chat = orchestrator.client.chat
+
+    def recording_chat(agent, messages, *args, **kwargs):
+        observed_messages.append(messages)
+        observed_settings.append(orchestrator.client.request_settings_snapshot())
+        return original_chat(agent, messages, *args, **kwargs)
+
+    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps(
+            {
+                "model": "orchestrator/free",
+                "input": [
+                    {"type": "message", "role": "system", "content": "context"},
+                    {"type": "message", "role": "user", "content": "question"},
+                    {"type": "message", "role": "assistant", "content": "history"},
+                ],
+                "temperature": 0.73,
+                "top_p": 0.81,
+                "presence_penalty": 0.2,
+                "frequency_penalty": -0.3,
+                "max_output_tokens": 33,
+            }
+        ).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert observed_messages
+    assert any(
+        [message.get("role") for message in messages][1:4]
+        == ["system", "user", "assistant"]
+        for messages in observed_messages
+    )
+    assert observed_settings
+    assert all(
+        settings["temperature"] == 0.73
+        and settings["top_p"] == 0.81
+        and settings["presence_penalty"] == 0.2
+        and settings["frequency_penalty"] == -0.3
+        and settings["max_output_tokens"] == 33
+        for settings in observed_settings
+    )
+
+
 @pytest.mark.parametrize(
     "structured_output",
     [

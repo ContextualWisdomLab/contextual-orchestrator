@@ -34,7 +34,6 @@ from .orchestrator import (
     ProviderResponseError,
     ModelAgent,
     TaskOrchestrator,
-    _coerce_input_text,
     estimate_tokens,
     _new_chat_completion_id,
     _responses_to_chat_payload,
@@ -3667,6 +3666,38 @@ def _is_omit_equivalent_list(value: list[Any]) -> bool:
     )
 
 
+def _responses_virtual_requires_provider_path(
+    input_value: Any, body: dict[str, Any]
+) -> bool:
+    """Keep file inputs and provider-only controls on the preserving path."""
+    def contains_file(value: Any) -> bool:
+        if isinstance(value, list):
+            return any(contains_file(item) for item in value)
+        if not isinstance(value, dict):
+            return False
+        return value.get("type") == "input_file" or any(
+            contains_file(item) for item in value.values()
+        )
+
+    if contains_file(input_value):
+        return True
+    if "stop" in body:
+        stop = body.get("stop")
+        if not (
+            stop is None
+            or (isinstance(stop, str) and not stop.strip())
+            or (isinstance(stop, list) and _is_omit_equivalent_list(stop))
+        ):
+            return True
+    if "seed" in body and body.get("seed") is not None:
+        return True
+    if "logit_bias" in body and body.get("logit_bias"):
+        return True
+    if body.get("logprobs") is True or body.get("top_logprobs") is not None:
+        return True
+    return False
+
+
 def _validate_chat_audio_web_search_surface(
     body: dict[str, Any],
     *,
@@ -7123,6 +7154,12 @@ def build_server(
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
                         _require_pool_model(orchestrator, model_name)
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
+                        if _responses_virtual_requires_provider_path(input_value, body):
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "file inputs and provider-only controls require non-streamed Responses execution",
+                            )
                         if body.get("tools"):
                             raise RequestError(
                                 400,
@@ -7143,11 +7180,7 @@ def build_server(
                                 "invalid_response_format",
                                 "structured output is not supported for streamed orchestrated Responses requests",
                             )
-                        messages = []
-                        instructions = body.get("instructions")
-                        if isinstance(instructions, str) and instructions:
-                            messages.append({"role": "system", "content": instructions})
-                        messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        messages = _responses_to_chat_payload(body)["messages"]
                         started_at = time.perf_counter()
                         stream_succeeded = self._stream_orchestrated_response(
                             orchestrator, security, messages, model_name
@@ -7174,12 +7207,9 @@ def build_server(
                             isinstance(body.get("text"), dict)
                             and body["text"].get("format")
                         )
+                        and not _responses_virtual_requires_provider_path(input_value, body)
                     ):
-                        messages = []
-                        instructions = body.get("instructions")
-                        if isinstance(instructions, str) and instructions:
-                            messages.append({"role": "system", "content": instructions})
-                        messages.append({"role": "user", "content": _coerce_input_text(input_value)})
+                        messages = _responses_to_chat_payload(body)["messages"]
                         responses_attribution = dict(
                             _validate_attribution(body.get("attribution")) or {}
                         )
@@ -7195,19 +7225,38 @@ def build_server(
                         # force the coordinator's synchronous contract even
                         # when a priority or token threshold would select batch.
                         responses_routing["channel"] = "sync"
-                        started_at = time.perf_counter()
-                        result = self._run(
-                            lambda: coordinator.complete(
-                                messages,
-                                mode="auto",
-                                attribution=responses_attribution,
-                                hints=responses_routing,
-                                model_name=model_name,
-                                cache_bypass=cache_bypass,
-                                cache_partition=cache_partition,
-                                zdr_only=zdr_only,
-                            )
+                        response_max_tokens = next(
+                            (
+                                body.get(key)
+                                for key in (
+                                    "max_output_tokens",
+                                    "max_completion_tokens",
+                                    "max_tokens",
+                                )
+                                if body.get(key) is not None
+                            ),
+                            None,
                         )
+                        started_at = time.perf_counter()
+                        with orchestrator.client.request_settings(
+                            max_output_tokens=response_max_tokens,
+                            temperature=body.get("temperature"),
+                            top_p=body.get("top_p"),
+                            presence_penalty=body.get("presence_penalty"),
+                            frequency_penalty=body.get("frequency_penalty"),
+                        ):
+                            result = self._run(
+                                lambda: coordinator.complete(
+                                    messages,
+                                    mode="auto",
+                                    attribution=responses_attribution,
+                                    hints=responses_routing,
+                                    model_name=model_name,
+                                    cache_bypass=cache_bypass,
+                                    cache_partition=cache_partition,
+                                    zdr_only=zdr_only,
+                                )
+                            )
                         summaries = [
                             _REASONING_STAGE_SUMMARIES.get(
                                 step.get("role"), "Processing the request."
