@@ -80,6 +80,16 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         and event["event_detail"]["response_streamed"] is True
         for event in orchestrator._analytics_events
     )
+    runs = list(orchestrator._workflow_runs.values())
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["mode"] == "conduct"
+    assert run["prompt_text"] == "Research, implement, and verify a safe design."
+    assert run["policy_snapshot"] == orchestrator.policy.as_dict()
+    assert orchestrator.get_access_report(run["workflow_run_id"])["policy_snapshot"] == run[
+        "policy_snapshot"
+    ]
+    assert orchestrator.analytics_snapshot()["measurement_status"] == "local_runtime_snapshot"
     if model == "orchestrator/free":
         assert {step["agent_id"] for step in orchestrator.conduct(
             [{"role": "user", "content": "Research and verify this."}], model_name=model

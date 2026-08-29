@@ -5087,6 +5087,8 @@ class TaskOrchestrator:
                 "workflow_run_id": workflow_run_id,
                 "created_at": int(time.time()),
                 "policy_mode": "conduct",
+                "prompt_text": task,
+                "policy_snapshot": self.policy.as_dict(),
                 **result,
             }
         )
