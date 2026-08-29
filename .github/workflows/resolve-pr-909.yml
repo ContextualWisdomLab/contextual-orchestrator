@@ -1,5 +1,6 @@
 name: Resolve PR 909 against protected main
 
+# Diagnostic retry: report bounded diff3 hunks for executable conflicts.
 on:
   push:
     branches: [fix/batch-routing-owner-20260829]
