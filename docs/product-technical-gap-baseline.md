@@ -16,8 +16,8 @@ models from other providers; OpenRouter is not selected as the upstream by
 this policy. Missing or failed ZDR evidence fails closed instead of being
 replaced by a stale or hard-coded model list.
 
-The papers are cited and summarized here rather than copied into the
-repository because redistribution rights for the PDFs were not established.
+The FrugalGPT and RouteLLM PDFs are already vendored under `docs/papers/`; the
+catalog there records their arXiv redistribution license and full citation.
 
 ## 2026-08-28 21:42 KST PR #901 provider error-shape compatibility slice
 
