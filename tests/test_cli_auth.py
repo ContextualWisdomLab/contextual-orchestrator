@@ -162,6 +162,33 @@ def test_non_loopback_bind_fails_at_parser_boundary() -> None:
     assert "public bind requires --allow-public-bind" in stderr.getvalue()
 
 
+def test_public_split_token_bind_reaches_server() -> None:
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--host",
+                "192.0.2.1",
+                "--allow-public-bind",
+                "--admin-token",
+                "admin",
+                "--inference-token",
+                "inference",
+            ],
+        ),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main()
+
+    security = serve.call_args.kwargs["security"]
+    assert security.allow_public_bind is True
+    assert security.admin_token == "admin"
+    assert security.inference_token == "inference"
+
+
 def test_main_accepts_explicit_argv_without_mutating_process_arguments() -> None:
     original_argv = sys.argv[:]
     with patch("contextual_orchestrator.__main__.serve") as serve:

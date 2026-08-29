@@ -392,14 +392,15 @@ class SecurityConfig:
         except (TypeError, ValueError):
             return False
 
-    def check_bind(self, host: str) -> None:
+    def check_bind(self, host: str, *, allow_public_bind: bool | None = None) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
         normalized_host = host.strip().lower()
         try:
             is_loopback = ipaddress.ip_address(normalized_host).is_loopback
         except ValueError:
             is_loopback = normalized_host == "localhost"
-        if not is_loopback and not self.allow_public_bind:  # nosec B104 - non-loopback binds require explicit opt-in.
+        public_bind_allowed = self.allow_public_bind if allow_public_bind is None else allow_public_bind
+        if not is_loopback and not public_bind_allowed:  # nosec B104 - non-loopback binds require explicit opt-in.
             raise ValueError("public bind requires --allow-public-bind")
 
     def resolve_purpose(self, scope: str, purpose: str | None = None) -> str:
