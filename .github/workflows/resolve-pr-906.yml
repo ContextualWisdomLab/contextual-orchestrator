@@ -1,0 +1,17 @@
+name: Resolve PR 906 against protected main
+
+on:
+  push:
+    branches: [feat/nim-benchmark-rebuild-20260828]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
+    with:
+      pr_number: 906
+      branch: feat/nim-benchmark-rebuild-20260828
+      caller_file: .github/workflows/resolve-pr-906.yml
