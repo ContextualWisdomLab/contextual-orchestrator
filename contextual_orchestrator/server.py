@@ -7571,17 +7571,10 @@ def build_server(
                             else {"answer": "".join(parts)}
                         )
                     else:
-                        if coordinator is None:
-                            result = orchestrator.conduct(
-                                messages, model_name=model_name, progress=progress
-                            )
-                        else:
-                            result = orchestrator.conduct(
-                                messages,
-                                model_name=model_name,
-                                progress=progress,
-                                workflow_run_id=f"run_{uuid.uuid4().hex}",
-                            )
+                        conduct_kwargs = {"model_name": model_name, "progress": progress}
+                        if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
+                            conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
+                        result = orchestrator.conduct(messages, **conduct_kwargs)
                 except ConnectionAbortedError:
                     raise
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
