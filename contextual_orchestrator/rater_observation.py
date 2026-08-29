@@ -1,7 +1,7 @@
 """Domain-neutral governed rater observation bounded context.
 
 The module is an Anti-Corruption Layer between provider-specific structured
-outputs and the published language owned by ``fast-mlsirm``.  It preserves
+outputs and the published language owned by ``fast-mlsirm``. It preserves
 criterion observations, abstentions, uncertainty, review signals, and opaque
 evidence references while structurally rejecting scores and decisions.
 """
@@ -95,7 +95,7 @@ def _reference(value: Any, field_name: str) -> str:
             "invalid_reference",
             f"{field_name} must be a bounded non-empty reference",
         )
-    if any(character.iscontrol() for character in normalized):
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
         raise RaterObservationError(
             "invalid_reference", f"{field_name} must not contain control characters"
         )
