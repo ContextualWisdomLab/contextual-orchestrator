@@ -105,10 +105,22 @@ def test_stream_route_emits_provider_usage_when_requested() -> None:
     class Orchestrator:
         client = Client()
 
-        def stream_route(self, messages, workflow_run_id, *, model_name, include_usage=False):
+        def stream_route(
+            self,
+            messages,
+            workflow_run_id,
+            *,
+            model_name,
+            include_usage=False,
+            usage_callback=None,
+        ):
             del messages, workflow_run_id, model_name
             assert include_usage is True
             yield "answer"
+            assert usage_callback is not None
+            usage_callback(
+                {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6}
+            )
 
     class Security:
         def acquire_run_slot(self):

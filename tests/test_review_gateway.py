@@ -30,7 +30,14 @@ def _fresh_backend():
         set_backend(None)
 
 
-def _discovered(provider: str, model: str, credential: str, price: float) -> DiscoveredModel:
+def _discovered(
+    provider: str,
+    model: str,
+    credential: str,
+    price: float,
+    *,
+    evidence_only: bool = False,
+) -> DiscoveredModel:
     """Build one deterministic discovered chat candidate for the tests."""
     return DiscoveredModel(
         provider_name=provider,
@@ -40,6 +47,7 @@ def _discovered(provider: str, model: str, credential: str, price: float) -> Dis
         auth_scheme="Bearer",
         prompt_price_per_1k=price,
         completion_price_per_1k=price,
+        evidence_only=evidence_only,
     )
 
 
@@ -98,6 +106,23 @@ def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
         "cheap_first",
         "independent_review",
     ]
+
+
+def test_build_review_orchestrator_never_routes_evidence_only_models(monkeypatch):
+    """OpenRouter catalog rows are evidence, never review upstreams."""
+    discovered = [
+        _discovered(
+            "openrouter",
+            "router-review",
+            "OPENROUTER_API_KEY",
+            0.01,
+            evidence_only=True,
+        )
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    with pytest.raises(NotConfigured, match="general chat models"):
+        review_gateway.build_review_orchestrator({"OPENROUTER_API_KEY": "router-secret"})
 
 
 def test_build_review_orchestrator_excludes_endpoint_only_models(monkeypatch):

@@ -1,4 +1,4 @@
-"""Chat stream_options honesty: requires stream=true and preserves usage requests."""
+"""Chat stream_options honesty: requires stream=true; include_usage is supported."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def test_http_chat_stream_options_true_without_stream_fail_closed() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_stream_options_include_usage_true_streams() -> None:
+def test_http_chat_stream_options_include_usage_true_is_accepted() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -105,7 +105,8 @@ def test_http_chat_stream_options_include_usage_true_streams() -> None:
             },
         )
         assert status == 200, body
-        assert isinstance(body, str) and body.endswith("data: [DONE]\n\n")
+        assert isinstance(body, str)
+        assert '"usage"' in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -170,7 +171,7 @@ def test_http_chat_omits_stream_options_ok() -> None:
 if __name__ == "__main__":
     test_http_chat_stream_options_all_false_without_stream_as_omit()
     test_http_chat_stream_options_true_without_stream_fail_closed()
-    test_http_chat_stream_options_include_usage_true_streams()
+    test_http_chat_stream_options_include_usage_true_is_accepted()
     test_http_chat_stream_options_include_usage_false_with_stream_ok()
     test_http_chat_stream_options_non_object_fail_closed()
     test_http_chat_omits_stream_options_ok()

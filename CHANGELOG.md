@@ -69,6 +69,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
   `batch_route`; omit it to keep today's payload.
+- Experimental CEFR criterion-observation gateway with exact contract checks,
+  independent rater blindness, bounded structured-output parsing, replay
+  provenance, and human-review routing; it emits no final CEFR level or score.
 
 ### Fixed
 
@@ -78,6 +81,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   streams, and reject structured `tools`/`response_format` passthrough before
   execution because it cannot emit that SSE contract; keep unsupported
   obfuscation flags fail-closed.
+- Billing usage-export failures now appear in the operator-safe telemetry health
+  counters instead of only in emitted error events.
+- Billing usage export now follows accepted ledger writes and skips duplicate,
+  failed, or queue-dropped records.
+- Billing export from a caller-owned SQLite transaction now waits for
+  `CostLedger.flush()` after commit, so rollback cannot leave a billing-only
+  event.
+- A billing-backed non-blocking SQL store now writes appends synchronously while
+  a caller-owned SQLite transaction is open and defers billing export until
+  commit confirmation, rather than moving them outside the caller's transaction.
+- Generated workflow planning now advertises only agents eligible under the
+  active ZDR request policy.
 - Accept function-tool descriptions up to the existing bounded request-body
   limit instead of enforcing an unsupported 1,024-character gateway cap.
 - Treat a provider's explicit 1,024-character tool-description rejection as a
@@ -103,6 +118,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   advance once across distinct capability-ranked providers after explicit
   upstream rejection, stale-model responses, or temporary pre-request DNS
   failure; concrete models and ambiguous network outcomes fail closed.
+- Recognize string-form upstream tool-description-limit errors from providers
+  that do not wrap the error in an ``invalid_tools`` object, preserving the
+  bounded passthrough failover contract.
 - Make per-request budget checks constant time while preserving exact parity
   with full spend analytics across persisted, replaced, estimated, and
   provider-reported workflow runs.
@@ -116,6 +134,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- The product and technical gap baseline now records the ten open PRs,
+  exact-head governance state, and current provider-backed Strix evidence.
 - Web requests now use the native `SOMAXCONN` listen backlog and HTTP/1.1
   persistent connections, while the existing per-request daemon threading and
   explicit run-slot admission keep slow provider I/O from blocking liveness.

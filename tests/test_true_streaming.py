@@ -134,6 +134,7 @@ def test_stream_send_ignores_empty_and_missing_choices() -> None:
         agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["before", "after"]
+    assert client.take_usage() == {"completion_tokens": 7}
 
 
 def test_stream_chat_requests_and_captures_provider_usage_without_stale_data() -> None:

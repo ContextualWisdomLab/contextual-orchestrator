@@ -41,7 +41,7 @@ def _post(port: int, path: str, payload: dict) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def _post_text(port: int, path: str, payload: dict) -> tuple[int, str]:
+def _post_raw(port: int, path: str, payload: dict) -> tuple[int, str, str]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode("utf-8"),
@@ -54,9 +54,13 @@ def _post_text(port: int, path: str, payload: dict) -> tuple[int, str]:
     )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
-            return response.status, response.read().decode("utf-8")
+            return (
+                response.status,
+                response.headers.get("content-type", ""),
+                response.read().decode("utf-8"),
+            )
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode("utf-8")
+        return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
 
 
 def _server():
@@ -140,22 +144,66 @@ def test_http_responses_accepts_stream_options_null_flags() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_include_usage_true_from_openai_sdk() -> None:
+def test_http_chat_accepts_include_usage_true() -> None:
     server, thread, port = _server()
     try:
-        status, body = _post_text(
+        status, content_type, sse = _post_raw(
             port,
             "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "usage compatibility"}],
+                "messages": [{"role": "user", "content": "usage true"}],
                 "stream": True,
                 "stream_options": {"include_usage": True},
             },
         )
-        assert status == 200, body
-        assert body.startswith("data: ")
-        assert body.endswith("data: [DONE]\n\n")
+        assert status == 200, sse
+        assert content_type.startswith("text/event-stream")
+        frames = [
+            json.loads(frame[len("data: "):])
+            for frame in sse.split("\n\n")
+            if frame.startswith("data: ") and frame != "data: [DONE]"
+        ]
+        assert frames
+        assert all(frame.get("usage") is None for frame in frames)
+        assert not any(frame.get("choices") == [] for frame in frames)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_structured_streams_include_usage() -> None:
+    server, thread, port = _server()
+    try:
+        for structured in (
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ]
+            },
+            {"response_format": {"type": "json_object"}},
+        ):
+            status, _, body = _post_raw(
+                port,
+                "/v1/chat/completions",
+                {
+                    "model": "mock-planner",
+                    "messages": [
+                        {"role": "user", "content": "structured usage"}
+                    ],
+                    "stream": True,
+                    "stream_options": {"include_usage": True},
+                    **structured,
+                },
+            )
+            assert status == 400, (structured, body)
+            assert "invalid_stream_options" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -185,6 +233,7 @@ if __name__ == "__main__":
     test_http_chat_accepts_stream_options_null_flags_without_stream()
     test_http_completions_accepts_stream_options_null_flags_without_stream()
     test_http_responses_accepts_stream_options_null_flags()
-    test_http_chat_accepts_include_usage_true_from_openai_sdk()
+    test_http_chat_accepts_include_usage_true()
+    test_http_chat_structured_streams_include_usage()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")

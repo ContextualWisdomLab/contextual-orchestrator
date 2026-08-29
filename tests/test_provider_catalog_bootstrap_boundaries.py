@@ -12,7 +12,6 @@ import contextual_orchestrator.provider_catalog_bootstrap as pcb
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     PostgresCredentialBackend,
-    get_backend,
     get_credential,
     set_backend,
 )
@@ -25,7 +24,6 @@ from contextual_orchestrator.provider_bootstrap import (
     ProviderBootstrapError,
 )
 from contextual_orchestrator.provider_catalog_bootstrap import (
-    ProviderCatalogSnapshot,
     _restore_provider_credentials_atomically,
     bootstrap_provider_catalog_runtime,
     build_provider_catalog_store,
@@ -324,10 +322,6 @@ def test_main_prints_secret_free_report_json(
     for name in PROVIDER_CREDENTIAL_NAMES:
         monkeypatch.setenv(name, f"value-for-{name.casefold()}")
 
-    openai = _source("openai", "OPENAI_API_KEY")
-    openrouter = _source("openrouter", "OPENROUTER_API_KEY")
-    nim = _source("nvidia_nim", "NVIDIA_NIM_API_KEY")
-
     def fake_discovery(sources: Any) -> tuple[list[DiscoveredModel], list[Any]]:
         by_provider = {s.provider_name: s for s in sources}
         return [
@@ -351,7 +345,6 @@ def test_main_allow_partial_flag_runs_subset_inventory(
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "only-openai-present")
 
-    openai = _source("openai", "OPENAI_API_KEY")
     monkeypatch.setattr(
         pcb,
         "discover_all_models",

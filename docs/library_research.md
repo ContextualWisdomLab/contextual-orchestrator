@@ -89,3 +89,28 @@ detectors, blanket masking, and a new policy framework. Callers explicitly
 declare the top-level event fields that contain PII; undeclared fields retain
 the existing behavior, while marked fields fail closed when the KV key is
 missing or invalid.
+
+## CEFR language observations
+
+| Question | Evidence reread | Decision | Deliberately skipped |
+|---|---|---|---|
+| What may an observation claim? | Council of Europe CEFR Companion Volume and linking manual | Preserve criterion-level evidence and transparent linking inputs; do not emit a CEFR level or placement decision. | A local CEFR scale or standard-setting algorithm. |
+| What makes an assessment result defensible? | AERA, APA, and NCME Standards for Educational and Psychological Testing | Keep task, rubric, criterion, anchor, evidence, rater, prompt, workflow, parse, verifier, and replay provenance explicit. | Calling provider success or a model label validity evidence. |
+| How should provider calls be governed? | Existing `TaskOrchestrator`, KV credential registry, model discovery, and structured-output passthrough | Reuse the existing gateway; require exact external contract compatibility and fail closed on missing capability or provider failure. | Direct provider SDK calls or a second credential path. |
+
+Official references:
+
+- Council of Europe. (2020). *Common European framework of reference for
+  languages: Learning, teaching, assessment—Companion volume*.
+  https://www.coe.int/en/web/common-european-framework-reference-languages/cefr-companion-volume-and-its-language-versions
+- Council of Europe. (2009). *Relating language examinations to the Common
+  European Framework of Reference for Languages: Learning, teaching,
+  assessment—A manual*.
+  https://www.coe.int/en/web/common-european-framework-reference-languages/relating-examinations-to-the-cefr
+- American Educational Research Association, American Psychological
+  Association, & National Council on Measurement in Education. (2014).
+  *Standards for educational and psychological testing*.
+  https://www.aera.net/Publications/Books/Standards-for----Educational-Psychological-Testing-2014-Edition
+
+The cited standards are linked rather than vendored because redistribution
+permission for their PDFs is not assumed.
