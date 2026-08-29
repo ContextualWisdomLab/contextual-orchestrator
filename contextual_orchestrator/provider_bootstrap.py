@@ -272,24 +272,27 @@ def _synchronize_durable_agent_pool(
         agents_db=agents_db,
         allow_empty_agents=True,
     )
-    selected_ids = {agent.id for agent in agents}
-    bootstrap.sync_discovered_agents(agents)
+    try:
+        selected_ids = {agent.id for agent in agents}
+        bootstrap.sync_discovered_agents(agents)
 
-    for candidate in list(bootstrap.candidates):
-        if candidate.id in selected_ids:
-            continue
-        if "discovered" in candidate.tags:
-            if not candidate.disabled:
-                bootstrap.remove_agent("default", candidate.id)
+        for candidate in list(bootstrap.candidates):
+            if candidate.id in selected_ids:
+                continue
+            if "discovered" in candidate.tags:
+                if not candidate.disabled:
+                    bootstrap.remove_agent("default", candidate.id)
 
-    for agent in agents:
-        bootstrap.patch_agent("default", agent.id, {"status": "active"})
+        for agent in agents:
+            bootstrap.patch_agent("default", agent.id, {"status": "active"})
 
-    # The patch loop above raises KeyError if any selected agent is missing from
-    # the pool, so the enabled set equals selected_ids by construction here.
-    return tuple(
-        sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
-    )
+        # The patch loop above raises KeyError if any selected agent is missing from
+        # the pool, so the enabled set equals selected_ids by construction here.
+        return tuple(
+            sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
+        )
+    finally:
+        bootstrap.close()
 
 
 def bootstrap_provider_runtime(
