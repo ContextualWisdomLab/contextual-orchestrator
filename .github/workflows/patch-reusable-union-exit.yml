@@ -18,15 +18,17 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path('.github/workflows/reusable-pr-conflict-resolver.yml')
           text = path.read_text(encoding='utf-8')
-          old = 'git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"'
-          new = old + ' || true'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one union anchor, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          pattern = r'(?m)^(\s*git merge-file --union .*?)(?: \|\| true)?$'
+          updated, count = re.subn(pattern, r'\1 || true', text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one merge-file command, found {count}')
+          path.write_text(updated, encoding='utf-8')
           PY
+          grep -F 'git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs" || true' .github/workflows/reusable-pr-conflict-resolver.yml
           rm -f .github/workflows/patch-reusable-union-exit.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
