@@ -1,18 +1,278 @@
 name: Resolve PR 879 against protected main
 
-# Hardened diagnostic retry after resolver correction.
 on:
   push:
-    branches: [fix/provider-error-taxonomy-telemetry]
+    branches:
+      - fix/provider-error-taxonomy-telemetry
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: resolve-pr-879
+  cancel-in-progress: false
+
 jobs:
   resolve:
-    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
-    with:
-      pr_number: 879
-      branch: fix/provider-error-taxonomy-telemetry
-      caller_file: .github/workflows/resolve-pr-879.yml
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact PR branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/provider-error-taxonomy-telemetry
+          fetch-depth: 0
+
+      - name: Merge protected main and resolve the known semantic conflicts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+          original_head="$(git rev-parse HEAD)"
+          main_head="$(git rev-parse origin/main)"
+
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "Protected main is already an ancestor of ${original_head}."
+          else
+            set +e
+            git merge --no-ff --no-commit origin/main
+            merge_rc=$?
+            set -e
+
+            if [[ $merge_rc -ne 0 ]]; then
+              mapfile -t conflicts < <(git diff --name-only --diff-filter=U | sort)
+              expected=(
+                CHANGELOG.md
+                contextual_orchestrator/orchestrator.py
+                contextual_orchestrator/server.py
+                tests/test_passthrough_provider_failover.py
+              )
+              if [[ "${conflicts[*]}" != "${expected[*]}" ]]; then
+                printf 'Unexpected conflict set while merging %s into %s:\n' "$main_head" "$original_head" >&2
+                printf '  %s\n' "${conflicts[@]}" >&2
+                exit 1
+              fi
+
+              tmpdir="$(mktemp -d)"
+              git show :2:CHANGELOG.md > "$tmpdir/changelog.ours"
+              git show :1:CHANGELOG.md > "$tmpdir/changelog.base"
+              git show :3:CHANGELOG.md > "$tmpdir/changelog.theirs"
+              git merge-file --union \
+                "$tmpdir/changelog.ours" \
+                "$tmpdir/changelog.base" \
+                "$tmpdir/changelog.theirs" || true
+              cp "$tmpdir/changelog.ours" CHANGELOG.md
+              rm -rf "$tmpdir"
+              git add CHANGELOG.md
+
+              git checkout --conflict=diff3 -- \
+                contextual_orchestrator/orchestrator.py \
+                contextual_orchestrator/server.py \
+                tests/test_passthrough_provider_failover.py
+
+              python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+
+          def resolve_file(path: str) -> None:
+              source = Path(path).read_text(encoding="utf-8")
+              lines = source.splitlines(keepends=True)
+              output: list[str] = []
+              index = 0
+              block_index = 0
+
+              while index < len(lines):
+                  if not lines[index].startswith("<<<<<<<"):
+                      output.append(lines[index])
+                      index += 1
+                      continue
+
+                  ours_start = index + 1
+                  base_marker = ours_start
+                  while base_marker < len(lines) and not lines[base_marker].startswith("|||||||"):
+                      base_marker += 1
+                  if base_marker >= len(lines):
+                      raise RuntimeError(f"{path}: expected diff3 base marker")
+
+                  separator = base_marker + 1
+                  while separator < len(lines) and not lines[separator].startswith("======="):
+                      separator += 1
+                  if separator >= len(lines):
+                      raise RuntimeError(f"{path}: expected conflict separator")
+
+                  end_marker = separator + 1
+                  while end_marker < len(lines) and not lines[end_marker].startswith(">>>>>>>"):
+                      end_marker += 1
+                  if end_marker >= len(lines):
+                      raise RuntimeError(f"{path}: expected conflict end marker")
+
+                  ours = lines[ours_start:base_marker]
+                  base = lines[base_marker + 1:separator]
+                  theirs = lines[separator + 1:end_marker]
+                  ours_text = "".join(ours)
+                  base_text = "".join(base)
+                  theirs_text = "".join(theirs)
+
+                  if path == "contextual_orchestrator/orchestrator.py":
+                      if block_index == 0:
+                          required_ours = ("stream_usage", "stream_model", "stream_choices.extend")
+                          required_theirs = ("self._local.usage", "choices == []")
+                          if not all(token in ours_text for token in required_ours):
+                              raise RuntimeError("unexpected orchestrator streaming telemetry conflict")
+                          if not all(token in theirs_text for token in required_theirs):
+                              raise RuntimeError("unexpected orchestrator streaming usage conflict")
+                          resolution = '''                    if not isinstance(chunk, dict):
+                        continue
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        self._local.usage = usage
+                        stream_usage = usage
+                    if isinstance(chunk.get("model"), str):
+                        stream_model = chunk["model"]
+                    choices = chunk.get("choices")
+                    if choices == []:
+                        continue
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    stream_choices.extend(
+                        {"finish_reason": choice["finish_reason"]}
+                        for choice in choices
+                        if isinstance(choice, dict)
+                        and isinstance(choice.get("finish_reason"), str)
+                        and choice["finish_reason"]
+                    )
+'''.splitlines(keepends=True)
+                      elif block_index == 1:
+                          if '"model": agent.model' not in ours_text or "trace_step" not in theirs_text:
+                              raise RuntimeError("unexpected streamed trace conflict")
+                          resolution = ["                    trace_step\n"]
+                      else:
+                          raise RuntimeError(f"unexpected orchestrator conflict block {block_index}")
+
+                  elif path == "contextual_orchestrator/server.py":
+                      if block_index == 0:
+                          if "invalid_stream_options" not in theirs_text or "explicit_trace" not in theirs_text:
+                              raise RuntimeError("unexpected structured stream-options conflict")
+                          resolution = theirs
+                      elif block_index == 1:
+                          if "ProviderUpstreamError" not in ours_text or "except Exception" not in ours_text:
+                              raise RuntimeError("unexpected SSE provider-error conflict")
+                          resolution = ours
+                      else:
+                          raise RuntimeError(f"unexpected server conflict block {block_index}")
+
+                  elif path == "tests/test_passthrough_provider_failover.py":
+                      if block_index != 0:
+                          raise RuntimeError(f"unexpected passthrough-test conflict block {block_index}")
+                      if "test_passthrough_with_no_ranked_provider_fails_cleanly" not in ours_text:
+                          raise RuntimeError("missing provider-exhaustion regression")
+                      if "test_virtual_responses_effort_profile_uses_responses_wire_shape" not in theirs_text:
+                          raise RuntimeError("missing Responses effort-profile regression")
+                      resolution = ours + theirs
+
+                  else:
+                      raise RuntimeError(f"unexpected conflict path {path}")
+
+                  output.extend(resolution)
+                  block_index += 1
+                  index = end_marker + 1
+
+              expected_blocks = {
+                  "contextual_orchestrator/orchestrator.py": 2,
+                  "contextual_orchestrator/server.py": 2,
+                  "tests/test_passthrough_provider_failover.py": 1,
+              }[path]
+              if block_index != expected_blocks:
+                  raise RuntimeError(
+                      f"{path}: resolved {block_index} blocks; expected {expected_blocks}"
+                  )
+
+              merged = "".join(output)
+              if any(marker in merged for marker in ("<<<<<<<", "|||||||", "=======", ">>>>>>>")):
+                  raise RuntimeError(f"{path}: unresolved conflict marker remains")
+
+              if path == "contextual_orchestrator/orchestrator.py":
+                  old_trace = '''        trace_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Direct route (streamed)",
+            "access": [],
+            "output": answer,
+        }
+'''
+                  new_trace = '''        trace_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "model": agent.model,
+            "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+            "subtask": "Direct route (streamed)",
+            "access": [],
+            "latency_ms": round(latency_seconds * 1000, 2),
+            "output": answer,
+        }
+'''
+                  if merged.count(old_trace) != 1:
+                      raise RuntimeError("streamed trace-step shape changed unexpectedly")
+                  merged = merged.replace(old_trace, new_trace, 1)
+
+              Path(path).write_text(merged, encoding="utf-8")
+
+
+          for conflict_path in (
+              "contextual_orchestrator/orchestrator.py",
+              "contextual_orchestrator/server.py",
+              "tests/test_passthrough_provider_failover.py",
+          ):
+              resolve_file(conflict_path)
+          PY
+
+              git add \
+                contextual_orchestrator/orchestrator.py \
+                contextual_orchestrator/server.py \
+                tests/test_passthrough_provider_failover.py
+            fi
+          fi
+
+          test -z "$(git diff --name-only --diff-filter=U)"
+          rm -f .github/workflows/resolve-pr-879.yml
+          git add -A
+          git diff --cached --check
+          python -m compileall -q contextual_orchestrator
+          printf 'ORIGINAL_HEAD=%s\nMAIN_HEAD=%s\n' "$original_head" "$main_head" >> "$GITHUB_ENV"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.12.5"
+
+      - name: Run conflict-boundary regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --locked --extra api --extra db --extra queue --group dev \
+            python -m pytest -q \
+            tests/test_provider_error_taxonomy.py \
+            tests/test_telemetry.py \
+            tests/test_passthrough_provider_failover.py \
+            tests/test_streaming.py \
+            tests/test_true_streaming.py \
+            tests/test_orchestrator_client_boundaries.py \
+            tests/test_openai_passthrough.py \
+            tests/test_provider_reliability.py
+
+      - name: Commit and push the verified merge result
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check
+          git commit -m "chore: merge protected main into PR #879"
+          git push origin HEAD:fix/provider-error-taxonomy-telemetry
+          echo "Merged protected main ${MAIN_HEAD} into PR head ${ORIGINAL_HEAD}."
