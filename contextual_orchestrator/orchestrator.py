@@ -3102,6 +3102,7 @@ class TaskOrchestrator:
         cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
+        allow_empty_agents: bool = False,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -3111,7 +3112,7 @@ class TaskOrchestrator:
             agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
         self.candidates = list(agents)
         self.agents = [agent for agent in self.candidates if not agent.disabled]
-        if not self.agents:  # pragma: no cover
+        if not self.agents and not allow_empty_agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         # Measured speed/stability routing inside model groups (global: every
         # selection path below funnels through _ranked_agents). Ledger state is

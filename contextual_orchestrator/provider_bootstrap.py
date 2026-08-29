@@ -266,18 +266,19 @@ def _synchronize_durable_agent_pool(
     selected: Sequence[DiscoveredModel],
 ) -> tuple[str, ...]:
     """Activate exactly the selected discovered models in one durable agent pool."""
-    bootstrap = TaskOrchestrator(
-        [ModelAgent("bootstrap_agent", "bootstrap-model")],
-        agents_db=agents_db,
-    )
     agents = [_active_agent_from_discovered(model) for model in selected]
+    bootstrap = TaskOrchestrator(
+        agents,
+        agents_db=agents_db,
+        allow_empty_agents=True,
+    )
     selected_ids = {agent.id for agent in agents}
     bootstrap.sync_discovered_agents(agents)
 
     for candidate in list(bootstrap.candidates):
         if candidate.id in selected_ids:
             continue
-        if candidate.id == "bootstrap_agent" or "discovered" in candidate.tags:
+        if "discovered" in candidate.tags:
             if not candidate.disabled:
                 bootstrap.remove_agent("default", candidate.id)
 

@@ -399,7 +399,7 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
     assert report.durable_agent_pool is True
 
     restarted = TaskOrchestrator(
-        [ModelAgent("bootstrap_agent", "bootstrap-model")],
+        [],
         agents_db=agents_db,
     )
     assert {agent.id for agent in restarted.agents} == {

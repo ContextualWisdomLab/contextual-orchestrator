@@ -24,7 +24,6 @@ from .model_discovery import (
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
-    ModelAgent,
     ModelClient,
     TaskOrchestrator,
     load_agents,
@@ -251,12 +250,17 @@ def _discover_models_command(argv: list[str]) -> None:
 
     enabled_agent_ids: list[str] = []
     if args.agents_db:
+        discovered_agents = [
+            agent_from_discovered(model)
+            for model in reported
+            if not model.evidence_only
+        ]
         bootstrap = TaskOrchestrator(
-            [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
+            discovered_agents,
+            agents_db=args.agents_db,
+            allow_empty_agents=True,
         )
-        bootstrap.sync_discovered_agents(
-            [agent_from_discovered(model) for model in reported if not model.evidence_only]
-        )
+        bootstrap.sync_discovered_agents(discovered_agents)
         if args.enable_cheapest:
             for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
                 agent_id = agent_id_for(model)
