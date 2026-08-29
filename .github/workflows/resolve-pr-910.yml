@@ -1,0 +1,79 @@
+name: Resolve PR 910 against protected main
+
+on:
+  push:
+    branches:
+      - fix/production-split-token-gate
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: resolve-pr-910
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge protected main without weakening code conflicts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_BRANCH: fix/production-split-token-gate
+          RESOLVER_FILE: .github/workflows/resolve-pr-910.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "$EXPECTED_BRANCH"
+          original_head="$(git rev-parse HEAD)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+
+          set +e
+          git merge --no-ff --no-commit origin/main
+          merge_rc=$?
+          set -e
+
+          if [[ $merge_rc -ne 0 ]]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U)
+            unsafe=()
+            for path in "${conflicts[@]}"; do
+              case "$path" in
+                CHANGELOG.md|docs/product-technical-gap-baseline.md)
+                  tmpdir="$(mktemp -d)"
+                  git show ":2:$path" > "$tmpdir/ours"
+                  git show ":1:$path" > "$tmpdir/base"
+                  git show ":3:$path" > "$tmpdir/theirs"
+                  git merge-file --union "$tmpdir/ours" "$tmpdir/base" "$tmpdir/theirs"
+                  cp "$tmpdir/ours" "$path"
+                  rm -rf "$tmpdir"
+                  git add "$path"
+                  ;;
+                *)
+                  unsafe+=("$path")
+                  ;;
+              esac
+            done
+            if (( ${#unsafe[@]} )); then
+              printf -v unsafe_list '%s\n' "${unsafe[@]}"
+              gh pr comment 910 --body "One-shot resolver stopped fail-closed. Non-document conflicts require semantic resolution at exact head \`$original_head\` against \`$(git rev-parse origin/main)\`:\n\n\`\`\`\n$unsafe_list\`\`\`"
+              git merge --abort
+              exit 1
+            fi
+          fi
+
+          test -z "$(git diff --name-only --diff-filter=U)"
+          rm -f "$RESOLVER_FILE"
+          git add -A
+          git diff --cached --check
+          python -m compileall -q contextual_orchestrator
+          git commit -m "chore: merge protected main into PR #910"
+          git push origin "HEAD:$EXPECTED_BRANCH"
