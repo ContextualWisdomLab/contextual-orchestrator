@@ -1,18 +1,57 @@
-name: Resolve PR 913 against protected main
+name: Resolve PR 913 semantically against protected main
 
-# Hardened diagnostic retry after resolver correction.
 on:
   push:
     branches: [feat/responses-stream-usage-20260829]
 
 permissions:
   contents: write
-  pull-requests: write
+
+concurrency:
+  group: resolve-pr-913-semantic
+  cancel-in-progress: false
 
 jobs:
   resolve:
-    uses: ContextualWisdomLab/contextual-orchestrator/.github/workflows/reusable-pr-conflict-resolver.yml@automation/one-shot-pr-conflict-resolver
-    with:
-      pr_number: 913
-      branch: feat/responses-stream-usage-20260829
-      caller_file: .github/workflows/resolve-pr-913.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge main and preserve Responses usage contracts
+        env:
+          EXPECTED_BRANCH: feat/responses-stream-usage-20260829
+          CALLER_FILE: .github/workflows/resolve-pr-913.yml
+          RESOLVER_SCRIPT: scripts/resolve_pr_913.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "$EXPECTED_BRANCH"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "Protected main is already an ancestor of this head."
+            exit 0
+          fi
+
+          set +e
+          git merge --no-ff --no-commit origin/main
+          merge_rc=$?
+          set -e
+          if [[ $merge_rc -ne 0 ]] && [[ -z "$(git diff --name-only --diff-filter=U)" ]]; then
+            git merge --abort || true
+            exit 1
+          fi
+
+          python "$RESOLVER_SCRIPT"
+          test -z "$(git diff --name-only --diff-filter=U)"
+          rm -f "$CALLER_FILE" "$RESOLVER_SCRIPT"
+          git add -A
+          git diff --cached --check
+          python -m compileall -q contextual_orchestrator tests
+          git commit -m "chore: merge protected main into PR #913"
+          git push origin "HEAD:$EXPECTED_BRANCH"
