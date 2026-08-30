@@ -1,5 +1,55 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 post-merge canary: max_tokens fix confirmed, distinct preflight failure surfaced
+
+`ContextualWisdomLab/.github#1436` (the sidecar `max_tokens:16→4096` fix below) merged via
+admin bypass: the `opencode-review` required check on that PR was a structural self-deadlock,
+not a review outcome — its job log
+(`ContextualWisdomLab/.github` run `33306047509`, job `99242771080`) shows it only verifies that
+`opencode-agent[bot]` posted a review on the current head SHA, and that review's dispatch runs
+the *base* branch's (pre-fix) sidecar, which could never produce one. No further push to that PR
+branch could have resolved it; merging was the only path out. Evidence posted on the PR before
+merging.
+
+**Live post-merge canary** (the outstanding item from the entry below): re-queued the failed
+`opencode-review`/`noema-review`/`strix` jobs on `contextual-orchestrator#921`, `#911`, `#920`
+against `.github` main post-fix.
+
+- **`opencode-review`**: still fails, but confirmed as expected, not a regression — the job that
+  fails is a deterministic verdict-checker (`No APPROVED or CHANGES_REQUESTED from opencode-agent
+  on the current head`); the actual review dispatch (`opencode-review-dispatch.yml`) is a
+  separate `repository_dispatch`-triggered workflow fired by `.github`'s own scheduler
+  (`*/15 * * * *` / `*/30 * * * *` cron in `pr-review-merge-scheduler.yml`), not something a
+  failed-job re-run re-invokes. Will resolve on the scheduler's own next pass; not re-tested
+  synchronously here.
+- **`noema-review`** (`contextual-orchestrator#921`, run `33306104620`, job `99243631744`): this
+  one *does* dispatch inline per-PR, so it's the real live signal. The exact `16`-token/502
+  symptom this fix targets did **not** reproduce — confirms the fix. Instead it failed with a
+  **different** signature: `provider_discovery_failed provider=bytez code=http_status_500`
+  followed by `review sidecar preflight failed` (detail lines sanitized from CI output by
+  design — the wrapper strips unstructured stderr to avoid leaking raw provider text; four lines
+  were dropped, `omitted_unstructured_lines=4`). Read
+  `scripts/ci/contextual_orchestrator_review_launcher.py`: `discover_all_models()` isolates a
+  single provider's failure by design (confirmed — the bytez 500 was logged and did not abort
+  discovery), so the crash is downstream, at `_preflight_with_fallback` finding zero passing
+  routes among whatever candidates were selected, not at discovery. No artifact was uploaded for
+  this workflow to inspect the per-route preflight reasons directly (unlike Strix's
+  `strix-reports.zip`).
+- **`strix`** (same PR, run `33306104587`): was still `in_progress` when this entry was written;
+  not yet observed to completion.
+
+**Working hypothesis, not yet confirmed**: three required review workflows
+(`opencode-review-dispatch`'s scheduler pass, `noema-review`, `strix`) each provisioning their
+own sidecar and hitting the same handful of free-tier NIM/OpenRouter routes within the same
+~1-minute window across three PRs simultaneously is a plausible transient rate-limit trigger,
+distinct from the fixed bug. Needs a re-observation once the herd of simultaneous re-runs has
+cleared, plus (if it reproduces) the actual `--preflight-out` JSON artifact from a run that
+captures it — `noema-review` doesn't currently upload one; Strix's does.
+
+**Net**: the `max_tokens` fix is verified correct and merged; it was not sufficient by itself to
+make the pipeline consistently healthy. Do not treat this fix as closing the gap-baseline item
+below until a clean re-run is observed.
+
 ## 2026-08-30 sidecar preflight max_tokens desynchronized from the routing probe
 
 Root-caused the org-wide `opencode-review`/`noema-review`/`strix` failure
