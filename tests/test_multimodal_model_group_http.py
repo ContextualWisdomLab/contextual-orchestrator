@@ -590,6 +590,24 @@ def test_capability_endpoint_reports_unavailable_and_unknown_models() -> None:
         server.shutdown()
 
 
+@pytest.mark.parametrize("model", ("", "   "))
+def test_capability_endpoint_rejects_explicit_empty_model(model: str) -> None:
+    server = build_server(
+        TaskOrchestrator([ModelAgent("image_member", "provider/image", tags=("image",))]),
+        port=0,
+        security=SecurityConfig(auth_token=TOKEN),
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        status, body = _post_error(
+            port, "/v1/images/generations", {"model": model, "prompt": "demo"}
+        )
+        assert status == 400 and body["error"]["code"] == "invalid_model"
+    finally:
+        server.shutdown()
+
+
 @pytest.mark.parametrize(
     ("capability", "endpoint", "binary"),
     [

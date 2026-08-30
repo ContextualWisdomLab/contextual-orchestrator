@@ -12,12 +12,16 @@ from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
-from .chat_capability import is_general_chat_agent_model_id
 from .model_discovery import (
+    CONFIGURED_GATEWAY_CREDENTIAL_NAME,
+    PROVIDER_MODEL_SOURCES,
+    ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
+    configured_gateway_source,
     discover_all_models,
     free_discovered_models,
+    is_routable_discovered_model,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
@@ -28,12 +32,14 @@ from .orchestrator import (
     TaskOrchestrator,
     load_agents,
 )
+from .privacy_policy_analysis import (
+    analyze_discovered_privacy_policies,
+)
 from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
-_GENERAL_CHAT_CAPABILITIES = frozenset({"chat", "text", "response_format"})
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -208,12 +214,52 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _bootstrap_discovery_sources() -> tuple[ProviderModelSource, ...]:
+    """Promote a configured gateway secret to KV and return discovery sources."""
+    source = configured_gateway_source(os.environ)
+    if source is None:
+        return PROVIDER_MODEL_SOURCES
+    secret = os.environ.get(CONFIGURED_GATEWAY_CREDENTIAL_NAME, "")
+    if secret.strip():
+        register_credential(CONFIGURED_GATEWAY_CREDENTIAL_NAME, secret.strip())
+    return (*PROVIDER_MODEL_SOURCES, source)
+
+
+def _runtime_discovery_sources(
+    orchestrator: TaskOrchestrator,
+) -> tuple[ProviderModelSource, ...]:
+    """Build runtime sources only from injected pool config and preseeded KV."""
+    sources = list(PROVIDER_MODEL_SOURCES)
+    allowed_hosts = ",".join(sorted(orchestrator.client.allowed_provider_hosts))
+    seen: set[tuple[str, str]] = set()
+    for agent in orchestrator.candidates:
+        if agent.provider_name != "configured_gateway":
+            continue
+        try:
+            source = configured_gateway_source(
+                {
+                    "LLM_GATEWAY_API_URL": agent.base_url,
+                    "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": allowed_hosts,
+                }
+            )
+        except ValueError:
+            continue
+        if source is None or get_credential(source.credential_name) is None:
+            continue
+        identity = (source.list_url, source.credential_name)
+        if identity not in seen:
+            sources.append(source)
+            seen.add(identity)
+    return tuple(sources)
+
+
 def _discover_models_command(argv: list[str]) -> None:
     """Query every provider with a KV-registered credential and report the models found.
 
-    Never fabricates a credential: a provider with nothing registered in the KV
-    (see ``register-credential``) is silently skipped, so running this after
-    registering any subset of the declared provider keys still works.
+    Providers without a KV credential are skipped. The sole bootstrap exception
+    is an explicitly configured gateway: this one-shot command promotes its
+    allowlisted URL and API key from bootstrap transport into the KV before
+    discovery. Runtime auto-discovery never reads that environment transport.
     """
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
@@ -238,11 +284,34 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Report only models whose structured provider/catalog price metadata is entirely zero; "
         "unknown or name-implied prices remain excluded, while the full report keeps every model.",
     )
+    parser.add_argument(
+        "--analyze-privacy-policies",
+        action="store_true",
+        help=(
+            "Crawl declared policy sources and run a model-backed privacy assessment; "
+            "this opt-in action may incur provider charges."
+        ),
+    )
+    parser.add_argument(
+        "--provider-ca-bundle",
+        default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
+        help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
+    )
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
-    discovered, errors = discover_all_models()
+    try:
+        sources = _bootstrap_discovery_sources()
+    except ValueError as exc:
+        parser.error(str(exc))
+    discovered, errors = discover_all_models(
+        sources,
+        ca_bundle=args.provider_ca_bundle,
+    )
+    privacy_assessments = []
+    if args.analyze_privacy_policies:
+        discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
     free_models = free_discovered_models(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
@@ -273,8 +342,18 @@ def _discover_models_command(argv: list[str]) -> None:
     report = {
         "discovered_count": len(reported),
         "free_tier_count": len(free_models),
+        "free_data_privacy": {
+            status: sum(1 for model in free_models if (
+                "supported" if model.supports_zero_data_retention is True else
+                "unsupported" if model.supports_zero_data_retention is False else "unknown"
+            ) == status)
+            for status in ("supported", "unsupported", "unknown")
+        },
         "priced_count": priced_count,
         "providers_with_errors": sorted({error.provider_name for error in errors}),
+        "privacy_policy_analysis": [
+            assessment.as_dict() for assessment in privacy_assessments
+        ],
         "enabled_agent_ids": enabled_agent_ids,
         "models": [
             {
@@ -282,6 +361,21 @@ def _discover_models_command(argv: list[str]) -> None:
                 "model": model.model_id,
                 "agent_id": agent_id_for(model),
                 "is_free": model.is_free,
+                "data_privacy": {
+                    "zero_data_retention": (
+                        "supported" if model.supports_zero_data_retention is True else
+                        "unsupported" if model.supports_zero_data_retention is False else "unknown"
+                    ),
+                    "no_training": (
+                        "supported" if model.supports_no_training is True else
+                        "unsupported" if model.supports_no_training is False else "unknown"
+                    ),
+                    "no_prompt_retention": (
+                        "supported" if model.supports_no_prompt_retention is True else
+                        "unsupported" if model.supports_no_prompt_retention is False else "unknown"
+                    ),
+                    "policy_sources": list(model.privacy_policy_urls),
+                },
             }
             for model in reported
         ],
@@ -292,18 +386,17 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover and activate models accepted by the shared chat contract."""
-    discovered, _errors = discover_all_models()
-    chat_models = [
-        model
-        for model in discovered
-        if (
-            not model.evidence_only
-            and (not model.output_modalities or "text" in model.output_modalities)
-            and set(model.capabilities) <= _GENERAL_CHAT_CAPABILITIES
-            and is_general_chat_agent_model_id(model.model_id)
-        )
-    ]
+    """Discover and activate routable chat models without runtime env transport.
+
+    The shared discovery predicate keeps ordinary chat rows discoverable even
+    when a provider omits structured capability metadata, while still refusing
+    evidence-only or non-chat rows.
+    """
+    discovered, _errors = discover_all_models(
+        _runtime_discovery_sources(orchestrator),
+        ca_bundle=orchestrator.client.ca_bundle,
+    )
+    chat_models = [model for model in discovered if is_routable_discovered_model(model)]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
         replace(
@@ -318,6 +411,17 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         if agents
         else {"added": [], "updated": []}
     )
+    if any(model.provider_name == "configured_gateway" for model in chat_models):
+        for agent in tuple(orchestrator.candidates):
+            if (
+                agent.provider_name == "configured_gateway"
+                and not agent.model.strip()
+                and any(
+                    candidate.id != agent.id and not candidate.disabled
+                    for candidate in orchestrator.candidates
+                )
+            ):
+                orchestrator.remove_agent("default", agent.id)
     has_real_runtime_agent = any(
         not candidate.disabled
         and not candidate.base_url.startswith("mock://")
@@ -534,6 +638,15 @@ def main(argv: list[str] | None = None) -> None:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):
             parser.error("--serve requires a KV auth credential or explicit local token")
+        if (
+            (args.production or args.allow_public_bind)
+            and split_requested
+            and admin_token == inference_token
+        ):
+            parser.error(
+                "--production/--allow-public-bind requires admin and inference tokens "
+                "to resolve to distinct credential values"
+            )
         serve(
             orchestrator,
             host=args.host,

@@ -264,10 +264,16 @@ def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
         input_modalities=("text", "image"),
         output_modalities=("text",),
         is_free=True,
+        supports_zero_data_retention=True,
+        supports_no_training=True,
+        supports_no_prompt_retention=True,
     )
     tags = provider_bootstrap.serving_tags_for_discovered(model)
     assert {
         "cost:free",
+        "privacy:zdr",
+        "privacy:no_training",
+        "privacy:no_retention",
         "chat",
         "text",
         "capability:chat",
@@ -275,6 +281,16 @@ def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
         "input:image",
         "output:text",
     } <= set(tags)
+
+
+def test_serving_tags_preserve_explicit_no_zdr_evidence():
+    """Explicit unsupported zero-data retention survives tag normalization."""
+    model = replace(
+        _model("opencode_zen", "OPENCODE_ZEN_API_KEY", "temporary-name", 0.0),
+        supports_zero_data_retention=False,
+    )
+
+    assert "privacy:no_zdr" in provider_bootstrap.serving_tags_for_discovered(model)
 
 
 def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(

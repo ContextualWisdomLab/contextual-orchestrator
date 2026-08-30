@@ -73,12 +73,15 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def _server_with_verifier(verifier):
+def _server_with_verifier(verifier, *, expose_trace_by_default: bool = False):
     orchestrator = build()
     server = build_server(
         orchestrator,
         port=0,
-        security=SecurityConfig(bearer_verifier=verifier),
+        security=SecurityConfig(
+            bearer_verifier=verifier,
+            expose_trace_by_default=expose_trace_by_default,
+        ),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -318,6 +321,33 @@ def test_structured_chat_ignores_server_trace_default_when_flag_is_omitted() -> 
         server.shutdown()
         thread.join(timeout=5)
     assert status == 200, body
+    assert not any(
+        event["event_type"] == "orchestration_trace_access_granted"
+        for event in orchestrator._audit_events
+    )
+
+
+def test_structured_chat_server_trace_default_still_rejects_trace_disclosure() -> None:
+    """A trace-by-default setting cannot override the structured-trace boundary."""
+    server, thread, port, orchestrator = _server_with_verifier(
+        lambda token, scope: token == _TEST_INFERENCE_TOKEN and scope == "inference",
+        expose_trace_by_default=True,
+    )
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "return JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token=_TEST_INFERENCE_TOKEN,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 400, body
+    assert body["error"]["code"] == "unsupported_trace_disclosure"
     assert not any(
         event["event_type"] == "orchestration_trace_access_granted"
         for event in orchestrator._audit_events
@@ -576,10 +606,13 @@ def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> No
     assert len(trace) >= 2
     assert trace[-1]["role"] == "synthesizer"
     assert "trace" not in hidden["orchestration"]
-    assert any(
-        event["event_type"] == "orchestration_trace_access_granted"
+    granted = [
+        event
         for event in orchestrator._audit_events
-    )
+        if event["event_type"] == "orchestration_trace_access_granted"
+    ]
+    assert granted
+    assert len(granted) == 1
 
 
 def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:

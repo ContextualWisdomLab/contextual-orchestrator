@@ -134,6 +134,43 @@ def test_production_guards_reject_insecure_admin_cookie(guard: str) -> None:
     assert "cannot use --insecure-admin-session-cookie" in stderr.getvalue()
 
 
+@pytest.mark.parametrize("guard", ["--production", "--allow-public-bind"])
+def test_production_guards_reject_split_credentials_that_resolve_to_one_value(guard: str) -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("admin_key", "same-token")
+    backend.set("inference_key", "same-token")
+    set_backend(backend)
+    stderr = StringIO()
+    try:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "contextual-orchestrator",
+                    "--serve",
+                    guard,
+                    "--admin-token-key",
+                    "admin_key",
+                    "--inference-token-key",
+                    "inference_key",
+                ],
+            ),
+            patch.object(sys, "stderr", stderr),
+            patch("contextual_orchestrator.__main__.serve") as serve,
+        ):
+            try:
+                main()
+            except SystemExit as exc:
+                assert exc.code == 2
+            else:  # pragma: no cover
+                raise AssertionError("production/public bind must reject equivalent split credentials")
+        assert not serve.called
+        assert "distinct credential values" in stderr.getvalue()
+    finally:
+        set_backend(None)
+
+
 def test_non_loopback_bind_fails_at_parser_boundary() -> None:
     stderr = StringIO()
     with (

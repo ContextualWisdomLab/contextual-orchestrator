@@ -25,7 +25,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   readiness report while keeping local product evidence inspectable.
 - Provider-affine asynchronous video jobs now return an opaque gateway id and
   keep status polling and content download bound to the exact provider agent
-  that accepted the submission (ADR 0037).
+  that accepted the submission (ADR 0037); new ownership and first-complete
+  usage observations are stored as separate registry records.
 - A fail-closed, transactional evidence boundary for the optional NVIDIA NIM
   benchmark with immutable task/scorer identities and complete provenance.
 - Bounded first-valid-completion racing for operator-declared equivalent model
@@ -96,6 +97,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Discover chat models from metadata-free OpenAI-compatible gateways. A
+  configured gateway whose `/v1/models` rows carry no modality/capability
+  metadata previously produced empty-capability chat rows that runtime
+  auto-discovery silently dropped, while embedding deployments that kept
+  richer `/model/info` evidence survived ("embedding discovers, chat does
+  not"). Transport-compatible identifiers now inherit the `chat`
+  capability, and `--auto-discover-model-agents` uses the same
+  chat-candidate rule as the serving bootstrap. (#868)
+- Accept `orchestrator/auto`, `orchestrator/free`, and the advertised
+  `contextual-orchestrator` gateway default on the structured chat surface:
+  a requested `response_format` is a preference (never a fail-closed tag
+  miss for an untagged-but-available pool), vision stays a hard
+  entitlement, and a trace disclosed on the structured path authorizes
+  trace purpose and audits the disclosure before release, matching the
+  plain chat gate. (#868)
 - Provider/model failures no longer collapse into a generic `internal_error`.
   A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
   classifies every upstream HTTP status, network, TLS, and transport failure
@@ -123,6 +139,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   binds, so a specific network interface cannot bypass the public-bind guard.
 - Reject shared or identical split bearer credentials on public binds, while
   keeping the CLI's preliminary host check independent from final credentials.
+- Experimental CEFR criterion-observation gateway with exact contract checks,
+  independent rater blindness, bounded structured-output parsing, replay
+  provenance, and human-review routing; it emits no final CEFR level or score.
 - Accept the standard Chat Completions `stream_options.include_usage=true`
   request and emit provider-reported usage in a usage-only SSE chunk when
   available after the terminal stop chunk; pass the option through live provider

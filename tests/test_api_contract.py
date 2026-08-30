@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from jsonschema import ValidationError, validate
 from pathlib import Path
+import pytest
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -86,6 +88,22 @@ def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> Non
     assert "Optional enabled embedding-capable pool model" in embeddings_schema["properties"]["model"][
         "description"
     ]
+
+
+def test_openapi_omitted_text_models_match_runtime_contract() -> None:
+    """Omitted text models validate while explicit null still fails the schema."""
+    for path, payload in (
+        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]}),
+        ("/v1/completions", {"prompt": "hi"}),
+        ("/v1/responses", {"input": "hi"}),
+    ):
+        schema = OPENAPI_SPEC["paths"][path]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        assert "model" not in schema.get("required", [])
+        validate(payload, schema)
+        with pytest.raises(ValidationError):
+            validate({**payload, "model": None}, schema)
 
 
 def test_openapi_capability_requests_have_endpoint_specific_contracts() -> None:
