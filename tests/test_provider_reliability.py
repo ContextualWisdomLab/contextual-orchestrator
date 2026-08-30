@@ -130,6 +130,14 @@ def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> N
     assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
     assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))
     assert not is_transient_error(ValueError("bad json"))
+    # Regression (Devin review on #923): urlopen wraps a TLS handshake's
+    # SSLCertVerificationError as URLError(reason=...), not a bare ssl.SSLError.
+    # The blanket URLError-is-transient branch used to shadow this before the
+    # ssl.SSLError check could ever see it.
+    assert not is_transient_error(
+        urllib.error.URLError(ssl.SSLCertVerificationError("certificate verify failed"))
+    )
+    assert is_transient_error(urllib.error.URLError(ConnectionResetError(104, "reset")))
 
 
 def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -> None:

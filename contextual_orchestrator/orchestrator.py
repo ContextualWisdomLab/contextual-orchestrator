@@ -1082,6 +1082,15 @@ def is_transient_error(exc: BaseException) -> bool:
         if _is_tool_execution_stopped(exc):
             return False
         return exc.code in TRANSIENT_HTTP_STATUS
+    # urlopen wraps a TLS handshake's ssl.SSLCertVerificationError as
+    # URLError(reason=...), not as a bare ssl.SSLError -- unwrap it here so a
+    # bad trust boundary is never retried as if it were a network fault. The
+    # isinstance(exc, ssl.SSLError) check further below never reaches this
+    # case, since it never sees the wrapping URLError.
+    if isinstance(exc, urllib.error.URLError) and isinstance(
+        exc.reason, ssl.SSLCertVerificationError
+    ):
+        return False
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True

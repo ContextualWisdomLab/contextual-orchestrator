@@ -28,6 +28,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   a caller-supplied budget shorter than the retry default: it is now
   `min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS)`, so a caller requesting
   e.g. a 2s timeout still gets a 2s retry, not a 5s one.
+- (Devin review on #923) `is_transient_error` no longer misclassifies a TLS
+  certificate-verification failure as transient when `urlopen` wraps it as
+  `URLError(reason=ssl.SSLCertVerificationError(...))` rather than raising a
+  bare `ssl.SSLError`. The existing bare-`ssl.SSLError` unwrap couldn't see
+  this case, since the blanket "any `URLError` is transient" branch matched
+  first and returned early — a permanently invalid trust boundary was being
+  retried as if it were a network blip. Fixes the shared classifier itself
+  (not just the discovery retry call site), so every current and future
+  caller of `is_transient_error` benefits.
 - `/v1/chat/completions`'s tools passthrough no longer rejects
   `stream: true` + `stream_options.include_usage: true` together with
   `tools`. Root-caused a live Strix required-check failure (org-wide CI run,
