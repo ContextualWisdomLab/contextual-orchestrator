@@ -385,6 +385,31 @@ def test_router_rejects_incomplete_store_contract() -> None:
         ModelGroupRouter(observation_store=object())  # type: ignore[arg-type]
 
 
+def test_router_uses_store_public_clock_for_default_observed_at() -> None:
+    captured: list[float] = []
+
+    class _Store:
+        def now(self) -> float:
+            return 123.5
+
+        def append(self, ledger_name, member_id, **kwargs) -> None:
+            del ledger_name, member_id
+            captured.append(kwargs["observed_at"])
+
+        def load(self, ledger_name: str, active_contexts=None) -> list:
+            del ledger_name, active_contexts
+            return []
+
+        def delete_members(self, ledger_name: str, member_ids) -> None:
+            del ledger_name, member_ids
+
+    router = ModelGroupRouter(observation_store=_Store())
+
+    router.observe_failure("member_a")
+
+    assert captured == [123.5]
+
+
 def test_router_deletes_persisted_context_when_members_leave(tmp_path) -> None:
     store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60)
     router = ModelGroupRouter(observation_store=store)

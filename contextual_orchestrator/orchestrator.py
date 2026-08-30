@@ -4159,18 +4159,15 @@ class TaskOrchestrator:
             )
 
         synthesis_started = time.perf_counter()
-        synthesis_context_key = self._routing_observation_context_for_agent(final_agent)
         try:
             raw, final_agent = send_synthesis(upstream)
         except Exception as exc:
             if not _is_request_too_large_error(exc):
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
-                self._record_group_failure(
-                    final_agent.id,
-                    observation_context_key=synthesis_context_key,
-                )
+                self._record_group_failure_for_agent(final_agent)
             raise
+        synthesis_context_key = self._routing_observation_context_for_agent(final_agent)
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:
                 try:
@@ -4237,26 +4234,20 @@ class TaskOrchestrator:
                     {"role": "system", "content": repair_instruction},
                 ]
             repair_started = time.perf_counter()
-            repair_context_key = self._routing_observation_context_for_agent(final_agent)
             try:
                 repaired, final_agent = send_synthesis(repair_upstream)
             except Exception as exc:
                 if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
                 if final_agent.group_name and not _is_request_too_large_error(exc):
-                    self._record_group_failure(
-                        final_agent.id,
-                        observation_context_key=repair_context_key,
-                    )
+                    self._record_group_failure_for_agent(final_agent)
                 raise
+            repair_context_key = self._routing_observation_context_for_agent(final_agent)
             repaired_output = provider_output(repaired)
             if _structured_output_error(repaired_output, response_format) is not None:
                 self._record_failure(final_agent.id)
                 if final_agent.group_name:
-                    self._record_group_failure(
-                        final_agent.id,
-                        observation_context_key=repair_context_key,
-                    )
+                    self._record_group_failure_for_agent(final_agent)
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
@@ -4277,8 +4268,8 @@ class TaskOrchestrator:
             synthesis_output = repaired_output
         self._record_success(final_agent.id)
         if final_agent.group_name:
-            self._group_router.observe_success(
-                final_agent.id,
+            self._record_group_success_for_agent(
+                final_agent,
                 time.perf_counter() - synthesis_started,
                 observation_context_key=synthesis_context_key,
             )
@@ -6848,6 +6839,19 @@ class TaskOrchestrator:
                 "durable routing observation failed while recording provider failure"
             )
 
+    def _record_group_failure_for_agent(
+        self,
+        agent: ModelAgent,
+        *,
+        observed_at: float | None = None,
+    ) -> None:
+        """Record provider failure using the current agent shape as the context key."""
+        self._record_group_failure(
+            agent.id,
+            observation_context_key=self._routing_observation_context_for_agent(agent),
+            observed_at=observed_at,
+        )
+
     def _record_quality_failure(
         self,
         agent_id: str,
@@ -6870,6 +6874,26 @@ class TaskOrchestrator:
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:
             self._circuit.pop(agent_id, None)
+
+    def _record_group_success_for_agent(
+        self,
+        agent: ModelAgent,
+        latency_seconds: float,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
+    ) -> None:
+        """Record provider success using the current agent shape as the context key."""
+        self._group_router.observe_success(
+            agent.id,
+            latency_seconds,
+            observation_context_key=(
+                observation_context_key
+                if observation_context_key is not None
+                else self._routing_observation_context_for_agent(agent)
+            ),
+            observed_at=observed_at,
+        )
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:

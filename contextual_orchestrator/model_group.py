@@ -94,6 +94,7 @@ class ModelGroupRouter:
         observation_context_resolver: Callable[[str], str] | None = None,
         observation_store: RoutingObservationStore | None = None,
         ledger_name: str = "transport",
+        clock: Callable[[], float] | None = None,
     ) -> None:
         if not 0 < ewma_gain <= 1:
             raise ValueError("ewma_gain must be within (0, 1]")
@@ -110,8 +111,16 @@ class ModelGroupRouter:
             raise TypeError("observation_store must implement the routing observation contract")
         if type(ledger_name) is not str or not ledger_name.strip():
             raise ValueError("ledger_name must be a non-empty string")
+        store_clock = getattr(observation_store, "now", None)
+        if clock is None and callable(store_clock):
+            clock = store_clock
+        if clock is None:
+            clock = time.time
+        if not callable(clock):
+            raise TypeError("clock must be callable")
         self._observation_store = observation_store
         self._ledger_name = ledger_name.strip()
+        self._clock = clock
         self._lock = threading.Lock()
         # Store I/O stays serialized with in-memory updates under the same lock
         # ordering so refresh=False reads never observe a partially refreshed row set.
@@ -296,9 +305,12 @@ class ModelGroupRouter:
     def _resolve_observed_at(self, observed_at: float | None) -> float:
         """Resolve one observation timestamp before any router lock can delay it."""
         if observed_at is None:
-            store_now = getattr(self._observation_store, "_now", None)
-            return float(store_now()) if callable(store_now) else time.time()
-        return float(observed_at)
+            when = float(self._clock())
+        else:
+            when = float(observed_at)
+        if not math.isfinite(when):
+            raise ValueError("observed_at must be finite")
+        return when
 
     def _persist_observation(
         self,

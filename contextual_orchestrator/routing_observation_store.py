@@ -31,6 +31,9 @@ class RoutingObservation:
 class RoutingObservationStore(Protocol):
     """Minimal store contract consumed by :class:`ModelGroupRouter`."""
 
+    def now(self) -> float:
+        """Return the store clock for default observation timestamps."""
+
     def append(
         self,
         ledger_name: str,
@@ -130,6 +133,10 @@ class SqliteRoutingObservationStore:
         if not math.isfinite(value):
             raise ValueError("clock must return a finite number")
         return value
+
+    def now(self) -> float:
+        """Return the caller-visible clock used for default observations."""
+        return self._now()
 
     @staticmethod
     def _ensure_schema(connection: sqlite3.Connection) -> None:

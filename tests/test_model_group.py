@@ -78,6 +78,43 @@ def test_group_reassignment_discards_old_group_measurements() -> None:
     assert orchestrator._group_router.member_report(member.id)["success_count"] == 0
 
 
+def test_missing_member_context_falls_back_to_a_stable_hash() -> None:
+    orchestrator = TaskOrchestrator([_agent("member_one", "vendor/model")])
+
+    first = orchestrator._routing_observation_context_for_member("missing_member")
+    second = orchestrator._routing_observation_context_for_member("missing_member")
+
+    assert first == second
+    assert isinstance(first, str)
+    assert len(first) == 64
+
+
+def test_record_group_success_for_agent_uses_the_supplied_agent_shape() -> None:
+    first = _agent("member_one", "vendor/one")
+    second = ModelAgent(
+        "member_two",
+        "vendor/two",
+        "https://alternate.example/v1",
+        provider_name="alternate_provider",
+        group_name="shared_reasoning_model",
+    )
+    orchestrator = TaskOrchestrator([first, second])
+    observed: list[tuple[str, str]] = []
+    original = orchestrator._group_router.observe_success
+
+    def capture(member_id: str, latency_seconds: float, **kwargs) -> None:
+        observed.append((member_id, kwargs["observation_context_key"]))
+        original(member_id, latency_seconds, **kwargs)
+
+    orchestrator._group_router.observe_success = capture  # type: ignore[method-assign]
+
+    orchestrator._record_group_success_for_agent(second, 0.1)
+
+    assert observed == [
+        (second.id, orchestrator._routing_observation_context_for_agent(second))
+    ]
+
+
 def test_load_agents_accepts_sidecar_list_catalog(tmp_path) -> None:
     catalog = tmp_path / "catalog.json"
     catalog.write_text(
