@@ -1304,9 +1304,43 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     )
 
 
+def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog evidence shows this model needs non-text input.
+
+    A model whose provider/catalog architecture evidence declares an input
+    modality other than ``"text"`` (e.g. ``image``, ``audio``, ``video``) is a
+    specialized multimodal deployment: a caller cannot use it for an arbitrary
+    request without knowing in advance that the request must carry that extra
+    modality. Absence of modality evidence is not evidence of a multimodal
+    requirement, so an empty ``input_modalities`` tuple never triggers this.
+    """
+    return any(
+        modality.strip().casefold() != "text"
+        for modality in discovered.input_modalities
+        if isinstance(modality, str) and modality.strip()
+    )
+
+
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
-    """Return models whose provider metadata identifies zero-cost inference."""
-    return [model for model in discovered if model.is_free]
+    """Return zero-cost models fit for the general-purpose free serving pool.
+
+    A zero price alone does not certify fitness for arbitrary callers: the
+    free pool (``orchestrator/free``) serves every role and request shape --
+    including tool/function-calling requests -- without knowing in advance
+    which capability a given request will need. Provider pricing can be
+    reliably zero on a model that only a caller who already knows to supply
+    an extra input modality (e.g. an image) could ever use meaningfully;
+    :func:`_requires_non_text_input` excludes exactly those rows here, using
+    catalog evidence discovery already records, not a per-model name rule.
+    Such a model remains fully discovered (and eligible for a pool that is
+    not modality-blind, e.g. one built for vision/multimodal tasks) --
+    it is only withheld from the general-purpose free pool.
+    """
+    return [
+        model
+        for model in discovered
+        if model.is_free and not _requires_non_text_input(model)
+    ]
 
 
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:

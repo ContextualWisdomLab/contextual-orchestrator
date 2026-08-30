@@ -716,6 +716,70 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
     assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
 
 
+def test_free_discovered_models_excludes_a_free_vision_only_input_model() -> None:
+    """The general-purpose free pool must exclude a zero-priced vision-input model.
+
+    Reproduces ``ContextualWisdomLab/.github`` PR #1198's required Strix Security
+    Scan failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passes every existing chat-capability
+    check (Models.dev reports its cost as 0/0, its output modality is "text",
+    and its model id carries no disqualifying token), yet NIM's live deployment
+    rejected Strix's tool-calling request against it with a definitive HTTP 400
+    (``invalid_request_error``) three independent times in a row -- because the
+    orchestrator/free pool has no other candidate to fail over to, this one
+    vision-input model alone exhausts the whole "free" tool-calling pool.
+    Models.dev's own ``tool_call`` field claims ``true`` for this exact model
+    (verified live), so that field cannot be the fix; its declared *input*
+    modality (``image``, alongside ``text``) is the only honest catalog
+    evidence distinguishing it from an ordinary text-only free worker. A
+    model requiring non-text input is a specialized multimodal deployment, not
+    a general-purpose worker a caller can route arbitrary (including
+    tool-calling) requests to without knowing in advance that it needs an
+    image -- so it must not enter the general free pool, while a text-only
+    free model of identical price remains fully eligible.
+    """
+    vision_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.2-90b-vision-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    text_only_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.1-8b-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    no_modality_evidence_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="mistralai/mistral-small",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        is_free=True,
+    )
+
+    free_models = free_discovered_models(
+        [vision_model, text_only_model, no_modality_evidence_model]
+    )
+
+    assert [model.model_id for model in free_models] == [
+        "meta/llama-3.1-8b-instruct",
+        "mistralai/mistral-small",
+    ]
+
+
 def test_discovery_does_not_mark_multimodal_input_rows_free_without_unit_prices() -> None:
     """Non-text inputs require explicit zero non-token price evidence."""
     source = ProviderModelSource(

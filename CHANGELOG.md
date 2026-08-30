@@ -194,6 +194,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   production-default gate returns false on junk reports and on
   `measurement_status=estimated`. Access-list scope is a real ablation
   factor, not a duplicate label.
+- `free_discovered_models()` no longer admits a zero-priced model that
+  declares a non-text input modality (e.g. NVIDIA NIM's
+  `meta/llama-3.2-90b-vision-instruct`, whose Models.dev evidence reports
+  `cost: 0/0` and, misleadingly for this exact deployment, `tool_call: true`)
+  into the general-purpose `orchestrator/free` pool. That pool serves
+  arbitrary request shapes -- including Strix's tool/function-calling
+  requests -- without knowing in advance which capability a request needs, so
+  a free model whose only price-evidenced identity requires an extra input
+  modality is reserved for a caller that explicitly needs it, not a general
+  worker. Fixes the required Strix Security Scan failure reproduced in
+  `ContextualWisdomLab/.github` PR #1198 (run 33325907333, job 99295892400),
+  where every one of 3 independent scan attempts exhausted the pool against
+  this exact agent with an identical HTTP 400 `invalid_request_error`. A
+  model excluded here remains fully discovered and price-evidenced; it is
+  only withheld from the free/tool-calling default pool.
 
 ### Changed
 
