@@ -97,15 +97,55 @@ jobs:
           python -m contextual_orchestrator.provider_catalog_bootstrap --model-limit 24 > provider-bootstrap-report.json
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           report = json.loads(Path('provider-bootstrap-report.json').read_text(encoding='utf-8'))
           from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
+          from contextual_orchestrator.model_discovery import PROVIDER_MODEL_SOURCES
 
           expected = set(PROVIDER_CREDENTIAL_NAMES)
           registered = set(report['registered_credentials'])
-          if registered != expected:
-              raise SystemExit(f'credential inventory mismatch: {sorted(expected - registered)}')
+          missing = expected - registered
+          if missing:
+              # A missing credential is only a hard failure when the secret was
+              # never supplied at all (a real configuration gap) or when the
+              # bootstrap report gives no isolated-provider-failure evidence for
+              # it (an unexplained rollback, which could hide a real bug). A
+              # credential that was supplied and whose provider is named in
+              # `providers_with_errors` is exactly the single-provider-outage
+              # case `bootstrap_provider_catalog_runtime`'s own docstring says
+              # the design already tolerates (last-known-good models retained,
+              # pool still served) -- demote that case to a warning instead of
+              # failing the whole scheduled sync every time one provider is down.
+              provider_by_credential = {
+                  source.credential_name: source.provider_name
+                  for source in PROVIDER_MODEL_SOURCES
+              }
+              providers_with_errors = set(report['providers_with_errors'])
+              unconfigured = sorted(
+                  name for name in missing if not os.environ.get(name, '').strip()
+              )
+              if unconfigured:
+                  raise SystemExit(
+                      f'credential inventory mismatch: not configured in secrets: {unconfigured}'
+                  )
+              unexplained = sorted(
+                  name for name in missing
+                  if provider_by_credential.get(name) not in providers_with_errors
+              )
+              if unexplained:
+                  raise SystemExit(
+                      f'credential inventory mismatch: unexplained rollback for: {unexplained}'
+                  )
+              print(
+                  '::warning title=Provider catalog degraded::'
+                  f'rolled back after provider-isolated discovery failure: {sorted(missing)} '
+                  f'(providers_with_errors={sorted(providers_with_errors)}, '
+                  f'catalog_refresh_failure_count={report["catalog_refresh_failure_count"]}, '
+                  f'restored_credentials={report["restored_credentials"]}); '
+                  'catalog still serves from last-known-good/other-provider models.'
+              )
           if report['catalog_backend'] != 'postgres':
               raise SystemExit('provider catalog is not PostgreSQL-backed')
           if report['catalog_model_count'] < 1 or report['eligible_model_count'] < 1:

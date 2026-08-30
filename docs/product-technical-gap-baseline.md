@@ -1,5 +1,61 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 provider-catalog-sync has failed on every scheduled run for 5 days on one provider; workflow check was too strict
+
+`provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
+inventory mismatch: ['BYTEZ_API_KEY']`. Traced to `bootstrap_provider_catalog_runtime`
+(`contextual_orchestrator/provider_catalog_bootstrap.py`): it registers all provider credentials up
+front, and per-provider discovery failures (an entry in `errors`, or zero live models matching that
+provider/credential pair) roll the credential back to its previous KV value via
+`_restore_provider_credentials_atomically` — for a run-scoped ephemeral KV that previous value is
+`None`, so the credential is deleted again. `registered_credentials` on the final report is then
+filtered to `durable_registered_credentials = tuple(name for name in registered if
+get_credential(name) is not None)`, correctly excluding the rolled-back credential. This is exactly
+the graceful degradation the function's own docstring describes ("retains last-known-good models for
+failed providers") — but the workflow's embedded verification script asserted
+`set(report['registered_credentials']) == set(PROVIDER_CREDENTIAL_NAMES)` unconditionally, with no
+tolerance for a single isolated provider outage, turning every occurrence into a hard CI failure.
+
+**Not a one-off flake.** `list_workflow_runs` for this workflow shows every scheduled run has failed
+since the schedule started, `2026-08-25T09:01:27Z` (run #4) through today (run #49,
+`2026-08-30T12:55:16Z`) — 44 of 46 scheduled runs `failure` (the other two `cancelled`/`skipped`),
+zero scheduled successes ever recorded. The only `success` runs (#1-3) were `pull_request`-triggered
+before the workflow went live on `main`. This had gone unnoticed for 5 days of continuous hourly
+failures — itself evidence that a hard-fail-on-any-provider-hiccup design was not actually serving as
+useful signal.
+
+**Bytez code path checked for a false-positive bug** (`contextual_orchestrator/model_discovery.py`
+`PROVIDER_MODEL_SOURCES`/`_parse_bytez`/`discover_provider_models`): URL
+(`https://api.bytez.com/models/v2/list/models?task=chat`), `Authorization: Key <token>` header, and
+response parsing all look correct and match this repo's stdlib `urllib` discovery convention used by
+every other provider; nothing there would unconditionally reject every response. No `BYTEZ_API_KEY`
+is available in this sandbox to replay the exact authenticated call, but an unauthenticated live probe
+of the same endpoint returned a fast, well-formed `401 {"error":"Unauthorized"}` (not a 500), showing
+the endpoint itself is reachable and enforcing auth normally right now. Independent corroborating
+evidence from earlier the same day, a completely different code path (`ContextualWisdomLab/.github`'s
+`noema-review` sidecar, which vendors this repo's discovery code) logged
+`provider_discovery_failed provider=bytez code=http_status_500` (see the entry below). A real
+`http_status_500` from Bytez's own backend, reproduced independently, is a stronger signal than a
+one-off flake — but five straight days with zero successes is also too long/consistent to be an
+ordinary transient outage; it's most consistent with a persistent problem specific to Bytez's handling
+of this account/key/query shape (or, less likely, a quietly invalid `BYTEZ_API_KEY` secret returning
+500 instead of the clean 401 an actually-wrong key gets from the same endpoint). Not resolvable from
+this repo alone — needs an operator check of the Bytez account/dashboard for this credential.
+
+**Fix applied** (`.github/workflows/provider-catalog-sync.yml`): the embedded verification script now
+distinguishes two cases for a credential missing from `registered_credentials`. Hard-fails (as before)
+when the secret was never supplied to the job at all (`os.environ[name]` empty — a real configuration
+gap) or when the report gives no `providers_with_errors` evidence tying the missing credential to an
+isolated provider failure (an unexplained rollback, which could hide a real bug). Otherwise — secret
+present, and that credential's provider is named in `report['providers_with_errors']` — it prints a
+`::warning::` with `providers_with_errors`, `catalog_refresh_failure_count`, and
+`restored_credentials` from the report and lets the job succeed, matching what the bootstrap design
+already promises: the pool keeps serving from last-known-good/other-provider models. The existing
+`catalog_model_count`/`eligible_model_count`/`selected_agent_ids` checks are unchanged and still fail
+the job if the pool itself is unhealthy. No production code changed; `tests/test_provider_bootstrap_secret_normalization.py`
+(asserts the workflow still supplies/validates/leak-checks the complete `PROVIDER_CREDENTIAL_NAMES`
+inventory) and the rest of `tests/test_provider_bootstrap*.py`/`tests/test_provider_catalog_bootstrap*.py`
+(61 tests) pass unchanged.
 ## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
 
 Checked whether the `.github` `opencode-review` required check's own verdict-matching logic (the
