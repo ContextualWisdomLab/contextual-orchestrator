@@ -58,8 +58,10 @@ invalid_structured_output`) that every open PR across the organization has
 been showing at sidecar boot, before any real review or security analysis
 ever runs.
 
-**Exact evidence, not speculation**: downloaded the `strix-reports` artifact
-from this repo's own PR #912 run `33304076516` (job `99237393606`,
+**Evidence, and where it stops being evidence and starts being inference**
+(correction added 2026-08-30 after a Devin review finding on
+`contextual-orchestrator#921` — see below): downloaded the `strix-reports`
+artifact from this repo's own PR #912 run `33304076516` (job `99237393606`,
 `ContextualWisdomLab/contextual-orchestrator/actions/runs/33304076516`).
 `contextual-orchestrator-preflight.json` in that artifact shows the
 `ContextualWisdomLab/.github`-owned review sidecar's own routing probe
@@ -69,17 +71,49 @@ from this repo's own PR #912 run `33304076516` (job `99237393606`,
 separate end-to-end gateway check (a raw `curl` to the running
 `/v1/chat/completions` endpoint through `orchestrator/free`) re-tested the
 exact same route with `"max_tokens":16` hardcoded — 256x smaller than the
-budget the routing probe itself had just proven sufficient. A reasoning-
-capable model (this DeepSeek NIM route) spends part of a small token budget
-on internal reasoning before any answer content, so at 16 tokens it returns
-a `reasoning` field with empty `content`.
-`contextual_orchestrator.orchestrator._response_content` correctly raises
-`ProviderResponseError` for that shape
-(`"provider ... response did not contain assistant content"`); `server.py`'s
-generic exception handler maps every `ProviderResponseError` to `502
-invalid_structured_output` — a label describing a schema-validation failure
-that has nothing to do with what actually happened here (this preflight
-request carries no `response_format` or `tools` at all).
+budget the routing probe itself had just proven sufficient, and that check
+failed with `error_code: invalid_structured_output`, `http_status: 502`
+(same artifact). **That much is captured evidence.**
+
+The specific mechanism ("a reasoning-capable model spends the 16-token
+budget on reasoning and returns an empty `content`, tripping
+`_response_content`") was this entry's original explanation for *why* a
+smaller budget fails where a larger one succeeds. It was inference, not
+observed fact — the sidecar's stderr/stdout sanitizer strips raw provider
+response bodies by design (confirmed: neither log file in this artifact,
+nor any other artifact from this incident, contains the literal JSON the
+gateway received), so the actual `content`/`reasoning` field values were
+never captured anywhere inspectable. Devin's review on `#921` correctly
+caught that the inference as originally worded doesn't hold up against the
+actual code: `ModelClient._response_content`
+(`contextual_orchestrator/orchestrator.py`, `_response_content`) returns
+successfully for **any** string `content`, including `""` — an empty-string
+content does not raise. Raising requires `content` to be missing or
+non-string; *if* `reasoning` is also present and truthy at that point, the
+raised message is `"returned reasoning without content"`, not the generic
+`"... did not contain assistant content"` this entry originally quoted. The
+generic message this entry quoted therefore implies `content` was
+non-string/absent **and** the response either had no truthy `reasoning`
+key or `message`/`choices` itself was a different shape than assumed — a
+narrower and less certain claim than originally stated.
+
+**What remains solid without needing the exact field-level shape**: the
+routing probe (4096-token budget) proved the route healthy; the gateway
+preflight (16-token budget) against the identical route failed; raising the
+preflight's budget to match the probe's eliminated the reproducible failure
+mode in this repo's own test suite (RED before the fix, GREEN after — see
+`ContextualWisdomLab/.github#1436`) and the specific symptom did not
+reproduce in the live post-merge canary below. The budget mismatch is the
+established, fixed defect. The token-starvation-produces-empty-content
+narrative was a plausible *hypothesis* for why that mismatch mattered, not
+a verified mechanism — treat it as retracted pending real evidence, not as
+part of the record.
+`server.py`'s generic exception handler maps every `ProviderResponseError`
+to `502 invalid_structured_output` regardless of cause — a label describing
+a schema-validation failure that has nothing to do with what actually
+happened here (this preflight request carries no `response_format` or
+`tools` at all); that mismatch-labeling issue is real and unaffected by the
+correction above.
 
 Net effect: a healthy `orchestrator/free` gateway has been reporting itself
 unhealthy at sidecar boot. This was never a code-quality or security defect
