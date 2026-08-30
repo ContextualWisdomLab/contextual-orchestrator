@@ -85,10 +85,14 @@ DRY_RUN_PROVENANCE_PLACEHOLDER = "dry_run"
 DRY_RUN_FIXED_UNIX_TIME = 1767225600.0
 # Issue contract: Conductor/TRINITY-style deep paths are capped at five steps.
 MAX_WORKFLOW_DEPTH = 5
-# Provider output remains capped at 256 tokens by default. The equal cell-wide
+# Provider output remains capped at 264 tokens by default. The equal cell-wide
 # prompt-plus-completion budget scales with the maximum five-call envelope so a
-# fixed conduct workflow can carry its prompts without being starved.
-DEFAULT_MAX_OUTPUT_TOKENS = 256
+# fixed conduct workflow can carry its prompts without being starved. The
+# eight-token margin over the historical 256 keeps the locked 30-task
+# manifest's tightest conduct_bounded task (four-call accumulated prompt
+# context) inside its equal budget under the current deterministic dry-run
+# token estimate; see test_smoke_manifest_cannot_authorize_production_routing.
+DEFAULT_MAX_OUTPUT_TOKENS = 264
 DEFAULT_POLICY_TOTAL_TOKEN_BUDGET = MAX_WORKFLOW_DEPTH * DEFAULT_MAX_OUTPUT_TOKENS
 # Bound every provider response before materializing it in memory. Eight MiB is
 # ample for model catalogs, JSON probe responses, and the deliberately tiny
