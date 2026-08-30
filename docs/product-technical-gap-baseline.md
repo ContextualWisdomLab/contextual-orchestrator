@@ -2090,3 +2090,66 @@ REMAINING GAP (follow-up loop): re-fit these priors against fast-mlsirm/
 TEPP calibrated quality latents before enabling benchmark priors on any
 revenue-serving route; until then their influence is capped at the same
 budget an unmeasured member already spends.
+
+### GAP RESOLVED (partial) — 2026-08-30 20:5x KST: `stream_options.include_usage` + `tools` gateway rejection
+
+**Symptom**: every Strix scan org-wide against `orchestrator/free` failed closed with
+`400 invalid_stream_options` (evidence: `.github` run `33307905354`, job
+`99247611184`, step 23). Strix's `openai-agents` SDK always sends
+`stream_options.include_usage=true` alongside `tools` on every streamed turn
+(`strix/core/inputs.py::make_model_settings`, no supported opt-out that keeps
+streaming), and `server.py`'s tools/response_format passthrough branch rejected
+that exact combination unconditionally, before any upstream call.
+
+**Root cause was gateway-side, not a real upstream constraint.** No provider
+(OpenAI, NVIDIA NIM, OpenRouter, Bytez) rejects this combination — this
+codebase has never sent `tools` + `stream=true` to a real provider in the
+first place; `proxy_completion()` always forces `upstream["stream"] = False`
+for tool-calling requests. `_chat_response_sse_chunks` (the SSE framing
+function this passthrough already calls) already had full, independently
+tested support for both tool_calls delta framing and honest usage-chunk
+emission (`usage_source: "reported"` vs `"estimated"`) — the only thing
+missing was reachability.
+
+**Fix**: [PR #925](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/925)
+narrowed the rejection from *all* `tools`/`response_format` structured
+passthrough to `response_format`-only (conduct mode, no tools).
+
+**Why not remove the rejection entirely** (a competing, independently-authored
+fix, PR #924, took that broader approach and was closed in favor of #925):
+traced `cost_router.py:456-507` — a conduct-mode multi-step workflow's
+`result["usage"]` dict is built by summing per-step counts and is *always*
+populated, but carries no `usage_source`/`measurement_status` tag of its own;
+when a step's provider response omits usage, the sum silently includes a
+local token-count estimate (the `measurement_status="estimated"` case, which
+only survives on the sibling `cost` key, never on `usage` itself).
+`_chat_response_sse_chunks` labels any populated `usage` dict
+`"usage_source": "reported"` unconditionally — it does not check
+`payload["cost"]["measurement_status"]`, unlike the sibling
+`orchestrator.py::chat_completion_chunks` (used by the *other* conduct-mode
+streaming path), which already correctly gates usage emission on
+`cost.get("measurement_status") == "measured"`. Removing the rejection for
+`response_format`-only would have let the gateway present a gateway-side
+token estimate as `"reported"` for a live SSE consumer — precisely the kind
+of fabricated-precision the project's Honest metrics convention exists to
+prevent. `tools` passthrough doesn't have this exposure (always one
+non-streaming upstream call; `payload["usage"]` there is always the raw
+provider JSON's own field), which is also exactly the shape Strix needs.
+**Follow-up (not yet scheduled)**: teach `_chat_response_sse_chunks` the same
+`measurement_status == "measured"` gate `chat_completion_chunks` already has,
+so conduct-mode streamed usage can be exposed honestly too, instead of kept
+closed.
+
+**Duplicate-work consolidation** (concurrent autonomous sessions independently
+converged on the same bug): closed contextual-orchestrator#924 (superseded by
+#925, evidence above); closed `.github`#1445 (duplicate of #1442, orphaned
+direct-NVIDIA-NIM resolver removal — unrelated cleanup, same root discovery
+day); closed `.github`#1447 (duplicate of #1448, both temporary
+`LLM_DISABLE_STREAMING` mitigations for Strix — #1448 is correctly scoped to
+only the contextual-orchestrator loopback base URL, #1447 was unconditional
+and would have also disabled streaming on Strix's other provider fallbacks).
+`.github`#1448 is held open, unmerged, as a fallback only: the correct fix is
+root-cause (#925, in normal — not bypassed — review, since it does not touch
+`.github`'s trusted scripts), and a non-streaming workaround is technical debt
+that would need a follow-up revert. Will bypass-merge #1448 only if #925's
+review stalls well beyond this org's accepted multi-hour LLM-review latency.
