@@ -28,7 +28,7 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([chat, embedding], []),
+        lambda *_args, **_kwargs: ([chat, embedding], []),
     )
 
     orchestrator = TaskOrchestrator(
@@ -73,7 +73,7 @@ def test_auto_discovery_activates_bare_chat_but_not_embedding_ids(monkeypatch) -
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([bare_chat, bare_embedding], []),
+        lambda *_args, **_kwargs: ([bare_chat, bare_embedding], []),
     )
     orchestrator = TaskOrchestrator(
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
@@ -97,7 +97,7 @@ def test_auto_discovery_activates_provider_catalog_rows(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([provider_row], []),
+        lambda *_args, **_kwargs: ([provider_row], []),
     )
     orchestrator = TaskOrchestrator(
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
@@ -127,7 +127,7 @@ def test_auto_discovery_never_activates_openrouter_evidence_rows(monkeypatch) ->
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([evidence], []),
+        lambda *_args, **_kwargs: ([evidence], []),
     )
     orchestrator = TaskOrchestrator(
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
@@ -148,7 +148,7 @@ def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> 
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([discovered], []),
+        lambda *_args, **_kwargs: ([discovered], []),
     )
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
@@ -171,7 +171,7 @@ def test_auto_discovery_removes_the_configured_gateway_placeholder(monkeypatch) 
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([discovered], []),
+        lambda *_args, **_kwargs: ([discovered], []),
     )
     placeholder = ModelAgent(
         "configured_gateway_bootstrap",
@@ -199,7 +199,7 @@ def test_auto_discovery_removes_placeholder_for_existing_gateway_model(monkeypat
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([discovered], []),
+        lambda *_args, **_kwargs: ([discovered], []),
     )
     existing = ModelAgent(
         "configured_gateway_chat_capable_model",
@@ -231,7 +231,7 @@ def test_auto_discovery_keeps_last_enabled_placeholder_for_disabled_gateway_mode
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([discovered], []),
+        lambda *_args, **_kwargs: ([discovered], []),
     )
     existing = ModelAgent(
         "configured_gateway_chat_capable_model",
@@ -263,7 +263,7 @@ def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(m
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([embedding], []),
+        lambda *_args, **_kwargs: ([embedding], []),
     )
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
@@ -284,7 +284,7 @@ def test_unrelated_discovery_keeps_configured_gateway_placeholder(monkeypatch) -
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([discovered], []),
+        lambda *_args, **_kwargs: ([discovered], []),
     )
     placeholder = ModelAgent(
         "configured_gateway_bootstrap",
@@ -310,7 +310,7 @@ def test_auto_discovery_uses_explicit_capabilities_before_model_id_heuristics(mo
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([generic_non_chat], []),
+        lambda *_args, **_kwargs: ([generic_non_chat], []),
     )
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
@@ -322,7 +322,7 @@ def test_auto_discovery_preserves_sole_real_bootstrap_seed(monkeypatch) -> None:
     """A seed cannot count itself as the replacement that retires it."""
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *args: ([], []),
+        lambda *args, **_kwargs: ([], []),
     )
     seed = ModelAgent(
         "bootstrap_agent",
@@ -348,7 +348,7 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *_args: ([discovered], []),
+        lambda *_args, **_kwargs: ([discovered], []),
     )
     existing = ModelAgent(
         "openai_chat_capable_model",
@@ -367,7 +367,7 @@ def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -
     captured = []
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda sources: (captured.extend(sources) or [], []),
+        lambda sources, **_kwargs: (captured.extend(sources) or [], []),
     )
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
     with patch.dict(
@@ -387,7 +387,7 @@ def test_runtime_auto_discovery_skips_gateway_outside_allowlist(monkeypatch) -> 
     captured = []
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda sources: (captured.extend(sources) or [], []),
+        lambda sources, **_kwargs: (captured.extend(sources) or [], []),
     )
     gateway = ModelAgent(
         "configured_gateway",
@@ -421,7 +421,7 @@ def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *args: ([discovered], []),
+        lambda *args, **_kwargs: ([discovered], []),
     )
     orchestrator = TaskOrchestrator(
         [
@@ -442,7 +442,7 @@ def test_auto_discovery_retires_mock_seed_when_current_discovery_is_empty(
     """A transient empty discovery cannot preserve a stale bootstrap fixture."""
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *args: ([], []),
+        lambda *args, **_kwargs: ([], []),
     )
     real_agent = ModelAgent(
         "existing_real_agent",
@@ -475,7 +475,7 @@ def test_auto_discovery_preserves_operator_configured_mock(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *args: ([discovered], []),
+        lambda *args, **_kwargs: ([discovered], []),
     )
     operator_mock = ModelAgent(
         "operator_mock", "operator-model", base_url="mock://operator"
