@@ -1456,6 +1456,34 @@ def test_discover_provider_models_does_not_retry_non_transient_failure() -> None
     mock_sleep.assert_not_called()
 
 
+def test_discover_provider_models_retry_timeout_never_exceeds_callers_budget() -> None:
+    """A caller-supplied timeout shorter than the retry default must not expand on retry.
+
+    Regression (Devin review on #923): the retry attempt hardcoded
+    _DISCOVERY_RETRY_TIMEOUT_SECONDS (5.0s) regardless of what timeout the
+    caller actually requested, so a caller budgeting e.g. 2s per attempt
+    could see the retry alone blow well past that budget.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    payload = {"data": [{"id": "gpt-test", "object": "model"}]}
+    attempt_timeouts = []
+
+    def urlopen(request, timeout=None):
+        attempt_timeouts.append(timeout)
+        if len(attempt_timeouts) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response(payload)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered = discover_provider_models(OPENAI_SOURCE, timeout=2.0)
+
+    assert attempt_timeouts == [2.0, 2.0]
+    assert [model.model_id for model in discovered] == ["gpt-test"]
+
+
 def test_agent_id_for_is_two_word_snake_case() -> None:
     discovered = DiscoveredModel(
         provider_name="openrouter",

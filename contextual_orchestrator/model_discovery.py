@@ -1099,7 +1099,7 @@ def discover_provider_models(
         "auth_scheme": source.auth_scheme,
         **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
     }
-    attempt_timeouts = (timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS)
+    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
     payload: Any = None
     last_exc: Exception | None = None
     for attempt_index, attempt_timeout in enumerate(attempt_timeouts):

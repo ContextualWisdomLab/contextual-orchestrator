@@ -24,6 +24,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   ("cross-provider failover cannot amplify load") — reusing the same
   retry pattern there risks amplifying load against an already-degraded
   provider and was left out of scope for this change.
+- (Devin review on #923) The retry attempt's timeout no longer expands past
+  a caller-supplied budget shorter than the retry default: it is now
+  `min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS)`, so a caller requesting
+  e.g. a 2s timeout still gets a 2s retry, not a 5s one.
 
 ### Added
 
