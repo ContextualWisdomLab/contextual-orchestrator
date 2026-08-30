@@ -154,11 +154,11 @@ complete —
 exercises all of it end to end through `bootstrap_provider_catalog_runtime`, not just the workflow's
 string content. `tests/test_provider_bootstrap_secret_normalization.py` now asserts the workflow
 delegates to this tested function instead of pinning inline branching logic. 100% statement and
-docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (82 tests across
+docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (79 tests across
 `tests/test_provider_bootstrap*.py`/`tests/test_provider_catalog_bootstrap*.py`); full
-`python -m pytest tests -q` reached 83% of 2780 collected tests with zero failures before a
-10-minute sandbox timeout on this large repo's Hypothesis-heavy suite (unrelated to the files this
-PR touches).
+`python -m pytest tests -q` (excluding `tests/test_psychometric_routing.py`, which fails to collect
+in this sandbox for lack of `numpy` — an unrelated pre-existing environment gap) completed clean at
+`2781 passed, 1 skipped in 720.75s`.
 
 ## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
 
