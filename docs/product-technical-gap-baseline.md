@@ -84,7 +84,7 @@ design already promises: the pool keeps serving from last-known-good/other-provi
 existing `catalog_model_count`/`eligible_model_count`/`selected_agent_ids` checks are unchanged and
 still fail the job if the pool itself is unhealthy.
 
-**Three review rounds, not one.** The first cut only checked whether the missing credential's provider
+**Four review rounds, not one.** The first cut only checked whether the missing credential's provider
 appeared anywhere in `providers_with_errors`, with no auth/transient distinction and no bound on
 simultaneous providers. Devin and CodeRabbit's first pass caught both gaps (fixed above). Devin's
 *second* pass on that fix caught a narrower version of the same underlying problem: the original
@@ -118,15 +118,32 @@ identical unconfigured/unexplained/classification/bound checks, rather than `mis
 that shows up in `restored_credentials` for a reason the report can't tie to `providers_with_errors`
 still hard-fails as an unexplained rollback, exactly like a fully-missing name would.
 
+Devin's *fourth* pass ("One NVIDIA outage fails sync") caught a false-positive introduced by fixing the
+third-round gap: `nvidia_nim` and `nvidia_nim_sub` are two separate `provider_name` values but one
+upstream outage domain — two KV credential names (`NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB`)
+registered for load balancing against the same NVIDIA endpoint, per `PROVIDER_MODEL_SOURCES`'s own
+comment and `model_discovery._provider_family` (already used by `select_provider_diverse_models` for
+exactly this collapsing). The `affected_providers` bound counted raw `provider_name`, so a single
+NVIDIA-side blip that happened to fail both keys at once counted as *two* providers degraded and
+hard-failed — exactly the isolated-outage case the tolerance exists for, misread as a broad one.
+Fixed by routing `affected_providers` through `_provider_family` before comparing against
+`max_tolerated_missing_providers`; the per-credential unconfigured/unexplained/classification checks
+are untouched (they still key off the real `provider_name`, since `providers_with_errors`/
+`provider_error_classifications` are recorded per source, not per family).
+
 Regression coverage in `tests/test_provider_catalog_bootstrap.py` (a genuinely retryable status —
 408/429/5xx — tolerated as a warning; an HTTP 401/403 authentication failure still hard-failing; a
 persistent non-auth 4xx and an unparseable response still hard-failing; two simultaneous provider
-failures still hard-failing; and, for the third round, an authentication failure and two simultaneous
+failures still hard-failing; for the third round, an authentication failure and two simultaneous
 failures each reproduced end to end with the credential pre-registered so rollback restores a
 durable, non-`None` prior value — `test_durable_rollback_with_auth_failure_still_hard_fails`,
 `test_durable_rollback_with_two_simultaneous_failures_still_hard_fails` — plus
 `test_durable_rollback_with_single_transient_failure_is_still_tolerated` confirming the fix doesn't
-over-correct into hard-failing a legitimately tolerable single transient outage) and
+over-correct into hard-failing a legitimately tolerable single transient outage; and, for the fourth
+round, both NVIDIA keys failing together still tolerated as one family
+(`test_nvidia_primary_and_sub_outage_together_is_one_provider_family`) contrasted with that same
+NVIDIA-family outage plus a genuinely distinct provider still hard-failing
+(`test_nvidia_family_outage_plus_a_distinct_provider_still_hard_fails`)) and
 `tests/test_provider_catalog_bootstrap_boundaries.py` (the verdict function's own edge cases: fully
 healthy, unconfigured secret, unexplained rollback, non-string error code, and three third-round unit
 cases exercising the union directly against a report where `registered_credentials` is already
@@ -137,9 +154,11 @@ complete —
 exercises all of it end to end through `bootstrap_provider_catalog_runtime`, not just the workflow's
 string content. `tests/test_provider_bootstrap_secret_normalization.py` now asserts the workflow
 delegates to this tested function instead of pinning inline branching logic. 100% statement and
-docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (77 tests across
+docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (82 tests across
 `tests/test_provider_bootstrap*.py`/`tests/test_provider_catalog_bootstrap*.py`); full
-`python -m pytest tests -q` run separately for final confirmation.
+`python -m pytest tests -q` reached 83% of 2780 collected tests with zero failures before a
+10-minute sandbox timeout on this large repo's Hypothesis-heavy suite (unrelated to the files this
+PR touches).
 
 ## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
 

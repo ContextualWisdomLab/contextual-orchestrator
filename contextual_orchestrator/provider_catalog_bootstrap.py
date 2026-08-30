@@ -28,6 +28,7 @@ from .model_discovery import (
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _provider_family,
     agent_id_for,
     discover_all_models,
     refresh_price_book,
@@ -227,10 +228,14 @@ def evaluate_provider_credential_inventory(
       to hard-fail here (rather than allow-listing only authentication
       failures) matters because a permanently broken integration is just as
       capable of silently passing forever as an invalid credential is;
-    - more than ``max_tolerated_missing_providers`` providers affected at
-      once -- a broad outage, not the isolated single-provider blip this
-      tolerance exists for, and reason enough to suspect the catalog itself
-      is running stale.
+    - more than ``max_tolerated_missing_providers`` provider *families*
+      (``model_discovery._provider_family`` -- the same mapping
+      ``select_provider_diverse_models`` uses; it only collapses
+      ``nvidia_nim``/``nvidia_nim_sub``, one upstream outage domain
+      registered under two KV credential names for load balancing, not two
+      independent providers) affected at once -- a broad outage, not the
+      isolated single-provider blip this tolerance exists for, and reason
+      enough to suspect the catalog itself is running stale.
 
     The set of credentials actually judged against those checks is the union
     of two things, not just names absent from ``report["registered_credentials"]``:
@@ -324,8 +329,17 @@ def evaluate_provider_credential_inventory(
             None,
         )
 
+    # Collapse through the same provider-family mapping
+    # ``select_provider_diverse_models`` already uses for diversity selection
+    # (``model_discovery._provider_family``): nvidia_nim/nvidia_nim_sub are
+    # two KV credential names for one upstream outage domain (a load-
+    # balancing pair, not two independent providers -- see
+    # PROVIDER_MODEL_SOURCES's own comment). Counting them separately would
+    # hard-fail a single NVIDIA-side outage that happens to affect both keys
+    # at once, which is exactly the isolated-outage case this tolerance
+    # exists for, not the broad-outage case it's meant to catch.
     affected_providers = sorted(
-        {provider_by_credential.get(name, name) for name in to_evaluate}
+        {_provider_family(provider_by_credential.get(name, name)) for name in to_evaluate}
     )
     if len(affected_providers) > max_tolerated_missing_providers:
         return ProviderCredentialInventoryVerdict(

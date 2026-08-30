@@ -586,5 +586,80 @@ def test_two_simultaneous_provider_failures_hard_fail_not_a_warning() -> None:
         set_backend(None)
 
 
+def test_nvidia_primary_and_sub_outage_together_is_one_provider_family() -> None:
+    """nvidia_nim/nvidia_nim_sub are two KV credential names for one upstream
+    outage domain (a load-balancing pair -- see model_discovery.
+    _provider_family and PROVIDER_MODEL_SOURCES's own comment), not two
+    independent providers. Both failing together with a transient error is
+    still the single-provider-family blip the tolerance exists for, not a
+    broad outage -- it must not hit the multi-provider hard-fail bound.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        nvidia = _source("nvidia_nim", "NVIDIA_NIM_API_KEY")
+        nvidia_sub = _source("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB")
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, nvidia, nvidia_sub),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [
+                    ProviderDiscoveryError("nvidia_nim", "http_status_500"),
+                    ProviderDiscoveryError("nvidia_nim_sub", "http_status_503"),
+                ],
+            ),
+            model_limit=4,
+        )
+        assert "NVIDIA_NIM_API_KEY" not in report.registered_credentials
+        assert "NVIDIA_NIM_API_KEY_SUB" not in report.registered_credentials
+
+        verdict = evaluate_provider_credential_inventory(
+            report.as_dict(), _environment()
+        )
+        assert verdict.ok is True
+        assert verdict.hard_fail_reason is None
+        assert verdict.warning_message is not None
+    finally:
+        set_backend(None)
+
+
+def test_nvidia_family_outage_plus_a_distinct_provider_still_hard_fails() -> None:
+    """Family-collapsing must not widen the bound itself: an NVIDIA-family
+    outage (both keys) alongside a genuinely distinct provider's failure is
+    two affected provider families, still over the tolerance.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        nvidia = _source("nvidia_nim", "NVIDIA_NIM_API_KEY")
+        nvidia_sub = _source("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, nvidia, nvidia_sub, bytez),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [
+                    ProviderDiscoveryError("nvidia_nim", "http_status_500"),
+                    ProviderDiscoveryError("nvidia_nim_sub", "http_status_500"),
+                    ProviderDiscoveryError("bytez", "timeout"),
+                ],
+            ),
+            model_limit=4,
+        )
+
+        verdict = evaluate_provider_credential_inventory(
+            report.as_dict(), _environment()
+        )
+        assert verdict.ok is False
+        assert verdict.warning_message is None
+        assert "too many providers degraded" in verdict.hard_fail_reason
+    finally:
+        set_backend(None)
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
