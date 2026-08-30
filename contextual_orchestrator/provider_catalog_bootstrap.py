@@ -185,7 +185,7 @@ class ProviderCredentialInventoryVerdict:
     ``ok`` is False for every case that must still fail the calling workflow
     (``hard_fail_reason`` explains which); ``ok`` is True either because the
     inventory is complete (both messages ``None``) or because exactly one
-    provider's isolated, non-authentication discovery failure is tolerated
+    provider's isolated, transient discovery failure is tolerated
     (``warning_message`` explains which, for visibility -- this case must
     never pass silently).
     """
@@ -207,14 +207,13 @@ def evaluate_provider_credential_inventory(
 
     Mirrors ``bootstrap_provider_catalog_runtime``'s own graceful-degradation
     design (last-known-good models retained, pool still served) by tolerating
-    -- as a warning, not a failure -- exactly one provider's credential
-    missing from ``report["registered_credentials"]`` when the report's own
-    evidence classifies it ``TRANSIENT_FAILURE_CLASSIFICATION`` (see
-    ``_classify_discovery_error_code``: only a narrow, genuinely retryable
-    set of conditions -- a rate limit, a request timeout, a 5xx, a transport
-    failure -- ever gets that classification). Every other gap still
-    hard-fails, because each is exactly a case the tolerance must not
-    silently swallow:
+    -- as a warning, not a failure -- exactly one provider's discovery
+    failure this run when the report's own evidence classifies it
+    ``TRANSIENT_FAILURE_CLASSIFICATION`` (see ``_classify_discovery_error_code``:
+    only a narrow, genuinely retryable set of conditions -- a rate limit, a
+    request timeout, a 5xx, a transport failure -- ever gets that
+    classification). Every other gap still hard-fails, because each is
+    exactly a case the tolerance must not silently swallow:
 
     - a credential never supplied to the caller at all (a real configuration
       gap, checked against ``environ`` -- bootstrap transport only, never a
@@ -228,17 +227,51 @@ def evaluate_provider_credential_inventory(
       to hard-fail here (rather than allow-listing only authentication
       failures) matters because a permanently broken integration is just as
       capable of silently passing forever as an invalid credential is;
-    - more than ``max_tolerated_missing_providers`` providers missing at
+    - more than ``max_tolerated_missing_providers`` providers affected at
       once -- a broad outage, not the isolated single-provider blip this
       tolerance exists for, and reason enough to suspect the catalog itself
       is running stale.
+
+    The set of credentials actually judged against those checks is the union
+    of two things, not just names absent from ``report["registered_credentials"]``:
+    also every name in ``report["restored_credentials"]``.
+    ``_restore_provider_credentials_atomically`` writes a name there whenever
+    that provider's discovery failed *this run*, regardless of what the
+    rollback happened to restore. On a KV that has never held that name
+    before (a fresh registration, or the run-scoped ephemeral store this
+    package's own tests use), rollback restores ``None`` and the name also
+    drops out of ``registered_credentials`` -- the "missing" case. But on a
+    KV that already held a still-valid value for that name from an earlier
+    successful run, rollback restores *that* value instead: the credential
+    stays present in ``registered_credentials`` even though this run's own
+    discovery for it failed. Judging only the "missing" set would return
+    healthy at the very first check for that case without ever looking at
+    ``provider_error_classifications`` -- silently reopening every hard-fail
+    case above (an auth failure, several simultaneous failures) the moment a
+    provider has ever registered successfully before, which is exactly the
+    class of regression this function exists to prevent. A name reaching
+    ``restored_credentials`` with no corresponding ``providers_with_errors``
+    entry still hard-fails as an unexplained rollback below, same as it
+    would for a fully-missing name -- being in ``restored_credentials`` is
+    not itself treated as proof of a legitimate, classifiable failure.
     """
     expected = set(expected_credential_names)
     registered = {
         name for name in report.get("registered_credentials", ()) if isinstance(name, str)
     }
-    missing = sorted(expected - registered)
-    if not missing:
+    missing = expected - registered
+    restored = {
+        name
+        for name in report.get("restored_credentials", ())
+        if isinstance(name, str) and name in expected
+    }
+    # A credential can fail this run's discovery yet still land back in
+    # ``registered`` (a durable-KV rollback restoring an old-but-valid prior
+    # value) -- see the docstring. ``missing`` alone is therefore not the
+    # complete set of credentials this run needs to justify; union in every
+    # name rollback actually touched this run.
+    to_evaluate = sorted(missing | restored)
+    if not to_evaluate:
         return ProviderCredentialInventoryVerdict(True, None, None)
 
     provider_by_credential = {
@@ -249,7 +282,9 @@ def evaluate_provider_credential_inventory(
     }
     error_classifications = dict(report.get("provider_error_classifications", {}) or {})
 
-    unconfigured = sorted(name for name in missing if not (environ.get(name) or "").strip())
+    unconfigured = sorted(
+        name for name in to_evaluate if not (environ.get(name) or "").strip()
+    )
     if unconfigured:
         return ProviderCredentialInventoryVerdict(
             False,
@@ -259,7 +294,7 @@ def evaluate_provider_credential_inventory(
 
     unexplained = sorted(
         name
-        for name in missing
+        for name in to_evaluate
         if provider_by_credential.get(name) not in providers_with_errors
     )
     if unexplained:
@@ -271,7 +306,7 @@ def evaluate_provider_credential_inventory(
 
     non_transient = sorted(
         name
-        for name in missing
+        for name in to_evaluate
         if error_classifications.get(provider_by_credential.get(name, ""))
         != TRANSIENT_FAILURE_CLASSIFICATION
     )
@@ -289,21 +324,23 @@ def evaluate_provider_credential_inventory(
             None,
         )
 
-    missing_providers = sorted({provider_by_credential.get(name, name) for name in missing})
-    if len(missing_providers) > max_tolerated_missing_providers:
+    affected_providers = sorted(
+        {provider_by_credential.get(name, name) for name in to_evaluate}
+    )
+    if len(affected_providers) > max_tolerated_missing_providers:
         return ProviderCredentialInventoryVerdict(
             False,
             "credential inventory mismatch: too many providers degraded at once "
-            f"({len(missing_providers)} > {max_tolerated_missing_providers}): "
-            f"{missing_providers}",
+            f"({len(affected_providers)} > {max_tolerated_missing_providers}): "
+            f"{affected_providers}",
             None,
         )
 
     return ProviderCredentialInventoryVerdict(
         True,
         None,
-        f"provider catalog degraded: {missing} rolled back after an isolated, "
-        "non-authentication discovery failure "
+        f"provider catalog degraded: {to_evaluate} rolled back after an isolated, "
+        "transient discovery failure "
         f"(providers_with_errors={sorted(providers_with_errors)}, "
         f"catalog_refresh_failure_count={report.get('catalog_refresh_failure_count')}, "
         f"restored_credentials={report.get('restored_credentials')}); catalog still "

@@ -67,12 +67,15 @@ that must not be silently swallowed:
   malformed request shape, a provider that moved/retired the API) must never be excused as a
   transient blip: left alone, either would let that provider stay silently disabled forever, no
   alert, every run;
-- **more than one provider's credential is missing at once** — bounded at exactly one provider
+- **more than one provider is affected at once** — bounded at exactly one provider
   (`max_tolerated_missing_providers=1`) so a broader outage (several providers degraded
   simultaneously) still fails instead of reporting success while serving a stale catalog. The bound
-  counts providers that actually lost their registered credential this run, not providers that merely
-  logged any error — a provider on a durable KV that kept its previous good credential despite a
-  transient blip this round does not count against the bound.
+  counts every provider whose discovery failed this run — both providers that actually lost their
+  registered credential (`registered_credentials` no longer has the name) and providers whose
+  credential was restored to an old-but-still-valid durable value and therefore never dropped out of
+  `registered_credentials` at all (see the third review round below). A provider that merely logged
+  any error with no corresponding rollback at all still does not count against the bound — the bound
+  is about discovery failures with rollback evidence, not raw error-log noise.
 
 Only when a single provider's credential is missing, the secret was supplied, and its classification is
 exactly `transient_failure` does the job print a `::warning::` (with `providers_with_errors`,
@@ -81,7 +84,7 @@ design already promises: the pool keeps serving from last-known-good/other-provi
 existing `catalog_model_count`/`eligible_model_count`/`selected_agent_ids` checks are unchanged and
 still fail the job if the pool itself is unhealthy.
 
-**Two review rounds, not one.** The first cut only checked whether the missing credential's provider
+**Three review rounds, not one.** The first cut only checked whether the missing credential's provider
 appeared anywhere in `providers_with_errors`, with no auth/transient distinction and no bound on
 simultaneous providers. Devin and CodeRabbit's first pass caught both gaps (fixed above). Devin's
 *second* pass on that fix caught a narrower version of the same underlying problem: the original
@@ -94,15 +97,47 @@ reliability bugfix (isolating transient vs. permanent provider failures), not a 
 research claim, and no other CI-only fix in this repo's history (`abb9aaa6`, `b3278df7`, `c328c1e8`,
 `1bbda718`, `8abc4b45`) attaches a paper either.
 
+Devin's *third* pass ("Durable rollback bypasses failure verdict") found the deepest gap of the three,
+in the still-standing `if not missing: return ... True ...` early return itself. `missing` is computed
+as `expected_credential_names - registered_credentials`, and `registered_credentials` on the report is
+filtered to names where `get_credential(name) is not None` *after* rollback has already run. On the
+run-scoped/first-registration KV every test above exercises, a failed provider's rollback restores
+`previous_credentials[name] = None` (nothing was registered before), so the name both leaves
+`registered_credentials` and enters `restored_credentials` — the two were accidentally redundant in
+every scenario the first two rounds tested. But on a KV that already durably held a still-valid value
+for that name from an earlier successful run, rollback restores *that* value instead of `None`: the
+credential never leaves `registered_credentials` at all, `missing` comes back empty, and the function
+returned healthy at the very first line — without ever inspecting `provider_error_classifications`.
+After a scheduled sync's first successful run against the durable PostgreSQL KV, this made the entire
+auth-failure/persistent-4xx/multi-provider hard-fail logic built across the first two rounds silently
+unreachable: a revoked or rotated credential, or several providers failing at once, would both report
+`ok=True` forever. Fixed by evaluating the union of `missing` and `restored_credentials` (bridged
+credential-name→provider-name through the same `provider_by_credential` map the `missing` path already
+used, joined on `expected_credential_names` for defense against untrusted report input) through the
+identical unconfigured/unexplained/classification/bound checks, rather than `missing` alone — a name
+that shows up in `restored_credentials` for a reason the report can't tie to `providers_with_errors`
+still hard-fails as an unexplained rollback, exactly like a fully-missing name would.
+
 Regression coverage in `tests/test_provider_catalog_bootstrap.py` (a genuinely retryable status —
 408/429/5xx — tolerated as a warning; an HTTP 401/403 authentication failure still hard-failing; a
 persistent non-auth 4xx and an unparseable response still hard-failing; two simultaneous provider
-failures still hard-failing) and `tests/test_provider_catalog_bootstrap_boundaries.py` (the verdict
-function's own edge cases: fully healthy, unconfigured secret, unexplained rollback, non-string error
-code) exercises all of it end to end through `bootstrap_provider_catalog_runtime`, not just the
-workflow's string content. `tests/test_provider_bootstrap_secret_normalization.py` now asserts the
-workflow delegates to this tested function instead of pinning inline branching logic. 100% statement
-and docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (71 tests across
+failures still hard-failing; and, for the third round, an authentication failure and two simultaneous
+failures each reproduced end to end with the credential pre-registered so rollback restores a
+durable, non-`None` prior value — `test_durable_rollback_with_auth_failure_still_hard_fails`,
+`test_durable_rollback_with_two_simultaneous_failures_still_hard_fails` — plus
+`test_durable_rollback_with_single_transient_failure_is_still_tolerated` confirming the fix doesn't
+over-correct into hard-failing a legitimately tolerable single transient outage) and
+`tests/test_provider_catalog_bootstrap_boundaries.py` (the verdict function's own edge cases: fully
+healthy, unconfigured secret, unexplained rollback, non-string error code, and three third-round unit
+cases exercising the union directly against a report where `registered_credentials` is already
+complete —
+`test_credential_inventory_verdict_evaluates_restored_names_even_when_registered_is_complete`,
+`test_credential_inventory_verdict_hard_fails_on_unexplained_restored_credential`,
+`test_credential_inventory_verdict_tolerates_restored_transient_failure_when_registered_is_complete`)
+exercises all of it end to end through `bootstrap_provider_catalog_runtime`, not just the workflow's
+string content. `tests/test_provider_bootstrap_secret_normalization.py` now asserts the workflow
+delegates to this tested function instead of pinning inline branching logic. 100% statement and
+docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (77 tests across
 `tests/test_provider_bootstrap*.py`/`tests/test_provider_catalog_bootstrap*.py`); full
 `python -m pytest tests -q` run separately for final confirmation.
 

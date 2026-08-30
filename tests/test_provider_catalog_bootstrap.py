@@ -424,6 +424,131 @@ def test_genuinely_retryable_http_statuses_are_transient() -> None:
         set_backend(None)
 
 
+def test_durable_rollback_with_auth_failure_still_hard_fails() -> None:
+    """A rollback that restores an old-but-still-valid credential value (the
+    durable-KV production path, simulated here by pre-registering a value
+    before bootstrap so ``previous_credentials`` is non-``None``) must not
+    let ``registered_credentials`` look complete and skip classification.
+    An authentication failure for that provider must still hard-fail even
+    though the credential name never actually drops out of
+    ``registered_credentials``.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        # Simulate a prior successful run having already durably registered
+        # BYTEZ_API_KEY, so this run's rollback restores that old value
+        # rather than clearing it to None.
+        register_credential("BYTEZ_API_KEY", "previous-value-for-bytez_api_key")
+
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, bytez),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [ProviderDiscoveryError("bytez", "http_status_401")],
+            ),
+            model_limit=4,
+        )
+        # The durable-rollback signature this bug targets: the credential is
+        # restored to its old value, not cleared, so it stays "registered".
+        assert "BYTEZ_API_KEY" in report.registered_credentials
+        assert "BYTEZ_API_KEY" in report.restored_credentials
+        assert get_credential("BYTEZ_API_KEY") == "previous-value-for-bytez_api_key"
+
+        verdict = evaluate_provider_credential_inventory(
+            report.as_dict(), _environment()
+        )
+        assert verdict.ok is False
+        assert verdict.warning_message is None
+        assert "not a tolerated transient outage" in verdict.hard_fail_reason
+        assert "'BYTEZ_API_KEY': 'authentication_failure'" in verdict.hard_fail_reason
+    finally:
+        set_backend(None)
+
+
+def test_durable_rollback_with_two_simultaneous_failures_still_hard_fails() -> None:
+    """Two providers failing at once, both restored to durable prior values
+    (so neither drops out of ``registered_credentials``), must still hit the
+    single-provider tolerance bound instead of silently reporting success.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        openrouter = _source("openrouter", "OPENROUTER_API_KEY")
+        register_credential("BYTEZ_API_KEY", "previous-value-for-bytez_api_key")
+        register_credential(
+            "OPENROUTER_API_KEY", "previous-value-for-openrouter_api_key"
+        )
+
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, bytez, openrouter),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [
+                    ProviderDiscoveryError("bytez", "http_status_500"),
+                    ProviderDiscoveryError("openrouter", "timeout"),
+                ],
+            ),
+            model_limit=4,
+        )
+        assert "BYTEZ_API_KEY" in report.registered_credentials
+        assert "OPENROUTER_API_KEY" in report.registered_credentials
+        assert set(report.restored_credentials) == {
+            "BYTEZ_API_KEY",
+            "OPENROUTER_API_KEY",
+        }
+
+        verdict = evaluate_provider_credential_inventory(
+            report.as_dict(), _environment()
+        )
+        assert verdict.ok is False
+        assert verdict.warning_message is None
+        assert "too many providers degraded" in verdict.hard_fail_reason
+    finally:
+        set_backend(None)
+
+
+def test_durable_rollback_with_single_transient_failure_is_still_tolerated() -> None:
+    """The fix must not over-correct: a single transient failure whose
+    credential is restored to a durable, still-valid prior value is still
+    tolerated as a warning, not turned into an unconditional hard-fail.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        register_credential("BYTEZ_API_KEY", "previous-value-for-bytez_api_key")
+
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, bytez),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [ProviderDiscoveryError("bytez", "http_status_500")],
+            ),
+            model_limit=4,
+        )
+        assert "BYTEZ_API_KEY" in report.registered_credentials
+        assert "BYTEZ_API_KEY" in report.restored_credentials
+
+        verdict = evaluate_provider_credential_inventory(
+            report.as_dict(), _environment()
+        )
+        assert verdict.ok is True
+        assert verdict.hard_fail_reason is None
+        assert verdict.warning_message is not None
+        assert "BYTEZ_API_KEY" in verdict.warning_message
+    finally:
+        set_backend(None)
+
+
 def test_two_simultaneous_provider_failures_hard_fail_not_a_warning() -> None:
     """Tolerance is bounded to exactly one provider; a broader outage --
     more than one provider's credential missing at once -- must still fail
