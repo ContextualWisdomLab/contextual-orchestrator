@@ -1,5 +1,34 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-30 durable routing-observation context and ordering slice
+
+PR #911 exact head `1e14b2fed0e9043ce3fd639c57aede4c40f77bf7` left durable
+routing observations keyed only by `ledger_name` and `member_id`, with write
+time assigned when SQLite acquired the transaction lock and old rows pruned by
+whichever writer had the shortest configured window. That produced four linked
+correctness gaps on the live branch: reused agent IDs could inherit unrelated
+history after restart, in-flight old-group attempts could repopulate a newly
+assigned member after `reset_members`, concurrent writers could replay rows in
+lock-acquisition order instead of completion order, and one short-window
+gateway could delete evidence still inside another gateway's longer window.
+
+The bounded fix keeps the opt-in SQLite slice but changes the durable contract:
+each row now carries a caller-supplied completion timestamp plus an active
+member-context key derived from the serving agent shape, router refresh loads
+only rows whose `(member_id, context_key)` matches the current member set, and
+shared writers no longer prune rows by their local window. This preserves
+restart continuity for the same agent shape while failing closed on stale or
+reassigned evidence rather than routing with the wrong history.
+
+Exact branch evidence on Saturday, August 30, 2026 used `uv run pytest -q`
+from the clean `commercial-loop-20260830-pr911-root-cause` worktree:
+`tests/test_routing_observation_store.py`,
+`tests/test_measured_routing_evidence.py`, and
+`tests/test_model_group.py` passed (`84 passed in 2.35s`). Added regressions
+cover stale-context rejection, completion-time ordering, and mixed-window
+coexistence. Hosted protected checks, independent review, conflict resolution,
+and normal merge remain required before this becomes protected-main evidence.
+
 ## 2026-08-29 bounded routing-observation durability slice
 
 The multi-instance routing gap is now partially implemented behind an explicit

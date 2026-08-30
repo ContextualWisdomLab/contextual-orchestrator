@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 import re
 import threading
+import time
 from collections.abc import Callable
 
 from .conventions import require_object_name
@@ -90,6 +91,7 @@ class ModelGroupRouter:
         ewma_gain: float = EWMA_LATENCY_GAIN,
         min_latency_seconds: float = MIN_ROUTING_LATENCY_SECONDS,
         prior_resolver: Callable[[str], tuple[float, float]] | None = None,
+        observation_context_resolver: Callable[[str], str] | None = None,
         observation_store: RoutingObservationStore | None = None,
         ledger_name: str = "transport",
     ) -> None:
@@ -100,6 +102,7 @@ class ModelGroupRouter:
         self._ewma_gain = float(ewma_gain)
         self._min_latency_seconds = float(min_latency_seconds)
         self._prior_resolver = prior_resolver
+        self._observation_context_resolver = observation_context_resolver
         if observation_store is not None and any(
             not callable(getattr(observation_store, name, None))
             for name in ("append", "load", "delete_members")
@@ -113,6 +116,7 @@ class ModelGroupRouter:
         # Store I/O stays serialized with in-memory updates under the same lock
         # ordering so refresh=False reads never observe a partially refreshed row set.
         self._observation_io_lock = threading.Lock()
+        self._member_contexts: dict[str, str] = {}
         # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
         # None until the first observation of each kind arrives.
         self._members: dict[str, dict[str, float | None]] = {}
@@ -120,6 +124,7 @@ class ModelGroupRouter:
     def register_member(self, member_id: str) -> None:
         """Ensure a member exists in the ledger (idempotent, keeps history)."""
         with self._lock:
+            self._member_contexts[member_id] = self._resolve_context_key(member_id)
             self._members.setdefault(member_id, self._blank_state(member_id))
 
     def _blank_state(self, member_id: str) -> dict[str, float | None]:
@@ -149,6 +154,7 @@ class ModelGroupRouter:
                 for member_id in list(self._members):
                     if member_id not in keep_member_ids:
                         del self._members[member_id]
+                        self._member_contexts.pop(member_id, None)
             return
         with self._lock:
             with self._observation_io_lock:
@@ -157,6 +163,7 @@ class ModelGroupRouter:
                 for member_id in removed:
                     if member_id not in keep_member_ids:
                         self._members.pop(member_id, None)
+                        self._member_contexts.pop(member_id, None)
 
     def reset_members(self, member_ids: set[str]) -> None:
         """Discard measurements whose group context changed."""
@@ -164,12 +171,14 @@ class ModelGroupRouter:
             with self._lock:
                 for member_id in member_ids:
                     self._members.pop(member_id, None)
+                    self._member_contexts.pop(member_id, None)
             return
         with self._lock:
             with self._observation_io_lock:
                 self._observation_store.delete_members(self._ledger_name, member_ids)
                 for member_id in member_ids:
                     self._members.pop(member_id, None)
+                    self._member_contexts.pop(member_id, None)
 
     def update_prior(
         self,
@@ -212,6 +221,9 @@ class ModelGroupRouter:
         member_id: str,
         latency_seconds: float,
         output_tokens: int | None = None,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
     ) -> None:
         """Record one successful attempt with its measured wall-clock latency.
 
@@ -245,6 +257,8 @@ class ModelGroupRouter:
             with self._observation_io_lock:
                 self._persist_observation(
                     member_id,
+                    observation_context_key=observation_context_key,
+                    observed_at=observed_at,
                     success=True,
                     latency_seconds=latency,
                     output_tokens=output_tokens,
@@ -252,11 +266,22 @@ class ModelGroupRouter:
                 state = self._ensure_locked(member_id)
                 self._apply_success_locked(state, clamped, throughput_sample)
 
-    def observe_failure(self, member_id: str) -> None:
+    def observe_failure(
+        self,
+        member_id: str,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
+    ) -> None:
         """Record one failed attempt (stability evidence only; no latency)."""
         with self._lock:
             with self._observation_io_lock:
-                self._persist_observation(member_id, success=False)
+                self._persist_observation(
+                    member_id,
+                    observation_context_key=observation_context_key,
+                    observed_at=observed_at,
+                    success=False,
+                )
                 state = self._ensure_locked(member_id)
                 self._apply_failure_locked(state)
 
@@ -264,6 +289,8 @@ class ModelGroupRouter:
         self,
         member_id: str,
         *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
         success: bool,
         latency_seconds: float | None = None,
         output_tokens: int | None = None,
@@ -271,10 +298,21 @@ class ModelGroupRouter:
         """Persist one observation while keeping storage failures identifiable."""
         if self._observation_store is None:
             return
+        if observed_at is None:
+            store_now = getattr(self._observation_store, "_now", None)
+            when = float(store_now()) if callable(store_now) else time.time()
+        else:
+            when = float(observed_at)
         try:
             self._observation_store.append(
                 self._ledger_name,
                 member_id,
+                context_key=(
+                    observation_context_key
+                    if observation_context_key is not None
+                    else self._context_key_locked(member_id)
+                ),
+                observed_at=when,
                 success=success,
                 latency_seconds=latency_seconds,
                 output_tokens=output_tokens,
@@ -290,7 +328,10 @@ class ModelGroupRouter:
             return
         with self._lock:
             with self._observation_io_lock:
-                observations = self._observation_store.load(self._ledger_name)
+                observations = self._observation_store.load(
+                    self._ledger_name,
+                    active_contexts=dict(self._member_contexts),
+                )
                 # ponytail: replay the bounded window for cross-process
                 # correctness; add a sequence cursor only after measured fleet
                 # load requires it.
@@ -389,7 +430,21 @@ class ModelGroupRouter:
     # --- internal helpers (callers must hold ``self._lock``) ---------------
 
     def _ensure_locked(self, member_id: str) -> dict[str, float | None]:
+        self._member_contexts.setdefault(member_id, self._resolve_context_key(member_id))
         return self._members.setdefault(member_id, self._blank_state(member_id))
+
+    def _resolve_context_key(self, member_id: str) -> str:
+        context_key = (
+            self._observation_context_resolver(member_id)
+            if self._observation_context_resolver is not None
+            else member_id
+        )
+        if type(context_key) is not str or not context_key:
+            raise ValueError("observation_context_resolver must return a non-empty string")
+        return context_key
+
+    def _context_key_locked(self, member_id: str) -> str:
+        return self._member_contexts.setdefault(member_id, self._resolve_context_key(member_id))
 
     def _apply_success_locked(
         self,

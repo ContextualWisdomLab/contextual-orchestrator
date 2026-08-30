@@ -14,7 +14,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from typing import Protocol
 
 
@@ -36,13 +36,19 @@ class RoutingObservationStore(Protocol):
         ledger_name: str,
         member_id: str,
         *,
+        context_key: str,
+        observed_at: float,
         success: bool,
         latency_seconds: float | None = None,
         output_tokens: int | None = None,
     ) -> None:
         """Append one completed attempt to the current observation window."""
 
-    def load(self, ledger_name: str) -> list[RoutingObservation]:
+    def load(
+        self,
+        ledger_name: str,
+        active_contexts: Mapping[str, str] | None = None,
+    ) -> list[RoutingObservation]:
         """Return current-window observations in completion order."""
 
     def delete_members(self, ledger_name: str, member_ids: Iterable[str]) -> None:
@@ -65,13 +71,13 @@ class SqliteRoutingObservationStore:
     _CREATE_TABLE_SQL = (
         "CREATE TABLE IF NOT EXISTS routing_observations ("
         "observation_id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "ledger_name TEXT NOT NULL, member_id TEXT NOT NULL, "
+        "ledger_name TEXT NOT NULL, member_id TEXT NOT NULL, context_key TEXT NOT NULL, "
         "observed_at REAL NOT NULL, success INTEGER NOT NULL CHECK(success IN (0, 1)), "
         "latency_seconds REAL, output_tokens INTEGER)"
     )
     _CREATE_INDEX_SQL = (
         "CREATE INDEX IF NOT EXISTS routing_observations_ledger_time "
-        "ON routing_observations(ledger_name, observed_at, observation_id)"
+        "ON routing_observations(ledger_name, member_id, context_key, observed_at, observation_id)"
     )
 
     def __init__(
@@ -95,6 +101,7 @@ class SqliteRoutingObservationStore:
             connection = self._connect()
             try:
                 connection.execute(self._CREATE_TABLE_SQL)
+                self._ensure_schema(connection)
                 connection.execute(self._CREATE_INDEX_SQL)
                 connection.commit()
             finally:
@@ -117,6 +124,19 @@ class SqliteRoutingObservationStore:
         return value
 
     @staticmethod
+    def _ensure_schema(connection: sqlite3.Connection) -> None:
+        """Backfill additive columns required by the durable observation contract."""
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(routing_observations)").fetchall()
+        }
+        if "context_key" not in columns:
+            connection.execute(
+                "ALTER TABLE routing_observations "
+                "ADD COLUMN context_key TEXT NOT NULL DEFAULT ''"
+            )
+
+    @staticmethod
     def _validate_ledger_name(ledger_name: str) -> None:
         """Validate the fixed logical ledger identifier."""
         if type(ledger_name) is not str or not ledger_name.strip():
@@ -128,11 +148,19 @@ class SqliteRoutingObservationStore:
         if type(member_id) is not str or not member_id:
             raise ValueError("member_id must be a non-empty string")
 
+    @staticmethod
+    def _validate_context_key(context_key: str) -> None:
+        """Validate the member-context key used to reject stale rows."""
+        if type(context_key) is not str or not context_key:
+            raise ValueError("context_key must be a non-empty string")
+
     def append(
         self,
         ledger_name: str,
         member_id: str,
         *,
+        context_key: str,
+        observed_at: float,
         success: bool,
         latency_seconds: float | None = None,
         output_tokens: int | None = None,
@@ -140,6 +168,7 @@ class SqliteRoutingObservationStore:
         """Append one validated attempt and prune rows outside the time window."""
         self._validate_ledger_name(ledger_name)
         self._validate_member_id(member_id)
+        self._validate_context_key(context_key)
         if type(success) is not bool:
             raise TypeError("success must be a boolean")
         latency: float | None = None
@@ -157,23 +186,22 @@ class SqliteRoutingObservationStore:
                 raise ValueError("output_tokens must be a positive integer when provided")
         elif latency_seconds is not None or output_tokens is not None:
             raise ValueError("failed observations cannot contain success-only measurements")
-        now = self._now()
+        when = float(observed_at)
+        if not math.isfinite(when):
+            raise ValueError("observed_at must be finite")
         connection = self._connect()
         with self._lock:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
-                    "DELETE FROM routing_observations WHERE observed_at < ?",
-                    (now - self._window_seconds,),
-                )
-                connection.execute(
                     "INSERT INTO routing_observations "
-                    "(ledger_name, member_id, observed_at, success, latency_seconds, output_tokens) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(ledger_name, member_id, context_key, observed_at, success, latency_seconds, output_tokens) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         ledger_name.strip(),
                         member_id,
-                        now,
+                        context_key,
+                        when,
                         int(success),
                         latency,
                         None if not success else output_tokens,
@@ -186,20 +214,42 @@ class SqliteRoutingObservationStore:
             finally:
                 connection.close()
 
-    def load(self, ledger_name: str) -> list[RoutingObservation]:
+    def load(
+        self,
+        ledger_name: str,
+        active_contexts: Mapping[str, str] | None = None,
+    ) -> list[RoutingObservation]:
         """Return only observations still inside the configured time window."""
         self._validate_ledger_name(ledger_name)
         cutoff = self._now() - self._window_seconds
+        active = dict(active_contexts or {})
+        for member_id, context_key in active.items():
+            self._validate_member_id(member_id)
+            self._validate_context_key(context_key)
         connection = self._connect()
         with self._lock:
             try:
-                rows = connection.execute(
-                    "SELECT member_id, success, latency_seconds, output_tokens "
-                    "FROM routing_observations "
-                    "WHERE ledger_name = ? AND observed_at >= ? "
-                    "ORDER BY observation_id",
-                    (ledger_name.strip(), cutoff),
-                ).fetchall()
+                if active:
+                    placeholders = ", ".join(["(?, ?)"] * len(active))
+                    params: list[object] = [ledger_name.strip(), cutoff]
+                    for member_id, context_key in active.items():
+                        params.extend((member_id, context_key))
+                    rows = connection.execute(
+                        "SELECT member_id, success, latency_seconds, output_tokens "
+                        "FROM routing_observations "
+                        "WHERE ledger_name = ? AND observed_at >= ? "
+                        f"AND (member_id, context_key) IN ({placeholders}) "
+                        "ORDER BY observed_at, observation_id",
+                        tuple(params),
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        "SELECT member_id, success, latency_seconds, output_tokens "
+                        "FROM routing_observations "
+                        "WHERE ledger_name = ? AND observed_at >= ? "
+                        "ORDER BY observed_at, observation_id",
+                        (ledger_name.strip(), cutoff),
+                    ).fetchall()
             finally:
                 connection.close()
         return [
