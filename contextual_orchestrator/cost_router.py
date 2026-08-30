@@ -278,7 +278,13 @@ class CostRoutingCoordinator:
         self._embedding_job_backends = registry.mapping("embedding_job_backends")
         self._embedding_request_keys = registry.mapping("embedding_request_keys")
         for readiness_job_id in list(self._readiness_jobs):
-            readiness_job = self._readiness_jobs[readiness_job_id]
+            readiness_job = self._readiness_jobs.get(readiness_job_id)
+            if not isinstance(readiness_job, dict):
+                # A durable (Valkey/Redis) registry can expire the document
+                # between the key listing above and this lookup; skip rather
+                # than let a KeyError propagate out of __init__ and fail
+                # server construction.
+                continue
             if readiness_job.get("status") == "completed" and readiness_job.get("capability_code") == "structured":
                 checked_at = time.monotonic()
                 with self.orchestrator._provider_readiness_lock:
@@ -353,7 +359,14 @@ class CostRoutingCoordinator:
 
     def _run_provider_readiness_job(self, job_id: str) -> None:
         """Probe only a job's declared access list under durable claim ownership."""
-        initial = dict(self._readiness_jobs[job_id])
+        initial = self._readiness_jobs.get(job_id)
+        if not isinstance(initial, dict):
+            # The durable document expired or was removed between enqueue
+            # and worker pickup (e.g. a short-TTL registry); there is no
+            # queued/running job left to advance, so return quietly instead
+            # of raising KeyError out of the worker thread.
+            return
+        initial = dict(initial)
         deadline_epoch = initial.get("deadline_epoch")
         deadline_remaining = (
             max(1.0, float(deadline_epoch) - time.time())

@@ -69,7 +69,7 @@ def test_naruon_structured_dom_decomposition_payload(test_server: tuple[HTTPServ
     try:
         # Since we use fake mock providers (or nothing) in this simple test server without real providers configured,
         # we expect the orchestrator to fail to route or mock a response. We just want to ensure it parses the payload correctly.
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             body = json.loads(response.read().decode("utf-8"))
             assert "choices" in body
     except urllib.error.HTTPError as e:
