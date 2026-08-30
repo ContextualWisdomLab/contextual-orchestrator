@@ -23,11 +23,20 @@ in the current diff against protected `main` (superseded by an earlier
 merge). Fixed: `tests/test_measured_routing_evidence.py`'s
 `fail_first_quality_append` fake now checks the `ledger_name` argument
 (`"quality"`) before raising, instead of unconditionally failing whichever
-ledger's `append` happens to be called first. Not independently verified
-this cycle: the empty-string `seed`/`top_logprobs` and
-`text.format.type="text"` claims in `server.py` (pre-existing on `main`,
-outside this PR's own diff) and `record_stream_usage` SSE-completion
-exception handling — left for a follow-up pass.
+ledger's `append` happens to be called first. Also re-verified on this exact
+PR head: empty-string `seed`/`top_logprobs` omission is now covered by
+`tests/test_orchestrated_responses_stream.py::test_streamed_orchestrated_responses_allows_blank_seed_and_top_logprobs`,
+and `text.format.type="text"` no longer forces the provider-only Responses
+path because `_responses_virtual_requires_provider_path` restricts that branch
+to actual provider-preserving controls. Newly fixed on this head: manually
+raised `ProviderUpstreamError` instances can no longer echo raw provider/client
+diagnostics into HTTP or SSE customer responses, so oversized text, private
+URLs, and credential-bearing strings are reduced to a bounded redacted
+sentence before `_provider_upstream_message()` adds caller guidance.
+Regression coverage now includes one direct HTTP failure path and both chat and
+Responses SSE failure surfaces. `record_stream_usage` SSE-completion exception
+handling remains independently verified on the branch and was not reopened
+here.
 
 ## 2026-08-30 durable routing-observation context and ordering slice
 

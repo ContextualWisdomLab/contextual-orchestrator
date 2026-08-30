@@ -98,6 +98,20 @@ def provider_error_body(exc: urllib.error.HTTPError) -> bytes:
     return body
 
 
+def _sanitize_provider_message_text(raw: object) -> str | None:
+    """Collapse one provider diagnostic to a bounded caller-safe sentence."""
+    collapsed = "".join(
+        char
+        if char == "\t" or not (ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F)
+        else " "
+        for char in str(raw)
+    ).strip()
+    collapsed = collapsed[:MAX_SAFE_MESSAGE_CHARS]
+    if not collapsed or _SENSITIVE_PROVIDER_MESSAGE.search(collapsed):
+        return None
+    return collapsed
+
+
 def safe_provider_message(exc: BaseException) -> str | None:
     """Extract one bounded, control-free diagnostic sentence from a failure.
 
@@ -131,16 +145,7 @@ def safe_provider_message(exc: BaseException) -> str | None:
     else:
         first_arg = next((part for part in exc.args[:1] if isinstance(part, str)), "")
         raw = first_arg or type(exc).__name__
-    collapsed = "".join(
-        char
-        if char == "\t" or not (ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F)
-        else " "
-        for char in str(raw)
-    ).strip()
-    collapsed = collapsed[:MAX_SAFE_MESSAGE_CHARS]
-    if not collapsed or _SENSITIVE_PROVIDER_MESSAGE.search(collapsed):
-        return None
-    return collapsed
+    return _sanitize_provider_message_text(raw)
 
 
 class ProviderUpstreamError(RuntimeError):
@@ -170,7 +175,10 @@ class ProviderUpstreamError(RuntimeError):
         self.provider_status = provider_status
         self.retryable = retryable
         self.transport = transport
-        super().__init__(message)
+        super().__init__(
+            _sanitize_provider_message_text(message)
+            or "provider diagnostic was redacted for safety"
+        )
 
     @property
     def detail(self) -> dict[str, Any]:

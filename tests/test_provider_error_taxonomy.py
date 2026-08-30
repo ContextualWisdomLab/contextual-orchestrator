@@ -429,6 +429,46 @@ def test_chat_completions_returns_openai_compatible_rate_limit_error() -> None:
     assert error["detail"]["retryable"] is True
 
 
+def test_chat_completions_redacts_sensitive_manual_provider_message() -> None:
+    """HTTP error payloads must not echo secrets or private endpoints from manual failures."""
+
+    class SensitiveUpstream(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del messages, temperature
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="api_error",
+                message="Authorization: Bearer secret-token at http://10.0.0.9/internal " + ("x" * 400),
+                client_status=502,
+                retryable=True,
+            )
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_agent", "gpt-x", tags=("reasoning",))],
+        client=SensitiveUpstream(),
+    )
+    orchestrator._triage_fn = lambda text: False
+    token = "taxonomy_redaction_token"
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+            {"model": "gpt-x", "messages": [{"role": "user", "content": "hello"}]},
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 502
+    message = body["error"]["message"]
+    assert "secret-token" not in message
+    assert "http://10.0.0.9/internal" not in message
+    assert "provider diagnostic was redacted for safety" in message
+    assert len(message) < 300
+
+
 def test_guidance_table_covers_every_documented_code() -> None:
     """Every classified code has caller guidance; unknown codes get a default."""
     from contextual_orchestrator import server as server_module
