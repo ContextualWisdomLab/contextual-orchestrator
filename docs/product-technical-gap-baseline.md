@@ -38,8 +38,12 @@ against `.github` main post-fix.
 - **`strix`** (same PR, run `33306104587`): was still `in_progress` when this entry was written;
   not yet observed to completion.
 
-**The "transient rate-limit" hypothesis above was wrong — superseded by evidence, not conjecture.**
-Two real, distinct defects were found and fixed in `ContextualWisdomLab/.github#1440`, both
+**Retracted: the "transient rate-limit" hypothesis.** An earlier version of this entry speculated
+that three required review workflows provisioning their own sidecars and hitting the same
+free-tier NIM/OpenRouter routes within the same ~1-minute window across three PRs simultaneously
+was a plausible transient rate-limit trigger. That was conjecture, not evidence, and it was wrong
+— superseded below. Two real, distinct defects were found and fixed in
+`ContextualWisdomLab/.github#1440`, both
 grounded in an actually-downloaded `strix-reports` artifact (Strix run `33306775025` on this PR,
 job `99244624298`), not inference from sanitized logs:
 
