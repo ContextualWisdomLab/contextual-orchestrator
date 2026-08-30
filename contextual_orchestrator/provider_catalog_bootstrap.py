@@ -37,6 +37,7 @@ from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
 )
 from .provider_bootstrap import (
+    PROVIDER_CREDENTIAL_NAMES,
     ProviderBootstrapError,
     _synchronize_durable_agent_pool,
     collect_provider_credentials,
@@ -55,6 +56,42 @@ from .provider_catalog_store import (
 
 _CATALOG_REFRESH_EVIDENCE_LOCK = threading.Lock()
 
+# The two-value classification a discovery failure collapses to for the
+# credential-rollback report. An authentication failure (a credential the
+# provider itself rejects) is never treated as an isolated, self-resolving
+# outage: left alone, a genuinely invalid/expired/revoked credential would
+# stay silently disabled forever with the rollback path quietly excusing it
+# every run. Everything else -- a real transient outage (5xx/timeout/
+# transport failure) or a successful-but-empty listing -- is eligible for the
+# isolated-outage tolerance. Only this exact vocabulary is ever attached to a
+# report; a raw provider/test error string never reaches it (see
+# ``_classify_discovery_error_code``).
+AUTHENTICATION_FAILURE_CLASSIFICATION = "authentication_failure"
+TRANSIENT_FAILURE_CLASSIFICATION = "transient_failure"
+UNKNOWN_FAILURE_CLASSIFICATION = "unknown_failure"
+_AUTHENTICATION_FAILURE_ERROR_CODES = frozenset({"http_status_401", "http_status_403"})
+_TRANSIENT_FAILURE_ERROR_CODES = frozenset({"timeout", "transport_error", "invalid_response"})
+
+
+def _classify_discovery_error_code(error_code: object) -> str:
+    """Bucket one raw discovery error code into the report-safe vocabulary.
+
+    ``_provider_discovery_error_code`` (``model_discovery.py``) only ever
+    produces ``http_status_<code>``, ``timeout``, ``transport_error``, or
+    ``invalid_response`` along the real discovery path. Anything else --
+    including a test double's free-form string -- collapses to
+    ``UNKNOWN_FAILURE_CLASSIFICATION`` so arbitrary text can never reach a
+    report consumed outside this process.
+    """
+    if not isinstance(error_code, str):
+        return UNKNOWN_FAILURE_CLASSIFICATION
+    normalized = error_code.strip().casefold()
+    if normalized in _AUTHENTICATION_FAILURE_ERROR_CODES:
+        return AUTHENTICATION_FAILURE_CLASSIFICATION
+    if normalized in _TRANSIENT_FAILURE_ERROR_CODES or normalized.startswith("http_status_"):
+        return TRANSIENT_FAILURE_CLASSIFICATION
+    return UNKNOWN_FAILURE_CLASSIFICATION
+
 
 @dataclass(frozen=True)
 class ProviderCatalogSnapshot:
@@ -65,6 +102,7 @@ class ProviderCatalogSnapshot:
     last_known_good_model_count: int
     refresh_failure_count: int
     providers_with_errors: tuple[str, ...]
+    provider_error_classifications: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -88,6 +126,7 @@ class ProviderCatalogBootstrapReport:
     catalog_backend: str
     catalog_refresh_failure_count: int
     providers_with_errors: tuple[str, ...]
+    provider_error_classifications: tuple[tuple[str, str], ...]
     priced_model_count: int
     privacy_assessment_count: int
     catalog_refreshes: tuple[CatalogRefreshEvidence, ...]
@@ -107,6 +146,7 @@ class ProviderCatalogBootstrapReport:
             "catalog_backend": self.catalog_backend,
             "catalog_refresh_failure_count": self.catalog_refresh_failure_count,
             "providers_with_errors": list(self.providers_with_errors),
+            "provider_error_classifications": dict(self.provider_error_classifications),
             "priced_model_count": self.priced_model_count,
             "privacy_assessment_count": self.privacy_assessment_count,
             "catalog_refreshes": [
@@ -122,6 +162,127 @@ class ProviderCatalogBootstrapReport:
                 for evidence in self.catalog_refreshes
             ],
         }
+
+
+@dataclass(frozen=True)
+class ProviderCredentialInventoryVerdict:
+    """Secret-free verdict for one provider-credential-inventory check.
+
+    ``ok`` is False for every case that must still fail the calling workflow
+    (``hard_fail_reason`` explains which); ``ok`` is True either because the
+    inventory is complete (both messages ``None``) or because exactly one
+    provider's isolated, non-authentication discovery failure is tolerated
+    (``warning_message`` explains which, for visibility -- this case must
+    never pass silently).
+    """
+
+    ok: bool
+    hard_fail_reason: str | None
+    warning_message: str | None
+
+
+def evaluate_provider_credential_inventory(
+    report: Mapping[str, object],
+    environ: Mapping[str, str],
+    *,
+    provider_model_sources: Sequence[ProviderModelSource] = PROVIDER_MODEL_SOURCES,
+    expected_credential_names: Sequence[str] = PROVIDER_CREDENTIAL_NAMES,
+    max_tolerated_missing_providers: int = 1,
+) -> ProviderCredentialInventoryVerdict:
+    """Judge a bootstrap report's gap (if any) from ``PROVIDER_CREDENTIAL_NAMES``.
+
+    Mirrors ``bootstrap_provider_catalog_runtime``'s own graceful-degradation
+    design (last-known-good models retained, pool still served) by tolerating
+    -- as a warning, not a failure -- exactly one provider's credential
+    missing from ``report["registered_credentials"]`` when the report's own
+    evidence explains it as an isolated, non-authentication discovery
+    failure. Every other gap still hard-fails, because each is exactly a case
+    the tolerance must not silently swallow:
+
+    - a credential never supplied to the caller at all (a real configuration
+      gap, checked against ``environ`` -- bootstrap transport only, never a
+      runtime secret read);
+    - a rollback with no ``providers_with_errors`` evidence tying it to a
+      discovery failure (could hide a real bug elsewhere);
+    - a credential the provider itself rejected (``provider_error_
+      classifications`` names it an authentication failure) -- left alone, a
+      genuinely invalid/expired/revoked credential would stay silently
+      disabled forever with every run quietly excusing it;
+    - more than ``max_tolerated_missing_providers`` providers missing at
+      once -- a broad outage, not the isolated single-provider blip this
+      tolerance exists for, and reason enough to suspect the catalog itself
+      is running stale.
+    """
+    expected = set(expected_credential_names)
+    registered = {
+        name for name in report.get("registered_credentials", ()) if isinstance(name, str)
+    }
+    missing = sorted(expected - registered)
+    if not missing:
+        return ProviderCredentialInventoryVerdict(True, None, None)
+
+    provider_by_credential = {
+        source.credential_name: source.provider_name for source in provider_model_sources
+    }
+    providers_with_errors = {
+        name for name in report.get("providers_with_errors", ()) if isinstance(name, str)
+    }
+    error_classifications = dict(report.get("provider_error_classifications", {}) or {})
+
+    unconfigured = sorted(name for name in missing if not (environ.get(name) or "").strip())
+    if unconfigured:
+        return ProviderCredentialInventoryVerdict(
+            False,
+            f"credential inventory mismatch: not configured in secrets: {unconfigured}",
+            None,
+        )
+
+    unexplained = sorted(
+        name
+        for name in missing
+        if provider_by_credential.get(name) not in providers_with_errors
+    )
+    if unexplained:
+        return ProviderCredentialInventoryVerdict(
+            False,
+            f"credential inventory mismatch: unexplained rollback for: {unexplained}",
+            None,
+        )
+
+    authentication_failed = sorted(
+        name
+        for name in missing
+        if error_classifications.get(provider_by_credential.get(name, ""))
+        == AUTHENTICATION_FAILURE_CLASSIFICATION
+    )
+    if authentication_failed:
+        return ProviderCredentialInventoryVerdict(
+            False,
+            "credential inventory mismatch: authentication failure (not a transient "
+            f"outage) for: {authentication_failed}",
+            None,
+        )
+
+    missing_providers = sorted({provider_by_credential.get(name, name) for name in missing})
+    if len(missing_providers) > max_tolerated_missing_providers:
+        return ProviderCredentialInventoryVerdict(
+            False,
+            "credential inventory mismatch: too many providers degraded at once "
+            f"({len(missing_providers)} > {max_tolerated_missing_providers}): "
+            f"{missing_providers}",
+            None,
+        )
+
+    return ProviderCredentialInventoryVerdict(
+        True,
+        None,
+        f"provider catalog degraded: {missing} rolled back after an isolated, "
+        "non-authentication discovery failure "
+        f"(providers_with_errors={sorted(providers_with_errors)}, "
+        f"catalog_refresh_failure_count={report.get('catalog_refresh_failure_count')}, "
+        f"restored_credentials={report.get('restored_credentials')}); catalog still "
+        "serves from last-known-good/other-provider models.",
+    )
 
 
 def build_provider_catalog_store() -> ProviderCatalogStore:
@@ -202,11 +363,20 @@ def refresh_persisted_provider_catalog(
     for model in discovered:
         live_by_account.setdefault(_model_key(model), []).append(model)
 
-    failed_names = {error.provider_name for error in errors}
+    # Last write wins for a provider with more than one error this refresh;
+    # every real caller (discover_all_models) raises at most one
+    # ProviderDiscoveryError per source, so this only matters for adversarial
+    # test doubles.
+    raw_error_code_by_provider = {error.provider_name: error.error_code for error in errors}
+    failed_names = set(raw_error_code_by_provider)
     effective: list[DiscoveredModel] = []
     last_known_good_count = 0
     refresh_failures = 0
     providers_with_errors: set[str] = set(failed_names)
+    error_classifications: dict[str, str] = {
+        provider_name: _classify_discovery_error_code(raw_code)
+        for provider_name, raw_code in raw_error_code_by_provider.items()
+    }
 
     for source in sources:
         if source.credential_name not in registered:
@@ -220,6 +390,15 @@ def refresh_persisted_provider_catalog(
             store.record_failure(source, error_code="empty_provider_catalog")
             refresh_failures += 1
             providers_with_errors.add(source.provider_name)
+            # A successful-but-empty listing carries no HTTP status of its
+            # own to classify; it is never an authentication failure (the
+            # credential worked well enough to get an authenticated
+            # response), so it is conservatively transient rather than
+            # unknown -- keeping it eligible for the isolated-outage
+            # tolerance instead of forcing every empty listing to hard-fail.
+            error_classifications.setdefault(
+                source.provider_name, TRANSIENT_FAILURE_CLASSIFICATION
+            )
         else:
             eligible_ids = {
                 model.model_id
@@ -253,6 +432,7 @@ def refresh_persisted_provider_catalog(
         last_known_good_model_count=last_known_good_count,
         refresh_failure_count=refresh_failures,
         providers_with_errors=tuple(sorted(providers_with_errors)),
+        provider_error_classifications=tuple(sorted(error_classifications.items())),
     )
 
 
@@ -391,6 +571,7 @@ def bootstrap_provider_catalog_runtime(
             catalog_backend=store.backend_name,
             catalog_refresh_failure_count=snapshot.refresh_failure_count,
             providers_with_errors=snapshot.providers_with_errors,
+            provider_error_classifications=snapshot.provider_error_classifications,
             priced_model_count=priced_count,
             privacy_assessment_count=privacy_assessment_count,
             catalog_refreshes=catalog_refreshes,

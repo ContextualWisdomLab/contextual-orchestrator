@@ -22,7 +22,10 @@ from contextual_orchestrator.model_discovery import (
 from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
 from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
 from contextual_orchestrator.provider_catalog_bootstrap import (
+    AUTHENTICATION_FAILURE_CLASSIFICATION,
+    TRANSIENT_FAILURE_CLASSIFICATION,
     bootstrap_provider_catalog_runtime,
+    evaluate_provider_credential_inventory,
 )
 from contextual_orchestrator.provider_catalog_store import (
     InMemoryProviderCatalogStore,
@@ -276,6 +279,114 @@ def test_concurrent_bootstraps_report_only_their_own_refresh_evidence() -> None:
             ["openrouter_openrouter_api_key"],
         ]
         assert len(store.refresh_evidence()) == 2
+    finally:
+        set_backend(None)
+
+
+def test_transient_provider_outage_is_a_classified_and_tolerated_warning() -> None:
+    """A real transient discovery error (e.g. HTTP 500) classifies as transient
+    and the credential-inventory verdict tolerates it as a warning, not a
+    failure -- end to end through the report the workflow actually consumes.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, bytez),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [ProviderDiscoveryError("bytez", "http_status_500")],
+            ),
+            model_limit=4,
+        )
+        assert dict(report.provider_error_classifications) == {
+            "bytez": TRANSIENT_FAILURE_CLASSIFICATION
+        }
+        payload = report.as_dict()
+        assert payload["provider_error_classifications"] == {
+            "bytez": TRANSIENT_FAILURE_CLASSIFICATION
+        }
+
+        verdict = evaluate_provider_credential_inventory(payload, _environment())
+        assert verdict.ok is True
+        assert verdict.hard_fail_reason is None
+        assert verdict.warning_message is not None
+        assert "BYTEZ_API_KEY" in verdict.warning_message
+    finally:
+        set_backend(None)
+
+
+def test_authentication_failure_is_classified_and_still_hard_fails() -> None:
+    """A credential the provider itself rejects (401/403) must never be
+    silently tolerated -- it would otherwise stay disabled forever with
+    nobody alerted.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        for code in ("http_status_401", "http_status_403"):
+            report = bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=InMemoryProviderCatalogStore(),
+                sources=(openai, bytez),
+                discovery=lambda _sources, code=code: (
+                    [_model(openai, "gpt-live")],
+                    [ProviderDiscoveryError("bytez", code)],
+                ),
+                model_limit=4,
+            )
+            assert dict(report.provider_error_classifications) == {
+                "bytez": AUTHENTICATION_FAILURE_CLASSIFICATION
+            }
+
+            verdict = evaluate_provider_credential_inventory(
+                report.as_dict(), _environment()
+            )
+            assert verdict.ok is False
+            assert verdict.warning_message is None
+            assert "authentication failure" in verdict.hard_fail_reason
+            assert "BYTEZ_API_KEY" in verdict.hard_fail_reason
+    finally:
+        set_backend(None)
+
+
+def test_two_simultaneous_provider_failures_hard_fail_not_a_warning() -> None:
+    """Tolerance is bounded to exactly one provider; a broader outage --
+    more than one provider's credential missing at once -- must still fail
+    the sync instead of reporting success on a stale catalog.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        openrouter = _source("openrouter", "OPENROUTER_API_KEY")
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=InMemoryProviderCatalogStore(),
+            sources=(openai, bytez, openrouter),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live")],
+                [
+                    ProviderDiscoveryError("bytez", "http_status_500"),
+                    ProviderDiscoveryError("openrouter", "timeout"),
+                ],
+            ),
+            model_limit=4,
+        )
+        assert set(report.providers_with_errors) == {"bytez", "openrouter"}
+        assert "BYTEZ_API_KEY" not in report.registered_credentials
+        assert "OPENROUTER_API_KEY" not in report.registered_credentials
+
+        verdict = evaluate_provider_credential_inventory(
+            report.as_dict(), _environment()
+        )
+        assert verdict.ok is False
+        assert verdict.warning_message is None
+        assert "too many providers degraded" in verdict.hard_fail_reason
     finally:
         set_backend(None)
 
