@@ -1,5 +1,56 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-30 hourly PR-review-fix-merge cycle: org review pipeline root cause
+
+Every open PR in this repository (#868, #911, #857, #912, #906 at review time)
+showed `opencode-review: failure` and `noema-review: failure` even though this
+repo's own `main` is green (`Tests`/`Security`/`Fuzz` all passing at
+`5f2753a`). Root cause is upstream of this repo: the org-central
+`.github` repo's `scripts/ci/contextual_orchestrator_review_sidecar.sh` vendors
+this repository at a hardcoded `ORCHESTRATOR_PIN_SHA=b21645116b352967e50fc497b87eb745b9cc8c61`
+as the shared LLM backend for `opencode-review-dispatch.yml` and
+`noema-review.yml` across the whole organization. That pin is 103 commits
+behind current `main` and predates a long run of discovery/ZDR/pool-selection
+fixes on this repo (`fix: remove hardcoded bootstrap model`,
+`fix: exclude evidence-only rows from model selection`,
+`fix(discovery): honor OpenRouter routing contract`, `fix(zdr): constrain
+judge allowlist to eligible members`, and others). The sidecar's own
+self-test against `orchestrator/free` fails closed with `gateway preflight
+returned HTTP 502` (observed directly in this repo's PR #868/#911
+`noema-review` job logs), which is this repo's `ProviderResponseError` →
+502 path in `server.py` firing when no agent in the routed pool actually
+returns assistant content — consistent with the vendored commit still
+carrying one or more of the pool-selection bugs fixed since. Because the
+sidecar aborts before the model pool can run, `opencode-agent` never posts a
+review on the current head, which is exactly why the `opencode-review` gate
+(`scripts/ci/noema_review_gate.py`-style check in `opencode-review.yml`)
+reports "No APPROVED or CHANGES_REQUESTED from opencode-agent on the current
+head" on every PR. **The fix is bumping `ORCHESTRATOR_PIN_SHA` in the
+`ContextualWisdomLab/.github` repo to a current `contextual-orchestrator`
+`main` commit** — that repo, not this one, owns the pin, and it is out of
+scope for this repo's own PRs to change. This repo's code already contains
+the fix; no change needed here.
+
+Separately, and only affecting this repo's own scheduled workflows (not the
+six PR checks above): `opencode-hourly-loop.yml` and
+`provider-catalog-sync.yml` run against the live `main` checkout rather than
+the vendored pin, and both are failing on every run. The hourly loop fails
+with `stream_options.include_usage=true is not supported with tools or
+response_format` (`invalid_stream_options`) — the opencode CLI's
+`@ai-sdk/openai-compatible` provider sends `stream_options.include_usage`
+together with tool definitions, which this gateway's single-agent
+tools/response_format passthrough on `/v1/chat/completions` rejects by
+design (see `e7618a3`, `README.md`, and the `*_http_honesty` test suite for
+the documented, tested "cannot honestly emit that SSE contract" rationale).
+Reverting or relaxing that contract is a bigger, riskier change than this
+cycle's time-box allows given its test/doc surface; flagging for a dedicated
+follow-up rather than touching it here. `provider-catalog-sync.yml` fails
+independently with `credential inventory mismatch: ['BYTEZ_API_KEY']` from
+`contextual_orchestrator.provider_catalog_bootstrap`, which looks like a
+secrets/ops issue (the credential name is expected but not landing in
+`registered_credentials`) rather than a code bug; needs an operator check of
+the `BYTEZ_API_KEY` Actions secret before further code investigation.
+
 ## 2026-08-29 KST normalized video job resource slice
 
 Protected `main` at `b21645116b352967e50fc497b87eb745b9cc8c61` already contains
@@ -17,6 +68,28 @@ The next unclosed customer-visible gap is cancellable answer-token streaming
 for conducted workflows. It requires an asynchronous dependency graph that can
 cancel or safely drain dependent provider work; this slice does not fabricate
 partial answers before verification and synthesis.
+
+## 2026-08-29 batch-routing object-authorization slice
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The accepted workflow-object
+authorization decision now has a bounded implementation branch for its listed
+batch-job gap: HTTP-created batch routing jobs carry a non-secret
+authenticated-principal digest, and both status and result retrieval require
+the same digest. An external verifier can provide a stable tenant/subject key
+through the optional principal resolver; bool-only adapters retain the
+documented bearer-digest fallback. A mismatch is returned as the existing generic
+`batch_job_not_found` response before the backend is called; results also keep
+the separate trace-purpose gate. Local exact-branch evidence is `61 passed`
+across the cost-router, HTTP, and OpenAPI contract suites. This is branch
+evidence only until the implementation reaches protected `main` through the
+normal review, Checks, and approval gates.
+
+The remaining issue #117 gaps are unchanged: tenant/resource/purpose/lifetime
+claims from an external identity adapter, explicit legacy single-token
+production migration, and ownership for other evidence surfaces still need
+their own decisions and acceptance evidence.
+
 ## 2026-08-29 streamed Responses usage boundary
 
 Protected `main` remains
