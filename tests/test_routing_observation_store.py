@@ -497,6 +497,35 @@ def test_store_prunes_only_rows_older_than_database_retention_window(tmp_path) -
     assert rows == [("member_b",), ("member_c",)]
 
 
+def test_concurrent_window_registration_keeps_longest_retention(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    ready = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def build(window_seconds: int) -> None:
+        try:
+            ready.wait(timeout=1.0)
+            SqliteRoutingObservationStore(path, window_seconds, clock=_Clock(100.0)).close()
+        except BaseException as exc:  # pragma: no cover - test assertion path
+            errors.append(exc)
+
+    short = threading.Thread(target=build, args=(10,), name="short-window")
+    long = threading.Thread(target=build, args=(60,), name="long-window")
+    short.start()
+    long.start()
+    short.join(timeout=1.0)
+    long.join(timeout=1.0)
+
+    assert not errors
+    with sqlite3.connect(path) as connection:
+        row = connection.execute(
+            "SELECT metadata_value FROM routing_observation_metadata WHERE metadata_key = ?",
+            (SqliteRoutingObservationStore._MAX_RETENTION_WINDOW_KEY,),
+        ).fetchone()
+
+    assert row == (60,)
+
+
 def test_task_orchestrator_opt_in_store_survives_restart_and_reports_policy(tmp_path) -> None:
     path = tmp_path / "state.sqlite"
     agents = [ModelAgent("member_a", "mock-model", group_name="shared_model")]

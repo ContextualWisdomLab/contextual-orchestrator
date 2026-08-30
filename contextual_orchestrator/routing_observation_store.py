@@ -146,16 +146,12 @@ class SqliteRoutingObservationStore:
 
     def _register_retention_window(self, connection: sqlite3.Connection) -> None:
         """Persist the largest configured shared-retention window for this database."""
-        row = connection.execute(
-            "SELECT metadata_value FROM routing_observation_metadata WHERE metadata_key = ?",
-            (self._MAX_RETENTION_WINDOW_KEY,),
-        ).fetchone()
-        current = self._window_seconds if row is None else max(int(row[0]), self._window_seconds)
         connection.execute(
             "INSERT INTO routing_observation_metadata(metadata_key, metadata_value) "
             "VALUES(?, ?) "
-            "ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value",
-            (self._MAX_RETENTION_WINDOW_KEY, current),
+            "ON CONFLICT(metadata_key) DO UPDATE SET "
+            "metadata_value = MAX(routing_observation_metadata.metadata_value, excluded.metadata_value)",
+            (self._MAX_RETENTION_WINDOW_KEY, self._window_seconds),
         )
 
     def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
