@@ -6647,6 +6647,7 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        trace_audited = False
                         if stream and include_usage:
                             raise RequestError(
                                 400,
@@ -6749,6 +6750,7 @@ def build_server(
                             workflow = orchestrator.get_workflow_run(workflow_run_id)
                             lineage["trace"] = workflow["trace"]
                             self._audit_trace_disclosure("/v1/chat/completions")
+                            trace_audited = True
                         orchestrator.record_analytics_event(
                             (
                                 "chat_completion_passthrough"
@@ -6762,7 +6764,7 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
-                        if include_trace:
+                        if include_trace and not trace_audited:
                             self._audit_trace_disclosure("/v1/chat/completions")
                         response_payload = (
                             proxied

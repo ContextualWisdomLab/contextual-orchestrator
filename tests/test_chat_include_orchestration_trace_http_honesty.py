@@ -606,10 +606,13 @@ def test_http_structured_chat_discloses_only_an_authorized_conduct_trace() -> No
     assert len(trace) >= 2
     assert trace[-1]["role"] == "synthesizer"
     assert "trace" not in hidden["orchestration"]
-    assert any(
-        event["event_type"] == "orchestration_trace_access_granted"
+    granted = [
+        event
         for event in orchestrator._audit_events
-    )
+        if event["event_type"] == "orchestration_trace_access_granted"
+    ]
+    assert granted
+    assert len(granted) == 1
 
 
 def test_http_tool_passthrough_rejects_a_trace_it_cannot_return() -> None:

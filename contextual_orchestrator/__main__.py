@@ -300,7 +300,10 @@ def _discover_models_command(argv: list[str]) -> None:
         sources = _bootstrap_discovery_sources()
     except ValueError as exc:
         parser.error(str(exc))
-    discovered, errors = discover_all_models(sources)
+    discovered, errors = discover_all_models(
+        sources,
+        ca_bundle=args.provider_ca_bundle,
+    )
     privacy_assessments = []
     if args.analyze_privacy_policies:
         discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
@@ -384,7 +387,10 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     when a provider omits structured capability metadata, while still refusing
     evidence-only or non-chat rows.
     """
-    discovered, _errors = discover_all_models(_runtime_discovery_sources(orchestrator))
+    discovered, _errors = discover_all_models(
+        _runtime_discovery_sources(orchestrator),
+        ca_bundle=orchestrator.client.ca_bundle,
+    )
     chat_models = [model for model in discovered if is_routable_discovered_model(model)]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [

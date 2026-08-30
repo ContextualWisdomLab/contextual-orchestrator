@@ -147,7 +147,7 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model", "messages"],
+                                "required": ["messages"],
                                 "properties": {
                                     "model": {"type": "string"},
                                     "messages": {"type": "array", "items": {"type": "object"}},
@@ -183,7 +183,7 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model", "prompt"],
+                                "required": ["prompt"],
                                 "properties": {
                                     "model": {"type": "string"},
                                     "prompt": {"oneOf": [{"type": "string"}, {"type": "array"}]},
@@ -378,7 +378,7 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model", "input"],
+                                "required": ["input"],
                                 "properties": {
                                     "model": {"type": "string"},
                                     "input": {"oneOf": [{"type": "string"}, {"type": "array"}]},

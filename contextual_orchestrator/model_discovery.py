@@ -274,6 +274,7 @@ def _fetch_configured_gateway_json(
     api_key: str,
     auth_scheme: str,
     timeout: float,
+    ca_bundle: str | None = None,
 ) -> Any:
     """Fetch an operator URL through the gateway's pinned hardened transport."""
     parsed = urlsplit(url)
@@ -287,6 +288,7 @@ def _fetch_configured_gateway_json(
         raise ValueError("configured gateway discovery URL is not a safe HTTPS URL")
     origin = urlunsplit(("https", parsed.netloc, "", "", ""))
     client = ModelClient(
+        ca_bundle=ca_bundle,
         timeout=max(1, math.ceil(timeout)),
         allowed_provider_hosts={parsed.hostname},
     )
@@ -974,7 +976,10 @@ def _apply_discovered_model_evidence(
 
 
 def discover_provider_models(
-    source: ProviderModelSource, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+    source: ProviderModelSource,
+    *,
+    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    ca_bundle: str | None = None,
 ) -> list[DiscoveredModel]:
     """Discover one provider's models, or ``[]`` if its credential is not registered."""
     api_key = get_credential(source.credential_name)
@@ -994,6 +999,7 @@ def discover_provider_models(
             api_key=api_key,
             auth_scheme=source.auth_scheme,
             timeout=timeout,
+            **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
         )
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
         # OSError covers ConnectionError/reset failures that are not URLError
@@ -1034,6 +1040,7 @@ def discover_provider_models(
                 api_key=api_key,
                 auth_scheme=source.auth_scheme,
                 timeout=timeout,
+                ca_bundle=ca_bundle,
             )
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
             metadata = None
@@ -1049,6 +1056,7 @@ def discover_all_models(
     sources: tuple[ProviderModelSource, ...] = PROVIDER_MODEL_SOURCES,
     *,
     timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    ca_bundle: str | None = None,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
     """Discover models across every provider with a registered credential.
 
@@ -1059,7 +1067,9 @@ def discover_all_models(
     errors: list[ProviderDiscoveryError] = []
     for source in sources:
         try:
-            discovered.extend(discover_provider_models(source, timeout=timeout))
+            discovered.extend(
+                discover_provider_models(source, timeout=timeout, ca_bundle=ca_bundle)
+            )
         except ProviderDiscoveryError as exc:
             errors.append(exc)
     # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies

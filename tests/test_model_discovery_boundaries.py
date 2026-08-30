@@ -140,6 +140,23 @@ def test_configured_gateway_discovery_keeps_combined_system_trust() -> None:
     assert client.call_args.kwargs.get("ca_bundle") is None
 
 
+def test_configured_gateway_discovery_preserves_custom_ca_bundle() -> None:
+    """Configured discovery reuses the serving client's reviewed trust bundle."""
+    with patch(
+        "contextual_orchestrator.model_discovery.ModelClient",
+        side_effect=RuntimeError("stop after construction"),
+    ) as client:
+        with pytest.raises(RuntimeError, match="stop after construction"):
+            _fetch_configured_gateway_json(
+                "https://gateway.example/v1/models",
+                api_key="secret",
+                auth_scheme="Bearer",
+                timeout=1,
+                ca_bundle="/tmp/reviewed-ca.pem",
+            )
+    assert client.call_args.kwargs.get("ca_bundle") == "/tmp/reviewed-ca.pem"
+
+
 def test_fixed_provider_ca_failure_retries_with_certifi_verification() -> None:
     calls = []
 
