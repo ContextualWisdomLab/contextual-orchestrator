@@ -356,13 +356,15 @@ def test_route_once_keeps_judge_reject_failover_when_quality_write_fails(
         },
     )
     original_append = orchestrator._routing_observation_store.append
-    append_calls = 0
+    quality_append_calls = 0
 
     def fail_first_quality_append(*args, **kwargs):
-        nonlocal append_calls
-        append_calls += 1
-        if append_calls == 1:
-            raise OSError("simulated quality storage outage")
+        nonlocal quality_append_calls
+        ledger_name = args[0] if args else kwargs.get("ledger_name")
+        if ledger_name == "quality":
+            quality_append_calls += 1
+            if quality_append_calls == 1:
+                raise OSError("simulated quality storage outage")
         return original_append(*args, **kwargs)
 
     try:

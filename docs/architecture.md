@@ -68,6 +68,10 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- Batch routing jobs carry a non-secret authenticated-principal digest from
+  submission through status and result retrieval; mismatched owners receive
+  the same not-found response before backend access. Results require the
+  separate trace purpose in addition to inference authorization.
 - Streamed `/v1/responses` workflow runs preserve optional provider usage on
   each trace step and record one `stream` cost-ledger row per completed step.
   Missing provider counts remain `unavailable`; the gateway never derives

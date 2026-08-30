@@ -1,5 +1,34 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-30 PR #911 review-finding verification pass
+
+Re-verified the CodeRabbit/Devin findings on this branch against current code
+before merging protected `main`. `model_group.py`'s lock ordering
+(`observe_success`/`observe_failure`/`refresh` now consistently take
+`self._lock` outside `self._observation_io_lock`) and the
+`_measured_member_order` double-refresh nitpick were already fixed on this
+head. The exception-masking concern (`observe_failure` swallowing the
+original error) does not reproduce: every call site in `orchestrator.py` and
+`server.py` goes through `_record_group_failure`/`_record_quality_failure`,
+which catch `RoutingObservationPersistenceError` internally, log it, and let
+the caller's bare `raise` preserve the original exception. The
+"`zdr_only` leaking into provider payloads" finding does not reproduce
+either: `_ORCHESTRATION_ONLY_KEYS` (which includes `zdr_only`) is applied
+consistently at every `upstream = {...}` provider-payload construction site
+in `orchestrator.py`, and `batch_routing.py` documents `zdr_only` as a
+selection-policy-only field never forwarded upstream. The ADR 0039 `status:
+proposed` field is correct as-is for an unmerged PR. The previously flagged
+"Partially closed — multi-instance telemetry" doc edit is no longer present
+in the current diff against protected `main` (superseded by an earlier
+merge). Fixed: `tests/test_measured_routing_evidence.py`'s
+`fail_first_quality_append` fake now checks the `ledger_name` argument
+(`"quality"`) before raising, instead of unconditionally failing whichever
+ledger's `append` happens to be called first. Not independently verified
+this cycle: the empty-string `seed`/`top_logprobs` and
+`text.format.type="text"` claims in `server.py` (pre-existing on `main`,
+outside this PR's own diff) and `record_stream_usage` SSE-completion
+exception handling — left for a follow-up pass.
+
 ## 2026-08-29 bounded routing-observation durability slice
 
 The multi-instance routing gap is now partially implemented behind an explicit
@@ -21,6 +50,28 @@ the completed response.
 Focused store/router/orchestrator/CLI coverage is maintained in
 `tests/test_routing_observation_store.py`; protected `main` and hosted Checks
 remain the release boundary for this implementation.
+
+## 2026-08-29 batch-routing object-authorization slice
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The accepted workflow-object
+authorization decision now has a bounded implementation branch for its listed
+batch-job gap: HTTP-created batch routing jobs carry a non-secret
+authenticated-principal digest, and both status and result retrieval require
+the same digest. An external verifier can provide a stable tenant/subject key
+through the optional principal resolver; bool-only adapters retain the
+documented bearer-digest fallback. A mismatch is returned as the existing generic
+`batch_job_not_found` response before the backend is called; results also keep
+the separate trace-purpose gate. Local exact-branch evidence is `61 passed`
+across the cost-router, HTTP, and OpenAPI contract suites. This is branch
+evidence only until the implementation reaches protected `main` through the
+normal review, Checks, and approval gates.
+
+The remaining issue #117 gaps are unchanged: tenant/resource/purpose/lifetime
+claims from an external identity adapter, explicit legacy single-token
+production migration, and ownership for other evidence surfaces still need
+their own decisions and acceptance evidence.
+
 ## 2026-08-29 streamed Responses usage boundary
 
 Protected `main` remains
