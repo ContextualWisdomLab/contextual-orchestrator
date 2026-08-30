@@ -10,6 +10,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Fixed
+
+- `discover_provider_models`'s primary model-list fetch is now retried once
+  (short fixed delay, shortened timeout) when the failure is transient
+  (5xx/timeout/connection reset, via the existing `is_transient_error`
+  classifier), instead of raising `ProviderDiscoveryError` on the first
+  attempt. One provider's momentary blip (observed live: a Bytez HTTP 500)
+  no longer has to zero out that provider's entire contribution to a
+  discovery pass. Non-transient failures (bad credential, malformed
+  response) are still never retried. Deliberately does not touch
+  `ModelClient.proxy_send_once`'s single-shot completion-call contract
+  ("cross-provider failover cannot amplify load") — reusing the same
+  retry pattern there risks amplifying load against an already-degraded
+  provider and was left out of scope for this change.
+
 ### Added
 
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond

@@ -19,6 +19,7 @@ import json
 import math
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 import certifi
@@ -28,12 +29,21 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
 from .credentials import get_credential
-from .orchestrator import ModelAgent, ModelClient
+from .orchestrator import ModelAgent, ModelClient, is_transient_error
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+# One bounded retry for a provider's primary model-list fetch, reusing the same
+# transient-vs-terminal classification completion calls already trust
+# (is_transient_error). A short, fixed delay and a shortened retry timeout keep
+# the added worst case small and predictable for CI callers with their own
+# overall time budget (see ContextualWisdomLab/.github's review sidecar).
+# Non-transient failures (auth/config errors, malformed responses) are never
+# retried — a retry cannot fix those and would only waste the time budget.
+_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
+_DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
 # bot signature. A stable, identifying user agent is not a credential and is
@@ -1065,6 +1075,13 @@ def discover_provider_models(
     this call does not repeat the fetch. Leaving it at the default sentinel
     preserves this function's existing lazy, per-call fetch-on-demand
     behavior for every other caller, tests included.
+
+    The primary model-list fetch gets one bounded retry (short fixed delay,
+    shortened timeout) when the failure is transient (5xx/timeout/connection
+    reset, per :func:`~contextual_orchestrator.orchestrator.is_transient_error`)
+    — a single provider's momentary blip no longer has to zero out that
+    provider's entire contribution for this discovery pass. A non-transient
+    failure (bad credential, malformed response) is never retried.
     """
     api_key = get_credential(source.credential_name)
     if not api_key:
@@ -1072,24 +1089,35 @@ def discover_provider_models(
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
-    try:
-        fetch = (
-            _fetch_configured_gateway_json
-            if source.provider_name == "configured_gateway"
-            else _fetch_json
-        )
-        payload = fetch(
-            url,
-            api_key=api_key,
-            auth_scheme=source.auth_scheme,
-            timeout=timeout,
-            **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
-        )
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        # OSError covers ConnectionError/reset failures that are not URLError
-        # subclasses, so a raw provider transport failure can never escape the
-        # discovery boundary with provider text attached.
-        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
+    fetch = (
+        _fetch_configured_gateway_json
+        if source.provider_name == "configured_gateway"
+        else _fetch_json
+    )
+    fetch_kwargs = {
+        "api_key": api_key,
+        "auth_scheme": source.auth_scheme,
+        **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
+    }
+    attempt_timeouts = (timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS)
+    payload: Any = None
+    last_exc: Exception | None = None
+    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
+        try:
+            payload = fetch(url, timeout=attempt_timeout, **fetch_kwargs)
+            last_exc = None
+            break
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            # OSError covers ConnectionError/reset failures that are not URLError
+            # subclasses, so a raw provider transport failure can never escape the
+            # discovery boundary with provider text attached.
+            last_exc = exc
+            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
+            if is_last_attempt or not is_transient_error(exc):
+                break
+            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    if last_exc is not None:
+        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(last_exc)) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
             try:
