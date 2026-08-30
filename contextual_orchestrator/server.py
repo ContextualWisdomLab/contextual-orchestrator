@@ -8,6 +8,7 @@ from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import hashlib
+import ipaddress
 import json
 import logging
 import mmap
@@ -25,7 +26,11 @@ import uuid
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
-from .cost_router import BatchModelSelectionError, CostRoutingCoordinator
+from .cost_router import (
+    BatchModelSelectionError,
+    CostRoutingCoordinator,
+    InvalidBatchModelError,
+)
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
@@ -44,6 +49,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
+from .provider_errors import ProviderUpstreamError
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -241,7 +247,7 @@ ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orches
 ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
-    "endpoint_equivalence",
+    "endpoint_equivalence", "stream_usage_supported",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -256,6 +262,7 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_exclusions",
     "group_name",
     "endpoint_equivalence",
+    "stream_usage_supported",
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}
@@ -344,6 +351,9 @@ class SecurityConfig:
     # relying-party adapter). The core deliberately does not decode JWTs with
     # an unsafe hand-rolled parser or own Keycloak admin credentials.
     bearer_verifier: Callable[[str, str], bool] | None = None
+    # Optional companion seam for external verifiers that can expose a stable,
+    # tenant-scoped principal key without exposing the bearer itself.
+    principal_resolver: Callable[[str], str | None] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -356,6 +366,18 @@ class SecurityConfig:
             raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if self.allow_public_bind and self.bearer_verifier is None and not (
+            self.admin_token and self.inference_token
+        ):
+            raise ValueError(
+                "public bind requires split admin_token and inference_token credentials"
+            )
+        if (
+            self.allow_public_bind
+            and self.bearer_verifier is None
+            and self.admin_token == self.inference_token
+        ):
+            raise ValueError("public bind requires distinct admin_token and inference_token credentials")
         if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
             raise ValueError("max_body_bytes must be a positive integer")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
@@ -384,9 +406,15 @@ class SecurityConfig:
         except (TypeError, ValueError):
             return False
 
-    def check_bind(self, host: str) -> None:
+    def check_bind(self, host: str, *, allow_public_bind: bool | None = None) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
-        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
+        normalized_host = host.strip().lower()
+        try:
+            is_loopback = ipaddress.ip_address(normalized_host).is_loopback
+        except ValueError:
+            is_loopback = normalized_host == "localhost"
+        public_bind_allowed = self.allow_public_bind if allow_public_bind is None else allow_public_bind
+        if not is_loopback and not public_bind_allowed:  # nosec B104 - non-loopback binds require explicit opt-in.
             raise ValueError("public bind requires --allow-public-bind")
 
     def resolve_purpose(self, scope: str, purpose: str | None = None) -> str:
@@ -451,13 +479,27 @@ class SecurityConfig:
                 if principal:
                     return principal
             raise RequestError(401, "unauthorized", "authenticated principal is required")
+        return self._principal_digest(token)
+
+    def _principal_digest(self, token: str) -> str:
+        """Hash a stable deployment principal without retaining bearer material."""
         if self.bearer_verifier is None:
             if self.admin_token and self.inference_token:
                 principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
             else:
                 principal_material = f"single:{self.auth_token}"
-        else:
+        elif self.principal_resolver is None:
+            # Back-compatible fallback for adapters that only return bool;
+            # token rotation can intentionally revoke old resource access.
             principal_material = f"bearer:{token}"
+        else:
+            try:
+                resolved = self.principal_resolver(token)
+            except Exception as exc:  # noqa: BLE001 - identity adapter failure denies access
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable") from exc
+            if not isinstance(resolved, str) or not resolved.strip():
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable")
+            principal_material = f"principal:{resolved}"
         return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -494,14 +536,7 @@ class SecurityConfig:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         session_id = secrets.token_urlsafe(32)
         expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
-        if self.bearer_verifier is None:
-            if self.admin_token and self.inference_token:
-                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
-            else:
-                principal_material = f"single:{self.auth_token}"
-        else:
-            principal_material = f"bearer:{presented_token}"
-        principal = hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
+        principal = self._principal_digest(presented_token)
         with self._session_lock:
             self._purge_expired_admin_sessions_locked(time.monotonic())
             overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
@@ -618,6 +653,36 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
         "error_message": error_message,
         "error_detail": detail,
     }
+
+
+_PROVIDER_FAILURE_GUIDANCE: dict[str, str] = {
+    "invalid_request_error": "Adjust the request parameters and retry.",
+    "authentication_error": "Verify the credential registered for this model in the credential registry.",
+    "payment_required": "Add payment capacity to the provider account that serves this model.",
+    "permission_error": "Request provider access for this model from the operator.",
+    "model_not_found": "Check the model id against the provider's model list and retry with a valid one.",
+    "request_too_large": "Reduce the request size (shorter input or lower max tokens).",
+    "rate_limit_exceeded": "Retry after a short delay; the provider is throttling this model.",
+    "conflict": "Resolve the conflicting in-flight operation before retrying.",
+    "provider_timeout": "The provider accepted but did not finish in time; retrying may succeed.",
+    "provider_connection_error": "The provider was unreachable; check network reachability before retrying.",
+    "tls_failure": "A transport-layer security error interrupted the provider connection; retrying may succeed.",
+    "tls_verification_failed": "Verify the provider endpoint certificate chain before retrying.",
+    "api_error": "The provider reported an internal failure; retrying may succeed.",
+    "service_unavailable": "The provider is temporarily unavailable; retry after a short delay.",
+}
+
+
+def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
+    """Build one caller-actionable sentence for a classified upstream failure.
+
+    The message names which model/agent failed and what to do next; it never
+    echoes raw provider diagnostics beyond the bounded redacted sentence.
+    """
+    guidance = _PROVIDER_FAILURE_GUIDANCE.get(
+        exc.error_code, "Review the request or contact the operator."
+    )
+    return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -5157,7 +5222,7 @@ def _orchestrated_response(
     """Build the OpenAI Responses shape for an orchestrated plain-text result."""
     reasoning_id = reasoning_id or f"rs_{uuid.uuid4().hex}"
     message_id = message_id or f"msg_{uuid.uuid4().hex}"
-    return {
+    response = {
         "id": response_id,
         "object": "response",
         "created_at": created_at,
@@ -5190,9 +5255,14 @@ def _orchestrated_response(
         "tools": [],
         "top_p": None,
         "truncation": "disabled",
-        "usage": None,
+        "usage": result.get("usage"),
         "metadata": {},
     }
+    if result.get("usage_record_ids"):
+        response["usage_record_ids"] = result["usage_record_ids"]
+    if result.get("cost") is not None:
+        response["cost"] = result["cost"]
+    return response
 
 
 def build_server(
@@ -5526,7 +5596,11 @@ def build_server(
                 if path.startswith("/api/v1/batch_routing_jobs/"):
                     job_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(coordinator.poll_batch(job_id))
+                        self._send(
+                            coordinator.poll_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
@@ -5876,6 +5950,13 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -5912,6 +5993,13 @@ def build_server(
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -6331,6 +6419,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
                         ))
                     # Batch-channel Completions return a job handle (202), not a
@@ -6498,12 +6587,6 @@ def build_server(
                                 "invalid_stream_options",
                                 "stream_options.include_usage=true is not supported with tools or response_format",
                             )
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use chat without tools or response_format",
-                            )
                         tool_loop = bool(tools_list)
                         if (
                             tool_loop
@@ -6519,16 +6602,26 @@ def build_server(
                             tool_loop
                             and body.get("include_orchestration_trace") is True
                         ):
+                            if security.bearer_verifier is None:
+                                raise RequestError(
+                                    400,
+                                    "trace_unavailable",
+                                    "orchestration trace is unavailable for single-agent tool passthrough",
+                                )
                             raise RequestError(
                                 400,
-                                "trace_unavailable",
-                                "orchestration trace is unavailable for single-agent tool passthrough",
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use chat without tools or response_format",
                             )
-                        include_trace = (
-                            False
-                            if tool_loop
-                            else include_trace
-                        )
+                        include_trace = False if tool_loop else include_trace
+                        if include_trace:
+                            if security.bearer_verifier is not None:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use chat without tools or response_format",
+                                )
+                            self._authorize_trace_access()
                         started_at = time.perf_counter()
                         if tool_loop:
                             proxied = self._run(
@@ -6589,6 +6682,7 @@ def build_server(
                                 )
                             workflow = orchestrator.get_workflow_run(workflow_run_id)
                             lineage["trace"] = workflow["trace"]
+                            self._audit_trace_disclosure("/v1/chat/completions")
                         orchestrator.record_analytics_event(
                             (
                                 "chat_completion_passthrough"
@@ -6697,6 +6791,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
                         ))
                     # Latency-tolerant requests get dispatched to the batch backend.
@@ -6935,7 +7030,16 @@ def build_server(
                         zdr_only=zdr_only,
                     )
                     metadata = {"actor_scope": "inference"}
-                    job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
+                        )
+                    except InvalidBatchModelError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
@@ -6958,7 +7062,11 @@ def build_server(
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
                     self._authorize_trace_access()
                     try:
-                        retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                        retrieved = self._run(
+                            lambda: coordinator.retrieve_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
@@ -7084,8 +7192,6 @@ def build_server(
                         _validate_responses_instructions(body)
                     if "metadata" in body:
                         _validate_openai_metadata(body)
-                    if "attribution" in body:
-                        _validate_attribution(body.get("attribution"))
                     if "routing" in body:
                         routing = _validate_routing(body.get("routing"))
                         # Responses passthrough has no batch channel plane yet.
@@ -7162,6 +7268,14 @@ def build_server(
                             )
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
                         _require_pool_model(orchestrator, model_name)
+                    responses_attribution = dict(
+                        _validate_attribution(body.get("attribution")) or {}
+                    )
+                    responses_user_id = _validate_completions_user(body)
+                    if responses_user_id is not None and not responses_attribution.get("account"):
+                        responses_attribution["account"] = responses_user_id
+                    responses_attribution.setdefault("model_name", body["model"])
+                    responses_attribution.setdefault("service", "responses_api")
                     if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
                         if _responses_virtual_requires_provider_path(input_value, body):
                             raise RequestError(
@@ -7192,7 +7306,12 @@ def build_server(
                         messages = _responses_to_chat_payload(body)["messages"]
                         started_at = time.perf_counter()
                         stream_succeeded = self._stream_orchestrated_response(
-                            orchestrator, security, messages, model_name
+                            orchestrator,
+                            security,
+                            messages,
+                            model_name,
+                            coordinator=coordinator,
+                            attribution=responses_attribution,
                         )
                         orchestrator.record_analytics_event(
                             "responses_orchestrated",
@@ -7300,14 +7419,6 @@ def build_server(
                     started_at = time.perf_counter()
                     tool_loop = bool(body.get("tools"))
                     responses_messages = _responses_to_chat_payload(body)["messages"]
-                    responses_attribution = dict(
-                        _validate_attribution(body.get("attribution")) or {}
-                    )
-                    responses_user_id = _validate_completions_user(body)
-                    if responses_user_id is not None and not responses_attribution.get("account"):
-                        responses_attribution["account"] = responses_user_id
-                    responses_attribution.setdefault("model_name", body["model"])
-                    responses_attribution.setdefault("service", "responses_api")
                     response_max_tokens = next(
                         (
                             body.get(key)
@@ -7435,6 +7546,13 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
             finally:
@@ -7746,6 +7864,9 @@ def build_server(
             security: Any,
             messages: Any,
             model_name: str,
+            *,
+            coordinator: Any = None,
+            attribution: dict[str, Any] | None = None,
         ) -> bool:
             """Stream orchestration as native Responses reasoning-summary events."""
             response_id = f"resp_{uuid.uuid4().hex}"
@@ -7832,15 +7953,40 @@ def build_server(
                 try:
                     if orchestrator.would_route(messages, "auto", model_name):
                         progress("worker", "started")
-                        parts = list(orchestrator.stream_route(messages, model_name=model_name))
-                        progress("worker", "completed")
-                        result = {"answer": "".join(parts)}
-                    else:
-                        result = orchestrator.conduct(
-                            messages, model_name=model_name, progress=progress
+                        workflow_run_id = f"run_{uuid.uuid4().hex}"
+                        parts = list(
+                            orchestrator.stream_route(
+                                messages,
+                                workflow_run_id=workflow_run_id,
+                                model_name=model_name,
+                            )
                         )
+                        progress("worker", "completed")
+                        result = (
+                            orchestrator.get_workflow_run(workflow_run_id)
+                            if coordinator is not None
+                            else {"answer": "".join(parts)}
+                        )
+                    else:
+                        conduct_kwargs = {"model_name": model_name, "progress": progress}
+                        if getattr(orchestrator.conduct, "__func__", None) is TaskOrchestrator.conduct:
+                            conduct_kwargs["workflow_run_id"] = f"run_{uuid.uuid4().hex}"
+                        result = orchestrator.conduct(messages, **conduct_kwargs)
                 except ConnectionAbortedError:
                     raise
+                except ProviderUpstreamError as exc:
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": _error_payload(
+                            exc.error_code,
+                            _provider_upstream_message(exc),
+                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                        )["error"],
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     failed = {
                         **created_response,
@@ -7853,6 +7999,26 @@ def build_server(
                     emit("response.failed", response=failed)
                     self._write_sse("data: [DONE]\n\n")
                     return False
+                if coordinator is not None:
+                    try:
+                        stream_usage = coordinator.record_stream_usage(
+                            result=result,
+                            attribution=attribution,
+                            model_name=model_name,
+                        )
+                    except Exception:  # noqa: BLE001 - headers sent; remain inside SSE
+                        failed = {
+                            **created_response,
+                            "status": "failed",
+                            "error": {
+                                "code": "usage_recording_failed",
+                                "message": "Usage evidence could not be recorded for this response.",
+                            },
+                        }
+                        emit("response.failed", response=failed)
+                        self._write_sse("data: [DONE]\n\n")
+                        return False
+                    result = {**result, **stream_usage}
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",
@@ -8006,7 +8172,19 @@ def build_server(
                         return
                     if not self._write_sse(frame({}, finish="error")):
                         return
-                except Exception:  # noqa: BLE001 - headers already sent
+                except ProviderUpstreamError as exc:
+                    payload = _error_payload(
+                        exc.error_code,
+                        _provider_upstream_message(exc),
+                        {"request_id": uuid.uuid4().hex, **exc.detail},
+                    )
+                    if not self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
+                except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 self._write_sse("data: [DONE]\n\n")

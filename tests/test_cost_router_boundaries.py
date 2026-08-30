@@ -66,6 +66,36 @@ def test_sync_attribution_falls_back_when_trace_names_unknown_agent() -> None:
     assert row["model_name"] == "contextual-orchestrator"
 
 
+def test_stream_usage_aggregates_trace_steps_without_text_estimates() -> None:
+    coordinator = _coordinator()
+    stream_result = {
+        "workflow_run_id": "run_stream_usage",
+        "mode": "conduct",
+        "trace": [
+            {"agent_id": "mock_worker", "usage": {"prompt_tokens": 5, "completion_tokens": 7}},
+            {"agent_id": "mock_worker", "usage": {"prompt_tokens": 11, "completion_tokens": 13}},
+        ],
+    }
+    result = coordinator.record_stream_usage(
+        result=stream_result,
+        attribution={"team": "alpha"},
+        model_name="requested-model",
+    )
+
+    assert result["usage"] == {"input_tokens": 16, "output_tokens": 20, "total_tokens": 36}
+    assert result["cost"]["measurement_status"] == "measured"
+    assert len(result["usage_record_ids"]) == 2
+    rows = coordinator.ledger.records()
+    assert [row["request_channel"] for row in rows] == ["stream", "stream"]
+    assert all(row["measurement_status"] == "measured" for row in rows)
+    coordinator.record_stream_usage(
+        result=stream_result,
+        attribution={"team": "alpha"},
+        model_name="requested-model",
+    )
+    assert len(coordinator.ledger.records()) == 2
+
+
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
     coordinator = _coordinator()
     with pytest.raises(TypeError, match="cache_bypass"):
@@ -114,6 +144,26 @@ def test_retrieve_batch_requires_known_job_id() -> None:
     coordinator = _coordinator()
     with pytest.raises(KeyError, match="batch job"):
         coordinator.retrieve_batch("nope_missing_job")
+
+
+def test_batch_poll_and_retrieve_require_the_bound_owner() -> None:
+    """An opaque job identifier cannot cross the authenticated owner boundary."""
+    coordinator = _coordinator()
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "owned"}],
+        hints={"channel": "batch"},
+        owner_id="principal-a",
+    )
+    job_id = submitted["job_id"]
+    job = coordinator._batch_jobs[job_id]
+
+    assert job.owner_id == "principal-a"
+    assert coordinator.poll_batch(job_id, owner_id="principal-a")["is_complete"] is True
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.poll_batch(job_id, owner_id="principal-b")
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.retrieve_batch(job_id, owner_id="principal-b")
+    assert coordinator.retrieve_batch(job_id, owner_id="principal-a")["result_count"] == 1
 
 
 # --- embedding input splitting --------------------------------------------------------
@@ -393,3 +443,33 @@ def test_complete_embeddings_batch_round_trips_locally() -> None:
     assert document["status"] == "completed"
     assert document["embeddings"][0]["index"] == 0
     assert document["cost_micro_usd"] >= 0
+
+
+
+def test_batch_model_identity_error_does_not_capture_backend_value_errors() -> None:
+    """Only model resolution receives the client-facing invalid-model category."""
+    from contextual_orchestrator.batch_routing import BatchRequest
+    from contextual_orchestrator.cost_router import InvalidBatchModelError
+
+    class RejectingBackend:
+        name = "rejecting-backend"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del requests, metadata
+            raise ValueError("backend payload validation failed")
+
+    coordinator = _coordinator(batch_backend=RejectingBackend())
+    with pytest.raises(ValueError, match="backend payload validation failed") as backend_error:
+        coordinator.submit_batch([
+            BatchRequest(messages=[{"role": "user", "content": "valid"}], model="mock-a")
+        ])
+    assert type(backend_error.value) is ValueError
+
+    with pytest.raises(InvalidBatchModelError, match="not configured"):
+        coordinator.submit_batch([
+            BatchRequest(
+                messages=[{"role": "user", "content": "private"}],
+                model="not-configured",
+                zdr_only=True,
+            )
+        ])

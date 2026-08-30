@@ -121,8 +121,10 @@ These open the KV. They are not provider API keys.
 
 ## Bootstrapping a credential
 
-The root `compose.yaml` uses the same stdin-only pattern for the server bearer
-token through a one-shot `credential_bootstrap` service and a Compose secret.
+The root `compose.yaml` uses the same stdin-only pattern for separate admin and
+inference bearer tokens through a one-shot `credential_bootstrap` service and
+Compose secrets. Its `--production` command refuses the legacy single-token
+mode; the single-token CLI remains an explicit local-development escape hatch.
 Only KV connection/unlock values use environment bootstrap transport.
 
 A one-shot CLI subcommand writes a deploy-time secret into the KV:
@@ -188,7 +190,11 @@ Provider credentials and gateway bearer authentication are separate concerns.
 The CLI resolves named server tokens from this KV when `--auth-token-key`,
 `--admin-token-key`, or `--inference-token-key` is used; it does not read the
 legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
-Explicit token flags remain local-development escape hatches.
+Explicit token flags remain local-development escape hatches. Add `--production`
+ to require split admin/inference credentials and reject the insecure admin
+ session cookie option; `--allow-public-bind` requires split credentials and
+ also rejects the insecure cookie option.
+Both gates fail before resolving any credential when a single token is selected.
 
 For production ecosystem access, construct `SecurityConfig` with a reviewed
 `bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must

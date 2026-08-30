@@ -40,6 +40,20 @@ def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
     assert security.readiness_profile()["auth_mode"] == "external_bearer_verifier"
 
 
+def test_external_principal_resolver_survives_bearer_rotation() -> None:
+    """An adapter-provided tenant/subject key keeps resource ownership stable."""
+    valid_tokens = {"old-token", "rotated-token"}
+    security = SecurityConfig(
+        bearer_verifier=lambda token, scope: token in valid_tokens and scope == "inference",
+        principal_resolver=lambda token: "tenant-a/user-a" if token in valid_tokens else None,
+    )
+    old_headers = {"authorization": "Bearer old-token"}
+    rotated_headers = {"authorization": "Bearer rotated-token"}
+    security.authorize(old_headers, "inference", "127.0.0.1")
+    security.authorize(rotated_headers, "inference", "127.0.0.1")
+    assert security.principal_id(old_headers) == security.principal_id(rotated_headers)
+
+
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
     headers = {"content-type": "application/json", "connection": "close"}
     if token:
@@ -253,6 +267,24 @@ def test_single_and_split_token_modes_cannot_be_combined() -> None:
         raise AssertionError("mixed single and split token modes must be rejected")
 
 
+def test_public_bind_rejects_shared_token_at_security_boundary() -> None:
+    try:
+        SecurityConfig(auth_token="shared_secret", allow_public_bind=True)
+    except ValueError as exc:
+        assert str(exc) == "public bind requires split admin_token and inference_token credentials"
+    else:  # pragma: no cover
+        raise AssertionError("public bind must not accept one shared bearer token")
+
+
+def test_public_bind_rejects_identical_split_tokens() -> None:
+    try:
+        SecurityConfig(admin_token="same_secret", inference_token="same_secret", allow_public_bind=True)
+    except ValueError as exc:
+        assert str(exc) == "public bind requires distinct admin_token and inference_token credentials"
+    else:  # pragma: no cover
+        raise AssertionError("public bind must not reuse one bearer for both scopes")
+
+
 def test_scope_token_precedes_mutated_shared_token() -> None:
     security = SecurityConfig(admin_token="admin_secret", inference_token="inference_secret")
     security.auth_token = "mutated_shared_secret"
@@ -352,12 +384,16 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
 
 
 def test_public_bind_requires_explicit_opt_in() -> None:
-    try:
-        SecurityConfig(auth_token="secret_token").check_bind("0.0.0.0")
-    except ValueError as exc:
-        assert "--allow-public-bind" in str(exc)
-    else:
-        raise AssertionError("public bind should require opt-in")
+    security = SecurityConfig(auth_token="secret_token")
+    for host in ("0.0.0.0", "192.0.2.1", "2001:db8::1"):
+        try:
+            security.check_bind(host)
+        except ValueError as exc:
+            assert "--allow-public-bind" in str(exc)
+        else:
+            raise AssertionError(f"public bind should require opt-in: {host}")
+    for host in ("127.0.0.1", "::1", "localhost"):
+        security.check_bind(host)
 
 
 def test_concurrency_limit_rejects_when_slots_are_full() -> None:

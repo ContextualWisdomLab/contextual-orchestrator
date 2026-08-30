@@ -437,6 +437,7 @@ OPENAPI_SPEC = {
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "provider_exclusions": {"type": "array", "items": {"type": "string"}},
                                     "group_name": {"type": "string"},
+                                    "stream_usage_supported": {"type": "boolean"},
                                 },
                             },
                         },
@@ -858,7 +859,7 @@ OPENAPI_SPEC = {
         "/api/v1/batch_routing_jobs": {
             "post": {
                 "operationId": "create_batch_routing_job",
-                "summary": "Submit a batch of latency-tolerant requests to the batch backend (pg-llm-batch)",
+                "summary": "Submit a principal-owned batch of latency-tolerant requests to the batch backend (pg-llm-batch)",
                 "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,
@@ -886,23 +887,33 @@ OPENAPI_SPEC = {
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}": {
             "get": {
                 "operationId": "get_batch_routing_job",
-                "summary": "Poll a submitted batch routing job",
+                "summary": "Poll a submitted batch routing job owned by the authenticated principal",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],
-                "responses": {"200": {"description": "Batch routing job status"}},
+                "responses": {
+                    "200": {"description": "Batch routing job status"},
+                    "404": {
+                        "description": "Batch job is missing or is not owned by the authenticated principal"
+                    },
+                },
             }
         },
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results": {
             "post": {
                 "operationId": "create_batch_routing_job_results",
-                "summary": "Retrieve batch results and record their usage + cost",
-                "security": [{"inference_bearer_auth": []}],
+                "summary": "Retrieve principal-owned batch results and record their usage + cost",
+                "security": [{"inference_bearer_auth": [], "trace_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],
-                "responses": {"200": {"description": "Batch results with recorded usage"}},
+                "responses": {
+                    "200": {"description": "Batch results with recorded usage"},
+                    "404": {
+                        "description": "Batch job is missing or is not owned by the authenticated principal"
+                    },
+                },
             }
         },
         "/v1/batch/embeddings": {

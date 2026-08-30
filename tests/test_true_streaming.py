@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
@@ -25,10 +26,13 @@ class _FakeSSEProvider:
     """Emits a fixed list of raw SSE frame strings at POST /chat/completions."""
 
     def __init__(self, frames: list[str]) -> None:
+        self.payloads: list[dict] = []
+        payloads = self.payloads
+
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
-                self.rfile.read(length)
+                payloads.append(json.loads(self.rfile.read(length)))
                 self.send_response(200)
                 self.send_header("content-type", "text/event-stream")
                 self.end_headers()
@@ -137,6 +141,27 @@ def test_stream_send_ignores_empty_and_missing_choices() -> None:
     assert client.take_usage() == {"completion_tokens": 7}
 
 
+def test_stream_send_preserves_complete_provider_usage_frame() -> None:
+    usage = {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10}
+    frames = [
+        _delta("answer"),
+        _usage_frame(choices=[], usage=usage),
+        "data: [DONE]\n\n",
+    ]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        assert list(
+            client._stream_send(agent, {"model": "gpt-x", "stream": True})
+        ) == ["answer"]
+    assert client.take_usage() == usage
+
+
 def test_stream_chat_requests_and_captures_provider_usage_without_stale_data() -> None:
     usage = {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6}
     streams = [
@@ -238,6 +263,26 @@ def test_http_route_stream_returns_provider_usage_without_stale_data() -> None:
     assert not any(payload.get("choices") == [] for payload in second_payloads)
 
 
+def test_stream_send_records_response_model_and_finish_reason(monkeypatch) -> None:
+    """Streaming spans retain the same response identity as non-streaming calls."""
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.annotate_current_span", captured.append
+    )
+    frames = [
+        'data: {"model":"served-model","choices":[{"delta":{"content":"ok"},"finish_reason":null}]}\n\n',
+        'data: {"model":"served-model","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        "data: [DONE]\n\n",
+    ]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url)
+        assert list(client._stream_send(agent, {"model": "gpt-x", "stream": True})) == ["ok"]
+
+    assert captured[-1]["gen_ai.response.model"] == "served-model"
+    assert captured[-1]["gen_ai.response.finish_reasons"] == ["stop"]
+
+
 def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
     """A mid-stream provider failure surfaces one package-owned error (CWE-209).
 
@@ -271,7 +316,12 @@ def test_stream_send_hides_raw_provider_error_text_and_cause() -> None:
         try:
             list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
         except RuntimeError as error:
-            assert "streaming request failed" in str(error)
+            # Classified, package-owned failure: the upstream status is kept,
+            # while the provider URL, body text, and cause stay inside.
+            assert isinstance(error, ProviderUpstreamError)
+            assert error.error_code == "api_error"
+            assert error.client_status == 502
+            assert "HTTP 500" in str(error)
             assert "http://" not in str(error)  # provider URL stays inside
             assert "upstream-secret-diagnostic" not in str(error)
             assert error.__cause__ is None
@@ -290,6 +340,24 @@ def test_stream_chat_mock_yields_chunks() -> None:
     assert "".join(deltas) == client._mock(agent, messages)  # lossless
 
 
+def test_stream_chat_omits_usage_option_for_local_gateway() -> None:
+    frames = [_delta("local"), "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "gateway_agent",
+            "gateway-model",
+            base_url=(
+                f"local://127.0.0.1:{provider._server.server_address[1]}/v1"
+            ),
+        )
+        assert list(
+            client.stream_chat(agent, [{"role": "user", "content": "ping"}])
+        ) == ["local"]
+
+    assert "stream_options" not in provider.payloads[0]
+
+
 def test_would_route_true_for_route_false_for_conduct() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "m-model", tags=("reasoning", "writing"))])
     messages = [{"role": "user", "content": "short prompt"}]
@@ -303,6 +371,17 @@ def test_stream_route_yields_and_persists() -> None:
     answer = "".join(deltas)
     assert answer.startswith("[general_agent:worker]")
     assert len(orchestrator._workflow_runs) == 1  # streamed run still persisted for observability
+
+
+def test_stream_route_uses_canonical_provider_name_in_trace() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "m-model", base_url="mock://provider/path")]
+    )
+
+    list(orchestrator.stream_route([{"role": "user", "content": "stream"}]))
+
+    trace = next(iter(orchestrator._workflow_runs.values()))["trace"]
+    assert trace[0]["provider"] == "mock-provider/path"
 
 
 def test_stream_route_persists_owner() -> None:
@@ -405,6 +484,81 @@ def test_http_route_stream_pipes_live_deltas() -> None:
         streamed += json.loads(line[len("data: ") :])["choices"][0]["delta"].get("content", "")
     reference = json.loads(ref)["choices"][0]["message"]["content"]
     assert streamed == reference  # live-streamed deltas equal the non-streamed route answer
+
+
+def test_chat_stream_preserves_classified_provider_error_payload() -> None:
+    """A terminal chat SSE frame keeps the actionable upstream taxonomy."""
+    server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    frames: list[str] = []
+
+    class Orchestrator:
+        def stream_route(self, *_args, **_kwargs):
+            raise ProviderUpstreamError(
+                agent_id="worker_agent",
+                model="gpt-x",
+                error_code="rate_limit_exceeded",
+                message="provider throttled the request",
+                client_status=429,
+                provider_status=429,
+                retryable=True,
+            )
+            yield "unreachable"
+
+    handler._begin_sse = lambda: True
+    handler._write_sse = lambda frame: frames.append(frame) is None or True
+    try:
+        handler._stream_route_completion(
+            Orchestrator(), SecurityConfig(auth_token="stream-token"), [], "gpt-x"
+        )
+    finally:
+        server.server_close()
+
+    errors = [
+        json.loads(frame.removeprefix("data: "))
+        for frame in frames
+        if frame.startswith("data: {") and '"error_code"' in frame
+    ]
+    assert errors[0]["error_code"] == "rate_limit_exceeded"
+    assert errors[0]["error_detail"]["provider_status"] == 429
+    assert errors[0]["error_detail"]["retryable"] is True
+
+
+def test_responses_stream_preserves_classified_provider_error_payload() -> None:
+    """A failed Responses SSE event keeps the actionable upstream taxonomy."""
+    server = build_server(TaskOrchestrator([ModelAgent("general_agent", "m-model")]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    frames: list[str] = []
+
+    class Orchestrator:
+        def would_route(self, *_args, **_kwargs):
+            return False
+
+        def conduct(self, *_args, **_kwargs):
+            raise ProviderUpstreamError(
+                agent_id="worker_agent",
+                model="gpt-x",
+                error_code="rate_limit_exceeded",
+                message="provider throttled the request",
+                client_status=429,
+                provider_status=429,
+                retryable=True,
+            )
+
+    handler._begin_sse = lambda: True
+    handler._write_sse = lambda frame: frames.append(frame) is None or True
+    try:
+        assert handler._stream_orchestrated_response(
+            Orchestrator(), SecurityConfig(auth_token="stream-token"), [], "gpt-x"
+        ) is False
+    finally:
+        server.server_close()
+
+    failed_frame = next(frame for frame in frames if "response.failed" in frame)
+    payload = json.loads(failed_frame.split("data: ", 1)[1])
+    assert payload["response"]["error"]["code"] == "rate_limit_exceeded"
+    assert payload["response"]["error"]["detail"]["provider_status"] == 429
+    assert payload["response"]["error"]["detail"]["retryable"] is True
 
 
 if __name__ == "__main__":

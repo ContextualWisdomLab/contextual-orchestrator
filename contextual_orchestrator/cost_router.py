@@ -4,7 +4,7 @@ This composes the existing :class:`~contextual_orchestrator.orchestrator.TaskOrc
 with the cost ledger and the sync-vs-batch router, so the orchestrator becomes
 the single control point for:
 
-1. **Cost review** — every completion (sync *and* batch) writes a
+1. **Cost review** — every completion (sync, stream, *and* batch) writes a
    :class:`~contextual_orchestrator.cost_ledger.UsageRecord` with token counts +
    computed cost and full multi-dimensional attribution.
 2. **Routing** — :class:`~contextual_orchestrator.batch_routing.RoutingPolicy`
@@ -55,6 +55,10 @@ _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 class BatchModelSelectionError(RuntimeError):
     """Raised when a batch request has no eligible model-group member."""
+
+
+class InvalidBatchModelError(ValueError):
+    """Raised only for an unknown client-supplied batch model identity."""
 
 
 class CostRoutingCoordinator:
@@ -269,7 +273,9 @@ class CostRoutingCoordinator:
                 mode=mode,
                 zdr_only=zdr_only,
             )
-            job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
+            job = self.submit_batch(
+                [request], metadata={"routing_reason": decision.reason}, owner_id=owner_id
+            )
             return {
                 "channel": "batch",
                 "routing_reason": decision.reason,
@@ -583,6 +589,68 @@ class CostRoutingCoordinator:
             measurement_status=measurement_status,
         )
 
+    def record_stream_usage(
+        self,
+        *,
+        result: Dict[str, Any],
+        attribution: Optional[Dict[str, Any]],
+        model_name: str,
+    ) -> Dict[str, Any]:
+        """Record one streamed workflow without estimating missing provider usage."""
+        workflow_run_id = result.get("workflow_run_id")
+        trace = [step for step in result.get("trace") or [] if isinstance(step, dict)]
+        if not trace:
+            trace = [{}]
+        records = []
+        for index, step in enumerate(trace):
+            counts = self._provider_usage(step.get("usage"))
+            provider, model = self._served_provider_model({"trace": [step]}, model_name)
+            usage_record_id = "usage_stream_" + hashlib.sha256(
+                f"{workflow_run_id}:{index}".encode("utf-8")
+            ).hexdigest()
+            records.append(
+                self.ledger.record_usage(
+                    provider=provider,
+                    model=model,
+                    prompt_tokens=counts[0] if counts else 0,
+                    completion_tokens=counts[1] if counts else 0,
+                    request_channel="stream",
+                    route_mode=result.get("mode"),
+                    workflow_run_id=workflow_run_id,
+                    attribution=attribution,
+                    measurement_status="measured" if counts else "unavailable",
+                    usage_record_id=usage_record_id,
+                )
+            )
+        statuses = {record.measurement_status for record in records}
+        measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
+        currencies = {record.currency_code for record in records}
+        return {
+            "usage_record_ids": [record.usage_record_id for record in records],
+            "usage": (
+                {
+                    "input_tokens": sum(record.prompt_tokens for record in records),
+                    "output_tokens": sum(record.completion_tokens for record in records),
+                    "total_tokens": sum(record.total_tokens for record in records),
+                }
+                if measurement_status == "measured"
+                else None
+            ),
+            "cost": {
+                "cost_amount": (
+                    round(sum(record.cost_amount for record in records), 6)
+                    if measurement_status == "measured" and len(currencies) == 1
+                    else None
+                ),
+                "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "measurement_status": measurement_status,
+            },
+        }
+
     # ------------------------------------------------------------------
     # Batch lifecycle
     # ------------------------------------------------------------------
@@ -590,15 +658,19 @@ class CostRoutingCoordinator:
         self,
         requests: List[BatchRequest],
         metadata: Optional[Dict[str, Any]] = None,
+        owner_id: Optional[str] = None,
     ) -> BatchJob:
-        """Submit a batch of requests to the configured batch backend."""
+        """Submit a batch, resolve its targets, and bind its authenticated owner."""
         try:
             prepared_requests = [self._resolve_batch_request(request) for request in requests]
-        except (RuntimeError, ValueError) as exc:
+        except ValueError as exc:
+            raise InvalidBatchModelError(str(exc)) from exc
+        except RuntimeError as exc:
             raise BatchModelSelectionError(
                 "no eligible model-group member is available for this batch request"
             ) from exc
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
+        job.owner_id = owner_id
         self._batch_jobs[job.job_id] = job
         return job
 
@@ -607,7 +679,18 @@ class CostRoutingCoordinator:
         if not request.zdr_only:
             return request
         with self.orchestrator.request_policy(request.zdr_only):
-            agent = self.orchestrator._requested_agent(request.model)
+            try:
+                agent = self.orchestrator._requested_agent(request.model)
+            except ValueError as exc:
+                configured_exact = any(
+                    candidate.model == request.model
+                    for candidate in self.orchestrator.candidates
+                )
+                if configured_exact:
+                    raise RuntimeError(
+                        "requested model is configured but not eligible for ZDR batch routing"
+                    ) from exc
+                raise
             if agent is None:
                 text = self.orchestrator._latest_user_text(request.messages)
                 agent = self.orchestrator._select_agent(
@@ -618,14 +701,14 @@ class CostRoutingCoordinator:
                 )
         return replace(request, model=agent.model)
 
-    def poll_batch(self, job_id: str) -> Dict[str, Any]:
-        """Poll a previously submitted batch job by id."""
-        job = self._require_job(job_id)
+    def poll_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
+        """Poll a previously submitted batch job owned by ``owner_id``."""
+        job = self._require_job(job_id, owner_id=owner_id)
         return self.batch_backend.poll(job)
 
-    def retrieve_batch(self, job_id: str) -> Dict[str, Any]:
-        """Retrieve batch results and record usage + cost for each completion."""
-        job = self._require_job(job_id)
+    def retrieve_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
+        """Retrieve results for a batch owned by ``owner_id`` and record usage."""
+        job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
         recorded: List[Dict[str, Any]] = []
         for item in items:
@@ -667,9 +750,9 @@ class CostRoutingCoordinator:
             provider = "unknown"
         return provider, item.model
 
-    def _require_job(self, job_id: str) -> BatchJob:
+    def _require_job(self, job_id: str, *, owner_id: Optional[str] = None) -> BatchJob:
         job = self._batch_jobs.get(job_id)
-        if job is None:
+        if job is None or job.owner_id != owner_id:
             raise KeyError(f"batch job {job_id!r} not found")
         return job
 

@@ -28,6 +28,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   deprecated aliases so existing integrations can migrate without disruption.
 - An explicit `--max-body-bytes` server option that preserves the 64 KiB
   default while allowing bounded authenticated multimodal deployments.
+- A fail-closed `--production` authentication gate that rejects legacy
+  single-token startup and insecure admin-session cookies; canonical Compose
+  now bootstraps separate admin/inference KV credentials.
 - Anti-heuristic routing evidence ladder (ADR 0034): `DOMAIN_HINTS` and
   `COMPLEX_HINTS` keyword tables are deleted; ordering is now
   eligibility contracts -> declaration priority/capability fit/cosine
@@ -73,12 +76,45 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Add deterministic no-egress benchmark dry runs, secret-redacted JSON/CSV/Markdown evidence artifacts, paired bootstrap uncertainty, quality-latency and quality-hypothetical-cost Pareto frontiers, all-modality catalog fuzzing, and a manually gated benchmark workflow.
 - Add a validated deterministic one-frame H.264 MP4 probe fixture, complete preflight reservation for every discovered model-capability cell plus the full evaluation envelope, and explicit evidence-sufficiency fields that keep the bundled smoke manifest from authorizing production routing.
 - Add direct benchmark quality gates for 100% production statement/branch coverage, 100% public docstrings, wheel build/install/import smoke testing, and optional-import isolation.
+- Streamed `/v1/responses` workflow runs now request provider usage only from
+  agents explicitly marked `stream_usage_supported`, preserve provider-declared
+  SSE usage, record per-step `stream` cost-ledger rows, and expose cost status
+  plus usage-record identities. Missing provider usage is explicitly
+  unavailable; the gateway does not estimate billing tokens from the final
+  answer, and nested gateway upstreams remain compatible (ADR 0040).
 - Experimental CEFR criterion-observation gateway with exact contract checks,
   independent rater blindness, bounded structured-output parsing, replay
   provenance, and human-review routing; it emits no final CEFR level or score.
 
 ### Fixed
 
+- Provider/model failures no longer collapse into a generic `internal_error`.
+  A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
+  classifies every upstream HTTP status, network, TLS, and transport failure
+  into OpenAI-compatible error codes (`rate_limit_exceeded`,
+  `authentication_error`, `model_not_found`, `provider_timeout`, ...) with the
+  client status, retryability, and one bounded redacted message (CWE-209).
+  Chat, passthrough, stream, and batch transports all surface the classified
+  cause; a fully-failed agent pool surfaces the final classified failure
+  after measured failover instead of an opaque collapse. Server error
+  payloads carry actionable next-step guidance per failure family.
+- Telemetry spans now carry concrete GenAI semantic-convention evidence:
+  `gen_ai.usage.input_tokens/output_tokens/total_tokens` from provider-reported
+  counts, served `gen_ai.response.model`, `gen_ai.response.finish_reasons`,
+  request latency, and classified `error.type` plus upstream status on
+  failures — replacing exception-class-only error labels. Chat, streaming,
+  and passthrough responses share this evidence path, and finish-reason arrays
+  are bounded to the OpenTelemetry default span-attribute budget.
+- Orchestration traces now include per-step telemetry evidence: streamed,
+  batched, routed, and conducted steps record `model`, `provider`, and
+  `latency_ms` alongside usage so workflow runs answer which model served a
+  step, how long it took, and what it cost.
+- Runtime agent create/PATCH now accepts and persists the explicit
+  `stream_usage_supported` capability, and the admin-safe agent view exposes it.
+- Require `--allow-public-bind` for every non-loopback address, not only wildcard
+  binds, so a specific network interface cannot bypass the public-bind guard.
+- Reject shared or identical split bearer credentials on public binds, while
+  keeping the CLI's preliminary host check independent from final credentials.
 - Accept the standard Chat Completions `stream_options.include_usage=true`
   request and emit provider-reported usage in a usage-only SSE chunk when
   available after the terminal stop chunk; pass the option through live provider
@@ -115,6 +151,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `fast-mlsirm` and its `numpy` dependency are installed in CI and locally.
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
+- Bind HTTP-created batch routing jobs to the authenticated principal and
+  require the same owner for status polling and trace-bearing result retrieval;
+  owner mismatches fail closed as not found.
 - Mixed structured workflows now retain a cost-ledger row for calls whose
   provider omitted usage, using the existing token-counting fallback while
   preserving reported counts for the other calls in the same workflow.
