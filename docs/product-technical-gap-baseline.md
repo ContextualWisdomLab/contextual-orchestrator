@@ -261,6 +261,146 @@ This document serves as the baseline for the Contextual Orchestrator (an enterpr
 
 # Product and Technical Gap Baseline
 
+## 2026-08-30 generalize the Models.dev free-cost join beyond opencode_zen
+
+`orchestrator/free` (ADR 0032) was structurally empty in practice: `is_free`
+only ever becomes `True` from a provider's own reported per-token price, and
+of this gateway's six provider sources only OpenRouter's API ever reports
+real pricing — and OpenRouter is deliberately `evidence_only=True` (ZDR
+hardening, commit `952996ec`, untouched by this change) so it never serves
+inference. Of the remaining five, `openai`, `nvidia_nim`, `nvidia_nim_sub`,
+and `bytez` never report pricing themselves. The one existing mitigation, cross-referencing
+`opencode_zen` against Models.dev (`https://models.dev/api.json`), only
+covers a source that is `bootstrap_required = False` and not always
+registered.
+
+ADR 0041 generalizes that already-accepted join (ADR 0032: "this
+source/effective-state split is the contract for adding further providers")
+from one hardcoded `provider_name == "opencode_zen"` branch to a declared
+`ProviderModelSource.models_dev_provider_id` field, set for `opencode_zen`
+("opencode"), `nvidia_nim` and `nvidia_nim_sub` (both "nvidia" — they share
+one upstream NIM catalog under two KV credentials), and `openai` ("openai").
+`discover_all_models` now fetches the Models.dev payload at most once per
+call and shares the identical parsed object across every source that wants
+it, instead of each source refetching it independently.
+
+Re-verified live against `models.dev/api.json` (4,432,167 bytes; 211
+providers; 7,488 models): `nvidia` is a real provider entry (103 models,
+exact `vendor/model` id shape matching NIM's own `/v1/models`, e.g.
+`meta/llama-3.1-8b-instruct`; 99 of 103 all-zero cost, 4 genuinely paid,
+e.g. `deepseek-ai/deepseek-v4-flash`). `openai` is a real provider entry
+(47 models) with every priced model nonzero today (0 free) — expected, and
+self-correcting with no code change if that ever stops being true. `bytez`
+has zero coverage anywhere in the payload (full key/substring scan over all
+211 provider ids) and Bytez's own docs describe billing only in prose
+(account-level credit, no per-model price field); this is documented as a
+permanent gap, not a TODO. The join stays exact-`model_id`-match and
+fail-closed exactly as the existing `is_free`/`_models_dev_cost_is_free`
+classification already was: unmatched ids, missing/partial cost objects, a
+nonzero `cache_read`/`cache_write`-only vector, and a Models.dev fetch
+failure all still leave `is_free = False`.
+
+This restores meaningful `orchestrator/free` coverage from `nvidia_nim`/
+`nvidia_nim_sub` rather than depending entirely on whether `opencode_zen`
+happens to be registered in a given deployment.
+
+## 2026-08-30 review-pipeline pin-bump verification and #911 provider-only streaming fix
+
+Re-checked every open PR fresh (`#868`, `#857`, `#906`, `#911`, `#912`; `#917`
+remains intentionally draft, blocked on an external dependency). None merged
+this cycle: all five are non-draft with `mergeable_state` `blocked` (`#857` is
+`dirty`), and none carries a qualifying `APPROVED` review — `opencode-review`
+and `noema-review` are still failing on every PR's exact head.
+
+**Confirmed the org's pin-bump fix landed but did not resolve the underlying
+gap.** `ContextualWisdomLab/.github#1422` bumped the vendored
+`ORCHESTRATOR_PIN_SHA` default from the stale `b21645116b352967e50fc497b87eb745b9cc8c61`
+to the current `5f2753ace756ddd81049a5221d55e8977572a416`. A fresh rerun of the
+`noema-review`/`opencode-review` required jobs on `#868`'s head, queued after
+that merge, shows the sidecar now correctly vendoring the fresh pin
+(`vendoring contextual-orchestrator @ 5f2753ace756...`) but still failing its
+own startup preflight with the identical signature as before the bump:
+`request_failed status=413 code=request_too_large` → falls back to the live
+OpenRouter ZDR feed → `sidecar exited before healthz`. The same
+`OpenCode Review Dispatch` failure signature was confirmed org-wide, across
+unrelated repositories (`.github` itself, `TEPP`, `DiagramWeave`,
+`psychometrics-commons`), both before and after the merge — this is a distinct
+bug in `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s own startup
+path, independent of which commit is vendored. A dedicated effort (a separate
+session, coordinated mid-cycle) is root-causing that sidecar failure directly;
+this repo's queue remains blocked on it until it lands, at which point every
+open PR here needs a fresh push or rerun to pick up a real review verdict.
+Rerunning the required-check jobs themselves does not help: `opencode-review`
+is a separate polling gate (`gh api .../pulls/{n}/reviews` for an
+`opencode-agent` review on the exact head) that only reflects whether the
+privileged `opencode-review-dispatch.yml` run (in `.github`, triggered via
+`repository_dispatch` from this repo's `pr-review-merge-scheduler.yml`)
+actually posted a review — it does not itself retry that dispatch.
+
+**`#911` (`feat/durable-routing-observations-20260829`)**: verified CodeRabbit's
+four outstanding findings against the exact head. One was still live and
+fixed (pushed `b140eda7`): a blank-string `seed` or `top_logprobs` on
+`/v1/responses` was left as a raw `""` in `body` by `_validate_responses_seed`
+/ `_validate_responses_logprobs` instead of being popped on the omit branch,
+so `_responses_virtual_requires_provider_path`'s `body.get(...) is not None`
+checks saw a truthy empty string and wrongly forced the provider-only
+(non-streamed) path for `orchestrator/auto` / `orchestrator/free` even though
+both fields were semantically omitted — a `400 invalid_stream` for a client
+that never actually set either control. Both validators now pop the key on
+omit, matching the established `_validate_chat_logprobs_surface` convention.
+Added a regression test (`test_streamed_orchestrated_responses_allows_blank_seed_and_top_logprobs`)
+that reproduces the bug on the pre-fix code and passes after. The other three
+findings were already resolved on this head and needed no action: `zdr_only`
+is already stripped from every provider payload via `_ORCHESTRATION_ONLY_KEYS`
+(covering `proxy_completion` and `_orchestrated_provider_completion` alike),
+`text.format`'s provider-only check is already restricted to
+`json_object`/`json_schema` (not the default `"text"` type), and
+`record_stream_usage` failures are already decoupled from SSE completion via
+their own try/except emitting a controlled `response.failed` event (covered by
+the existing `test_stream_usage_failure_remains_inside_the_started_sse_protocol`).
+Full local suite: `2684 passed, 1 failed` — the one failure is the
+unreachable-`fast-mlsirm`-package sandbox gap also documented on PR #917, not
+a regression.
+
+**`#906` (`feat/nim-benchmark-rebuild-20260828`)**: `Full unit and contract
+suite` and the dedicated NIM job both fail on
+`test_smoke_manifest_cannot_authorize_production_routing`
+(`evidence_status == "insufficient_evidence"`, expected
+`"evidence_review_required"`) — a **different** failing assertion than last
+cycle's recorded 3-token budget overage on
+`test_budgeted_client_fallback_and_transport_errors` (which is not failing on
+this run: `2798 passed, 1 failed` vs. the prior `2797 passed, 2 failed`). Both
+symptoms point at the same root cause already flagged for the author: this
+`dry_run` smoke-manifest test still depends on live-provider discovery
+evidence in the hosted runner rather than being fully deterministic, so its
+outcome varies run to run with upstream catalog/availability. Left untouched
+again — needs the author's judgment on whether to tighten the test's
+evidence-floor mocking or accept it as environment noise, not a bot's guess.
+
+**`#912` (`feat/normalized-video-job-resource-20260829`)**: all three of
+CodeRabbit's outstanding findings were re-checked and are already resolved on
+this head (the `VideoJobRegistry` doc already describes the legacy-owner
+compatibility path correctly, the OpenRouter video-generation doc link is
+already valid, and the gap-baseline heading-date nitpick is cosmetic only) —
+no action taken.
+
+**`#857` (`fix/provider-backed-embedding-batch`)**: confirmed `dirty` again,
+this time by the repository's own automated `resolve-pr-857.yml` merge
+attempt, which surfaced real conflicts in 15 files (`CHANGELOG.md`,
+`Dockerfile`, `contextual_orchestrator/__main__.py`, `batch_routing.py`,
+`cost_router.py`, `model_discovery.py`, `orchestrator.py`,
+`provider_bootstrap.py`, `provider_catalog_store.py`, `server.py`,
+`docs/library_research.md`,
+`docs/planning/adrs/0026-trace-purpose-authorization.md`, this gap-baseline
+file, and two test files) before aborting rather than push a bad resolution.
+This corroborates the prior cycles' assessment that the branch (165+ files,
+~14k lines diverged from `main`) is too large to merge-resolve safely in one
+pass; left as-is again. No new code changes this cycle.
+
+A short status comment was left on each of `#868`, `#857`, `#906`, `#911`, and
+`#912` recording the pin-bump-did-not-fix-it finding so the next pass (human
+or agent) does not re-diagnose the same sidecar failure from scratch.
+
 ## 2026-08-29 batch-routing object-authorization slice
 
 Protected `main` remains
