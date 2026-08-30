@@ -1,5 +1,62 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 sidecar preflight max_tokens desynchronized from the routing probe
+
+Root-caused the org-wide `opencode-review`/`noema-review`/`strix` failure
+signature (`gateway preflight returned HTTP 502` / `error_code:
+invalid_structured_output`) that every open PR across the organization has
+been showing at sidecar boot, before any real review or security analysis
+ever runs.
+
+**Exact evidence, not speculation**: downloaded the `strix-reports` artifact
+from this repo's own PR #912 run `33304076516` (job `99237393606`,
+`ContextualWisdomLab/contextual-orchestrator/actions/runs/33304076516`).
+`contextual-orchestrator-preflight.json` in that artifact shows the
+`ContextualWisdomLab/.github`-owned review sidecar's own routing probe
+(`contextual_orchestrator_review_launcher.py`, `REVIEW_MAX_OUTPUT_TOKENS =
+4096`) already selected `nvidia_nim_deepseek_ai_deepseek_v4_flash_0731` as
+`"status": "ready"` — a healthy, working free-tier route. The sidecar's
+separate end-to-end gateway check (a raw `curl` to the running
+`/v1/chat/completions` endpoint through `orchestrator/free`) re-tested the
+exact same route with `"max_tokens":16` hardcoded — 256x smaller than the
+budget the routing probe itself had just proven sufficient. A reasoning-
+capable model (this DeepSeek NIM route) spends part of a small token budget
+on internal reasoning before any answer content, so at 16 tokens it returns
+a `reasoning` field with empty `content`.
+`contextual_orchestrator.orchestrator._response_content` correctly raises
+`ProviderResponseError` for that shape
+(`"provider ... response did not contain assistant content"`); `server.py`'s
+generic exception handler maps every `ProviderResponseError` to `502
+invalid_structured_output` — a label describing a schema-validation failure
+that has nothing to do with what actually happened here (this preflight
+request carries no `response_format` or `tools` at all).
+
+Net effect: a healthy `orchestrator/free` gateway has been reporting itself
+unhealthy at sidecar boot. This was never a code-quality or security defect
+in the PRs it blocked.
+
+**Fix**: `ContextualWisdomLab/.github#1436` bumps the sidecar's gateway
+preflight `max_tokens` from `16` to `4096`, matching `REVIEW_MAX_OUTPUT_TOKENS`
+(the budget the routing probe already uses and already proved sufficient for
+this exact route, well within the existing 30s curl timeout — the routing
+probe itself completes in under its own 10s timeout at this budget). Per
+owner review on that PR, source correctness alone does not establish
+operational acceptance: the fix also carries a RED→GREEN parity test
+(`test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe`,
+confirmed to fail on the pre-fix `16` literal and pass once synchronized) and
+a negative control
+(`test_reasoning_without_content_remains_rejected_even_with_the_full_budget`)
+proving a genuinely reasoning-only/no-content response still fails closed at
+the full 4096-token budget — the fix widens the budget without weakening the
+fail-closed content check. A live post-merge canary (a subsequent PR's
+`opencode-review`/`noema-review`/`strix` actually producing an authoritative
+result, not just the sidecar preflight passing) remains outstanding before
+this is fully accepted.
+
+This is central `.github`-owned infrastructure; this repo's own PRs cannot
+fix it directly, only report and verify it (see the `pull_request_target`
+trust-boundary note in `.github`'s own `CLAUDE.md`).
+
 ## 2026-08-30 hourly loop: #868 test-mock fix, #857 narrow hardening, #906 stale-base merge
 
 Fresh status check confirmed #868/#911/#912 were still `BLOCKED` purely on the
