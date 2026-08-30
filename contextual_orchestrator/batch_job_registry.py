@@ -105,6 +105,13 @@ class ValkeyJsonMapping(MutableMapping):
         # expiry forward, so an active registry never expires mid-flight.
         self._client.expire(self._key, self._retention_seconds)
 
+    def set_if_absent(self, job_id: str, value: Any) -> bool:
+        """Store one value only when no concurrent writer stored it first."""
+        created = bool(self._client.hsetnx(self._key, job_id, _encode(value)))
+        if created:
+            self._client.expire(self._key, self._retention_seconds)
+        return created
+
     def __delitem__(self, job_id: str) -> None:
         if not self._client.hdel(self._key, job_id):
             raise KeyError(job_id)

@@ -61,8 +61,10 @@ failover; see `docs/doctoring/equivalent-endpoint-racing.md`.
   inference.
 - The current success-per-second member order is not a distinct-model quality
   router. Quality/cost routing requires calibrated evaluation and ablation.
-- A synchronous video submission does not prove provider-affine polling or durable
-  result ownership; that remains a production Gap.
+- Asynchronous video submission returns an opaque gateway resource whose status
+  and content reads stay bound to the accepting provider account. New ownership
+  and measured-usage records are normalized inside the existing job-registry
+  boundary; Valkey is still required for restart and replica durability.
 
 ## TRD
 
@@ -117,9 +119,23 @@ classDiagram
     +latency_seconds: real?
     +output_tokens: integer?
   }
+  class VideoJobRecord {
+    +gateway_job_id: text
+    +provider_job_id: text
+    +agent_id: text
+    +owner_id: text
+    +submitted_at: integer
+  }
+  class VideoJobUsage {
+    +gateway_job_id: text
+    +prompt_tokens: integer
+    +completion_tokens: integer
+    +observed_at: integer
+  }
   ModelGroup "1" --> "0..*" ModelGroupMember
   AgentPool "1" --> "0..1" ModelGroupMember
   ModelGroupMember "1" --> "0..*" RoutingObservation
+  VideoJobRecord "1" --> "0..1" VideoJobUsage
 ```
 
 `model_group_member.agent_id` is both its primary key and a foreign key, so one
@@ -158,8 +174,10 @@ transactionally into these relations.
   `routing_observations` table replays only the selected time window and uses
   retention-only semantics; calibrated decay, cross-model quality weights, and
   production horizontal-scaling claims remain outside this slice.
-- Video job ownership and opt-in spend-capped live canaries remain explicitly
-  tracked in `docs/product-technical-gap-baseline.md`.
+- Video job durability still depends on the configured shared job registry;
+  standalone mode makes no durability claim.
+- Cancellable conducted-answer streaming and opt-in spend-capped live
+  canaries remain explicitly tracked in `docs/product-technical-gap-baseline.md`.
 
 ## Evidence and limits
 
