@@ -8,6 +8,14 @@ def read_text(relative_path: str) -> str:
     return (ROOT_DIR / relative_path).read_text(encoding="utf-8")
 
 
+def find_uses_line(workflow_text: str, action_name: str) -> str:
+    for line in workflow_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"uses: {action_name}@"):
+            return stripped
+    raise AssertionError(f"could not find uses line for {action_name}")
+
+
 def test_readme_links_deepwiki_and_security_workflow_badges():
     readme_text = read_text("README.md")
 
@@ -162,7 +170,10 @@ def test_python_lockfile_uses_hash_pinning():
 def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
     """CI must install the uv lock so git-backed runtime dependencies are present."""
     workflow_text = read_text(".github/workflows/ci.yml")
-    assert "uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e" in workflow_text
+    setup_uv_line = find_uses_line(workflow_text, "astral-sh/setup-uv")
+
+    assert re.search(r"@[0-9a-f]{40}(?:\s+#|$)", setup_uv_line)
+    assert "# v" in setup_uv_line
     assert 'version: "0.12.5"' in workflow_text
     assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in workflow_text
 
