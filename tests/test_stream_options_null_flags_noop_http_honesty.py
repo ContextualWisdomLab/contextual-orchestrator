@@ -172,11 +172,19 @@ def test_http_chat_accepts_include_usage_true() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_structured_streams_include_usage() -> None:
+def test_http_chat_tools_stream_includes_reported_usage() -> None:
+    """Tool-loop passthrough already has the complete non-streamed provider
+    response before SSE framing, so its usage is knowable and reportable."""
     server, thread, port = _server()
     try:
-        for structured in (
+        status, content_type, sse = _post_raw(
+            port,
+            "/v1/chat/completions",
             {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured usage"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
                 "tools": [
                     {
                         "type": "function",
@@ -185,25 +193,42 @@ def test_http_chat_structured_streams_include_usage() -> None:
                             "parameters": {"type": "object", "properties": {}},
                         },
                     }
-                ]
+                ],
             },
-            {"response_format": {"type": "json_object"}},
-        ):
-            status, _, body = _post_raw(
-                port,
-                "/v1/chat/completions",
-                {
-                    "model": "mock-planner",
-                    "messages": [
-                        {"role": "user", "content": "structured usage"}
-                    ],
-                    "stream": True,
-                    "stream_options": {"include_usage": True},
-                    **structured,
-                },
-            )
-            assert status == 400, (structured, body)
-            assert "invalid_stream_options" in body
+        )
+        assert status == 200, sse
+        assert content_type.startswith("text/event-stream")
+        frames = [
+            json.loads(frame[len("data: "):])
+            for frame in sse.split("\n\n")
+            if frame.startswith("data: ") and frame != "data: [DONE]"
+        ]
+        usage_frames = [frame for frame in frames if frame.get("choices") == []]
+        assert len(usage_frames) == 1, frames
+        assert usage_frames[0]["usage"]["usage_source"] == "reported"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_structured_response_format_stream_usage_stays_fail_closed() -> None:
+    """response_format alone still conducts a multi-step workflow whose usage
+    would only reflect the final synthesizer step, so it stays fail-closed."""
+    server, thread, port = _server()
+    try:
+        status, _, body = _post_raw(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured usage"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_stream_options" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -234,6 +259,7 @@ if __name__ == "__main__":
     test_http_completions_accepts_stream_options_null_flags_without_stream()
     test_http_responses_accepts_stream_options_null_flags()
     test_http_chat_accepts_include_usage_true()
-    test_http_chat_structured_streams_include_usage()
+    test_http_chat_tools_stream_includes_reported_usage()
+    test_http_chat_structured_response_format_stream_usage_stays_fail_closed()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")

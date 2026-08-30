@@ -40,7 +40,6 @@ from .orchestrator import (
     ProviderResponseError,
     ModelAgent,
     TaskOrchestrator,
-    estimate_tokens,
     _new_chat_completion_id,
     _responses_to_chat_payload,
     chat_completion_chunks,
@@ -5053,7 +5052,6 @@ def _chat_response_sse_chunks(
     *,
     model: str,
     include_usage: bool,
-    prompt_text: str,
 ) -> list[dict[str, Any]]:
     """Frame a completed provider-shaped chat response as OpenAI SSE chunks."""
     completion_id = payload.get("id")
@@ -5128,21 +5126,15 @@ def _chat_response_sse_chunks(
     chunks.append(final)
     if include_usage:
         reported_usage = payload.get("usage")
+        # Only provider-reported usage may be emitted here, matching the same
+        # honesty boundary already enforced on the other two SSE usage paths
+        # (ModelClient.stream_chat's relay-only usage, chat_completion_chunks'
+        # cost.measurement_status=="measured" gate): a text-derived token
+        # estimate is not this gateway's usage to report as fact, so when the
+        # provider omits it, no usage chunk is sent at all.
         if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}
-        else:
-            completion_text = content if isinstance(content, str) else ""
-            if tool_calls:
-                completion_text += json.dumps(tool_calls, ensure_ascii=False)
-            prompt_tokens = estimate_tokens(prompt_text)
-            completion_tokens = estimate_tokens(completion_text)
-            usage = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                "usage_source": "estimated",
-            }
-        chunks.append({**base, "choices": [], "usage": usage})
+            chunks.append({**base, "choices": [], "usage": usage})
     return chunks
 
 
@@ -6652,13 +6644,20 @@ def build_server(
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
                         trace_audited = False
-                        if stream and include_usage:
+                        tool_loop = bool(tools_list)
+                        # tool_loop resolves through the single-agent passthrough below,
+                        # which already has the complete non-streamed provider response
+                        # (proxy_completion forces stream=False upstream) before framing
+                        # it as SSE -- its usage is knowable and honestly reportable, so
+                        # only the multi-step conduct path (response_format without
+                        # tools) stays fail-closed: its usage would reflect only the
+                        # final synthesizer step, undercounting the true workflow cost.
+                        if stream and include_usage and not tool_loop:
                             raise RequestError(
                                 400,
                                 "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with tools or response_format",
+                                "stream_options.include_usage=true is not supported with response_format",
                             )
-                        tool_loop = bool(tools_list)
                         if (
                             tool_loop
                             and "include_orchestration_trace" in body
@@ -6782,9 +6781,6 @@ def build_server(
                                         response_payload,
                                         model=model_name,
                                         include_usage=include_usage,
-                                        prompt_text=json.dumps(
-                                            body.get("messages", []), ensure_ascii=False
-                                        ),
                                     )
                                 )
                             )

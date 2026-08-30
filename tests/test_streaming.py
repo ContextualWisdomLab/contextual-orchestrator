@@ -135,7 +135,6 @@ def test_structured_sse_tool_call_deltas_include_indices() -> None:
         },
         model="tool-model",
         include_usage=False,
-        prompt_text="tool call",
     )
 
     tool_deltas = [
