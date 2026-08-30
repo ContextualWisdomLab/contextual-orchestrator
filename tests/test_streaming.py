@@ -146,6 +146,53 @@ def test_structured_sse_tool_call_deltas_include_indices() -> None:
     assert [tool_call["index"] for tool_call in tool_deltas] == [0, 1]
 
 
+def test_structured_sse_tool_call_deltas_coexist_with_reported_usage() -> None:
+    """tool_calls framing and usage framing are independent -- both must survive together.
+
+    Regression for the 2026-08-30 stream_options/tools incident: usage
+    emission used to be unreachable for any tools request (server.py raised
+    400 before this function could ever run with include_usage=True). This
+    proves the two already-independent code paths inside this one function
+    combine correctly now that the HTTP-layer gate has been narrowed.
+    """
+    chunks = _chat_response_sse_chunks(
+        {
+            "id": "chatcmpl-tools-usage",
+            "model": "tool-model",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {}},
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+        },
+        model="tool-model",
+        include_usage=True,
+        prompt_text="tool call",
+    )
+
+    tool_deltas = [
+        chunk["choices"][0]["delta"]["tool_calls"][0]
+        for chunk in chunks
+        if chunk["choices"] and "tool_calls" in chunk["choices"][0]["delta"]
+    ]
+    assert [tool_call["index"] for tool_call in tool_deltas] == [0]
+
+    usage_chunks = [chunk for chunk in chunks if chunk["choices"] == []]
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0]["usage"] == {
+        "prompt_tokens": 7,
+        "completion_tokens": 3,
+        "total_tokens": 10,
+        "usage_source": "reported",
+    }
+
+
 def test_structured_nonstream_provider_drops_gateway_stream_options() -> None:
     orchestrator = TaskOrchestrator(
         [ModelAgent("structured_agent", "structured-model")],

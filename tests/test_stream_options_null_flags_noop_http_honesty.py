@@ -172,11 +172,24 @@ def test_http_chat_accepts_include_usage_true() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_structured_streams_include_usage() -> None:
+def test_http_chat_tools_streams_include_reported_usage() -> None:
+    """Single-agent tools passthrough streams the provider's real reported usage.
+
+    Regression for the 2026-08-30 stream_options/tools incident: this
+    combination used to be rejected with a blanket 400 even though the
+    upstream call here is always a single non-streaming provider request
+    whose real usage field survives untouched into the SSE framing.
+    """
     server, thread, port = _server()
     try:
-        for structured in (
+        status, content_type, sse = _post_raw(
+            port,
+            "/v1/chat/completions",
             {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured usage"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
                 "tools": [
                     {
                         "type": "function",
@@ -185,25 +198,51 @@ def test_http_chat_structured_streams_include_usage() -> None:
                             "parameters": {"type": "object", "properties": {}},
                         },
                     }
-                ]
+                ],
             },
-            {"response_format": {"type": "json_object"}},
-        ):
-            status, _, body = _post_raw(
-                port,
-                "/v1/chat/completions",
-                {
-                    "model": "mock-planner",
-                    "messages": [
-                        {"role": "user", "content": "structured usage"}
-                    ],
-                    "stream": True,
-                    "stream_options": {"include_usage": True},
-                    **structured,
-                },
-            )
-            assert status == 400, (structured, body)
-            assert "invalid_stream_options" in body
+        )
+        assert status == 200, sse
+        assert content_type.startswith("text/event-stream")
+        frames = [
+            json.loads(frame[len("data: "):])
+            for frame in sse.split("\n\n")
+            if frame.startswith("data: ") and frame != "data: [DONE]"
+        ]
+        assert frames
+        usage_frames = [frame for frame in frames if frame.get("choices") == []]
+        assert len(usage_frames) == 1, frames
+        usage = usage_frames[0]["usage"]
+        assert usage["usage_source"] == "reported"
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+        assert usage["total_tokens"] == 0
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_response_format_only_streams_still_reject_include_usage() -> None:
+    """response_format-only (conduct mode, no tools) keeps failing closed.
+
+    Its usage comes from a multi-step workflow's cost ledger, which may be
+    unmeasured -- unlike single-agent tools passthrough, which always has
+    the one upstream call's own real, reported usage available.
+    """
+    server, thread, port = _server()
+    try:
+        status, _, body = _post_raw(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured usage"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_stream_options" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -234,6 +273,7 @@ if __name__ == "__main__":
     test_http_completions_accepts_stream_options_null_flags_without_stream()
     test_http_responses_accepts_stream_options_null_flags()
     test_http_chat_accepts_include_usage_true()
-    test_http_chat_structured_streams_include_usage()
+    test_http_chat_tools_streams_include_reported_usage()
+    test_http_chat_response_format_only_streams_still_reject_include_usage()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")
