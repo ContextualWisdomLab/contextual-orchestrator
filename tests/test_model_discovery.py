@@ -27,6 +27,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _fetch_json,
     _price_per_1k,
     agent_from_discovered,
     agent_id_for,
@@ -421,6 +422,61 @@ def test_nvidia_nim_metadata_failure_keeps_availability_but_not_free() -> None:
         discovered = discover_provider_models(source)
 
     assert discovered[0].is_free is False
+
+
+def test_fetch_json_sends_a_stable_user_agent_on_every_request() -> None:
+    """Models.dev rejects urllib's default UA with HTTP 403 (Cloudflare error 1010);
+
+    every request -- authenticated or not -- must carry an identifying UA so the
+    Models.dev join (and any other unauthenticated discovery call) does not
+    silently degrade to metadata-unavailable.
+    """
+    captured: list[object] = []
+
+    def urlopen(request, timeout=None):
+        captured.append(request)
+        return _Response({"data": []})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        _fetch_json("https://models.dev/api.json", timeout=5.0)
+        _fetch_json("https://api.openai.com/v1/models", api_key="sk-test", timeout=5.0)
+
+    assert len(captured) == 2
+    for request in captured:
+        user_agent = request.get_header("User-agent")
+        assert user_agent, "every discovery request must carry a User-Agent header"
+        assert "urllib" not in user_agent.lower()
+    # The authorization header must still be scoped to the authenticated call only.
+    assert captured[0].get_header("Authorization") is None
+    assert captured[1].get_header("Authorization") == "Bearer sk-test"
+
+
+def test_nvidia_nim_join_requires_the_user_agent_header_to_avoid_a_403() -> None:
+    """Regression for the exact live failure: a fetch mock that 403s without a UA."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            if not request.get_header("User-agent"):
+                raise urllib.error.HTTPError(
+                    request.full_url, 403, "Forbidden", {}, None
+                )
+            return _Response(
+                {"nvidia": {"models": {"meta/llama-3.1-8b-instruct": {"cost": {"input": 0, "output": 0}}}}}
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is True
 
 
 def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() -> None:

@@ -31,16 +31,17 @@ success_criteria:
 explicit `cost:free` evidence. `DiscoveredModel.is_free` is set once, at parse
 time, in `_parse_openai_compatible` (`_pricing_is_free`, unless a merged row
 already carries an explicit `is_free` boolean), which requires a provider's
-own model-list response to carry a real per-token price of exactly zero. Of this
-gateway's five configured provider sources, only OpenRouter's own API ever
-reports real pricing, and OpenRouter is deliberately `evidence_only=True`
+own model-list response to carry a real per-token price of exactly zero. Of
+this gateway's six configured provider sources, only OpenRouter's own API
+ever reports real pricing, and OpenRouter is deliberately `evidence_only=True`
 (commit `952996ec`, a ZDR-privacy hardening that stays untouched) and so never
-serves inference. `openai`, `nvidia_nim`, `nvidia_nim_sub`, and `bytez` never
-report pricing in their own `/v1/models` responses, so `is_free` was never
-`True` for any of them. `orchestrator/free` was therefore structurally empty
-in practice: the one provider ADR 0032 already cross-references against
-Models.dev to recover a price signal, OpenCode Zen, is `bootstrap_required =
-False` and not always registered, leaving the pool with no reliable member.
+serves inference. Of the remaining five, `openai`, `nvidia_nim`,
+`nvidia_nim_sub`, and `bytez` never report pricing in their own `/v1/models`
+responses, so `is_free` was never `True` for any of them. `orchestrator/free`
+was therefore structurally empty in practice: the one provider ADR 0032
+already cross-references against Models.dev to recover a price signal,
+OpenCode Zen, is `bootstrap_required = False` and not always registered,
+leaving the pool with no reliable member.
 
 ADR 0032 already solved exactly this gap for OpenCode Zen: intersect its
 `/zen/v1/models` availability response with the `opencode` catalog in
@@ -152,10 +153,10 @@ touches can turn a paid model free.
 - `openai` contributes nothing to the free pool today, by design, and will
   self-correct with no code change if OpenAI ever lists a genuinely free
   chat model in Models.dev.
-- `discover_all_models` makes one additional outbound HTTPS request in the
-  common case where any of `opencode_zen`/`nvidia_nim`/`nvidia_nim_sub`/
-  `openai` are registered, in exchange for removing what would otherwise be
-  up to three redundant identical fetches.
+- `discover_all_models` makes at most one shared outbound HTTPS request when a
+  supported source is registered. This preserves the prior single fetch for
+  `opencode_zen` and removes up to three duplicate fetches when multiple
+  supported sources are registered.
 
 ## References
 

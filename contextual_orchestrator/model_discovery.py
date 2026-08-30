@@ -30,6 +30,11 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+# Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
+# 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
+# bot signature. A stable, identifying user agent is not a credential and is
+# safe to send on every request, authenticated or not.
+_HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
 # Sentinel distinguishing "no shared Models.dev payload supplied" (fall back to
@@ -171,7 +176,9 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"user-agent": _HTTP_USER_AGENT}
+    if api_key:
+        headers["authorization"] = f"{auth_scheme} {api_key}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
