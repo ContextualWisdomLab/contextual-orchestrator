@@ -2170,3 +2170,23 @@ non-tools case) correctly labels the resulting chunk `usage_source:
 in `server.py` makes this new test fail). No behavior change was needed —
 this closes the coverage gap and corrects the PR's own comment/README/
 CHANGELOG language, which had overclaimed the guarantee.
+
+**TRACKED FOLLOW-UP (2026-08-30, action required once this PR merges):**
+a concurrent session merged `.github#1448`
+(`LLM_DISABLE_STREAMING=true` for Strix against the contextual-orchestrator
+loopback) at 12:15 UTC, before this PR merged. Its own justification is a
+*separate*, real deadlock, not a disagreement with the analysis above:
+`pr_review_merge_scheduler.py::inspect_pr` requires completed Strix
+evidence on a PR's head before it will ever dispatch OpenCode review, so a
+PR fixing Strix's only failure mode could never itself pass the review
+gated behind Strix succeeding — a genuine self-referential deadlock,
+independent of the `stream_options`/`tools` root cause this PR fixes.
+Confirmed with the user this is explicitly a temporary workaround, not the
+resolution: it trades away Strix's real-time SSE streaming to route around
+the gateway bug rather than fixing it. **Once this PR (#925) merges**,
+Strix's `tools` + `stream_options.include_usage=true` requests will
+succeed on their own against `orchestrator/free`, and the
+`LLM_DISABLE_STREAMING` opt-in in `scripts/ci/strix_quick_gate.sh`
+(`.github`) becomes unnecessary technical debt — file a follow-up PR in
+`.github` to revert it and restore real SSE streaming for Strix scans.
+Do not let this workaround become permanent by omission.
