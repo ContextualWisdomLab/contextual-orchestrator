@@ -307,6 +307,40 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
     assert any(agent.id == "openai_gpt_5_5" for agent in reloaded.candidates)
 
 
+def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> None:
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator import __main__ as cli
+
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENAI_API_KEY", "sk-live")
+    db_path = str(tmp_path / "pool.db")
+    stdout = StringIO()
+    closed: list[bool] = []
+
+    class TrackingOrchestrator(TaskOrchestrator):
+        def close(self) -> None:
+            closed.append(True)
+            super().close()
+
+    def urlopen(request, timeout=None):
+        if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
+            return _Response({"data": [{"id": "gpt-5.5"}]})
+        return _Response({"data": []})
+
+    try:
+        with (
+            patch.object(sys, "argv", ["contextual-orchestrator", "discover-models", "--agents-db", db_path]),
+            patch.object(sys, "stdout", stdout),
+            patch.object(cli, "TaskOrchestrator", TrackingOrchestrator),
+            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    assert closed == [True]
+
+
 def test_enable_cheapest_requires_agents_db() -> None:
     set_backend(InMemoryCredentialBackend())
     stderr = StringIO()
@@ -359,12 +393,11 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
         set_backend(None)
 
     report = json.loads(stdout.getvalue())
-    assert report["enabled_agent_ids"] == ["openrouter_cheap_model"]
+    assert report["enabled_agent_ids"] == ["openai_pricey_model"]
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
-    assert by_id["openrouter_cheap_model"].disabled is False
-    assert by_id["openai_pricey_model"].disabled is True
+    assert by_id["openai_pricey_model"].disabled is False
 
 
 def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> None:
@@ -404,7 +437,6 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
 
     report = json.loads(stdout.getvalue())
     assert report["enabled_agent_ids"] == [
-        "openrouter_router_model",
         "nvidia_nim_nim_model",
         "openai_openai_model",
     ]

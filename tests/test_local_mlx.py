@@ -860,7 +860,12 @@ def test_patch_agent_rejects_disabling_last_enabled_agent() -> None:
 
 
 def test_stream_chat_forwards_local_template_arguments() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent(
+        "local_agent",
+        "local-model",
+        base_url="mlx://127.0.0.1:8080/v1",
+        stream_usage_supported=True,
+    )
     client = ModelClient(chat_template_args={"enable_thinking": False})
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
         client, "_stream_send", return_value=iter(("delta",))
@@ -868,6 +873,7 @@ def test_stream_chat_forwards_local_template_arguments() -> None:
         assert list(client.stream_chat(agent, [{"role": "user", "content": "ping"}])) == ["delta"]
 
     assert stream_send.call_args.args[1]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert stream_send.call_args.args[1]["stream_options"] == {"include_usage": True}
 
 
 if __name__ == "__main__":

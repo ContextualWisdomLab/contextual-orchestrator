@@ -25,6 +25,7 @@ from contextual_orchestrator.orchestrator import (
     _validate_batch_results,
     _validate_provider_probe_timeout,
 )
+from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
 
 def _orch(*agents: ModelAgent, **kwargs) -> TaskOrchestrator:
@@ -401,7 +402,6 @@ def test_stream_preserves_tool_stop_contract_mid_stream() -> None:
     agent = _streaming_agent()
     client = ModelClient()
     from contextual_orchestrator.tool_fallback import (
-        ToolExecutionError,
         ToolFallbackAction,
         ToolFallbackStoppedError,
         ToolFailureDecision,
@@ -456,8 +456,10 @@ def test_stream_wraps_mid_stream_transport_failure_without_provider_text() -> No
     ):
         iterator = client._stream_send(agent, {})
         assert next(iterator) == "par"
-        with pytest.raises(RuntimeError, match="streaming request failed"):
+        with pytest.raises(ProviderUpstreamError) as excinfo:
             next(iterator)
+    assert excinfo.value.error_code == "provider_connection_error"
+    assert "connection reset" not in str(excinfo.value)
 
 
 # -- batch success paths ------------------------------------------------------------
@@ -494,8 +496,10 @@ def test_batch_chat_wraps_provider_failures_without_provider_text() -> None:
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
         client, "_batch_run", side_effect=ValueError("provider secret detail")
     ):
-        with pytest.raises(RuntimeError, match="batch request failed") as excinfo:
+        with pytest.raises(ProviderUpstreamError) as excinfo:
             client.batch_chat(agent, requests)
+    assert excinfo.value.error_code == "api_error"
+    assert excinfo.value.transport == "batch"
     assert "secret detail" not in str(excinfo.value)
 
 

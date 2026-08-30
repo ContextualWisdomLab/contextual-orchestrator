@@ -7,7 +7,7 @@ and/or :class:`~contextual_orchestrator.cost_ledger.PriceBook` rows.
 
 Credentials are never fabricated: a provider resolves through :func:`get_credential`
 (the KV registry), and a provider with nothing registered is silently skipped so
-registering a subset of the five supported keys still works. Stdlib only
+registering a subset of the declared provider keys still works. Stdlib only
 (``urllib.request``), matching this repo's dependency-free transport convention.
 """
 
@@ -26,7 +26,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .chat_capability import is_general_chat_agent_model_id
+from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
 from .credentials import get_credential
 from .orchestrator import ModelAgent, ModelClient
 
@@ -78,6 +78,8 @@ class ProviderModelSource:
     task_filter: str = ""
     capabilities: tuple[str, ...] = ()
     privacy_policy_urls: tuple[str, ...] = ()
+    bootstrap_required: bool = True
+    evidence_only: bool = False
 
 
 def configured_gateway_source(
@@ -147,6 +149,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
+        evidence_only=True,
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -154,6 +157,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://opencode.ai/zen/v1/models",
         chat_base_url="https://opencode.ai/zen/v1",
         capabilities=("chat",),
+        bootstrap_required=False,
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -180,7 +184,6 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         capabilities=("chat",),
     ),
 )
-
 
 @dataclass(frozen=True)
 class ModelUnitPrice:
@@ -229,6 +232,8 @@ class DiscoveredModel:
     supports_no_training: bool | None = None
     supports_no_prompt_retention: bool | None = None
     privacy_policy_urls: tuple[str, ...] = ()
+    zdr_capable: bool = False
+    evidence_only: bool = False
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -871,6 +876,56 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
     return _deduplicate_discovered_models(discovered)
 
 
+def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
+    """Read public OpenRouter ZDR evidence for discovered provider models."""
+    api_key = get_credential("OPENROUTER_API_KEY") or ""
+    try:
+        payload = _fetch_json(
+            _OPENROUTER_ZDR_ENDPOINTS_URL,
+            api_key=api_key,
+            timeout=timeout,
+        )
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return set()
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    return {
+        row["model_id"].casefold()
+        for row in rows or ()
+        if isinstance(row, dict)
+        and isinstance(row.get("model_id"), str)
+        and row["model_id"].strip()
+    }
+
+
+def _apply_discovered_model_evidence(
+    discovered: list[DiscoveredModel], zdr_model_ids: set[str]
+) -> list[DiscoveredModel]:
+    """Apply model-level ZDR evidence to matching rows from every provider.
+
+    Providers may expose the same canonical model id as OpenRouter while using
+    a different upstream endpoint. Exact canonical ids are the only portable
+    identity; suffix matching would transfer privacy evidence to an unrelated
+    model that merely shares a display name.
+    """
+    if not zdr_model_ids:
+        return discovered
+    exact_ids = {model_id.strip().casefold() for model_id in zdr_model_ids if model_id.strip()}
+
+    def matches(model_id: str) -> bool:
+        normalized = model_id.strip().casefold()
+        return normalized in exact_ids
+
+    return [
+        replace(
+            model,
+            zdr_capable=not model.evidence_only and matches(model.model_id),
+        )
+        for model in discovered
+    ]
+
+
 def discover_provider_models(
     source: ProviderModelSource, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
 ) -> list[DiscoveredModel]:
@@ -937,8 +992,10 @@ def discover_provider_models(
             metadata = None
         payload = _merge_configured_gateway_metadata(payload, metadata)
     if source.style == "bytez":
-        return _parse_bytez(payload, source)
-    return _parse_openai_compatible(payload, source)
+        discovered = _parse_bytez(payload, source)
+    else:
+        discovered = _parse_openai_compatible(payload, source)
+    return [replace(model, evidence_only=source.evidence_only) for model in discovered]
 
 
 def discover_all_models(
@@ -958,7 +1015,13 @@ def discover_all_models(
             discovered.extend(discover_provider_models(source, timeout=timeout))
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    return _deduplicate_discovered_models(discovered), errors
+    # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
+    # matching privacy evidence for discovered models from other providers. It
+    # is never selected as an inference upstream here.
+    return _apply_discovered_model_evidence(
+        _deduplicate_discovered_models(discovered),
+        _openrouter_zdr_model_ids(timeout=timeout),
+    ), errors
 
 
 def openrouter_paid_inference_available(
@@ -1010,7 +1073,7 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
-        *(("privacy:zdr",) if discovered.supports_zero_data_retention is True else ()),
+        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is True or discovered.zdr_capable) else ()),
         *(("privacy:no_zdr",) if discovered.supports_zero_data_retention is False else ()),
         *(("privacy:no_training",) if discovered.supports_no_training is True else ()),
         *(("privacy:training_only",) if discovered.supports_no_training is False else ()),
@@ -1020,15 +1083,35 @@ def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
 
 
 def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
-    """Require explicit chat evidence when a provider supplied capabilities."""
-    return (
-        (not discovered.capabilities or "chat" in discovered.capabilities)
-        and is_general_chat_agent_model_id(discovered.model_id)
+    """Return whether a discovered row is chat-compatible before serving policy.
+
+    Provider-declared capabilities/modalities remain authoritative when
+    present. The model-id heuristic is only the fallback for bare
+    OpenAI-compatible listings that omit structured capability metadata.
+    """
+    return is_general_chat_candidate(
+        discovered.model_id,
+        capabilities=discovered.capabilities,
+        output_modalities=discovered.output_modalities,
+    )
+
+
+def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
+    """Return whether a discovered row may become an ordinary chat agent.
+
+    Explicit catalog metadata is authoritative when present. A provider may
+    expose a media-only model with a generic identifier, so the model-name
+    heuristic is only a fallback for rows with no capability or modality data.
+    """
+    return not discovered.evidence_only and is_discovered_chat_candidate(
+        discovered
     )
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
     """Build a disabled capability agent or reject a chat-ineligible record."""
+    if discovered.evidence_only:
+        raise ValueError("evidence-only model cannot become a serving agent")
     if not any(
         capability not in {"chat", "response_format"}
         for capability in discovered.capabilities
@@ -1048,6 +1131,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(("cost:free",) if discovered.is_free else ()),
             *privacy_tags_for_discovered(discovered),
             *discovered.capabilities,
+            *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
         ),
@@ -1173,7 +1257,7 @@ def select_cheapest_discovered_agent(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_discovered_chat_candidate(model)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return None
@@ -1189,7 +1273,7 @@ def select_top_n_cheapest_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_discovered_chat_candidate(model)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return []
@@ -1218,7 +1302,7 @@ def select_bootstrap_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_discovered_chat_candidate(model)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return []

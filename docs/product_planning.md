@@ -48,9 +48,20 @@ Enterprise teams want the benefit of collective model intelligence without makin
 | Access list inspector | Conductor access lists are the concrete mechanism for context visibility and auditability. |
 | Evaluation replay | TRINITY and Fugu both optimize against measured task outcomes; product teams need replay before learned routing exists. |
 | Analytics snapshot | Pilot readiness needs source-backed local KPIs for API adoption, trace completeness, policy-safe routing, provider exclusions, and locale readiness before production telemetry exists. |
+| Stream usage evidence | Streamed multi-agent Responses requests need per-workflow usage and cost evidence without treating an omitted provider usage frame as zero-cost or answer-text estimates. |
 | Sales readiness gate | Enterprise evaluation needs a concrete pass/warn/fail checklist for API compatibility, admin evidence, trace evidence, replay, security posture, analytics truthfulness, locale parity, and provider egress safety without overstating production certification. |
 | Commercial readiness gate | High-value buyer review needs a KRW 2,000,000,000 due-diligence checklist that rolls up product, security, operations, audit, documentation, support, and value-case evidence without claiming a valuation guarantee. |
 | Locale bundle editor | i18n support is an explicit product requirement and should be reviewable as data. |
+
+## CEFR Language-Observation Slice
+
+The experimental language-assessment slice provides provider-neutral,
+criterion-level writing and speaking observations from independently blinded
+raters. It preserves opaque task, rubric, anchor, and source-evidence
+references for downstream assessment owners, but does not assign a CEFR level,
+score, placement, certification, or psychometric result. Execution remains
+fail-closed until the released `cwl_cefr_language_assessment/v1` and
+fast-mlsirm contracts are available.
 
 ## Deliberate Non-goals For This Repository
 
@@ -58,6 +69,10 @@ Enterprise teams want the benefit of collective model intelligence without makin
 - No visual workflow builder. Tables and trace details are enough until operators need to author complex topologies.
 - No recursive topology UI. Conductor recursion is a future scaling knob, not an MVP control.
 - No billing, SSO, or RBAC implementation in the stdlib lab. Document the need; add it with the enterprise stack.
+- No CEFR standard setting, human-review persistence, source-evidence
+  authorization, or many-facet calibration in this gateway repository. Those
+  remain owned by the interoperability, assessment, and psychometrics
+  components.
 
 ## Acceptance Criteria
 
@@ -65,5 +80,6 @@ Enterprise teams want the benefit of collective model intelligence without makin
 - The management console prioritizes traceability and policy control over decorative SaaS chrome.
 - Every new product surface maps to one of: compatible API adoption, model/group pool management, cost and policy control, trace audit, access-list evidence, evaluation replay, or i18n.
 - Local runtime analytics are clearly labeled as process-local evidence and not production telemetry.
+- Streamed Responses cost rollups are per-workflow and per-trace-step; missing provider usage is explicitly unavailable, never estimated from answer text.
 - Sales readiness is reported as local enterprise-pilot evidence with pass/warn/fail remediation, not as a production compliance certificate.
 - Commercial readiness is reported as high-value buyer due-diligence evidence with a KRW 2,000,000,000 target value caveat, not as a sale guarantee.

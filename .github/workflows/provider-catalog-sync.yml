@@ -100,14 +100,9 @@ jobs:
           from pathlib import Path
 
           report = json.loads(Path('provider-bootstrap-report.json').read_text(encoding='utf-8'))
-          expected = {
-              'NVIDIA_NIM_API_KEY',
-              'NVIDIA_NIM_API_KEY_SUB',
-              'BYTEZ_API_KEY',
-              'OPENROUTER_API_KEY',
-              'OPENCODE_ZEN_API_KEY',
-              'OPENAI_API_KEY',
-          }
+          from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
+
+          expected = set(PROVIDER_CREDENTIAL_NAMES)
           registered = set(report['registered_credentials'])
           if registered != expected:
               raise SystemExit(f'credential inventory mismatch: {sorted(expected - registered)}')
@@ -134,14 +129,9 @@ jobs:
           from pathlib import Path
 
           report = Path('provider-bootstrap-report.json').read_text(encoding='utf-8')
-          names = (
-              'NVIDIA_NIM_API_KEY',
-              'NVIDIA_NIM_API_KEY_SUB',
-              'BYTEZ_API_KEY',
-              'OPENROUTER_API_KEY',
-              'OPENCODE_ZEN_API_KEY',
-              'OPENAI_API_KEY',
-          )
+          from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
+
+          names = PROVIDER_CREDENTIAL_NAMES
           leaked = [
               name
               for name in names

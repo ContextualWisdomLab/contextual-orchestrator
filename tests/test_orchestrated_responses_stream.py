@@ -11,6 +11,7 @@ import urllib.error
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.server import (
     RequestError,
     SecurityConfig,
@@ -80,10 +81,69 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         and event["event_detail"]["response_streamed"] is True
         for event in orchestrator._analytics_events
     )
+    runs = list(orchestrator._workflow_runs.values())
+    assert len(runs) == 1
+    run = runs[0]
+    assert run["mode"] == "conduct"
+    assert run["prompt_text"] == "Research, implement, and verify a safe design."
+    assert run["policy_snapshot"] == orchestrator.policy.as_dict()
+    assert orchestrator.get_access_report(run["workflow_run_id"])["policy_snapshot"] == run[
+        "policy_snapshot"
+    ]
+    assert orchestrator.analytics_snapshot()["measurement_status"] == "local_runtime_snapshot"
     if model == "orchestrator/free":
         assert {step["agent_id"] for step in orchestrator.conduct(
             [{"role": "user", "content": "Research and verify this."}], model_name=model
         )["trace"]} == {"free_worker"}
+
+
+def test_streamed_responses_records_unavailable_usage_without_estimating_answer() -> None:
+    token = "responses_stream_usage_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("route_worker", "mock-model", tags=("reasoning", "writing"))
+    ])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({"model": "orchestrator/auto", "input": "hello", "stream": True}).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    all_events = []
+    try:
+        for _ in range(2):
+            with urllib.request.urlopen(request, timeout=5) as response:
+                all_events.append([
+                    json.loads(line[6:])
+                    for line in response.read().decode().splitlines()
+                    if line.startswith("data: {")
+                ])
+    finally:
+        server.shutdown()
+
+    for events in all_events:
+        completed = events[-1]["response"]
+        assert completed["usage"] is None
+        assert completed["cost"]["measurement_status"] == "unavailable"
+        assert completed["cost"]["cost_amount"] is None
+        assert completed["usage_record_ids"]
+    rows = coordinator.ledger.records()
+    assert len(rows) == sum(
+        len(events[-1]["response"]["usage_record_ids"]) for events in all_events
+    )
+    assert len({row["usage_record_id"] for row in rows}) == len(rows)
+    assert all(row["workflow_run_id"] for row in rows)
+    assert len({row["workflow_run_id"] for row in rows}) == 2
+    assert all(row["request_channel"] == "stream" for row in rows)
+    assert all(row["measurement_status"] == "unavailable" for row in rows)
+    assert all(row["prompt_tokens"] == row["completion_tokens"] == 0 for row in rows)
 
 
 def test_conduct_preserves_responses_instructions_for_every_stage() -> None:
@@ -234,6 +294,21 @@ def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
         )
 
 
+def test_virtual_capability_auto_rejects_non_zdr_pool() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",))]
+    )
+
+    with orchestrator.request_policy(True), pytest.raises(
+        RequestError, match="no enabled embedding model"
+    ) as raised:
+        _require_pool_model(
+            orchestrator, TaskOrchestrator.AUTO_MODEL, required_capability="embedding"
+        )
+
+    assert raised.value.status == 400
+
+
 def test_virtual_text_models_require_an_enabled_eligible_pool() -> None:
     """AUTO and FREE fail as client errors before an empty pool reaches routing."""
     empty = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")])
@@ -281,6 +356,108 @@ def test_http_free_virtual_model_returns_400_when_pool_is_empty() -> None:
         server.shutdown()
     assert raised.value.code == 400
     assert "no enabled zero-cost model" in raised.value.read().decode()
+
+
+def test_http_zdr_only_request_filters_the_runtime_candidate_pool() -> None:
+    """The request bool, not a provider-specific model list, controls selection."""
+    token = "zdr_request_token"
+    paid = ModelAgent("paid_worker", "paid-model", group_name="shared_model")
+    private = ModelAgent(
+        "zdr_worker",
+        "zdr-model",
+        tags=("privacy:zdr",),
+        group_name="shared_model",
+    )
+    orchestrator = TaskOrchestrator([paid, private])
+    coordinator = CostRoutingCoordinator(orchestrator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps({
+            "model": "orchestrator/auto",
+            "input": "hello",
+            "zdr_only": True,
+        }).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+    finally:
+        server.shutdown()
+
+    workflow = orchestrator.get_workflow_run(next(iter(orchestrator._run_order)))
+    assert {step["agent_id"] for step in workflow["trace"]} == {private.id}
+    assert coordinator.ledger.store.query()
+
+
+def test_http_virtual_responses_preserves_message_array_and_sampling_controls() -> None:
+    token = "responses_array_controls_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("free_worker", "free-model", tags=("reasoning", "cost:free"))
+    ])
+    observed_messages: list[list[dict]] = []
+    observed_settings: list[dict] = []
+    original_chat = orchestrator.client.chat
+
+    def recording_chat(agent, messages, *args, **kwargs):
+        observed_messages.append(messages)
+        observed_settings.append(orchestrator.client.request_settings_snapshot())
+        return original_chat(agent, messages, *args, **kwargs)
+
+    orchestrator.client.chat = recording_chat  # type: ignore[method-assign]
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+        data=json.dumps(
+            {
+                "model": "orchestrator/free",
+                "input": [
+                    {"type": "message", "role": "system", "content": "context"},
+                    {"type": "message", "role": "user", "content": "question"},
+                    {"type": "message", "role": "assistant", "content": "history"},
+                ],
+                "temperature": 0.73,
+                "top_p": 0.81,
+                "presence_penalty": 0.2,
+                "frequency_penalty": -0.3,
+                "max_output_tokens": 33,
+            }
+        ).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert observed_messages
+    assert any(
+        [message.get("role") for message in messages][1:4]
+        == ["system", "user", "assistant"]
+        for messages in observed_messages
+    )
+    assert observed_settings
+    assert all(
+        settings["temperature"] == 0.73
+        and settings["top_p"] == 0.81
+        and settings["presence_penalty"] == 0.2
+        and settings["frequency_penalty"] == -0.3
+        and settings["max_output_tokens"] == 33
+        for settings in observed_settings
+    )
 
 
 @pytest.mark.parametrize(
@@ -339,3 +516,39 @@ def test_stream_failure_emits_terminal_responses_event() -> None:
     assert event["event_detail"]["status_code"] == 500
     assert event["event_detail"]["transport_status_code"] == 200
     assert event["event_detail"]["response_status"] == "failed"
+
+
+
+def test_stream_usage_failure_remains_inside_the_started_sse_protocol(monkeypatch) -> None:
+    """A post-header ledger failure emits Responses failure framing, never JSON HTTP."""
+    token = "responses_stream_usage_failure_token"
+    orchestrator = TaskOrchestrator([
+        ModelAgent("workflow_agent", "mock-model", base_url="mock://provider")
+    ])
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    def fail_usage(**_kwargs):
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(coordinator, "record_stream_usage", fail_usage)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        stream = _post(server, token, "orchestrator/auto")
+    finally:
+        server.shutdown()
+
+    events = [
+        json.loads(line[6:])
+        for line in stream.splitlines()
+        if line.startswith("data: {")
+    ]
+    assert events[-1]["type"] == "response.failed"
+    assert events[-1]["response"]["error"]["code"] == "usage_recording_failed"
+    assert all(event["type"] != "response.completed" for event in events)
+    assert stream.rstrip().endswith("data: [DONE]")

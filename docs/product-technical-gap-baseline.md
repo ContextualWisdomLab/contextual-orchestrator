@@ -129,6 +129,383 @@ This document serves as the baseline for the Contextual Orchestrator (an enterpr
 
 # Product and Technical Gap Baseline
 
+## 2026-08-29 batch-routing object-authorization slice
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The accepted workflow-object
+authorization decision now has a bounded implementation branch for its listed
+batch-job gap: HTTP-created batch routing jobs carry a non-secret
+authenticated-principal digest, and both status and result retrieval require
+the same digest. An external verifier can provide a stable tenant/subject key
+through the optional principal resolver; bool-only adapters retain the
+documented bearer-digest fallback. A mismatch is returned as the existing generic
+`batch_job_not_found` response before the backend is called; results also keep
+the separate trace-purpose gate. Local exact-branch evidence is `61 passed`
+across the cost-router, HTTP, and OpenAPI contract suites. This is branch
+evidence only until the implementation reaches protected `main` through the
+normal review, Checks, and approval gates.
+
+The remaining issue #117 gaps are unchanged: tenant/resource/purpose/lifetime
+claims from an external identity adapter, explicit legacy single-token
+production migration, and ownership for other evidence surfaces still need
+their own decisions and acceptance evidence.
+## 2026-08-29 streamed Responses usage boundary
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. This branch closes the bounded
+Responses streaming cost-accounting gap: provider SSE usage, when supplied, is
+kept on the served workflow trace; every completed trace step is recorded as a
+`request_channel=stream` ledger row; and a provider that omits usage produces
+an explicit `measurement_status=unavailable` row with no token estimate from
+the synthesized answer. The final Responses event exposes standard
+`input_tokens`/`output_tokens`/`total_tokens` only when every step is measured,
+plus gateway cost status and usage-record identifiers.
+
+This follows the Responses API's `response.completed` usage shape and the
+OpenTelemetry GenAI input/output usage vocabulary. A stream can end before a
+provider's final usage frame, so unavailable is retained as an honest state;
+it is never represented as free or estimated. The exact branch proof is the
+focused streaming, ledger, disconnect, and cost-router tests; protected
+Checks, independent approval, and normal merge remain required.
+
+The remaining customer-visible gaps are unchanged: true answer-token
+streaming still needs a cancellable asynchronous dependency graph; routing
+observations remain process-local; and live NIM quality/cost evidence remains
+open under issue #86.
+
+## 2026-08-29 legacy single-token production gate
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The current implementation branch
+adds fail-closed `--production`/`--allow-public-bind` CLI gates: server startup
+must choose split admin/inference credentials, and the insecure admin-session
+cookie option is rejected; every non-loopback bind also requires the explicit
+public-bind opt-in. Canonical `compose.yaml` now seeds those two names into the
+KV from separate stdin-only secrets. Single-token mode remains available for
+explicit local development, while split static credentials still do not grant
+the separate trace purpose without a verified external adapter. Branch evidence is
+local focused CLI/Compose/authorization coverage only until normal protected
+review, Checks, and approval gates complete.
+
+The remaining issue #117 gap is the external authorization adapter's
+tenant/resource/purpose/lifetime context; PR #909 separately carries batch
+routing ownership and is not protected-main evidence here.
+## 2026-08-29 05:26 KST exact-head protected-queue snapshot
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The ten-PR open queue was
+re-read at the exact heads below. Every PR has zero qualifying independent
+approvals and zero unresolved review threads; no protected control was
+bypassed.
+
+| PR | Exact head | Current protected evidence |
+| ---: | --- | --- |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `13432f3e4836df9bc8b3c83778ca0faf09c04d93` | `BLOCKED`; ordinary/security checks pass, OpenCode fails closed |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `8a1654ead5a23e985c9bf1d6d500602283f05ab8` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode fails closed |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `ec17d4e0b77fe10c8087c587cb748d4027fe4d0f` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `29d9493fcdbf11aaa3d43bc6c7e10857bb85ca73` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed on provider evidence |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `e12d334cf307b5bda1253a020ea6a13cb0e243f4` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `cc50d934e78d12b5edc8640f9ac9dd52d2158b13` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode fails closed |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `2f7b177a1631e3f1c845748e2a4bd312664e0759` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, required Strix context is absent, OpenCode fails closed |
+| [#909](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/909) | `d3d2e31df62a5b773ae5077dd538472fa2a6ec18` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed (`STRIX_PROVIDER_UNAVAILABLE`) |
+| [#910](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/910) | `f46f11473d96e76282cb908f9ec338588fa14472` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, Full and Atheris pass, Strix remains in progress, OpenCode fails closed |
+
+The current required branch contexts are still `opencode-review` and `strix`.
+For #910, the Full and Atheris jobs are now terminal-successful, but the Strix
+status remains in progress and its run metadata is not retrievable (`404`), so
+it is not passing evidence. #908 has no current Strix check result at all, so
+the required context is absent rather than successful. The OpenCode failures
+state that no authenticated current-head verdict exists; they are not review
+approvals. All rows remain blocked by both external gate evidence and the
+absence of a qualifying independent approval.
+
+## 2026-08-29 04:06 KST exact-head protected-queue snapshot
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The eight-PR open queue was
+re-read at the exact heads below. Every PR has zero qualifying independent
+approvals and zero unresolved review threads after the current-head review
+reply on #903; no protected control was bypassed.
+
+| PR | Exact head | Current protected evidence |
+| ---: | --- | --- |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `13432f3e4836df9bc8b3c83778ca0faf09c04d93` | `BLOCKED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `8a1654ead5a23e985c9bf1d6d500602283f05ab8` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `ec17d4e0b77fe10c8087c587cb748d4027fe4d0f` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode and Strix fail closed |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `29d9493fcdbf11aaa3d43bc6c7e10857bb85ca73` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed and Strix fails closed on provider `500` |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `e12d334cf307b5bda1253a020ea6a13cb0e243f4` | `BLOCKED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed and Strix remains in progress |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `bbad9c2653a8d4f3af198f09b4d82e561f5abbc4` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode and Strix fail closed |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `bf6fbb7d372922088bd075b395543b325d91ed78` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema and ordinary security checks pass, OpenCode fails closed |
+
+The current OpenCode failures report that no authenticated `opencode-agent`
+review exists for the exact head; they are not review approvals. #901's Strix
+log records three provider/backend `500 internal_error` attempts with no
+structured report, so its required check failed closed on unavailable external
+evidence. #903's local CEFR/reasoning/passthrough regression set is `80
+passed`; its hosted Strix result is still pending at this snapshot.
+
+## 2026-08-29 03:35 KST exact-head protected-queue snapshot
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`; the open queue still contains
+eight PRs. Every exact head below has zero unresolved threads and zero
+qualifying independent approvals. Normal protected controls remain required;
+no bypass was used.
+
+| PR | Exact head | Current protected evidence |
+| ---: | --- | --- |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `13432f3e4836df9bc8b3c83778ca0faf09c04d93` | `BLOCKED`; ordinary/security checks pass, Full and Atheris run, OpenCode fails closed |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `8a1654ead5a23e985c9bf1d6d500602283f05ab8` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security and Full/Atheris checks pass, OpenCode fails closed |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `ec17d4e0b77fe10c8087c587cb748d4027fe4d0f` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `3adb441a84b6d6d2e0bc866b64281c81acaf70af` | `BLOCKED/REVIEW_REQUIRED`; Full/Atheris/Python/Noema run, Strix runs, earlier ordinary/security checks pass, OpenCode fails closed |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `a0be90cdc401aa6322e5ea7174c5b78efea4b824` | `BLOCKED/REVIEW_REQUIRED`; base update is pushed and hosted checks are rebuilding |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `dddb2026fe591df5bd071b6441ff15272f5d7cd8` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security and Strix checks pass, Full/Atheris run, OpenCode fails closed; this documentation commit will advance its self-referential head |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `bf6fbb7d372922088bd075b395543b325d91ed78` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode fails closed |
+
+The OpenCode and Strix failures are hosted provider-gate outcomes, not local
+passing evidence. #857's TLS runner repair is at a fresh exact head, #901
+keeps authenticated OpenRouter discovery routable while using its ZDR endpoint
+as privacy evidence, and #903 is now main-aligned through a normal merge.
+
+## 2026-08-29 03:23 KST exact-head protected-queue snapshot
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The open protected queue has
+eight PRs. The table records mixed mergeability, including a `BEHIND` entry, and
+every PR is still blocked by protected review requirements; all have zero
+unresolved threads and zero qualifying approvals on the exact head. No bypass
+was used.
+
+| PR | Exact head | Current protected evidence |
+| ---: | --- | --- |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `31059a6b383912fcdf0bac42afa237ff5796b6a4` | `BLOCKED`; ordinary/security checks pass, Atheris passes, Full and Strix run, OpenCode fails closed |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `8a1654ead5a23e985c9bf1d6d500602283f05ab8` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security and Full/Atheris checks pass, OpenCode fails closed |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `ec17d4e0b77fe10c8087c587cb748d4027fe4d0f` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `ea183e72be3a2d2ae8ad6229a0212bc5b8ec9bf6` | `BLOCKED/REVIEW_REQUIRED`; Full is queued, Atheris/Python/Noema run, earlier ordinary/security checks pass |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `57ec66351c1ca37910650d5ad77e6bdbdc79be51` | `BEHIND/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `5c5c077b272c41c8042cb2e42fec33b0da633612` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode fails closed; this documentation commit will advance its self-referential head |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode and Strix fail closed |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `bf6fbb7d372922088bd075b395543b325d91ed78` | `BLOCKED/REVIEW_REQUIRED`; ordinary/security checks pass, OpenCode fails closed |
+
+The OpenCode and Strix failures are hosted provider-gate outcomes, not local
+passing evidence. #901's exact head also keeps authenticated OpenRouter
+discovery in the serving pool while retaining the public ZDR endpoint as
+privacy evidence; its focused provider/discovery/bootstrap/review validation
+is `90 passed` locally.
+
+## 2026-08-29 01:14 KST exact-head protected-queue snapshot
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`, including the normal merge of
+PR #904. This snapshot records the open queue before this documentation
+commit; PR #905 is at pre-push head `322215b7068c279db55eb006679ee36010b852d3`
+and this commit will advance that documentation PR head. No open PR has a
+qualifying independent approval; exact-head hosted checks and resolved review
+threads remain required, and no bypass was used.
+
+PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
+is at `97356f66bd0aa39d4b903e3a1bcef08467e0a36c`, `MERGEABLE/BLOCKED`, with
+`REVIEW_REQUIRED`, zero unresolved threads, and zero exact-head approvals.
+The main integration and privacy-assessment normalization are local-verified
+by 142 focused tests; its hosted Full, security, dependency, supply-chain,
+Hypothesis, Atheris, Noema, and review jobs are still queued or running, with
+no completed failure at this snapshot.
+
+PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
+is at `6549937834941895ae3e379f82cbf37eb645a59a`, `MERGEABLE/BLOCKED`, with
+zero unresolved threads and zero exact-head approvals. Its ordinary checks
+are successful so far; Full, Atheris, and Strix are running and OpenCode is
+queued. The plain orchestrated Responses path now forces synchronous routing,
+and the focused Responses routing/stream suite is `25 passed`.
+
+PR [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908)
+is at `bf6fbb7d372922088bd075b395543b325d91ed78`, `MERGEABLE/BLOCKED`, with
+zero unresolved threads and zero exact-head approvals. Its required ordinary
+checks are successful; OpenCode is failed closed and the focused metering and
+cost-ledger proof is `53 passed`. Inline duplicate and rollback health
+counters, deferred export accounting, and the corresponding ADR/CHANGELOG
+contract are now aligned.
+
+PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906)
+is at `c6495e19b3255eaf74c94ae3d80d455fa88ebde9`, `MERGEABLE/BLOCKED`, with
+all threads resolved and no exact-head approval. Full, security, NIM, supply
+chain, and ordinary checks pass; OpenCode and Strix fail closed. Its local NIM
+evidence remains `121 passed` with 100% branch coverage for `nim_benchmark.py`.
+
+PR [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905)
+is at pre-push head `322215b7068c279db55eb006679ee36010b852d3`,
+`MERGEABLE/BLOCKED`, with all threads resolved and no exact-head approval.
+Ordinary checks pass and OpenCode fails closed. The next documentation push
+will advance this self-referential head, so this row intentionally records the
+pre-push SHA.
+
+PR [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857)
+is at `52d8bf66f2d14efd2b9e5f11da419b8683696527`, `MERGEABLE/BLOCKED`, with
+all threads resolved and no exact-head approval. Ordinary checks pass; Full
+and Atheris are running and OpenCode fails closed.
+
+PR [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903)
+is at `57ec66351c1ca37910650d5ad77e6bdbdc79be51`, `MERGEABLE/BEHIND`, with
+all threads resolved and no exact-head approval. Ordinary checks pass while
+OpenCode and Strix fail closed. PR
+[#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879)
+is at `2b1829a81ea79e012480c680a7ef5683dc13c3bc`, `CONFLICTING/DIRTY`, with
+all threads resolved and no exact-head approval; ordinary checks and OpenCode
+pass while Strix fails closed.
+
+| PR | Exact head | Current protected gate state |
+| ---: | --- | --- |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `97356f66bd0aa39d4b903e3a1bcef08467e0a36c` | `BLOCKED`; main-aligned, ordinary/review checks queued or running, no failure yet, no approval |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `6549937834941895ae3e379f82cbf37eb645a59a` | `BLOCKED`; ordinary checks pass so far, Full/Atheris/Strix running, OpenCode queued, no approval |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `bf6fbb7d372922088bd075b395543b325d91ed78` | `BLOCKED`; ordinary checks pass, OpenCode fails closed, no approval |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED`; ordinary/NIM/security checks pass, OpenCode/Strix fail closed, no approval |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `322215b7068c279db55eb006679ee36010b852d3` | `BLOCKED`; self pre-push head, ordinary checks pass, OpenCode fails closed, no approval |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `52d8bf66f2d14efd2b9e5f11da419b8683696527` | `BLOCKED`; Full/Atheris running, ordinary checks pass, OpenCode fails closed, no approval |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `57ec66351c1ca37910650d5ad77e6bdbdc79be51` | `BEHIND`; ordinary checks pass, OpenCode/Strix fail closed, no approval |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `2b1829a81ea79e012480c680a7ef5683dc13c3bc` | `DIRTY`; ordinary/OpenCode checks pass, Strix fails closed, no approval |
+
+## 2026-08-29 00:32 KST exact-head protected-queue snapshot
+
+Protected `main` is `b21645116b352967e50fc497b87eb745b9cc8c61`, which contains
+the merge commit for PR #904 at exact head
+`6cd7d57c177d945f67ba3b86b699949584bc6b7e`. This loop did not bypass or claim
+that merge. The open queue now contains eight PRs; duplicate docs-only PR #900
+remains closed because #905 supersedes its evidence, and the previously stacked
+PR #907 is merged into #857. The current protected state still requires exact
+head checks, independent approval, and resolved threads; `behind`, `dirty`, or
+`UNKNOWN` merge state is not readiness.
+
+PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906)
+at `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` is the base-aligned head after
+the protected #904 merge. Full and Strix are running; ordinary, NIM quality,
+security, Hypothesis, dependency, OSV, Trivy, and Noema checks pass while
+OpenCode fails closed. All threads are resolved and no independent approval is
+present. Its local NIM evidence remains `121 passed` with 100% branch coverage
+for `nim_benchmark.py`; the cold-import fuzz fix and unused provider response
+wrapper cleanup do not change production routing defaults.
+
+PR [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908)
+at `94dd586839efc2621c4e0d81b0867e4af33d0b03` is base-aligned after the
+protected #904 merge. Full and Atheris are running; CodeQL, dependency,
+Hypothesis, OSV, Trivy, Python supply chain, and Noema pass while OpenCode
+fails closed and Strix has not yet reported. All threads are resolved and no
+independent approval is present. Its focused metering and cost-ledger proof is
+`51 passed`; deferred exports use targeted persisted-ID lookups, transaction
+visibility checks, and reconciled duplicate-drop telemetry.
+
+PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
+at `ddc43068e123e707197bbeab8e4518d29a0b8063` is base-aligned after the
+protected #904 merge. Full and Atheris are running; CodeQL, coverage,
+dependency, OSV, Trivy, Hypothesis, Python supply chain, and Noema pass while
+OpenCode fails closed. All threads are resolved and no independent approval is
+present.
+
+The previously stacked PR #907 is merged into #857. The shared batch embedding
+fixture is byte-identical with the current naruon consumer fixture.
+
+PR [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904)
+was merged into protected `main` as
+`b21645116b352967e50fc497b87eb745b9cc8c61`. Its ordinary Full, Atheris,
+security, coverage, dependency, OSV, Hypothesis, and Noema checks passed at the
+source head; OpenCode and Strix are recorded as failed provider/review gates
+after the merge. The merged slice binds concrete model file replicas, honors
+file-provider exclusions, and maps provider delete failures to retryable 503
+responses.
+
+PR [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905)
+at `f7276b02ac1587d7ca9e93876f8c27f4e7b32eb1` is the base-aligned pre-push
+head of this baseline refresh branch. Full is running while Atheris, CodeQL,
+coverage, dependency, OSV, Trivy, Hypothesis, and Noema pass; OpenCode fails
+closed. Its next documentation commit will advance the PR head; threads are
+resolved and no independent approval is present. PR
+[#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903)
+at `57ec66351c1ca37910650d5ad77e6bdbdc79be51` has ordinary checks passing but
+OpenCode and Strix fail closed; it has no qualifying independent approval.
+PR [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879)
+at `2b1829a81ea79e012480c680a7ef5683dc13c3bc` has ordinary checks and OpenCode
+passing but Strix failing closed; it has no qualifying independent approval.
+PR [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868)
+at `511956c274109a89af49193d1e6c78260dd2c1eb` has ordinary checks passing but
+OpenCode and Strix fail closed; it has no qualifying independent approval. PR
+[#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857)
+at `d1afcd3763b925195d6c4303ef5004d92c0d94cf` has ordinary checks passing but
+OpenCode fails; it has no qualifying independent approval.
+
+| PR | Exact head | Base / current gate state |
+| ---: | --- | --- |
+| [#908](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/908) | `94dd586839efc2621c4e0d81b0867e4af33d0b03` | `BLOCKED`; base-aligned, Full/Atheris running, ordinary security checks and Noema pass, OpenCode fails closed, no Strix result, no independent approval |
+| [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) | `c6495e19b3255eaf74c94ae3d80d455fa88ebde9` | `BLOCKED`; base-aligned, Full/Strix running, ordinary/NIM/security/review checks pass, OpenCode fails closed, no independent approval |
+| [#905](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/905) | `f7276b02ac1587d7ca9e93876f8c27f4e7b32eb1` | `BLOCKED`; base-aligned pre-push head for this baseline refresh, Full running, ordinary checks pass, OpenCode fails closed, no independent approval |
+| [#904](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/904) | `6cd7d57c177d945f67ba3b86b699949584bc6b7e` | `MERGED` as `b21645116b352967e50fc497b87eb745b9cc8c61`; ordinary checks pass, OpenCode/Strix fail after merge |
+| [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) | `57ec66351c1ca37910650d5ad77e6bdbdc79be51` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode/Strix fail closed |
+| [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901) | `ddc43068e123e707197bbeab8e4518d29a0b8063` | `BLOCKED`; base-aligned, Full/Atheris running, ordinary checks pass, OpenCode fails closed, no independent approval |
+| [#879](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/879) | `2b1829a81ea79e012480c680a7ef5683dc13c3bc` | `BLOCKED`, `REVIEW_REQUIRED`; OpenCode/Strix fail closed |
+| [#868](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/868) | `511956c274109a89af49193d1e6c78260dd2c1eb` | `BLOCKED`, `REVIEW_REQUIRED`; ordinary checks pass, OpenCode fail, Strix provider failure |
+| [#857](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/857) | `d1afcd3763b925195d6c4303ef5004d92c0d94cf` | `BLOCKED`, `REVIEW_REQUIRED`; Strix retry canceled, dependency-review pass, OpenCode fail |
+## 2026-08-29 PR #901 routing research grounding
+
+This ZDR slice applies the established cost/performance routing literature to
+the gateway boundary without turning provider names or model ids into policy.
+[FrugalGPT](https://arxiv.org/abs/2305.05176) motivates composing a model
+cascade from heterogeneous providers while reducing inference cost, and
+[RouteLLM](https://arxiv.org/abs/2406.18665) motivates selecting among the
+available candidates at inference time rather than binding the router to a
+fixed model list. In this implementation, Naruon supplies `zdr_only` as a
+Boolean request policy and contextual-orchestrator filters the caller's
+runtime model-group array by verified `privacy:zdr` evidence before measured
+member selection. The public OpenRouter ZDR feed is evidence for matching
+models from other providers; OpenRouter is not selected as the upstream by
+this policy. Missing or failed ZDR evidence fails closed instead of being
+replaced by a stale or hard-coded model list.
+
+The FrugalGPT and RouteLLM PDFs are already vendored under `docs/papers/`; the
+catalog there records their arXiv redistribution license and full citation.
+
+## 2026-08-28 21:42 KST PR #901 provider error-shape compatibility slice
+
+PR [#901](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/901)
+is at exact head `bcead52a` after a narrow failover repair: provider HTTP 400
+tool-description-limit responses whose `error` field is a string now receive
+the same capability-mismatch failover as the existing `invalid_tools` object
+shape. The focused passthrough suite passed **28 tests**; protected hosted
+checks and independent approval remain authoritative and are not claimed here.
+
+## 2026-08-28 21:20 KST PR #901 ZDR batch omitted-model evidence slice
+
+`gh api user`, `gh pr view 901`, and the review-thread GraphQL query all
+succeeded on August 28, 2026. At that snapshot, PR `#901`
+(`fix/zdr-only-dynamic-discovery`, exact head `dcdb04b7adcfc8f57cbf5b13332b504f5c246fed`)
+already covers the earlier ZDR routing defects that had active review threads:
+caller-supplied group filtering, generated-plan ZDR revalidation, batch model
+selection error normalization, and duplicate-model embedding identity. The
+remaining protected block is external: `opencode-review` is still fail-closed
+pending a current-head verdict, while the last `strix` failure on this branch
+reported `STRIX_PROVIDER_UNAVAILABLE` rather than a repository finding.
+
+The existing `.worktrees/commercial-loop-20260828-pr901-fix` worktree was
+reconciled before new edits. It is 38 commits behind the live PR head and its
+omitted-model batch embeddings regression test plus this baseline note were
+ported onto a fresh worktree and are now published on the live PR head instead
+of reviving the diverged branch.
+
+This slice closes one bounded evidence gap in the highest-leverage open product
+area: `POST /v1/batch/embeddings` with omitted `model` and `"zdr_only": true`
+now has an explicit loopback HTTP regression test proving the gateway selects
+the ZDR-capable embedding member rather than a higher-priority non-ZDR peer.
+The seeded contract server already carried persisted `privacy:zdr` evidence, so
+the change is a missing acceptance test, not a runtime behavior change.
+
+Exact verification on the current-head worktree:
+
+- `uv pip install --python .venv/bin/python -r requirements.lock` → restored the locked runtime packages for the fresh worktree venv.
+- `uv pip install --python .venv/bin/python -r requirements-opencode-review-ci.txt` → installed the repository's pinned pytest toolchain for focused validation.
+- `uv run --python .venv/bin/python -m pytest -q tests/test_batch_embeddings.py -k 'naruon_contract or zdr_only or omitted_model'` → `2 passed, 6 deselected in 8.40s`
+- `uv run --python .venv/bin/python -m pytest -q tests/test_cost_router.py -k 'zdr_only or duplicate_model'` → `1 passed, 24 deselected in 6.77s`
+- `uv run --python .venv/bin/python -m pytest -q tests/test_model_group.py -k 'zdr_only or duplicate_model'` → `4 passed, 24 deselected in 6.84s`
+
 ## 2026-08-27 20:10 KST main trace-rpds regression slice
 
 Protected `main` briefly carried a merge-order regression from PR #891 merged
@@ -866,15 +1243,17 @@ guarantees.
 
 | Issue | Customer-visible gap | Planned proof / next PR |
 |---:|---|---|
-| [#568](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/568) | Operators cannot compare provider-neutral reasoning profiles at equal budget. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) adds versioned role profiles, exact snapshot hashing, provider-capability fail-closed request binding, and equal-budget theta-hat/RMSE ablation; production defaults remain locked until measured evidence is available. |
+| [#568](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/568) | Closed by merged PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785): operators can compare provider-neutral reasoning profiles at equal budget. | Keep production route/conduct defaults locked until the accepted true-parameter ablation evidence permits a separately authorized default change. |
 | [#123](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/123) | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
 | [#119](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/119) | Ambiguous or unbounded inbound framing threatens request integrity. | The #776/#783 implementation stack is merged into non-main branches; protected-main integration still requires exact-head hosted evidence and independent approval. |
 | [#118](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/118) | Liveness and authenticated readiness are not yet fully separated. | PR [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) implements the minimal `/healthz` and authenticated `/readyz` contract; merge only after exact-head Checks and independent approval. |
-| [#117](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/117) | Trace access and inference access need separate authority. | The #781 implementation is integrated into #780 at the current parent branch; merge #780 only after exact-head protected evidence confirms the `trace` purpose scope, pre-release audit event, and audit-outage fail-closed behavior. |
+| [#117](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/117) | Trace access and inference access need separate authority. | PR [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) merged the minimal liveness/readiness and trace-authority slice; the issue remains open for batch ownership, full purpose/tenant/resource/lifetime/revocation context, and the single-token migration gate. |
 | [#116](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/116) | Browser admin sessions need separation from long-lived bearer credentials. | PR [#788](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/788) implements opaque bounded sessions, Secure-by-default cookies, same-origin state-change checks, logout/revocation, and regression evidence. |
-| [#103](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/103) | Release readiness must fail closed on stale head, missing review, or missing Checks evidence. | PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) separates product evidence from release authority and adds exact-head `gh api` collection; merge only after fresh protected evidence. |
+| [#103](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/103) | Release readiness must fail closed on stale head, missing review, or missing Checks evidence. | PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) merged the semantic split, but the issue remains open until a trusted `.github` producer artifact and consumer verification bind complete exact-head policy evidence; caller-supplied dictionaries remain insufficient. |
+| [#899](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/899) | CEFR writing/speaking observations need a governed, evidence-bound orchestration boundary. | PR [#903](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/903) is the current implementation head; validate its exact protected checks, research traceability, and independent approval before delivery. |
+| [#897](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/897) | Language-rater output must structurally prohibit final CEFR or placement decisions. | Keep the operation limited to criterion observations and evidence references; align the acceptance contract with PR #903 and the downstream CEFR/fast-mlsirm owners. |
 | [#102](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/102) | Equivalent endpoints need race-to-first-valid completion without unsafe cancellation. | Closed predecessor [#114](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/114) is explicitly a partial experiment and its evidence does not transfer. Rebuild one bounded vertical slice after the protected provider boundary is integrated: explicit endpoint equivalence, completed-response validation, bounded budgets, cancellation-or-drain, deterministic tie-breaking, secret-redacted attempt provenance, and provider-truth tests. |
-| [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) | NVIDIA NIM discovery needs live, evidence-grade capability/cost/quality measurement. | Use KV-registered NIM credentials in a controlled benchmark; publish provenance and limits. The issue remains open and no accepted active implementation PR exists. |
+| [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) | NVIDIA NIM discovery needs live, evidence-grade capability/cost/quality measurement. | PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) is the active benchmark implementation; its local and ordinary hosted evidence passes, but OpenCode is missing a current verdict and Strix failed closed on provider HTTP 500s. |
 
 Issue [#95](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/95) (Atheris locking must work on all supported CPython interpreters) was closed 2026-08-23 as resolved on protected main by a simpler mechanism than the PR #96 predecessor originally proposed: `pyproject.toml`'s `fuzz` extra pins one version (`atheris==3.1.0; python_version >= '3.12'`) rather than a two-way version split, and it already covers both the 3.12 fuzz runner and the central 3.14 coverage-evidence image per `.github/workflows/fuzz.yml`'s own comment — verified directly against the exact current head, not assumed from the stale issue history. GitHub currently returns `404 Not Found` for issue [#777](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/777); its earlier metric-gap
 row is therefore removed from the actionable queue rather than treated as a
@@ -890,7 +1269,7 @@ live work item.
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) and [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
 | P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) records the no-blanket-masking policy and explicitly leaves authorization/encryption as follow-up. The actual design is proposed [ADR 0011 at #762's exact head](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/8f87bcaeddff0866e26900e41deeafe208d8f9e4/docs/planning/adrs/0011-pii-purpose-authorization-and-field-encryption.md); both design [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) and implementation [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) remain open and are not protected-main evidence. | Protected main has purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests proving raw PII is returned only to an authorized purpose. |
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
-| P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; local catalog is not production telemetry. Current [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) labels the configured NIM listing source `chat` for startup activation, but that static source declaration is not live, model-level capability, price, failure, or quality evidence. | KV-backed NIM discovery benchmark records model-level declared capability, price provenance, failure class, and quality result without secret leakage; protected main then activates only capability-qualified deployments. |
+| P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; active PR [#906](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/906) now provides the bounded benchmark, but it is not protected-main evidence while OpenCode/Strix and independent approval remain incomplete. | KV-backed NIM discovery benchmark records model-level declared capability, price provenance, failure class, and quality result without secret leakage; protected main then activates only capability-qualified deployments. |
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
 | P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | PR #823 explicit CLI invocation contract is merged to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |

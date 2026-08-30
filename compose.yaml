@@ -23,12 +23,13 @@ services:
       CONTEXTUAL_ORCHESTRATOR_KV_DSN: postgresql://contextual_orchestrator@postgres/contextual_orchestrator
       PGPASSWORD: ${CONTEXTUAL_ORCHESTRATOR_POSTGRES_PASSWORD:?set the Postgres password}
       CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE:?set the KV encryption passphrase}
-    command: ["sh", "-c", "python -m contextual_orchestrator register-credential --name CONTEXTUAL_ORCHESTRATOR_TOKEN --value-stdin < /run/secrets/server_token"]
+    command: ["sh", "-c", "python -m contextual_orchestrator register-credential --name CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN --value-stdin < /run/secrets/admin_token && python -m contextual_orchestrator register-credential --name CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN --value-stdin < /run/secrets/inference_token"]
     depends_on:
       postgres:
         condition: service_healthy
     secrets:
-      - server_token
+      - admin_token
+      - inference_token
     restart: "no"
 
   gateway:
@@ -50,8 +51,11 @@ services:
       - --port
       - "8000"
       - --allow-public-bind
-      - --auth-token-key
-      - CONTEXTUAL_ORCHESTRATOR_TOKEN
+      - --production
+      - --admin-token-key
+      - CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN
+      - --inference-token-key
+      - CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN
     depends_on:
       credential_bootstrap:
         condition: service_completed_successfully
@@ -62,8 +66,10 @@ services:
     restart: unless-stopped
 
 secrets:
-  server_token:
-    file: ${CONTEXTUAL_ORCHESTRATOR_SERVER_TOKEN_FILE:-./.secrets/server-token}
+  admin_token:
+    file: ${CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN_FILE:-./.secrets/admin-token}
+  inference_token:
+    file: ${CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN_FILE:-./.secrets/inference-token}
 
 volumes:
   postgres_data:

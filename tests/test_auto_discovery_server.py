@@ -2,7 +2,6 @@
 
 import os
 from unittest.mock import patch
-from dataclasses import replace
 
 from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
 from contextual_orchestrator.model_discovery import DiscoveredModel
@@ -79,46 +78,85 @@ def test_auto_discovery_activates_bare_chat_but_not_embedding_ids(monkeypatch) -
     orchestrator = TaskOrchestrator(
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
     )
-    orchestrator = TaskOrchestrator(
-        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
-    )
     result = _auto_discover_runtime_agents(orchestrator)
     assert result["added"] == ["configured_gateway_gpt_chat_7x"]
     agents = orchestrator.agents
     assert any(agent.id == "configured_gateway_gpt_chat_7x" for agent in agents)
-    assert all(
-        agent.model != "text-embedding-5" for agent in agents
-    )
+    assert all(agent.model != "text-embedding-5" for agent in agents)
 
 
-def test_auto_discovery_disables_paid_openrouter_without_credit(monkeypatch) -> None:
-    """Catalog availability cannot promote an unaffordable paid deployment."""
-    paid = DiscoveredModel(
-        provider_name="openrouter",
-        model_id="provider/paid-chat",
-        credential_name="OPENROUTER_API_KEY",
-        chat_base_url="https://openrouter.ai/api/v1",
+def test_auto_discovery_activates_provider_catalog_rows(monkeypatch) -> None:
+    """Discovered provider rows with serving evidence enter the runtime pool."""
+    provider_row = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="provider/nim-chat",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
         auth_scheme="Bearer",
         capabilities=("chat", "response_format"),
     )
-    free = replace(paid, model_id="provider/free-chat", is_free=True)
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
-        lambda *args: ([paid, free], []),
-    )
-    monkeypatch.setattr(
-        "contextual_orchestrator.__main__.openrouter_paid_inference_available",
-        lambda: False,
+        lambda *_args: ([provider_row], []),
     )
     orchestrator = TaskOrchestrator(
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
     )
 
-    _auto_discover_runtime_agents(orchestrator)
+    result = _auto_discover_runtime_agents(orchestrator)
 
-    by_model = {agent.model: agent for agent in orchestrator.candidates}
-    assert by_model[paid.model_id].disabled is True
-    assert by_model[free.model_id].disabled is False
+    assert result == {
+        "added": ["nvidia_nim_provider_nim_chat"],
+        "updated": ["bootstrap_agent"],
+    }
+    agent = orchestrator.candidates[-1]
+    assert agent.model == provider_row.model_id
+    assert agent.disabled is False
+
+
+def test_auto_discovery_never_activates_openrouter_evidence_rows(monkeypatch) -> None:
+    """OpenRouter catalog rows provide evidence but never serving agents."""
+    evidence = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/router-chat",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat", "response_format"),
+        evidence_only=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args: ([evidence], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert [agent.model for agent in orchestrator.agents] == ["bootstrap-model"]
+
+
+def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> None:
+    """OpenAI-style model rows without capability metadata remain discoverable."""
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="gpt-5.4",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args: ([discovered], []),
+    )
+
+    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["added"] == ["openai_gpt_5_4"]
+    assert orchestrator.agents[-1].model == discovered.model_id
 
 
 def test_auto_discovery_removes_the_configured_gateway_placeholder(monkeypatch) -> None:
@@ -259,6 +297,27 @@ def test_unrelated_discovery_keeps_configured_gateway_placeholder(monkeypatch) -
 
     assert result["added"] == ["openai_chat_capable_model"]
     assert placeholder in orchestrator.agents
+
+
+def test_auto_discovery_uses_explicit_capabilities_before_model_id_heuristics(monkeypatch) -> None:
+    generic_non_chat = DiscoveredModel(
+        provider_name="openai",
+        model_id="generic-deployment",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args: ([generic_non_chat], []),
+    )
+
+    orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+
+
 def test_auto_discovery_preserves_sole_real_bootstrap_seed(monkeypatch) -> None:
     """A seed cannot count itself as the replacement that retires it."""
     monkeypatch.setattr(
@@ -340,6 +399,8 @@ def test_runtime_auto_discovery_skips_gateway_outside_allowlist(monkeypatch) -> 
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert all(source.provider_name != "configured_gateway" for source in captured)
+
+
 def test_auto_discovery_retires_mock_seed_when_real_agent_already_exists(
     monkeypatch,
 ) -> None:

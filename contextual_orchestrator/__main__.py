@@ -21,15 +21,13 @@ from .model_discovery import (
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
-    is_discovered_chat_candidate,
-    openrouter_paid_inference_available,
+    is_routable_discovered_model,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
-    ModelAgent,
     ModelClient,
     TaskOrchestrator,
     load_agents,
@@ -313,15 +311,25 @@ def _discover_models_command(argv: list[str]) -> None:
 
     enabled_agent_ids: list[str] = []
     if args.agents_db:
+        discovered_agents = [
+            agent_from_discovered(model)
+            for model in reported
+            if not model.evidence_only
+        ]
         bootstrap = TaskOrchestrator(
-            [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
+            discovered_agents,
+            agents_db=args.agents_db,
+            allow_empty_agents=True,
         )
-        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in reported])
-        if args.enable_cheapest:
-            for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
-                agent_id = agent_id_for(model)
-                bootstrap.patch_agent("default", agent_id, {"status": "active"})
-                enabled_agent_ids.append(agent_id)
+        try:
+            bootstrap.sync_discovered_agents(discovered_agents)
+            if args.enable_cheapest:
+                for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
+                    agent_id = agent_id_for(model)
+                    bootstrap.patch_agent("default", agent_id, {"status": "active"})
+                    enabled_agent_ids.append(agent_id)
+        finally:
+            bootstrap.close()
 
     report = {
         "discovered_count": len(reported),
@@ -370,27 +378,19 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover and activate chat-capable models, preserving free/ZDR evidence.
+    """Discover and activate routable chat models without runtime env transport.
 
-    A model is a chat candidate when a provider explicitly tags ``chat`` or
-    when it carries no capability metadata at all (a bare OpenAI-compatible or
-    LiteLLM listing) but still passes the ordinary chat transport gate — see
-    :func:`model_discovery.is_discovered_chat_candidate`. Splitting that rule
-    here would silently drop bare chat deployments whose embedding sibling
-    happens to carry richer metadata.
+    The shared discovery predicate keeps ordinary chat rows discoverable even
+    when a provider omits structured capability metadata, while still refusing
+    evidence-only or non-chat rows.
     """
     discovered, _errors = discover_all_models(_runtime_discovery_sources(orchestrator))
-    openrouter_paid_available = openrouter_paid_inference_available()
-    chat_models = [model for model in discovered if is_discovered_chat_candidate(model)]
+    chat_models = [model for model in discovered if is_routable_discovered_model(model)]
     existing_ids = {agent.id for agent in orchestrator.candidates}
     agents = [
         replace(
             agent_from_discovered(model),
-            disabled=(
-                model.provider_name == "openrouter"
-                and not model.is_free
-                and openrouter_paid_available is not True
-            ),
+            disabled=False,
         )
         for model in chat_models
         if agent_id_for(model) not in existing_ids
@@ -463,6 +463,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument(
+        "--production",
+        action="store_true",
+        help="Require split admin/inference server credentials; single-token mode is local-only.",
+    )
     parser.add_argument(
         "--rate-limit-requests",
         type=_positive_int,
@@ -582,6 +587,19 @@ def main(argv: list[str] | None = None) -> None:
                 "provided by --admin-token/--inference-token or "
                 "--admin-token-key/--inference-token-key"
             )
+        if (args.production or args.allow_public_bind) and not split_requested:
+            parser.error(
+                "--production/--allow-public-bind requires split "
+                "--admin-token/--inference-token credentials; single-token mode is local-only"
+            )
+        if (args.production or args.allow_public_bind) and args.insecure_admin_session_cookie:
+            parser.error(
+                "--production/--allow-public-bind cannot use --insecure-admin-session-cookie"
+            )
+        try:
+            SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
+        except ValueError as exc:
+            parser.error(str(exc))
         try:
             auth_token = (
                 _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)

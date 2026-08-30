@@ -18,6 +18,7 @@ primitives use maintained libraries when the enterprise target requires them.
 | TLS trust | [certifi](https://pypi.org/project/certifi/) | Add Mozilla's public CA bundle to the platform trust store when no operator `ca_bundle` is configured. An explicit bundle replaces both; system-only trust is insufficient where Python does not expose a complete public-root store. | `ssl.create_default_context()` preserves native enterprise roots, while `load_verify_locations(certifi.where())` adds maintained public roots without disabling verification. |
 | Rendered policy browser | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | Keep as a pinned deployment-provided optional package for the existing Camoufox MCP transport; do not claim a repository `policy-browser` extra until this project owns that lock and publish contract. | Reuses the protocol client and Streamable HTTP lifecycle instead of implementing a second transport; static policy analysis does not install it. |
 | Structured-output validation | `jsonschema` | Use the maintained validator for provider-returned JSON against caller-supplied JSON Schema; keep parsing and the single repair policy in the existing orchestrator. | Reusing `validator_for`, schema checks, and bounded validation avoids an incomplete custom JSON Schema implementation. Provider output and schemas remain untrusted and fail closed. |
+| SSE usage capture | Python stdlib streaming parser already used by `ModelClient._stream_send` | Reuse the existing line-delimited SSE parser and capture only provider-declared usage frames; do not add an SSE or provider SDK dependency. | OpenAI's Responses and Chat Completions references define terminal usage fields, while interrupted streams may omit the final usage frame. |
 
 ## Ponytail Decision
 
@@ -91,3 +92,28 @@ detectors, blanket masking, and a new policy framework. Callers explicitly
 declare the top-level event fields that contain PII; undeclared fields retain
 the existing behavior, while marked fields fail closed when the KV key is
 missing or invalid.
+
+## CEFR language observations
+
+| Question | Evidence reread | Decision | Deliberately skipped |
+|---|---|---|---|
+| What may an observation claim? | Council of Europe CEFR Companion Volume and linking manual | Preserve criterion-level evidence and transparent linking inputs; do not emit a CEFR level or placement decision. | A local CEFR scale or standard-setting algorithm. |
+| What makes an assessment result defensible? | AERA, APA, and NCME Standards for Educational and Psychological Testing | Keep task, rubric, criterion, anchor, evidence, rater, prompt, workflow, parse, verifier, and replay provenance explicit. | Calling provider success or a model label validity evidence. |
+| How should provider calls be governed? | Existing `TaskOrchestrator`, KV credential registry, model discovery, and structured-output passthrough | Reuse the existing gateway; require exact external contract compatibility and fail closed on missing capability or provider failure. | Direct provider SDK calls or a second credential path. |
+
+Official references:
+
+- Council of Europe. (2020). *Common European framework of reference for
+  languages: Learning, teaching, assessment—Companion volume*.
+  https://www.coe.int/en/web/common-european-framework-reference-languages/cefr-companion-volume-and-its-language-versions
+- Council of Europe. (2009). *Relating language examinations to the Common
+  European Framework of Reference for Languages: Learning, teaching,
+  assessment—A manual*.
+  https://www.coe.int/en/web/common-european-framework-reference-languages/relating-examinations-to-the-cefr
+- American Educational Research Association, American Psychological
+  Association, & National Council on Measurement in Education. (2014).
+  *Standards for educational and psychological testing*.
+  https://www.aera.net/Publications/Books/Standards-for----Educational-Psychological-Testing-2014-Edition
+
+The cited standards are linked rather than vendored because redistribution
+permission for their PDFs is not assumed.

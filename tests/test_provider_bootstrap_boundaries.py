@@ -315,3 +315,30 @@ def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
     assert ids_by_state["openai_retired_model"] == "disabled"
     assert ids_by_state["openai_gpt_current"] == "enabled"
     assert ids_by_state["openrouter_qwen_current"] == "enabled"
+
+
+def test_durable_pool_sync_closes_temporary_orchestrator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """A refresh must stop telemetry owned by its temporary orchestrator."""
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.provider_bootstrap import (
+        _synchronize_durable_agent_pool,
+    )
+
+    closed: list[bool] = []
+
+    class TrackingOrchestrator(TaskOrchestrator):
+        def close(self) -> None:
+            closed.append(True)
+            super().close()
+
+    monkeypatch.setattr(pb, "TaskOrchestrator", TrackingOrchestrator)
+    enabled = _synchronize_durable_agent_pool(
+        str(tmp_path / "pool_close.db"),
+        [_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")],
+    )
+
+    assert enabled == ("openrouter_qwen_current",)
+    assert closed == [True]

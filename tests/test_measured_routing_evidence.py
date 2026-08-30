@@ -262,7 +262,6 @@ class _VerdictJudgeAdapter:
 
 def test_realtime_judge_accept_records_quality_success(monkeypatch: pytest.MonkeyPatch) -> None:
     orchestrator = _orch(ModelAgent("worker_agent", "mock", tags=("reasoning",)))
-    adapter = _VerdictJudgeAdapter(accepted=True)
 
     monkeypatch.setattr(orchestrator, "_model_judge_verification", lambda *a, **k: {
         "accepted": True, "reason": "stub verdict", "verifier_output": k.get("answer", ""),

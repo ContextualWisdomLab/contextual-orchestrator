@@ -326,6 +326,7 @@ def normalize_discovered_model(
         supports_no_training=model.supports_no_training,
         supports_no_prompt_retention=model.supports_no_prompt_retention,
         privacy_policy_urls=tuple(model.privacy_policy_urls),
+        zdr_capable=bool(model.zdr_capable),
     )
 
 
@@ -362,6 +363,7 @@ def _restore_model_semantics(
             True if "privacy:no_retention" in normalized else False if "privacy:retention_only" in normalized else None
         ),
         privacy_policy_urls=tuple(model.privacy_policy_urls),
+        zdr_capable=bool(model.zdr_capable),
     )
 
 

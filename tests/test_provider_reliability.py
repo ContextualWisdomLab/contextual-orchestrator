@@ -29,6 +29,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ProviderResponseError,
     is_transient_error,
 )
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 
@@ -586,7 +587,8 @@ def test_batch_boundary_hides_raw_upload_error_text_and_cause() -> None:
     try:
         client.batch_chat(agent, {"task_0": [{"role": "user", "content": "ping"}]})
     except RuntimeError as error:
-        assert "batch request failed" in str(error)
+        assert isinstance(error, ProviderUpstreamError)
+        assert error.transport == "batch"
         assert "provider-secret-batch-body" not in str(error)
         assert error.__cause__ is None
     else:  # pragma: no cover

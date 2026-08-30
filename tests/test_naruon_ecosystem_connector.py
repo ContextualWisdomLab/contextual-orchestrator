@@ -1,10 +1,9 @@
-from typing import Any
 """Ecosystem consumer contract tests for Naruon DOM-decomposition."""
 
-import threading
-import urllib.request
-import urllib.error
 import json
+import threading
+import urllib.error
+import urllib.request
 import pytest
 from typing import Iterator
 
