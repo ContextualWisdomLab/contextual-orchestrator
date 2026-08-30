@@ -28,6 +28,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   a caller-supplied budget shorter than the retry default: it is now
   `min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS)`, so a caller requesting
   e.g. a 2s timeout still gets a 2s retry, not a 5s one.
+- `/v1/chat/completions`'s tools passthrough no longer rejects
+  `stream: true` + `stream_options.include_usage: true` together with
+  `tools`. Root-caused a live Strix required-check failure (org-wide CI run,
+  `contextual-orchestrator#923`): `proxy_completion`'s single-agent tool
+  passthrough always fetches a complete, non-streamed upstream response and
+  frames it locally via `_chat_response_sse_chunks`, which already emits a
+  real, honestly-labeled usage chunk (`usage_source: reported` when the
+  provider returned one, else a clearly marked `estimated` fallback) for
+  both plain-content and tool-call deltas — the combination was always
+  supported downstream, so the upfront rejection was an avoidable, stale
+  restriction. `response_format`'s separate multi-agent "conduct"
+  orchestration path has no equivalent aggregate-usage story yet and still
+  fails closed with the same `invalid_stream_options` error.
 
 ### Added
 

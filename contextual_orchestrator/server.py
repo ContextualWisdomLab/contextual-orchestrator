@@ -6652,13 +6652,23 @@ def build_server(
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
                         trace_audited = False
-                        if stream and include_usage:
+                        tool_loop = bool(tools_list)
+                        # Single-agent tool passthrough always fetches a complete
+                        # (non-streamed) upstream response (proxy_completion forces
+                        # upstream["stream"] = False) and frames it locally via
+                        # _chat_response_sse_chunks, which already emits a real,
+                        # honestly-labeled usage chunk (payload["usage"] when the
+                        # provider reported one, else a clearly-marked estimate) for
+                        # both plain-content and tool_calls deltas -- so this
+                        # combination is fully supported for tools. response_format's
+                        # multi-agent "conduct" orchestration has no equivalent
+                        # aggregate-usage story yet, so it still fails closed.
+                        if stream and include_usage and not tool_loop:
                             raise RequestError(
                                 400,
                                 "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with tools or response_format",
+                                "stream_options.include_usage=true is not supported with response_format",
                             )
-                        tool_loop = bool(tools_list)
                         if (
                             tool_loop
                             and "include_orchestration_trace" in body

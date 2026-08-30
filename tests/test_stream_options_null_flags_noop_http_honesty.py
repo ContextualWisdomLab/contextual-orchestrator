@@ -172,11 +172,23 @@ def test_http_chat_accepts_include_usage_true() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_structured_streams_include_usage() -> None:
+def test_http_chat_tools_stream_includes_usage() -> None:
+    """Single-agent tool passthrough fetches a complete upstream response
+
+    (``proxy_completion`` forces ``upstream["stream"] = False``) and frames it
+    locally, so it can -- and now does -- emit a real, honestly-labeled usage
+    chunk alongside tool-call deltas instead of rejecting the combination.
+    """
     server, thread, port = _server()
     try:
-        for structured in (
+        status, content_type, sse = _post_raw(
+            port,
+            "/v1/chat/completions",
             {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured usage"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
                 "tools": [
                     {
                         "type": "function",
@@ -185,25 +197,48 @@ def test_http_chat_structured_streams_include_usage() -> None:
                             "parameters": {"type": "object", "properties": {}},
                         },
                     }
-                ]
+                ],
             },
-            {"response_format": {"type": "json_object"}},
-        ):
-            status, _, body = _post_raw(
-                port,
-                "/v1/chat/completions",
-                {
-                    "model": "mock-planner",
-                    "messages": [
-                        {"role": "user", "content": "structured usage"}
-                    ],
-                    "stream": True,
-                    "stream_options": {"include_usage": True},
-                    **structured,
-                },
-            )
-            assert status == 400, (structured, body)
-            assert "invalid_stream_options" in body
+        )
+        assert status == 200, sse
+        assert content_type.startswith("text/event-stream")
+        frames = [
+            json.loads(frame[len("data: "):])
+            for frame in sse.split("\n\n")
+            if frame.startswith("data: ") and frame != "data: [DONE]"
+        ]
+        assert frames
+        usage_frames = [frame for frame in frames if frame.get("choices") == []]
+        assert len(usage_frames) == 1, frames
+        usage = usage_frames[0]["usage"]
+        assert usage["usage_source"] in {"reported", "estimated"}
+        assert isinstance(usage["total_tokens"], int)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_response_format_streams_still_reject_usage() -> None:
+    """response_format's multi-agent "conduct" path has no aggregate-usage
+
+    story yet, so it keeps failing closed -- unlike tools (see
+    ``test_http_chat_tools_stream_includes_usage``).
+    """
+    server, thread, port = _server()
+    try:
+        status, _, body = _post_raw(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured usage"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_stream_options" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -234,6 +269,7 @@ if __name__ == "__main__":
     test_http_completions_accepts_stream_options_null_flags_without_stream()
     test_http_responses_accepts_stream_options_null_flags()
     test_http_chat_accepts_include_usage_true()
-    test_http_chat_structured_streams_include_usage()
+    test_http_chat_tools_stream_includes_usage()
+    test_http_chat_response_format_streams_still_reject_usage()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")
