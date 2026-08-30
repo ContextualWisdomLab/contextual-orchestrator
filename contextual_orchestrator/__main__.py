@@ -313,6 +313,11 @@ def _discover_models_command(argv: list[str]) -> None:
     privacy_assessments = []
     if args.analyze_privacy_policies:
         discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
+    # free_tier_count and general_free_serving_count are always computed over
+    # the complete `discovered` population, independent of --free-only (which
+    # only filters `reported`, the per-model listing below): both answer a
+    # global "how many, out of everything found" question, matching each
+    # other's population by design rather than "reported"'s row-level filter.
     free_models = free_discovered_models(discovered)
     general_free_serving_models = general_free_serving_candidates(discovered)
     reported = free_models if args.free_only else discovered

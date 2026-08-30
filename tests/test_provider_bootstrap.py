@@ -293,10 +293,13 @@ def test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligibl
     agent ``cost:free`` from raw price evidence alone, with no serving-pool
     modality check -- exactly like the ``_auto_discover_runtime_agents`` path
     this incident already fixed once. The fix lives in
-    ``TaskOrchestrator._is_free_agent`` (a single choke point every
-    ``FREE_MODEL`` selection path shares, including this one and any future
-    pool-construction path), not in this tagging function: ``cost:free`` must
-    keep meaning "honest zero price" here, because
+    ``TaskOrchestrator._is_general_free_agent`` (a single choke point every
+    *general-chat* ``FREE_MODEL`` selection path shares, including this one
+    and any future pool-construction path); ``_is_free_agent`` itself stays
+    price-only so the same honestly free agent remains reachable through its
+    own capability-scoped free route (Devin's PR #933 fourth-round finding).
+    Not in this tagging function: ``cost:free`` must keep meaning "honest
+    zero price" here, because
     ``provider_catalog_store.py``'s durable catalog round trip reconstructs
     ``DiscoveredModel.is_free`` from exactly this tag (see
     ``test_serving_tags_preserve_only_explicit_free_and_modality_evidence`` and
@@ -315,7 +318,11 @@ def test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligibl
 
     assert agent.disabled is False
     assert "cost:free" in agent.tags
-    assert orchestrator._is_free_agent(agent) is False
+    # Price-only: honestly free, and (Devin's PR #933 fourth-round finding)
+    # still reachable through its own capability-scoped free route.
+    assert orchestrator._is_free_agent(agent) is True
+    # The blind general-chat orchestrator/free pool must still exclude it.
+    assert orchestrator._is_general_free_agent(agent) is False
 
 
 def test_serving_tags_preserve_explicit_no_zdr_evidence():

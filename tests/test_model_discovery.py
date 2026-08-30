@@ -868,6 +868,64 @@ def test_general_free_serving_candidates_modality_shapes() -> None:
     )} == {"text-only-model", "vision-only-model", "meta/llama-3.2-90b-vision-instruct"}
 
 
+def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
+    """``general_free_serving_candidates`` and ``_is_general_free_agent`` agree.
+
+    Devin's review on PR #933 (design-consistency note): the discovery-time
+    selector (over ``DiscoveredModel.input_modalities``) and the
+    selection-time predicate (over an agent's persisted ``input:<modality>``
+    tags) must never independently reimplement "what counts as non-text
+    input" -- both now delegate to ``chat_capability.requires_non_text_input``
+    for that classification. This locks the three fixture shapes already
+    established by ``test_general_free_serving_candidates_modality_shapes``
+    (text-only, vision-only-input, text+image) so the two call sites cannot
+    silently diverge again.
+    """
+    text_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="text-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    vision_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="vision-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("image",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    text_and_image = _nim_vision_model()
+    discovered = [text_only, vision_only, text_and_image]
+    serving_model_ids = {model.model_id for model in general_free_serving_candidates(discovered)}
+
+    agents = {
+        model.model_id: ModelAgent(
+            model.model_id,
+            model.model_id,
+            tags=("cost:free", *(f"input:{value}" for value in model.input_modalities)),
+        )
+        for model in discovered
+    }
+    orchestrator = TaskOrchestrator(list(agents.values()))
+
+    for model in discovered:
+        agent = agents[model.model_id]
+        assert orchestrator._is_general_free_agent(agent) == (
+            model.model_id in serving_model_ids
+        ), model.model_id
+        # Every one of these stays reachable through its own capability route.
+        assert orchestrator._is_free_agent(agent) is True
+
+
 def test_discovery_does_not_mark_multimodal_input_rows_free_without_unit_prices() -> None:
     """Non-text inputs require explicit zero non-token price evidence."""
     source = ProviderModelSource(

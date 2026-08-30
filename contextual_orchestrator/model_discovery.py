@@ -26,7 +26,11 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
+from .chat_capability import (
+    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
+    requires_non_text_input,
+)
 from .credentials import get_credential
 from .orchestrator import ModelAgent, ModelClient
 
@@ -1328,12 +1332,16 @@ def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
     actually keeps that incident fixed; a model believed to also serve plain
     text requests just fine can still be reached through a pool that is not
     modality-blind (see :func:`general_free_serving_candidates`'s docstring).
+
+    Delegates the actual classification to
+    ``chat_capability.requires_non_text_input``, the single evidence-based
+    rule shared with ``orchestrator.TaskOrchestrator._agent_requires_non_text_input``
+    (which reads an agent's persisted ``input:<modality>`` tags instead of
+    ``DiscoveredModel`` directly) so the two representations of the same
+    catalog evidence cannot drift on this question independently of each
+    other.
     """
-    return any(
-        modality.strip().casefold() != "text"
-        for modality in discovered.input_modalities
-        if isinstance(modality, str) and modality.strip()
-    )
+    return requires_non_text_input(discovered.input_modalities)
 
 
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
@@ -1384,10 +1392,13 @@ def general_free_serving_candidates(
     This is the selector every runtime pool-construction path must apply
     before treating a discovered model as eligible for blind free serving
     (e.g. tagging an agent ``cost:free`` in a context where that tag alone
-    drives ``orchestrator/free`` routing). ``TaskOrchestrator._is_free_agent``
-    additionally re-checks an agent's persisted ``input:<modality>`` tags at
-    selection time, so a durable agent-pool row written by an older build --
-    before this exclusion existed -- cannot bypass it either.
+    drives general-chat ``orchestrator/free`` routing).
+    ``TaskOrchestrator._is_general_free_agent`` additionally re-checks an
+    agent's persisted ``input:<modality>`` tags at selection time -- but only
+    for the capability-blind general chat pool, never for a capability-scoped
+    free route (``_capability_agents``), where that same tag is the expected
+    shape, not a surprise -- so a durable agent-pool row written by an older
+    build, before this exclusion existed, cannot bypass it either.
     """
     return [
         model

@@ -60,8 +60,9 @@ def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(
     NIM's ``meta/llama-3.2-90b-vision-instruct`` kept its ``cost:free`` tag and
     stayed blindly selectable by ``orchestrator/free`` through this second
     path even after that first function was fixed. Pre-fix, every assertion
-    from ``_is_free_agent`` onward here fails: the agent is (wrongly) treated
-    as free-pool eligible and ``orchestrator/free`` is (wrongly) advertised.
+    from ``_is_general_free_agent`` onward here fails: the agent is (wrongly)
+    treated as blind-free-pool eligible and ``orchestrator/free`` is (wrongly)
+    advertised.
     """
     vision = DiscoveredModel(
         provider_name="nvidia_nim",
@@ -92,8 +93,10 @@ def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(
     # explicitly requests it with an image) and its price evidence is honest.
     assert agent.disabled is False
     assert "cost:free" in agent.tags
-    # It must never be selectable by the capability-blind free pool.
-    assert orchestrator._is_free_agent(agent) is False
+    # Its own capability route can still serve it for free (price-only).
+    assert orchestrator._is_free_agent(agent) is True
+    # It must never be selectable by the capability-blind general chat pool.
+    assert orchestrator._is_general_free_agent(agent) is False
     assert orchestrator.FREE_MODEL not in {
         row["id"] for row in orchestrator.list_openai_models()["data"]
     }
