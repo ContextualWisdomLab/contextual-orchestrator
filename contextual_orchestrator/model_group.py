@@ -264,7 +264,10 @@ class ModelGroupRouter:
                     latency_seconds=latency,
                     output_tokens=output_tokens,
                 )
-                state = self._ensure_locked(member_id)
+                state = self._ensure_locked(
+                    member_id,
+                    observation_context_key=observation_context_key,
+                )
                 self._apply_success_locked(state, clamped, throughput_sample)
 
     def observe_failure(
@@ -284,7 +287,10 @@ class ModelGroupRouter:
                     observed_at=when,
                     success=False,
                 )
-                state = self._ensure_locked(member_id)
+                state = self._ensure_locked(
+                    member_id,
+                    observation_context_key=observation_context_key,
+                )
                 self._apply_failure_locked(state)
 
     def _resolve_observed_at(self, observed_at: float | None) -> float:
@@ -315,7 +321,10 @@ class ModelGroupRouter:
                 context_key=(
                     observation_context_key
                     if observation_context_key is not None
-                    else self._context_key_locked(member_id)
+                    else self._context_key_locked(
+                        member_id,
+                        observation_context_key=observation_context_key,
+                    )
                 ),
                 observed_at=when,
                 success=success,
@@ -434,8 +443,18 @@ class ModelGroupRouter:
 
     # --- internal helpers (callers must hold ``self._lock``) ---------------
 
-    def _ensure_locked(self, member_id: str) -> dict[str, float | None]:
-        self._member_contexts.setdefault(member_id, self._resolve_context_key(member_id))
+    def _ensure_locked(
+        self,
+        member_id: str,
+        *,
+        observation_context_key: str | None = None,
+    ) -> dict[str, float | None]:
+        if member_id not in self._member_contexts:
+            self._member_contexts[member_id] = (
+                observation_context_key
+                if observation_context_key is not None
+                else self._resolve_context_key(member_id)
+            )
         return self._members.setdefault(member_id, self._blank_state(member_id))
 
     def _resolve_context_key(self, member_id: str) -> str:
@@ -448,8 +467,19 @@ class ModelGroupRouter:
             raise ValueError("observation_context_resolver must return a non-empty string")
         return context_key
 
-    def _context_key_locked(self, member_id: str) -> str:
-        return self._member_contexts.setdefault(member_id, self._resolve_context_key(member_id))
+    def _context_key_locked(
+        self,
+        member_id: str,
+        *,
+        observation_context_key: str | None = None,
+    ) -> str:
+        if member_id not in self._member_contexts:
+            self._member_contexts[member_id] = (
+                observation_context_key
+                if observation_context_key is not None
+                else self._resolve_context_key(member_id)
+            )
+        return self._member_contexts[member_id]
 
     def _apply_success_locked(
         self,

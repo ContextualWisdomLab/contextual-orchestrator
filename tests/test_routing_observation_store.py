@@ -325,6 +325,61 @@ def test_provider_failure_observation_outage_does_not_mask_active_failure(
         orchestrator.close()
 
 
+def test_removed_agent_observation_uses_captured_context_without_resolving_pool_member(
+    tmp_path, monkeypatch
+) -> None:
+    removed = ModelAgent("member_a", "mock-model", group_name="shared_model")
+    survivor = ModelAgent("member_b", "mock-model", group_name="shared_model")
+    orchestrator = TaskOrchestrator(
+        [removed, survivor],
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+    context_key = orchestrator._routing_observation_context_for_agent(removed)
+    orchestrator.remove_agent("default", removed.id)
+
+    def fail_if_resolved(member_id: str) -> str:
+        raise AssertionError(f"unexpected resolver call for {member_id}")
+
+    try:
+        monkeypatch.setattr(orchestrator._group_router, "_resolve_context_key", fail_if_resolved)
+        orchestrator._group_router.observe_failure(
+            removed.id,
+            observation_context_key=context_key,
+        )
+        with sqlite3.connect(tmp_path / "state.sqlite") as connection:
+            rows = connection.execute(
+                "SELECT member_id, context_key FROM routing_observations"
+            ).fetchall()
+        assert rows == [(removed.id, context_key)]
+    finally:
+        orchestrator.close()
+
+
+def test_removed_agent_observation_without_captured_context_uses_stable_fallback(
+    tmp_path,
+) -> None:
+    removed = ModelAgent("member_a", "mock-model", group_name="shared_model")
+    survivor = ModelAgent("member_b", "mock-model", group_name="shared_model")
+    orchestrator = TaskOrchestrator(
+        [removed, survivor],
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+    try:
+        orchestrator.remove_agent("default", removed.id)
+        expected_context = orchestrator._routing_observation_context_for_member(removed.id)
+        orchestrator._record_group_failure(removed.id)
+        with sqlite3.connect(tmp_path / "state.sqlite") as connection:
+            rows = connection.execute(
+                "SELECT member_id, context_key FROM routing_observations"
+            ).fetchall()
+        assert rows == [(removed.id, expected_context)]
+        assert orchestrator._routing_observation_context_for_member(removed.id) == expected_context
+    finally:
+        orchestrator.close()
+
+
 def test_router_rejects_incomplete_store_contract() -> None:
     with pytest.raises(TypeError):
         ModelGroupRouter(observation_store=object())  # type: ignore[arg-type]

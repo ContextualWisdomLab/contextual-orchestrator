@@ -6892,7 +6892,22 @@ class TaskOrchestrator:
         ).hexdigest()
 
     def _routing_observation_context_for_member(self, agent_id: str) -> str:
-        return self._routing_observation_context_for_agent(self._agent(agent_id))
+        try:
+            agent = self._agent(agent_id)
+        except KeyError:
+            payload = {
+                "auth_scheme": "",
+                "base_url": "",
+                "group_name": "",
+                "id": agent_id,
+                "model": "",
+                "provider_name": "",
+                "removed_from_pool": True,
+            }
+            return hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        return self._routing_observation_context_for_agent(agent)
 
     def _agent_in_pool(self, agent_pool_id: str, worker_agent_id: str) -> ModelAgent:
         """Resolve an agent only through the pool boundary it can belong to.
