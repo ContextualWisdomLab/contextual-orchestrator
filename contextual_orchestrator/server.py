@@ -1244,6 +1244,11 @@ def _validate_responses_logprobs(body: dict[str, Any]) -> None:
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
         if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            # Pop rather than leave a raw blank/None value in body: later
+            # provider-only routing checks (_responses_virtual_requires_provider_path)
+            # read body.get("top_logprobs") directly and must see an omitted
+            # field, not a truthy empty string.
+            body.pop("top_logprobs", None)
             return
         if body.get("logprobs") is not True:
             raise RequestError(
@@ -1308,6 +1313,11 @@ def _validate_responses_seed(body: dict[str, Any]) -> int | None:
         message="seed must be an integer",
     )
     if seed is None:
+        # Pop rather than leave a raw blank/None value in body: later
+        # provider-only routing checks (_responses_virtual_requires_provider_path)
+        # read body.get("seed") directly and must see an omitted field, not a
+        # truthy empty string.
+        body.pop("seed", None)
         return None
     body["seed"] = seed
     if seed < -(2**63) or seed > (2**63 - 1):

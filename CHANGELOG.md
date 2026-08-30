@@ -85,6 +85,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A blank-string `seed` or `top_logprobs` on `/v1/responses` no longer forces
+  the provider-only (non-streamed) execution path for `orchestrator/auto` /
+  `orchestrator/free`. Both omit-equivalence checks now pop the field instead
+  of leaving the raw blank string behind, matching the existing Chat
+  Completions convention and keeping the streamed-orchestration decision
+  (`_responses_virtual_requires_provider_path`) honest about what was
+  actually supplied.
 - Provider/model failures no longer collapse into a generic `internal_error`.
   A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
   classifies every upstream HTTP status, network, TLS, and transport failure

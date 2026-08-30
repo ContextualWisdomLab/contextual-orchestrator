@@ -97,6 +97,55 @@ def test_virtual_models_stream_openai_reasoning_summaries(model: str) -> None:
         )["trace"]} == {"free_worker"}
 
 
+def test_streamed_orchestrated_responses_allows_blank_seed_and_top_logprobs() -> None:
+    """Blank-string ``seed`` / ``top_logprobs`` are omit-equivalent and must not
+    force the provider-only (non-streamed) Responses path.
+
+    Regression: ``_validate_responses_seed`` and ``_validate_responses_logprobs``
+    left the raw blank string in ``body`` on their omit branch, so
+    ``_responses_virtual_requires_provider_path``'s ``body.get("seed") is not
+    None`` / ``body.get("top_logprobs") is not None`` checks saw a truthy
+    ``""`` and wrongly rejected virtual streaming with ``invalid_stream`` even
+    though both fields were semantically omitted.
+    """
+    token = "responses_stream_blank_controls_token"
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("blank_control_worker", "mock-model", tags=("reasoning",), priority=100)]
+    )
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+            data=json.dumps(
+                {
+                    "model": "orchestrator/auto",
+                    "input": "Blank seed and top_logprobs must not force provider-only.",
+                    "stream": True,
+                    "seed": "",
+                    "top_logprobs": "",
+                }
+            ).encode(),
+            headers={"content-type": "application/json", "authorization": f"Bearer {token}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.headers["content-type"].startswith("text/event-stream")
+            stream = response.read().decode()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    types = [
+        json.loads(line[6:])["type"]
+        for line in stream.splitlines()
+        if line.startswith("data: {")
+    ]
+    assert types[0] == "response.created"
+    assert types[-1] == "response.completed"
+
+
 def test_streamed_responses_records_unavailable_usage_without_estimating_answer() -> None:
     token = "responses_stream_usage_token"
     orchestrator = TaskOrchestrator([
