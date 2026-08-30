@@ -51,8 +51,8 @@ against `.github` main post-fix.
   on the current head`); the actual review dispatch (`opencode-review-dispatch.yml`) is a
   separate `repository_dispatch`-triggered workflow fired by `.github`'s own scheduler
   (`*/15 * * * *` / `*/30 * * * *` cron in `pr-review-merge-scheduler.yml`), not something a
-  failed-job re-run re-invokes. Will resolve on the scheduler's own next pass; not re-tested
-  synchronously here.
+  failed-job re-run re-invokes. Whether it resolves depends on the scheduler's own next pass,
+  which has not been synchronously re-verified here — a planned follow-up, not an assumed outcome.
 - **`noema-review`** (`contextual-orchestrator#921`, run `33306104620`, job `99243631744`): this
   one *does* dispatch inline per-PR, so it's the real live signal. The exact `16`-token/502
   symptom this fix targets did **not** reproduce — confirms the fix. Instead it failed with a
@@ -176,10 +176,14 @@ in the PRs it blocked.
 
 **Fix**: `ContextualWisdomLab/.github#1436` bumps the sidecar's gateway
 preflight `max_tokens` from `16` to `4096`, matching `REVIEW_MAX_OUTPUT_TOKENS`
-(the budget the routing probe already uses and already proved sufficient for
-this exact route, well within the existing 30s curl timeout — the routing
-probe itself completes in under its own 10s timeout at this budget). Per
-owner review on that PR, source correctness alone does not establish
+(the budget the routing probe already uses). Note: the routing probe's own
+10s per-candidate timeout does *not* establish that a full-budget gateway
+completion finishes within any particular bound — the gateway preflight's
+separate curl timeout (originally 30s) was itself later found to be too
+tight for real reasoning-model latency and raised to 120s in
+`ContextualWisdomLab/.github#1440` (see that entry above); the two timeouts
+are independent and this entry originally conflated them. Per owner review
+on that PR, source correctness alone does not establish
 operational acceptance: the fix also carries a RED→GREEN parity test
 (`test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe`,
 confirmed to fail on the pre-fix `16` literal and pass once synchronized) and
