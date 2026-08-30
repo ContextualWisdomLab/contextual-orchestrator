@@ -16,13 +16,13 @@ failed providers") — but the workflow's embedded verification script asserted
 `set(report['registered_credentials']) == set(PROVIDER_CREDENTIAL_NAMES)` unconditionally, with no
 tolerance for a single isolated provider outage, turning every occurrence into a hard CI failure.
 
-**Not a one-off flake.** `list_workflow_runs` for this workflow shows every scheduled run has failed
-since the schedule started, `2026-08-25T09:01:27Z` (run #4) through today (run #49,
-`2026-08-30T12:55:16Z`) — 44 of 46 scheduled runs `failure` (the other two `cancelled`/`skipped`),
-zero scheduled successes ever recorded. The only `success` runs (#1-3) were `pull_request`-triggered
-before the workflow went live on `main`. This had gone unnoticed for 5 days of continuous hourly
-failures — itself evidence that a hard-fail-on-any-provider-hiccup design was not actually serving as
-useful signal.
+**Not a one-off flake.** `list_workflow_runs` for this workflow (runs #4-#49, `2026-08-25T09:01:27Z`
+through today's #49 at `2026-08-30T12:55:16Z`) shows 44 `failure` / 1 `cancelled` / 1 `skipped` — zero
+successes since the schedule started, across both the 43 `schedule`-triggered runs (42 failure, 1
+cancelled) and the 3 manual `workflow_dispatch` runs (2 failure, 1 skipped). The only `success` runs
+(#1-3) were `pull_request`-triggered before the workflow went live on `main`. This had gone unnoticed
+for 5 days of continuous near-hourly failures — itself evidence that a hard-fail-on-any-provider-hiccup
+design was not actually serving as a useful signal.
 
 **Bytez code path checked for a false-positive bug** (`contextual_orchestrator/model_discovery.py`
 `PROVIDER_MODEL_SOURCES`/`_parse_bytez`/`discover_provider_models`): URL
