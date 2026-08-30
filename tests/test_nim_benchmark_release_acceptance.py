@@ -506,7 +506,7 @@ def test_budgeted_client_fallback_and_transport_errors(monkeypatch) -> None:
         return 500, b"provider failure"
 
     failing = nb._BudgetedModelClient(nb.RequestBudget(1), transport=failing_transport)
-    with pytest.raises(RuntimeError, match="provider .* request failed"):
+    with pytest.raises(RuntimeError, match="provider rejected the request with HTTP 500"):
         failing.chat(agent, [{"role": "user", "content": "hello"}])
 
 

@@ -39,7 +39,7 @@ def test_dry_run_workflow_honors_optional_pricing_scenario_without_secret() -> N
 
 def test_temporary_review_export_job_is_absent_from_mergeable_tests_workflow() -> None:
     """Mergeable CI must not retain the one-use exact-head export mechanism."""
-    workflow = (REPOSITORY_ROOT / ".github/workflows/tests.yml").read_text(
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(
         encoding="utf-8"
     )
     assert "export_review_workspace" not in workflow
@@ -64,7 +64,7 @@ def test_compatibility_monkeypatch_module_is_absent() -> None:
 
 def test_tests_workflow_enforces_nim_coverage_docstrings_and_package_smoke() -> None:
     """The exact PR head must prove 100% branches, docstrings, and installability."""
-    workflow = (REPOSITORY_ROOT / ".github/workflows/tests.yml").read_text(
+    workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(
         encoding="utf-8"
     )
     assert "nim_benchmark_quality:" in workflow
