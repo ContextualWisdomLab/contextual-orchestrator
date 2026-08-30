@@ -811,6 +811,78 @@ def test_free_discovered_models_still_counts_a_free_vision_only_input_model() ->
     assert general_free_serving_candidates([vision_model]) == []
 
 
+def test_general_free_serving_candidates_excludes_unroutable_free_models() -> None:
+    """Non-text price/modality evidence alone does not certify servability.
+
+    Devin's review pass on PR #933 after ``efd44f6`` found that
+    ``general_free_serving_candidates`` admits any zero-priced, text-input
+    row regardless of whether it could ever actually become a serving agent:
+    an ``evidence_only`` catalog row (``agent_from_discovered`` refuses to
+    build an agent from one at all) and a free non-chat-capable model (e.g.
+    an embedding-only deployment) both pass the price and modality checks
+    while being fundamentally unroutable. ``general_free_serving_count``
+    therefore overcounted models the general chat pool could never actually
+    serve. ``is_routable_discovered_model`` -- the same predicate
+    ``_auto_discover_runtime_agents`` and ``provider_bootstrap`` already use
+    to decide whether a discovered row may become an ordinary chat agent at
+    all -- is the missing check.
+    """
+    evidence_only_free_text_model = replace(
+        DiscoveredModel(
+            provider_name="nvidia_nim",
+            model_id="evidence-only-free-model",
+            credential_name="NVIDIA_NIM_API_KEY",
+            chat_base_url="https://integrate.api.nvidia.com/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat",),
+            input_modalities=("text",),
+            output_modalities=("text",),
+            is_free=True,
+        ),
+        evidence_only=True,
+    )
+    embedding_only_free_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="embedding-only-free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    routable_free_text_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="routable-free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+    serving_candidates = general_free_serving_candidates([
+        evidence_only_free_text_model,
+        embedding_only_free_model,
+        routable_free_text_model,
+    ])
+
+    assert [model.model_id for model in serving_candidates] == ["routable-free-model"]
+    # Both unroutable rows remain fully counted in the price-based inventory.
+    assert {model.model_id for model in free_discovered_models([
+        evidence_only_free_text_model,
+        embedding_only_free_model,
+        routable_free_text_model,
+    ])} == {
+        "evidence-only-free-model",
+        "embedding-only-free-model",
+        "routable-free-model",
+    }
+
+
 def test_general_free_serving_candidates_modality_shapes() -> None:
     """Explicit three-way modality contract: text-only, image-only, text+image.
 
@@ -907,9 +979,13 @@ def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
     discovered = [text_only, vision_only, text_and_image]
     serving_model_ids = {model.model_id for model in general_free_serving_candidates(discovered)}
 
+    # ModelAgent.id must be two-or-more-word snake_case; provider model ids
+    # (e.g. "meta/llama-3.2-90b-vision-instruct") are not, so derive a
+    # compliant id distinct from the ``model`` field under test.
+    agent_id_translation = str.maketrans("/.-", "___")
     agents = {
         model.model_id: ModelAgent(
-            model.model_id,
+            model.model_id.casefold().translate(agent_id_translation),
             model.model_id,
             tags=("cost:free", *(f"input:{value}" for value in model.input_modalities)),
         )

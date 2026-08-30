@@ -233,6 +233,32 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   model that "also declares text" (Devin's other suggestion) because the
   incident model itself declares both `text` and `image` per Models.dev, so
   that narrowing would have silently re-admitted it.
+- Devin's review on the fix above found it had overshot: `TaskOrchestrator._is_free_agent`
+  is also the predicate `_capability_agents` uses for every explicit
+  capability-scoped free route (`/v1/audio/transcriptions`, `/v1/videos`,
+  image, speech, rerank), where a free agent's non-text `input:<modality>`
+  tag is the capability's own expected shape, not a surprise -- so the
+  shared choke point made those genuinely free agents unreachable through
+  their own free route. `_is_free_agent` now reverts to plain, modality-blind
+  price evidence; a new, stricter `_is_general_free_agent` (price-blind
+  `_is_free_agent` plus the non-text-input exclusion) carries the exclusion
+  only at capability-blind general-chat call sites (`proxy_completion`,
+  `_orchestrated_provider_completion`, `route_once`, `conduct`,
+  `list_openai_models`'s advertising check, and `server.py`'s
+  capability-agnostic `_require_pool_model` branch). The discovery-time and
+  selection-time "what counts as non-text input" classification is now one
+  shared predicate, `chat_capability.requires_non_text_input`, so
+  `model_discovery._requires_non_text_input` and
+  `orchestrator._agent_requires_non_text_input` cannot drift apart.
+- Devin's next review pass found `general_free_serving_candidates()` still
+  overcounted: it admitted a zero-priced, text-input catalog row regardless
+  of whether it could ever actually become a serving agent, so an
+  `evidence_only` row (`agent_from_discovered` refuses to build an agent from
+  one) or a free non-chat-capable model (e.g. an embedding-only deployment)
+  both inflated `general_free_serving_count`. The selector now also requires
+  `is_routable_discovered_model` -- the same predicate `_auto_discover_runtime_agents`
+  and `provider_bootstrap` already require before promoting a discovered row
+  to an ordinary chat agent.
 
 ### Changed
 

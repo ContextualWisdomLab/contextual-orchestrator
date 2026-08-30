@@ -1399,11 +1399,22 @@ def general_free_serving_candidates(
     free route (``_capability_agents``), where that same tag is the expected
     shape, not a surprise -- so a durable agent-pool row written by an older
     build, before this exclusion existed, cannot bypass it either.
+
+    Zero price and text-only input still are not enough on their own: an
+    ``evidence_only`` catalog row can never become a serving agent at all
+    (:func:`agent_from_discovered` refuses to build one), and a free
+    non-chat-capable model (e.g. an embedding-only deployment) is not a
+    general chat candidate either. :func:`is_routable_discovered_model` --
+    the same predicate ``_auto_discover_runtime_agents`` and
+    ``provider_bootstrap`` already require before promoting a discovered row
+    to an ordinary chat agent -- excludes both here too, so this selector's
+    count never overstates how many free models the general chat pool could
+    actually serve.
     """
     return [
         model
         for model in free_discovered_models(discovered)
-        if not _requires_non_text_input(model)
+        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
     ]
 
 
