@@ -19,6 +19,7 @@ from hypothesis import given, settings, strategies as st
 from fuzz.targets import (
     exercise_agent_config,
     exercise_model_judge_reply,
+    exercise_models_dev_cost,
     exercise_nim_catalog,
     exercise_orchestration,
     exercise_pii_key,
@@ -105,6 +106,12 @@ def test_agent_config_parser_shaped(value: dict) -> None:
 @given(_json_values)
 def test_provider_model_payload_parser_never_crashes(value: object) -> None:
     exercise_provider_model_payload(value)
+
+
+@_SETTINGS
+@given(_json_values)
+def test_models_dev_cost_classifier_never_crashes_or_over_claims_free(value: object) -> None:
+    exercise_models_dev_cost(value)
 
 
 @_SETTINGS

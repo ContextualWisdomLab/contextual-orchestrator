@@ -27,6 +27,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _fetch_json,
     _price_per_1k,
     agent_from_discovered,
     agent_id_for,
@@ -342,6 +343,235 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
     ):
         discovered = discover_provider_models(source)
 
+    assert discovered[0].is_free is False
+
+
+def test_nvidia_nim_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
+    """The generalized join (ADR 0032's opencode_zen contract, now data-driven)."""
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            assert request.get_header("Authorization") is None
+            return _Response(
+                {
+                    "nvidia": {
+                        "models": {
+                            "meta/llama-3.1-8b-instruct": {
+                                "cost": {"input": 0, "output": 0, "cache_read": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                            "deepseek-ai/deepseek-v4-flash": {
+                                "cost": {"input": 0.1, "output": 0.4},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                            "nvidia/cache-fee-model": {
+                                "cost": {"input": 0, "output": 0, "cache_write": 0.05},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                        }
+                    }
+                }
+            )
+        return _Response(
+            {
+                "data": [
+                    {"id": "meta/llama-3.1-8b-instruct"},
+                    {"id": "deepseek-ai/deepseek-v4-flash"},
+                    {"id": "nvidia/cache-fee-model"},
+                    {"id": "nvidia/unlisted-model"},
+                ]
+            }
+        )
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    # Free: every declared monetary component is exactly zero.
+    assert discovered[0].is_free is True
+    assert discovered[0].input_modalities == ("text",)
+    # Paid: nonzero input/output cost, consistent with the deliberately-priced
+    # models Models.dev documents for the nvidia provider.
+    assert discovered[1].is_free is False
+    assert discovered[1].prompt_price_per_1k == pytest.approx(0.0001)
+    assert discovered[1].completion_price_per_1k == pytest.approx(0.0004)
+    # Only cache_write is nonzero: must NOT be classified free (off-by-omission
+    # guard -- a free-looking token price is not the whole cost vector).
+    assert discovered[2].is_free is False
+    # In NIM's own listing but absent from Models.dev: stays unknown, not free.
+    assert discovered[3].is_free is False
+
+
+def test_nvidia_nim_metadata_failure_keeps_availability_but_not_free() -> None:
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            raise urllib.error.URLError("offline")
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is False
+
+
+def test_fetch_json_sends_a_stable_user_agent_on_every_request() -> None:
+    """Models.dev rejects urllib's default UA with HTTP 403 (Cloudflare error 1010);
+
+    every request -- authenticated or not -- must carry an identifying UA so the
+    Models.dev join (and any other unauthenticated discovery call) does not
+    silently degrade to metadata-unavailable.
+    """
+    captured: list[object] = []
+
+    def urlopen(request, timeout=None):
+        captured.append(request)
+        return _Response({"data": []})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        _fetch_json("https://models.dev/api.json", timeout=5.0)
+        _fetch_json("https://api.openai.com/v1/models", api_key="sk-test", timeout=5.0)
+
+    assert len(captured) == 2
+    for request in captured:
+        user_agent = request.get_header("User-agent")
+        assert user_agent, "every discovery request must carry a User-Agent header"
+        assert "urllib" not in user_agent.lower()
+    # The authorization header must still be scoped to the authenticated call only.
+    assert captured[0].get_header("Authorization") is None
+    assert captured[1].get_header("Authorization") == "Bearer sk-test"
+
+
+def test_nvidia_nim_join_requires_the_user_agent_header_to_avoid_a_403() -> None:
+    """Regression for the exact live failure: a fetch mock that 403s without a UA."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            if not request.get_header("User-agent"):
+                raise urllib.error.HTTPError(
+                    request.full_url, 403, "Forbidden", {}, None
+                )
+            return _Response(
+                {"nvidia": {"models": {"meta/llama-3.1-8b-instruct": {"cost": {"input": 0, "output": 0}}}}}
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is True
+
+
+def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() -> None:
+    """opencode_zen + nvidia_nim + nvidia_nim_sub share one Models.dev fetch."""
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    register_credential("NVIDIA_NIM_API_KEY_SUB", "nim-sub-key")
+    models_dev_calls = []
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            models_dev_calls.append(request.full_url)
+            return _Response(
+                {
+                    "opencode": {"models": {}},
+                    "nvidia": {
+                        "models": {
+                            "meta/llama-3.1-8b-instruct": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            }
+                        }
+                    },
+                }
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(
+        item
+        for item in PROVIDER_MODEL_SOURCES
+        if item.provider_name in {"opencode_zen", "nvidia_nim", "nvidia_nim_sub"}
+    )
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert len(models_dev_calls) == 1
+    # Both NVIDIA NIM credentials joined against the identical shared catalog.
+    assert [
+        (model.provider_name, model.is_free)
+        for model in discovered
+        if model.provider_name in {"nvidia_nim", "nvidia_nim_sub"}
+    ] == [("nvidia_nim", True), ("nvidia_nim_sub", True)]
+
+
+def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false() -> None:
+    """A failure of the ONE shared prefetch degrades every source to unknown cost."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    register_credential("NVIDIA_NIM_API_KEY_SUB", "nim-sub-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            raise urllib.error.URLError("offline")
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(
+        item
+        for item in PROVIDER_MODEL_SOURCES
+        if item.provider_name in {"nvidia_nim", "nvidia_nim_sub"}
+    )
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert [model.is_free for model in discovered] == [False, False]
+
+
+def test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev() -> None:
+    """Bytez has no Models.dev coverage; it must never trigger the shared fetch."""
+    register_credential("BYTEZ_API_KEY", "bytez-key")
+    models_dev_calls = []
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            models_dev_calls.append(request.full_url)
+            return _Response({})
+        return _Response(
+            {"output": [{"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat"}]}
+        )
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models()
+
+    assert errors == []
+    assert models_dev_calls == []
+    assert [model.model_id for model in discovered] == ["0-hero/Matter-0.1-Slim-7B-C"]
     assert discovered[0].is_free is False
 
 
