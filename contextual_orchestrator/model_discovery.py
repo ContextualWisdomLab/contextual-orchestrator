@@ -313,6 +313,7 @@ class _TrustedDiscoveryRedirectHandler(urllib.request.HTTPRedirectHandler):
         self._trusted_host = trusted_host.casefold()
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Follow a redirect only when it stays on the trusted HTTPS host."""
         parsed = urlsplit(newurl)
         if parsed.scheme != "https" or not parsed.hostname or parsed.hostname.casefold() != self._trusted_host:
             raise urllib.error.HTTPError(

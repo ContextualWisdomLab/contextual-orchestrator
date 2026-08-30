@@ -1,5 +1,18 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 PR #868 docstring-coverage fix
+
+`Full unit and contract suite` was failing exclusively on
+`tests/test_docstring_coverage.py::test_public_production_api_has_complete_docstrings`:
+`_TrustedDiscoveryRedirectHandler.redirect_request` in
+`contextual_orchestrator/model_discovery.py` (added by this branch) had no
+docstring. Added one; no other change. This branch's head was already even
+with protected `main` (`5f2753a`), so no merge was needed. `opencode-review`
+and `noema-review` remain red on this PR for the same org-wide reason
+recorded in the contextual-orchestrator gap baseline's 2026-08-30 entry: the
+central `.github` repo's review sidecar vendors a stale
+`contextual-orchestrator` pin, not a defect in this branch.
+
 ## 2026-08-27 omitted-model and virtual-id contract slice
 
 The prior local `commercial-loop-20260826` worktree contained an omitted-model
