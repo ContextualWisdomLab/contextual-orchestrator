@@ -5127,6 +5127,13 @@ def _chat_response_sse_chunks(
         final["orchestration"] = orchestration
     chunks.append(final)
     if include_usage:
+        # Every normal chunk must carry usage: null so a consumer that checks
+        # key presence (rather than dict.get()) sees the same OpenAI
+        # include_usage contract this framing's sibling, the live
+        # _stream_route_completion path, already honors — only the terminal
+        # choices-empty chunk below carries the real usage value.
+        for normal_chunk in chunks:
+            normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
         if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}
@@ -6802,7 +6809,11 @@ def build_server(
                                         model=model_name,
                                         include_usage=include_usage,
                                         prompt_text=json.dumps(
-                                            body.get("messages", []), ensure_ascii=False
+                                            {
+                                                "messages": body.get("messages", []),
+                                                "tools": body.get("tools"),
+                                            },
+                                            ensure_ascii=False,
                                         ),
                                     )
                                 )

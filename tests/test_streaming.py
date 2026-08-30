@@ -193,6 +193,48 @@ def test_structured_sse_tool_call_deltas_coexist_with_reported_usage() -> None:
     }
 
 
+def test_structured_sse_normal_chunks_carry_null_usage_when_include_usage() -> None:
+    """Every non-final chunk must carry the key "usage": None, not merely omit it.
+
+    Regression for a Devin finding on #925: the sibling live-stream framing
+    path (_stream_route_completion's frame()) already sets payload["usage"] =
+    None on every role/content/tool-call/stop chunk when include_usage=True,
+    matching the OpenAI stream_options.include_usage contract, which some
+    consumers verify by key presence rather than dict.get(). This function
+    used to omit the key entirely on those chunks.
+    """
+    chunks = _chat_response_sse_chunks(
+        {
+            "id": "chatcmpl-null-usage",
+            "model": "tool-model",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "tool_calls": [
+                        {"id": "call-1", "type": "function", "function": {}},
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        model="tool-model",
+        include_usage=True,
+        prompt_text="hi",
+    )
+
+    normal_chunks = [chunk for chunk in chunks if chunk["choices"] != []]
+    assert len(normal_chunks) == 4  # role, content, tool_call, stop
+    for chunk in normal_chunks:
+        assert "usage" in chunk
+        assert chunk["usage"] is None
+
+    usage_chunks = [chunk for chunk in chunks if chunk["choices"] == []]
+    assert len(usage_chunks) == 1
+    assert usage_chunks[0]["usage"]["usage_source"] == "reported"
+
+
 def test_structured_nonstream_provider_drops_gateway_stream_options() -> None:
     orchestrator = TaskOrchestrator(
         [ModelAgent("structured_agent", "structured-model")],
