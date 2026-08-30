@@ -68,6 +68,13 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.video_jobs.VideoJobRegistry`: provider-affine async
+  video resources. New submissions join immutable `video_job_records` with an
+  optional first-complete `video_job_usages` row; legacy owner payloads are a
+  compatibility read-and-update path — `observe_provider_result` still writes
+  the first-complete `video_job_usages` row for a legacy `video_job_owners`
+  record that has none. Provider status is observed in provider responses,
+  never persisted or inferred.
 - Batch routing jobs carry a non-secret authenticated-principal digest from
   submission through status and result retrieval; mismatched owners receive
   the same not-found response before backend access. Results require the

@@ -45,6 +45,13 @@ class FakeValkeyClient:
         self.hashes.setdefault(key, {})[field] = value
         return 1
 
+    def hsetnx(self, key: str, field: str, value: str) -> int:
+        bucket = self.hashes.setdefault(key, {})
+        if field in bucket:
+            return 0
+        bucket[field] = value
+        return 1
+
     def hdel(self, key: str, field: str) -> int:
         bucket = self.hashes.get(key, {})
         if field in bucket:
@@ -106,6 +113,15 @@ def test_writes_refresh_the_registry_retention_window() -> None:
     mapping = ValkeyJsonMapping(client, "jobs", retention_seconds=123)
     mapping["job"] = {"ok": True}
     assert client.expirations["batch_job_registry:jobs"] == 123
+
+
+def test_set_if_absent_preserves_the_first_value() -> None:
+    client = FakeValkeyClient()
+    mapping = ValkeyJsonMapping(client, "jobs", retention_seconds=123)
+
+    assert mapping.set_if_absent("job", {"value": 1}) is True
+    assert mapping.set_if_absent("job", {"value": 2}) is False
+    assert mapping["job"] == {"value": 1}
 
 
 def test_factory_without_client_hands_out_plain_dicts() -> None:

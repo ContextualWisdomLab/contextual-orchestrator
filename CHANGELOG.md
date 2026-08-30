@@ -25,7 +25,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   readiness report while keeping local product evidence inspectable.
 - Provider-affine asynchronous video jobs now return an opaque gateway id and
   keep status polling and content download bound to the exact provider agent
-  that accepted the submission (ADR 0037).
+  that accepted the submission (ADR 0037); new ownership and first-complete
+  usage observations are stored as separate registry records.
 - A fail-closed, transactional evidence boundary for the optional NVIDIA NIM
   benchmark with immutable task/scorer identities and complete provenance.
 - Bounded first-valid-completion racing for operator-declared equivalent model
