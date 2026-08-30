@@ -253,12 +253,13 @@ class ModelGroupRouter:
             raise ValueError("output_tokens must be representable as a finite float") from None
         if throughput_sample is not None and not math.isfinite(throughput_sample):
             raise ValueError("output_tokens must be representable as a finite float")
+        when = self._resolve_observed_at(observed_at)
         with self._lock:
             with self._observation_io_lock:
                 self._persist_observation(
                     member_id,
                     observation_context_key=observation_context_key,
-                    observed_at=observed_at,
+                    observed_at=when,
                     success=True,
                     latency_seconds=latency,
                     output_tokens=output_tokens,
@@ -274,16 +275,24 @@ class ModelGroupRouter:
         observed_at: float | None = None,
     ) -> None:
         """Record one failed attempt (stability evidence only; no latency)."""
+        when = self._resolve_observed_at(observed_at)
         with self._lock:
             with self._observation_io_lock:
                 self._persist_observation(
                     member_id,
                     observation_context_key=observation_context_key,
-                    observed_at=observed_at,
+                    observed_at=when,
                     success=False,
                 )
                 state = self._ensure_locked(member_id)
                 self._apply_failure_locked(state)
+
+    def _resolve_observed_at(self, observed_at: float | None) -> float:
+        """Resolve one observation timestamp before any router lock can delay it."""
+        if observed_at is None:
+            store_now = getattr(self._observation_store, "_now", None)
+            return float(store_now()) if callable(store_now) else time.time()
+        return float(observed_at)
 
     def _persist_observation(
         self,
@@ -298,11 +307,7 @@ class ModelGroupRouter:
         """Persist one observation while keeping storage failures identifiable."""
         if self._observation_store is None:
             return
-        if observed_at is None:
-            store_now = getattr(self._observation_store, "_now", None)
-            when = float(store_now()) if callable(store_now) else time.time()
-        else:
-            when = float(observed_at)
+        when = self._resolve_observed_at(observed_at)
         try:
             self._observation_store.append(
                 self._ledger_name,

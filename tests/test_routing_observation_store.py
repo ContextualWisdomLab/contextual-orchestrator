@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 import pytest
 
@@ -383,6 +384,51 @@ def test_store_load_orders_by_observed_completion_time_not_insert_order(tmp_path
     assert [(row.success, row.latency_seconds) for row in rows] == [
         (True, 0.1),
         (False, None),
+    ]
+
+
+def test_router_captures_default_observed_at_before_lock_acquisition(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    store = SqliteRoutingObservationStore(path, 60, clock=_Clock(100.0))
+    router = ModelGroupRouter(observation_store=store)
+    first_timestamp_captured = threading.Event()
+    allow_first_attempt = threading.Event()
+    observed_times = iter((90.0, 95.0))
+
+    def resolve(observed_at: float | None) -> float:
+        if observed_at is not None:
+            return float(observed_at)
+        when = next(observed_times)
+        if when == 90.0:
+            first_timestamp_captured.set()
+            assert allow_first_attempt.wait(timeout=1.0)
+        return when
+
+    router._resolve_observed_at = resolve  # type: ignore[method-assign]
+
+    first = threading.Thread(
+        target=router.observe_success,
+        args=("member_a", 0.1),
+        name="member-a-observation",
+    )
+    second = threading.Thread(
+        target=router.observe_success,
+        args=("member_b", 0.1),
+        name="member-b-observation",
+    )
+
+    first.start()
+    assert first_timestamp_captured.wait(timeout=1.0)
+    second.start()
+    second.join(timeout=1.0)
+    assert not second.is_alive()
+    allow_first_attempt.set()
+    first.join(timeout=1.0)
+    assert not first.is_alive()
+
+    assert [row.member_id for row in store.load("transport")] == [
+        "member_a",
+        "member_b",
     ]
 
 
