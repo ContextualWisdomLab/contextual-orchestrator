@@ -32,6 +32,7 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+import certifi
 from jsonschema.validators import validator_for
 
 from .chat_capability import (
@@ -45,7 +46,17 @@ from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
-from .telemetry import inject_trace_context, traced
+from .provider_errors import (
+    ProviderUpstreamError,
+    classify_provider_failure,
+    provider_error_body,
+)
+from .telemetry import (
+    annotate_current_span,
+    inject_trace_context,
+    record_provider_usage,
+    traced,
+)
 from .pii_protection import (
     DEFAULT_PII_KEY_NAME,
     ENCRYPTED_FIELDS_KEY,
@@ -131,8 +142,28 @@ class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
 
 
-class ProviderRequestTooLargeError(RuntimeError):
-    """Raised after every eligible provider rejects the request as too large."""
+class ProviderRequestTooLargeError(ProviderUpstreamError):
+    """Preserve request-size taxonomy across transport and telemetry boundaries."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        agent_id: str = "",
+        model: str = "",
+        provider_status: int | None = None,
+        transport: str = "chat",
+    ) -> None:
+        super().__init__(
+            agent_id=agent_id,
+            model=model,
+            error_code="request_too_large",
+            message=message,
+            client_status=413,
+            provider_status=provider_status,
+            retryable=False,
+            transport=transport,
+        )
 
 
 def _structured_output_error(
@@ -621,7 +652,7 @@ class OrchestrationPolicy:
 # HTTP statuses worth retrying: request timeout, conflict, too-early, rate limit,
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
-TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -634,10 +665,7 @@ def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
     if cached is not missing:
         return cached if isinstance(cached, dict) else None
     try:
-        raw = error.read(65536)
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8")
-        payload = json.loads(raw)
+        payload = json.loads(provider_error_body(error).decode("utf-8"))
     except (
         AttributeError,
         OSError,
@@ -1067,6 +1095,39 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> None:
+    """Annotate the active provider span with one response's concrete evidence.
+
+    Records GenAI semantic-convention usage counts, the served model name,
+    the finish reason, and request latency so traces carry real per-call
+    telemetry instead of transport metadata alone.
+    """
+    if not isinstance(data, dict):
+        return
+    attributes: dict[str, Any] = {
+        "contextual_orchestrator.latency_ms": round((time.monotonic() - started_monotonic) * 1000, 2)
+    }
+    served_model = data.get("model")
+    if isinstance(served_model, str) and served_model:
+        attributes["gen_ai.response.model"] = served_model
+    choices = data.get("choices")
+    finish_reasons = (
+        [
+            choice["finish_reason"]
+            for choice in choices
+            if isinstance(choice, dict)
+            and isinstance(choice.get("finish_reason"), str)
+            and choice["finish_reason"]
+        ]
+        if isinstance(choices, list)
+        else []
+    )
+    if finish_reasons:
+        attributes["gen_ai.response.finish_reasons"] = finish_reasons
+    annotate_current_span(attributes)
+    record_provider_usage(data.get("usage"))
+
+
 _PASSTHROUGH_TRIGGER_KEYS = (
     "response_format",
     "tools",
@@ -1136,6 +1197,11 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         if current is None or id(current) in seen:
             return False
         seen.add(id(current))
+        if isinstance(current, ProviderUpstreamError):
+            if current.provider_status in (
+                _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
+            ):
+                return True
         if (
             isinstance(current, urllib.error.HTTPError)
             and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
@@ -1190,6 +1256,7 @@ class ModelClient:
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
         self.temperature = temperature
+        self.ca_bundle = ca_bundle
         if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -1216,7 +1283,9 @@ class ModelClient:
                 return ssl.create_default_context(cafile=ca_bundle)
             except OSError as exc:
                 raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
-        return ssl.create_default_context()
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        return context
 
     @staticmethod
     def _normalize_allowed_provider_hosts(hosts: Iterable[str] | None) -> frozenset[str]:
@@ -1519,10 +1588,18 @@ class ModelClient:
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
         ):
-            raise ProviderRequestTooLargeError("provider request body is too large") from None
+            raise ProviderRequestTooLargeError(
+                "provider request body is too large",
+                agent_id=agent.id,
+                model=agent.model,
+                provider_status=last_error.code,
+                transport="chat",
+            ) from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
-        raise RuntimeError(f"provider {agent.id} request failed") from None
+        # Classify instead of collapsing: a 401/404/429 upstream failure is
+        # caller-actionable and must not surface as one opaque internal error.
+        raise classify_provider_failure(last_error, agent_id=agent.id, model=agent.model)
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -1553,6 +1630,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        started = time.monotonic()
         opened = (
             self._open_provider(request, destination)
             if timeout is None
@@ -1560,6 +1638,7 @@ class ModelClient:
         )
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
+        _record_provider_response_telemetry(data, started)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -1579,7 +1658,6 @@ class ModelClient:
                 "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
             )
         raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
-
     @staticmethod
     def _connect_validated(
         destination: ProviderDestination, timeout: float | None, source_address: tuple[str, int] | None
@@ -1751,6 +1829,10 @@ class ModelClient:
             method="POST",
         )
         stream_error: RuntimeError | None = None
+        started = time.monotonic()
+        stream_usage: dict[str, Any] | None = None
+        stream_model: str | None = None
+        stream_choices: list[dict[str, str]] = []
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1764,17 +1846,33 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    choices = chunk.get("choices")
+                    if not isinstance(chunk, dict):
+                        continue
                     usage = chunk.get("usage")
                     if isinstance(usage, dict):
                         self._local.usage = usage
+                        stream_usage = usage
+                    if isinstance(chunk.get("model"), str):
+                        stream_model = chunk["model"]
+                    choices = chunk.get("choices")
                     if choices == []:
                         continue
                     if not isinstance(choices, list) or not choices:
                         continue
+                    stream_choices.extend(
+                        {"finish_reason": choice["finish_reason"]}
+                        for choice in choices
+                        if isinstance(choice, dict)
+                        and isinstance(choice.get("finish_reason"), str)
+                        and choice["finish_reason"]
+                    )
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
+            _record_provider_response_telemetry(
+                {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
+                started,
+            )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
             # The gateway's own terminal tool-stop contract must survive the
             # boundary: convert the provider HTTP shape into the package-owned
@@ -1786,8 +1884,10 @@ class ModelClient:
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
             # and exception cause inside the gateway; callers get one stable,
-            # package-owned error instead of raw provider diagnostics.
-            stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+            # classified, package-owned error instead of raw provider diagnostics.
+            stream_error = classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport="stream"
+            )
         if stream_error is not None:
             raise stream_error
 
@@ -1905,8 +2005,13 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
-            return response.read(), response.headers.get_content_type()
+        try:
+            with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
+                return response.read(), response.headers.get_content_type()
+        except Exception as exc:  # noqa: BLE001 - classify provider transport failures
+            raise classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport="passthrough"
+            ) from None
 
     def proxy_get_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
         """Retrieve provider JSON from the exact agent that owns an async job."""
@@ -2017,10 +2122,20 @@ class ModelClient:
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
         ):
-            raise ProviderRequestTooLargeError("provider request body is too large") from None
-        if not allow_transient_retries and last_error is not None:
+            raise ProviderRequestTooLargeError(
+                "provider request body is too large",
+                agent_id=agent.id,
+                model=agent.model,
+                provider_status=last_error.code,
+                transport="passthrough",
+            ) from None
+        if last_error is None:  # pragma: no cover - the loop always attempts once
+            raise RuntimeError(f"provider {agent.id} passthrough request failed")
+        if not allow_transient_retries:
             raise last_error
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
+        raise classify_provider_failure(
+            last_error, agent_id=agent.id, model=agent.model, transport="passthrough"
+        ) from None
 
     def _send_raw(
         self,
@@ -2041,8 +2156,11 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        started = time.monotonic()
         with self._open_provider(request, destination) as response:
-            return json.loads(response.read().decode("utf-8"))
+            data = json.loads(response.read().decode("utf-8"))
+        _record_provider_response_telemetry(data, started)
+        return data
 
     def _mock_raw(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -2197,16 +2315,19 @@ class ModelClient:
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
-            batch_error: RuntimeError | None = None
+            batch_error: ProviderUpstreamError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
                     agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
                 )
-            except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
+            except Exception as exc:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
                 # public gateway boundary; provider bodies and exception text stay
-                # inside the authorized provider observability system.
-                batch_error = RuntimeError(f"provider {agent.id} batch request failed")
+                # inside the authorized provider observability system. The failure
+                # is still classified so callers can act on the cause.
+                batch_error = classify_provider_failure(
+                    exc, agent_id=agent.id, model=agent.model, transport="batch"
+                )
             if batch_error is not None:
                 raise batch_error
         return _validate_batch_results(requests, results)
@@ -3115,6 +3236,11 @@ class TaskOrchestrator:
         "synthesizer": ("writing", "reasoning", "planning"),
         "embedding": ("embedding",),
     }
+    #: Gateway-default virtual model name advertised on ``/v1/models`` and
+    #: accepted by every inference endpoint as orchestrator-owned auto
+    #: selection. Kept beside :data:`AUTO_MODEL` because both are virtual ids:
+    #: neither maps to a concrete agent until routing resolves one.
+    GATEWAY_DEFAULT_MODEL = "contextual-orchestrator"
     AUTO_MODEL = "orchestrator/auto"
     FREE_MODEL = "orchestrator/free"
 
@@ -3478,7 +3604,12 @@ class TaskOrchestrator:
             else None
         )
         if replica_agent_ids is not None and agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             agent = next(
                 (
@@ -3506,7 +3637,7 @@ class TaskOrchestrator:
         upstream["stream"] = False
         if requested_model not in (
             None,
-            "contextual-orchestrator",
+            self.GATEWAY_DEFAULT_MODEL,
             self.AUTO_MODEL,
             self.FREE_MODEL,
         ):
@@ -3544,7 +3675,7 @@ class TaskOrchestrator:
                     for candidate in self.agents
                     if self._zdr_agent_allowed(candidate)
                 }
-                if requested_model == self.AUTO_MODEL
+                if requested_model in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
                 else None
             )
         ))
@@ -3592,7 +3723,7 @@ class TaskOrchestrator:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
-        last_error: Exception | None = None
+        last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
         for candidate in candidates:
             started_at = time.perf_counter()
@@ -3616,8 +3747,15 @@ class TaskOrchestrator:
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
                 if not _is_passthrough_failover_error(exc):
+                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
+                        raise classify_provider_failure(
+                            exc,
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            transport="passthrough",
+                        ) from None
                     raise
-                last_error = exc
+                last_failure = (exc, candidate)
                 request_too_large = _is_request_too_large_error(exc)
                 every_failure_was_request_too_large = (
                     every_failure_was_request_too_large
@@ -3634,13 +3772,19 @@ class TaskOrchestrator:
                     candidate.id, time.perf_counter() - started_at
                 )
             return result
-        if last_error is not None and every_failure_was_request_too_large:
+        if last_failure is not None and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             ) from None
-        raise RuntimeError(
-            f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
-        ) from last_error
+        if last_failure is not None:
+            last_error, failed_candidate = last_failure
+            raise classify_provider_failure(
+                last_error,
+                agent_id=failed_candidate.id,
+                model=failed_candidate.model,
+                transport="passthrough",
+            ) from None
+        raise RuntimeError("passthrough has no eligible provider candidate")
 
     def _orchestrated_provider_completion(
         self,
@@ -3667,12 +3811,17 @@ class TaskOrchestrator:
                 "response_format.json_schema is missing a schema"
             )
         task = self._latest_user_text(messages)
+        # Vision is a hard entitling capability the request payload cannot
+        # grant, so it stays a required tag. ``response_format`` is a gateway
+        # contract that any general chat synthesizer can honor because the
+        # provider payload itself carries the format: prefer a deployment that
+        # advertises it, but never fail closed merely because the pool does not
+        # tag it. Missing format filtering is therefore a 400, not a 500 or a
+        # silent fallback. Deferred (virtual/gateway-default) model names must
+        # resolve to a concrete synthesizer even without that tag.
         prompt_context = self._prompt_interaction(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
-        selection_tags = (
-            *required_tags,
-            *(("response_format",) if chat_body.get("response_format") else ()),
-        )
+        response_format_requested = bool(chat_body.get("response_format"))
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         required_agent_id = body.get("_required_agent_id")
@@ -3699,15 +3848,23 @@ class TaskOrchestrator:
                 final_agent = self._select_agent(
                     task,
                     "synthesizer",
-                    required_tags=selection_tags,
+                    required_tags=required_tags,
                     free_only=free_only,
+                    prefer_tags=(
+                        (("response_format",) if response_format_requested else ())
+                    ),
                     prompt_context=prompt_context,
                 )
             except RuntimeError as exc:
-                if selection_tags:
+                if required_tags:
                     raise ValueError(
                         "no enabled model supports required tags: "
-                        + ", ".join(selection_tags)
+                        + ", ".join(required_tags)
+                    ) from exc
+                if response_format_requested:
+                    raise ValueError(
+                        "no enabled model can serve the requested response_format; "
+                        "the pool has no chat synthesizer"
                     ) from exc
                 raise
         replica_agent_ids = (
@@ -3716,7 +3873,12 @@ class TaskOrchestrator:
             else None
         )
         if replica_agent_ids is not None and final_agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             final_agent = next(
                 (
@@ -3724,7 +3886,7 @@ class TaskOrchestrator:
                     for candidate in self._ranked_agents(
                     task,
                     "synthesizer",
-                    required_tags=selection_tags,
+                    required_tags=required_tags,
                     free_only=free_only,
                     prompt_context=prompt_context,
                     )
@@ -3745,7 +3907,7 @@ class TaskOrchestrator:
         self._raise_if_spend_budget_exceeded()
         workflow = self.conduct(
             messages,
-            model_name=self.FREE_MODEL if free_only else "contextual-orchestrator",
+            model_name=self.FREE_MODEL if free_only else self.GATEWAY_DEFAULT_MODEL,
         )
         in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -3863,7 +4025,7 @@ class TaskOrchestrator:
                 final_agent,
                 task,
                 "synthesizer",
-                required_tags=selection_tags,
+                required_tags=required_tags,
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
             )
@@ -4101,7 +4263,7 @@ class TaskOrchestrator:
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
-            "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL
+            self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL
         }:
             return None
         if type(requested_model) is not str or not requested_model:
@@ -4142,7 +4304,7 @@ class TaskOrchestrator:
         mode: str = "auto",
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
@@ -4190,13 +4352,13 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         ):
@@ -4207,14 +4369,14 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str = "auto",
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
         return mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         )
@@ -4224,7 +4386,7 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         workflow_run_id: str | None = None,
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         owner_id: str | None = None,
         include_usage: bool = False,
         usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
@@ -4278,8 +4440,11 @@ class TaskOrchestrator:
             "id": 0,
             "role": "worker",
             "agent_id": agent.id,
+            "model": agent.model,
+            "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
             "subtask": "Direct route (streamed)",
             "access": [],
+            "latency_ms": round(latency_seconds * 1000, 2),
             "output": answer,
         }
         if isinstance(usage, dict):
@@ -4317,7 +4482,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> str:
         snapshot = getattr(self.client, "request_settings_snapshot", None)
@@ -4344,7 +4509,7 @@ class TaskOrchestrator:
         workflow_run_id: str | None = None,
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
         owner_id: str | None = None,
     ) -> dict[str, Any]:
@@ -4477,14 +4642,23 @@ class TaskOrchestrator:
             requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
 
         answers: dict[int, dict[str, Any]] = {}
+        batch_latency_ms_by_agent: dict[str, float] = {}
         for agent_id, requests in requests_by_agent.items():
             effort_profile = self._role_effort_profile("worker")
+            batch_started_at = time.perf_counter()
             batch = (
                 self.client.batch_chat(
                     agents_by_id[agent_id], requests, effort_profile=effort_profile
                 )
                 if effort_profile is not None
                 else self.client.batch_chat(agents_by_id[agent_id], requests)
+            )
+            # One provider batch call covers every request in this group. Record
+            # its shared elapsed time on each trace row without claiming
+            # unavailable per-request timing precision.
+            batch_latency_ms_by_agent[agent_id] = round(
+                (time.perf_counter() - batch_started_at) * 1000,
+                2,
             )
             results = _validate_batch_results(requests, batch)
             for custom_id, result in results.items():
@@ -4509,6 +4683,9 @@ class TaskOrchestrator:
             result = answers[index]
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
+                "model": agent.model,
+                "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+                "latency_ms": batch_latency_ms_by_agent[agent.id],
                 "subtask": "Direct route (batched)", "access": [], "output": result["content"],
             }
             if result.get("usage") is not None:
@@ -4975,7 +5152,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace.
 
@@ -5030,6 +5207,8 @@ class TaskOrchestrator:
                 "id": attempt_index,
                 "role": "worker",
                 "agent_id": candidate.id,
+                "model": candidate.model,
+                "provider": candidate.provider_name or self._infer_provider_name(candidate.base_url),
                 "subtask": "Direct route",
                 "access": [],
                 "latency_ms": round(latency_seconds * 1000, 2),
@@ -5152,7 +5331,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         progress: Any = None,
         workflow_run_id: str | None = None,
     ) -> dict[str, Any]:
@@ -5167,7 +5346,7 @@ class TaskOrchestrator:
             if message.get("role") == "system" and isinstance(message.get("content"), str)
         )
         plan_source = "template"
-        if model_name not in {"contextual-orchestrator", self.AUTO_MODEL}:
+        if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
             steps = self._plan(task, model_name=model_name)
         elif self.policy.workflow_planning == "generated":
             try:
@@ -5265,6 +5444,8 @@ class TaskOrchestrator:
             row = step.as_dict()
             row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
+            row["model"] = agent.model
+            row["provider"] = agent.provider_name or self._infer_provider_name(agent.base_url)
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
@@ -5441,7 +5622,7 @@ class TaskOrchestrator:
         return steps
 
     def _plan(
-        self, task: str, *, model_name: str = "contextual-orchestrator"
+        self, task: str, *, model_name: str = GATEWAY_DEFAULT_MODEL
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
         free_only = model_name == self.FREE_MODEL
@@ -5823,6 +6004,7 @@ class TaskOrchestrator:
         *,
         free_only: bool = False,
         required_tags: tuple[str, ...] = (),
+        prefer_tags: tuple[str, ...] = (),
         prompt_context: str | None = None,
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
@@ -5830,7 +6012,10 @@ class TaskOrchestrator:
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
         excluded by the capability contract enforced by
         :func:`is_general_chat_candidate`; this is an endpoint-compatibility
-        gate, not a task-keyword heuristic.
+        gate, not a task-keyword heuristic. ``required_tags`` must all be
+        present (hard entitlements); ``prefer_tags`` only influence
+        tie-breaking when a candidate already carries them, so a pool that
+        does not advertise an optional gateway capability still resolves.
         """
         ranked = [
             agent
@@ -5844,6 +6029,14 @@ class TaskOrchestrator:
             if _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
+        if prefer_tags and ranked:
+            preferred = [
+                agent
+                for agent in ranked
+                if all(tag in agent.tags for tag in prefer_tags)
+            ]
+            if preferred:
+                ranked = preferred
         if not ranked:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         selected = ranked[0]
@@ -5859,7 +6052,11 @@ class TaskOrchestrator:
         capability = {"embeddings": "embedding"}.get(capability, capability)
         if not capability:
             raise ValueError("capability must be a non-empty string")
-        virtual_model = model_name in {self.AUTO_MODEL, self.FREE_MODEL}
+        virtual_model = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
         free_only = model_name == self.FREE_MODEL
         exact_models = {agent.model for agent in self.candidates}
         requested_group = (
@@ -6149,6 +6346,8 @@ class TaskOrchestrator:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             ) from last_error
+        if isinstance(last_error, ProviderUpstreamError):
+            raise last_error
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
@@ -6248,7 +6447,13 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        bounded_provider_response_failures = 0
+        last_provider_response_error: ProviderResponseError | None = None
         every_failure_was_request_too_large = True
+        # The final classified upstream failure survives the candidate loop so a
+        # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
+        # one opaque collapse message.
+        last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -6266,10 +6471,28 @@ class TaskOrchestrator:
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
-                    if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
+                    if isinstance(exc, ToolFallbackStoppedError):
                         raise
+                    if isinstance(exc, ProviderUpstreamError):
+                        last_upstream_error = exc
+                    if isinstance(exc, ProviderResponseError):
+                        if allowed_agent_ids is None:
+                            raise
+                        bounded_provider_response_failures += 1
+                        last_provider_response_error = exc
+                        decision = classify_tool_failure(exc)
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        self._record_failure(agent.id)
+                        break
                     decision = classify_tool_failure(exc)
                     action = decision.action
+                    if (
+                        isinstance(exc, ProviderUpstreamError)
+                        and not exc.retryable
+                        and action is ToolFallbackAction.RETRY_SAME_AGENT
+                    ):
+                        decision = downgrade_to_failover(decision)
+                        action = decision.action
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
                     if (
@@ -6312,10 +6535,17 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
-        if every_failure_was_request_too_large:
+        if (
+            last_provider_response_error is not None
+            and bounded_provider_response_failures == len(candidates)
+        ):
+            raise last_provider_response_error
+        if candidates and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
+        if last_upstream_error is not None:
+            raise last_upstream_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
@@ -6712,7 +6942,7 @@ class TaskOrchestrator:
         created = 1_700_000_000  # stable epoch so list responses are deterministic
         data: list[dict[str, Any]] = [
             {
-                "id": "contextual-orchestrator",
+                "id": self.GATEWAY_DEFAULT_MODEL,
                 "object": "model",
                 "created": created,
                 "owned_by": "contextual-orchestrator",

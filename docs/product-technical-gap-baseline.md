@@ -1,4 +1,626 @@
+# Contextual Orchestrator: Product & Technical Gap Baseline
+
+## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
+
+Checked whether the `.github` `opencode-review` required check's own verdict-matching logic (the
+`pulls/{pr}/reviews` jq filter matching `opencode-agent[bot]` + current-head `commit_id` +
+`APPROVED`/`CHANGES_REQUESTED`) was itself defective, since it's failed on essentially every PR
+across the org for days. Read its git history instead of guessing:
+
+- **2026-08-27** (`ContextualWisdomLab/.github@d8216de`, "restore OpenCode coverage honesty and
+  mermaid surfaces"): the `opencode-review` job was **rewritten from a rubber stamp into a real
+  fail-closed check**. Before this commit the entire job body was
+  `echo "Review approval remains a separate current-head PR review requirement..."` — always
+  `exit 0`, satisfied by nothing. This commit replaced it with the actual verdict-matching logic,
+  a deliberate hardening (it explicitly excludes low-quality fallback/unsupported-scope approvals
+  from counting — sound defense against a documented prior failure mode, not a bug).
+- **2026-08-29** (`ContextualWisdomLab/.github@5992331`, "exercise exact gateway readiness"): a
+  second, independent, well-intentioned addition — the real end-to-end gateway completion check
+  (`gateway_preflight_request`/`gateway_preflight_response`/`publish_sidecar_evidence`, the whole
+  mechanism this doc's entries below are about). It shipped with `"max_tokens":16` hardcoded —
+  exactly the bug `ContextualWisdomLab/.github#1436` fixed.
+
+**The collision, not a design flaw**: the verdict-checker went strict on the 27th; the dispatch
+that would satisfy it started reliably failing two days later because the *new* gateway check
+introduced on the 29th broke on reasoning-capable routes. Confirmed directly on
+`ContextualWisdomLab/.github#1246` (open since 2026-08-23): a real `opencode-agent[bot]`
+`CHANGES_REQUESTED` review landed on 2026-08-23, and none since, despite the PR head moving
+forward multiple times and presumably hundreds of scheduler passes in between. That gap is the
+most direct evidence available that this — not a checker logic defect — plausibly explains the
+~30-PR backlog observed across `ContextualWisdomLab/.github` on 2026-08-30. The fix path was
+already the right one: make the gateway check reliable (`#1436`, then `#1440` below), not touch
+the verdict-checker.
+
+## 2026-08-30 post-merge canary: max_tokens fix confirmed, distinct preflight failure surfaced
+
+`ContextualWisdomLab/.github#1436` (the sidecar `max_tokens:16→4096` fix below) merged via
+admin bypass: the `opencode-review` required check on that PR was a structural self-deadlock,
+not a review outcome — its job log
+(`ContextualWisdomLab/.github` run `33306047509`, job `99242771080`) shows it only verifies that
+`opencode-agent[bot]` posted a review on the current head SHA, and that review's dispatch runs
+the *base* branch's (pre-fix) sidecar, which could never produce one. No further push to that PR
+branch could have resolved it; merging was the only path out. Evidence posted on the PR before
+merging.
+
+**Live post-merge canary** (the outstanding item from the entry below): re-queued the failed
+`opencode-review`/`noema-review`/`strix` jobs on `contextual-orchestrator#921`, `#911`, `#920`
+against `.github` main post-fix.
+
+- **`opencode-review`**: still fails, but confirmed as expected, not a regression — the job that
+  fails is a deterministic verdict-checker (`No APPROVED or CHANGES_REQUESTED from opencode-agent
+  on the current head`); the actual review dispatch (`opencode-review-dispatch.yml`) is a
+  separate `repository_dispatch`-triggered workflow fired by `.github`'s own scheduler
+  (`*/15 * * * *` / `*/30 * * * *` cron in `pr-review-merge-scheduler.yml`), not something a
+  failed-job re-run re-invokes. Whether it resolves depends on the scheduler's own next pass,
+  which has not been synchronously re-verified here — a planned follow-up, not an assumed outcome.
+- **`noema-review`** (`contextual-orchestrator#921`, run `33306104620`, job `99243631744`): this
+  one *does* dispatch inline per-PR, so it's the real live signal. The exact `16`-token/502
+  symptom this fix targets did **not** reproduce — confirms the fix. Instead it failed with a
+  **different** signature: `provider_discovery_failed provider=bytez code=http_status_500`
+  followed by `review sidecar preflight failed` (detail lines sanitized from CI output by
+  design — the wrapper strips unstructured stderr to avoid leaking raw provider text; four lines
+  were dropped, `omitted_unstructured_lines=4`). Read
+  `scripts/ci/contextual_orchestrator_review_launcher.py`: `discover_all_models()` isolates a
+  single provider's failure by design (confirmed — the bytez 500 was logged and did not abort
+  discovery), so the crash is downstream, at `_preflight_with_fallback` finding zero passing
+  routes among whatever candidates were selected, not at discovery. No artifact was uploaded for
+  this workflow to inspect the per-route preflight reasons directly (unlike Strix's
+  `strix-reports.zip`).
+- **`strix`** (same PR, run `33306104587`): was still `in_progress` when this entry was written;
+  not yet observed to completion.
+
+**Retracted: the "transient rate-limit" hypothesis.** An earlier version of this entry speculated
+that three required review workflows provisioning their own sidecars and hitting the same
+free-tier NIM/OpenRouter routes within the same ~1-minute window across three PRs simultaneously
+was a plausible transient rate-limit trigger. That was conjecture, not evidence, and it was wrong
+— superseded below. Two real, distinct defects were found and fixed in
+`ContextualWisdomLab/.github#1440`, both
+grounded in an actually-downloaded `strix-reports` artifact (Strix run `33306775025` on this PR,
+job `99244624298`), not inference from sanitized logs:
+
+1. **Zero observability for non-Strix workflows.** The launcher already writes real, schema-bounded
+   per-route evidence (`agent_id`/`provider`/`model`/`status`/`error_type`/`http_status` — no raw
+   provider content or secrets) to `--preflight-out` before raising. Only Strix's separate
+   artifact-upload step ever surfaced it; `noema-review`/`opencode-review` had no way to show *why*
+   routes were rejected. Fixed: the sidecar script now prints that file directly into the job log on
+   total rejection.
+2. **The real cause of that specific artifact's failure**: the routing probe marked
+   `nvidia_nim_deepseek_ai_deepseek_v4_flash_0731` "ready" in 18s (other candidates rejected with
+   `TimeoutError`/`HTTP 404` — not a `max_tokens`-too-large `400`, ruling out a per-model-token-limit
+   theory also raised during this investigation). The separate end-to-end gateway check against that
+   *same* healthy route was then cut off by curl's own `--max-time 30` at exactly 30.0s —
+   `"gateway preflight request could not reach the local sidecar"` was that timeout, not a real
+   connectivity failure. 30s undercuts real reasoning-model completion latency and this org's own
+   accuracy-over-speed policy (the job already budgets 120 minutes). Fixed: raised to 120s.
+
+Both fixes are RED-before-GREEN tested (`test_sidecar_surfaces_preflight_route_evidence_when_every_route_is_rejected`,
+`test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency`) and pushed as
+`ContextualWisdomLab/.github#1440` (open at the time of this entry; not yet merged — per this
+repo's own trust-boundary note, that PR's own CI cannot validate its fixes before merge, since its
+required checks run *main's* pre-fix script).
+
+**Net**: `#1436`'s `max_tokens` fix is verified correct and merged. It was not, by itself,
+sufficient to make the pipeline consistently healthy — `#1440` fixes two more concrete, evidenced
+defects in the same failure chain. Whether the pipeline is now consistently healthy remains to be
+re-observed once `#1440` merges; do not treat either fix as closing this gap-baseline item until
+that clean re-run is confirmed.
+
+## 2026-08-30 sidecar preflight max_tokens desynchronized from the routing probe
+
+Root-caused the org-wide `opencode-review`/`noema-review`/`strix` failure
+signature (`gateway preflight returned HTTP 502` / `error_code:
+invalid_structured_output`) that every open PR across the organization has
+been showing at sidecar boot, before any real review or security analysis
+ever runs.
+
+**Evidence, and where it stops being evidence and starts being inference**
+(correction added 2026-08-30 after a Devin review finding on
+`contextual-orchestrator#921` — see below): downloaded the `strix-reports`
+artifact from this repo's own PR #912 run `33304076516` (job `99237393606`,
+`ContextualWisdomLab/contextual-orchestrator/actions/runs/33304076516`).
+`contextual-orchestrator-preflight.json` in that artifact shows the
+`ContextualWisdomLab/.github`-owned review sidecar's own routing probe
+(`contextual_orchestrator_review_launcher.py`, `REVIEW_MAX_OUTPUT_TOKENS =
+4096`) already selected `nvidia_nim_deepseek_ai_deepseek_v4_flash_0731` as
+`"status": "ready"` — a healthy, working free-tier route. The sidecar's
+separate end-to-end gateway check (a raw `curl` to the running
+`/v1/chat/completions` endpoint through `orchestrator/free`) re-tested the
+exact same route with `"max_tokens":16` hardcoded — 256x smaller than the
+budget the routing probe itself had just proven sufficient, and that check
+failed with `error_code: invalid_structured_output`, `http_status: 502`
+(same artifact). **That much is captured evidence.**
+
+The specific mechanism ("a reasoning-capable model spends the 16-token
+budget on reasoning and returns an empty `content`, tripping
+`_response_content`") was this entry's original explanation for *why* a
+smaller budget fails where a larger one succeeds. It was inference, not
+observed fact — the sidecar's stderr/stdout sanitizer strips raw provider
+response bodies by design (confirmed: neither log file in this artifact,
+nor any other artifact from this incident, contains the literal JSON the
+gateway received), so the actual `content`/`reasoning` field values were
+never captured anywhere inspectable. Devin's review on `#921` correctly
+caught that the inference as originally worded doesn't hold up against the
+actual code: `ModelClient._response_content`
+(`contextual_orchestrator/orchestrator.py`, `_response_content`) returns
+successfully for **any** string `content`, including `""` — an empty-string
+content does not raise. Raising requires `content` to be missing or
+non-string; *if* `reasoning` is also present and truthy at that point, the
+raised message is `"returned reasoning without content"`, not the generic
+`"... did not contain assistant content"` this entry originally quoted. The
+generic message this entry quoted therefore implies `content` was
+non-string/absent **and** the response either had no truthy `reasoning`
+key or `message`/`choices` itself was a different shape than assumed — a
+narrower and less certain claim than originally stated.
+
+**What remains solid without needing the exact field-level shape**: the
+routing probe (4096-token budget) proved the route healthy; the gateway
+preflight (16-token budget) against the identical route failed; raising the
+preflight's budget to match the probe's eliminated the reproducible failure
+mode in this repo's own test suite (RED before the fix, GREEN after — see
+`ContextualWisdomLab/.github#1436`) and the specific symptom did not
+reproduce in the live post-merge canary below. The budget mismatch is the
+established, fixed defect. The token-starvation-produces-empty-content
+narrative was a plausible *hypothesis* for why that mismatch mattered, not
+a verified mechanism — treat it as retracted pending real evidence, not as
+part of the record.
+`server.py`'s generic exception handler maps every `ProviderResponseError`
+to `502 invalid_structured_output` regardless of cause — a label describing
+a schema-validation failure that has nothing to do with what actually
+happened here (this preflight request carries no `response_format` or
+`tools` at all); that mismatch-labeling issue is real and unaffected by the
+correction above.
+
+Net effect: a healthy `orchestrator/free` gateway has been reporting itself
+unhealthy at sidecar boot. This was never a code-quality or security defect
+in the PRs it blocked.
+
+**Fix**: `ContextualWisdomLab/.github#1436` bumps the sidecar's gateway
+preflight `max_tokens` from `16` to `4096`, matching `REVIEW_MAX_OUTPUT_TOKENS`
+(the budget the routing probe already uses). Note: the routing probe's own
+10s per-candidate timeout does *not* establish that a full-budget gateway
+completion finishes within any particular bound — the gateway preflight's
+separate curl timeout (originally 30s) was itself later found to be too
+tight for real reasoning-model latency and raised to 120s in
+`ContextualWisdomLab/.github#1440` (see that entry above); the two timeouts
+are independent and this entry originally conflated them. Per owner review
+on that PR, source correctness alone does not establish
+operational acceptance: the fix also carries a RED→GREEN parity test
+(`test_gateway_preflight_max_tokens_is_synchronized_with_the_routing_probe`,
+confirmed to fail on the pre-fix `16` literal and pass once synchronized) and
+a negative control
+(`test_reasoning_without_content_remains_rejected_even_with_the_full_budget`)
+proving a genuinely reasoning-only/no-content response still fails closed at
+the full 4096-token budget — the fix widens the budget without weakening the
+fail-closed content check. A live post-merge canary (a subsequent PR's
+`opencode-review`/`noema-review`/`strix` actually producing an authoritative
+result, not just the sidecar preflight passing) remains outstanding before
+this is fully accepted.
+
+This is central `.github`-owned infrastructure; this repo's own PRs cannot
+fix it directly, only report and verify it (see the `pull_request_target`
+trust-boundary note in `.github`'s own `CLAUDE.md`).
+
+## 2026-08-30 hourly loop: #868 test-mock fix, #857 narrow hardening, #906 stale-base merge
+
+Fresh status check confirmed #868/#911/#912 were still `BLOCKED` purely on the
+known org-wide `opencode-review`/`noema-review` failure (stale
+`ORCHESTRATOR_PIN_SHA` vendored in `ContextualWisdomLab/.github`, fix pending
+in `.github#1422`) — none had picked up an approval since the last pass, so
+none were merged this cycle. #911/#912 had no other non-systemic failures
+(`Full unit and contract suite` green on both) and needed no code changes.
+
+**#868** (`fix/gateway-default-chat-model`) had one genuine, non-systemic
+failure at the start of this pass: `Full unit and contract suite` failed with
+`AttributeError: 'Namespace' object has no attribute 'provider_ca_bundle'` in
+`_discover_models_command` (`contextual_orchestrator/__main__.py:305`) — its
+own `argparse.ArgumentParser` never declared `--provider-ca-bundle`, even
+though the function read `args.provider_ca_bundle` unconditionally (26 tests
+failed: 8 directly on the missing attribute, 18 in
+`test_auto_discovery_server.py` because their `discover_all_models` mocks
+were fixed-arity lambdas that could not accept the `ca_bundle=` keyword the
+server-startup call site already passes). Mid-fix, the PR owner
+independently pushed `51fc34bb` adding the identical `--provider-ca-bundle`
+argument — this pass rebased its own unpushed commit on top of that (no
+history rewritten, since the commit had never been shared) and kept only the
+non-duplicate half: widening the 18 test lambdas to `**_kwargs`. Pushed as
+`e16cfed2`. Full local suite: `2745 passed, 1 skipped, 1 failed` — the one
+failure is `tests/test_psychometric_routing.py` needing the private
+`fast-mlsirm` package, unreachable in this sandbox (same documented blocker
+as PR #917), not a regression.
+
+**#857** (`fix/provider-backed-embedding-batch`) remains far too diverged to
+merge-resolve in one pass (165 files / ~13.9k lines vs current `main`,
+consistent with the prior pass's "too large" call) — left as-is otherwise.
+The three findings named for re-verification this cycle
+(`ProviderEmbeddingBatchBackend.submit` concurrency, `chat()` deadline
+propagation, `zdr_only` leaking into provider payloads) were checked against
+the PR's current head: the first two are already resolved there (Devin's
+"Caller deadline is ignored on chat passthrough" thread is marked resolved,
+and `submit`/`_run_job` already serialize every state transition under
+`self._registry.lock(...)` with a bounded `ThreadPoolExecutor`), and
+`zdr_only` does not exist anywhere in this PR's diff — that finding belongs to
+**PR #911** instead (open, unresolved CodeRabbit thread on `server.py`'s
+`_validate_zdr_only` not stripping the field from provider request bodies),
+not #857; apparently conflated across PRs in an earlier pass's notes. Of
+#857's 21 still-unresolved review threads, two were narrowly safe to fix
+without touching the stale-merge problem, pushed as `9b9f9e4d` (a plain
+commit on the existing head, no merge, no rebase):
+- `CostRoutingCoordinator.__init__`'s readiness-recovery loop and
+  `_run_provider_readiness_job` both indexed `self._readiness_jobs[job_id]`
+  with no presence check; a durable (Valkey/Redis) backend can expire that
+  document's TTL between the key listing and the lookup, raising `KeyError`
+  out of `__init__` (failing server construction) or silently killing the
+  readiness worker thread (leaving the job stuck `queued`/`running`
+  forever). Both sites now check `isinstance(..., dict)` and return/continue.
+- `tests/test_naruon_ecosystem_connector.py` called
+  `urllib.request.urlopen(req)` with no timeout, unlike every other HTTP test
+  in the file (`timeout=10`); added it.
+Validated with the Rust `_token_packer` extension built locally (`maturin
+develop --release`, needed because `build_token_counter` now hard-requires it
+— itself one of the 21 still-open findings, left alone): focused suite 54
+passed; full suite `2748 passed, 1 skipped, 1 failed` (same `fast-mlsirm`
+sandbox gap as above). The remaining ~19 unresolved threads (Dockerfile
+`test-runner` stage missing the `orchestrator` user — Major; unbounded
+OpenRouter endpoint enumeration; a resolver workflow pinned to a mutable ref;
+several Minor/Info items) were left untouched — the Dockerfile one needs a
+real `docker build` to fix safely (no daemon available in this sandbox), and
+the rest touch enough surrounding logic to risk the kind of regression this
+PR has already spent 268 commits chasing.
+
+**#906** (`feat/nim-benchmark-rebuild-20260828`) was reported `dirty` by
+GitHub's cached `mergeable_state`; a real trial merge of `origin/main` showed
+the branch was NOT irreconcilably diverged as `dirty` implied — the only
+textual conflict, across all 28 changed files plus everything `main` gained
+over the PR's stale base (33 commits), was in `CHANGELOG.md` (both sides
+appended bullets to the same `### Added`/`### Fixed` region). Resolved by
+keeping both sides' bullets under the file's one-header-per-type-per-version
+convention and merging `origin/main` into the PR branch (a merge commit; no
+rebase, no history rewritten). That merge then surfaced two real, narrow
+regressions against this PR's own test suite, both fixed and pushed together
+as `7ba5fefc`:
+- `tests/test_nim_benchmark_workflow_contract.py` read
+  `.github/workflows/tests.yml`, which `main` renamed to `ci.yml` in
+  `9b0a356d` ("use conventional workflow filename") sometime in those 33
+  commits; the `nim_benchmark_quality` job content the tests check for is
+  present and intact under the new name — repointed both reads.
+- `tests/test_nim_benchmark_release_acceptance.py::
+  test_budgeted_client_fallback_and_transport_errors` matched the old error
+  string `"provider .* request failed"`. `main`'s new
+  `contextual_orchestrator/provider_errors.py` (PR #879) reclassifies
+  provider HTTP failures through `ProviderUpstreamError` (still a
+  `RuntimeError` subclass) with the fixed message `"provider rejected the
+  request with HTTP {status}"` — updated the match regex.
+
+One more failure surfaced by the full suite, `tests/
+test_nim_benchmark_release_acceptance.py::
+test_smoke_manifest_cannot_authorize_production_routing`, is **not** caused
+by this merge: it was verified to fail identically — same
+`configured_total_token_budget=1280` vs `observed_budget_tokens=1283` on task
+`trick_arithmetic_lily_pads`/policy `conduct_bounded` — on this PR's own
+unmerged head `b0167b08`, before touching `main` at all. That contradicts the
+PR description's claimed "NIM focused and release/workflow tests: 112
+passed." This pass left it untouched rather than loosening the equal-budget
+assertion or the `30`/`0.9` evidence thresholds without the PR author's input
+on why observed token usage grew by exactly 3 tokens for that one locked
+task; it needs the author's judgment (a legitimate token-counting fix
+elsewhere in the 32-commit branch history vs. an actual regression), not a
+bot's guess. Full suite after both merge-fixes: `2797 passed, 2 failed` (the
+token-budget gap above, plus the same sandbox-only `fast-mlsirm` gap).
+`opencode-review` and `strix` were already failing on this PR before the
+merge for the same org-wide systemic reason (the `strix` job's own log shows
+it calling out to `api.opencode.ai`, consistent with `AGENTS.md`'s
+"OpenCode/Noema/Strix share this repo's gateway backend" migration note);
+`noema-review` was passing even pre-merge. None of this is a new regression
+from the merge itself.
+
+Nothing was merged to protected `main` this cycle — the org-wide
+`opencode-review`/`noema-review` gate blocks every open PR here until
+`ContextualWisdomLab/.github#1422` lands; that PR remains blocked on its own
+`pull_request_target` trust-boundary deadlock and is out of this repo's
+control. No new PRs had opened since the prior pass.
+
+## 2026-08-30 PR #868 docstring-coverage fix
+
+`Full unit and contract suite` was failing exclusively on
+`tests/test_docstring_coverage.py::test_public_production_api_has_complete_docstrings`:
+`_TrustedDiscoveryRedirectHandler.redirect_request` in
+`contextual_orchestrator/model_discovery.py` (added by this branch) had no
+docstring. Added one; no other change. This branch's head was already even
+with protected `main` (`5f2753a`), so no merge was needed. `opencode-review`
+and `noema-review` remain red on this PR for the same org-wide reason
+recorded in the contextual-orchestrator gap baseline's 2026-08-30 entry: the
+central `.github` repo's review sidecar vendors a stale
+`contextual-orchestrator` pin, not a defect in this branch.
+
+## 2026-08-27 omitted-model and virtual-id contract slice
+
+The prior local `commercial-loop-20260826` worktree contained an omitted-model
+repair that was not yet covered by PR #868 head `d37569835b1944075b66dd259d6738a8f4052927`.
+That repair was reconciled into the live PR branch without changing the open
+privacy-discovery or trace-authorization contracts. The exact contract on the
+new head is now:
+
+1. `/v1/chat/completions` omits to the advertised virtual gateway id
+   `contextual-orchestrator`.
+2. `/v1/responses` omits to `orchestrator/auto`, preserving the orchestrated
+   path instead of pretending a concrete deployment was named.
+3. Explicit JSON `null` still fails closed on both text surfaces; omission and
+   explicit null are no longer conflated.
+4. `orchestrator/free` remains explicit-only; no omitted-model path can
+   silently downgrade into a free-only request.
+
+Focused exact-head verification on Thursday, August 27, 2026 used `uv run`
+from the clean PR worktree:
+`tests/test_chat_orchestration_mode_http_honesty.py`,
+`tests/test_responses_model_required_http_honesty.py`,
+`tests/test_model_strip_writeback_http_honesty.py`, and
+`tests/test_orchestrated_responses_stream.py` all passed (`43 passed in
+18.49s`). This is branch evidence only and does not replace protected hosted
+checks or independent review.
+
+## 2026-08-27 bare-gateway discovery and virtual-model acceptance slice
+
+The user-facing report was reproduced as a code path, not an environment
+quirk: with the configured-gateway bootstrap transport
+(`LLM_GATEWAY_API_URL` + `LLM_GATEWAY_API_KEY`) pointing at a
+plain OpenAI-compatible gateway (e.g. a LiteLLM proxy) whose `/v1/models`
+rows carry no modality metadata produced `DiscoveredModel` rows with
+**empty** capabilities for chat deployments, while embedding deployments
+that happen to carry richer `/model/info` evidence kept an `embedding`
+capability. Empty-capability chat rows were then guaranteed to be dropped
+by the runtime activation filter (`"chat" in model.capabilities`), which
+is exactly "embedding discovers, chat does not".
+
+Closure in PR #868 (`fix/gateway-default-chat-model` core slice):
+
+1. `_parse_openai_compatible`: an identifier that passes the ordinary chat
+   transport gate (`is_general_chat_agent_model_id`) now receives the
+   `chat` capability, so a bare gateway list discovers usable chat models.
+   Endpoint-only ids (embedding/rerank/transcription/...) never pass that
+   gate, so no non-chat model is mislabeled.
+2. `_auto_discover_runtime_agents` activates candidates with the same
+   `is_discovered_chat_candidate` rule the serving bootstrap uses, so the
+   two entry points agree on bare-listing evidence.
+3. Structured chat trace disclosure path is restored (authorized callers
+   receive the disclosed workflow trace; tool passthrough reports
+   `trace_unavailable`), and `response_format` is a preference that can
+   never fail-closed purely because a pool lacks the tag, while vision
+   stays a hard entitlement.
+4. `orchestrator/auto`, `orchestrator/free`, and the advertised
+   `contextual-orchestrator` default resolve to a concrete synthesizer on
+   every structured surface; omitted-model and null/blank-model semantics
+   now differ honestly (omission defaults; explicit null/blank fails
+   closed).
+5. ZDR discovery already marks both paid and free models on OpenRouter
+   (`endpoints/zdr`) and configured gateways (`/model/info` consensus);
+   no ZDR regression introduced.
+
+Evidence: full suite `2483 passed, 1 skipped` locally and the hosted
+"Full unit and contract suite" green on the exact head; focused suites
+green. Non-critical CI only: fuzz hash-locks were aligned
+(`rpds-py`/`typing-extensions`) with `requirements.lock`; the Strix
+security-run provider was externally unavailable at one point (rate limit,
+token cap, or connection) and is re-run on dispatch — not a code
+defect.
+
+Remaining gap: the durable catalog still lacks operator-visible
+per-refresh status on every consumed config; follow-up leaves ZDR
+position for a metadata-freshness slice.
+
+## 1. Executive Summary
+This document serves as the baseline for the Contextual Orchestrator (an enterprise-grade LLM model orchestration gateway). To achieve a tier-one enterprise valuation (targeting the $20B+ market for AI infrastructure and governance), we must bridge the gap between our current state and a fully auditable, highly concurrent, standard-compliant SaaS gateway.
+
+## 2. Product Requirements Document (PRD) Gaps
+### Target Buyer & Value Proposition
+- **Enterprise AI Platform Teams & SOC**: Require high throughput, lowest latency, and absolute data privacy compliance (CSAP, SOC2, HIPAA).
+- **Core Value**: Token-cost optimization + performance + upstream load balancing with strict PII protection and Role-Based Access Control (RBAC).
+
+### Gap Analysis (Product)
+1. **Dynamic Model Discovery & Standard API Routing**:
+   - *Current*: A configured OpenAI-compatible gateway with API keys resolves embeddings, but other models (chat, multimodal) fail discovery.
+   - *Root cause (closed in PR #868)*: plain OpenAI-compatible listing rows without capability metadata were parsed with empty capabilities and then dropped by the runtime chat-activation filter; endpoint embedding rows kept richer metadata and survived.
+   - *Target*: Seamless dynamic model discovery for `orchestrator/auto`, `orchestrator/free`, and omitted models. Paid vs free model discovery fully automated regardless of provider or custom gateway endpoint. Full OpenAPI/RESTful standard compliance.
+   - *ZDR Discovery*: OpenRouter and configured gateways discover ZDR models (paid and free) and parse privacy policies for automated compliance.
+2. **PII Masking vs Business Continuity**:
+   - *Current*: PII masking disrupts downstream workflows if over-aggressive.
+   - *Target*: Context-aware differential privacy and entity resolution masking that preserves structural integrity without destroying analytical value (ADR 0027, 0028).
+3. **Advanced Scheduling & Reasoning (Fugu/Conductor/TRINITY)**:
+   - *Current*: Basic LiteLLM routing parity.
+   - *Target*: Test-time compute allocation based on reasoning effort ablation. Dynamic multi-agent routing based on task complexity. True $\theta$ ablations using equal-budget profiling are needed to map `lite` vs `full` vs `pro` execution.
+
+## 3. Technical Requirements Document (TRD) Gaps
+### Gap Analysis (Technical)
+1. **Concurrency and Scaling**:
+   - *Current*: Python GIL limitations (Multithreading issues).
+   - *Target*: Asynchronous full-duplex non-blocking I/O. Use Python 3.14 for GIL improvements, but core vector/routing arithmetic must be migrated to **Rust**. `k6` end-to-end load tests required to prove concurrent connections.
+2. **Database & Persistence**:
+   - *Current*: May have unstructured locking or missing 3NF.
+   - *Target*: Strict 3NF database schema with `snake_case` naming. Read/Write replica split. Hot partition mitigation. Use strict `UPSERT` semantics.
+3. **Math & Psychometrics Engine**:
+   - *Current*: Python-based math.
+   - *Target*: All tensor, vector, embedding chunking, token sizing, and psychometric models (TEPP, fast-mlsirm) must be computed in **Rust with GPU+CPU multithreading**. Use empirically validated weights (not arbitrary heuristics). Atomistic fallacy prevention via multilevel/temporal modeling.
+4. **Embedding Chunking & Omni-modal**:
+   - *Current*: Flat chunks.
+   - *Target*: Semantic boundary chunking (DOM nodes, paragraph, sender/receiver). Multimodal embedding (Base64 image text extraction, object detection). Add seamless audio/video routing natively.
+5. **Security & Compliance**:
+   - *Current*: Basic auth.
+   - *Target*: CSAP, SOC 2 compliance. Formalize gateway trust boundary with WAF/IDS (`wardnet`). 100% test coverage (unit, contract, edge cases). 100% docstring coverage.
+
+## 4. Ecosystem Integration Gaps
+- **fast-mlsirm & Psychometrics**: Time-aware modeling and multi-level / multi-membership models are not natively integrated in routing decisions.
+- **naruon**: PIM/DOM decomposition graphs from `naruon` are not directly queryable via our model's tool calls yet.
+
+## 5. Action Plan & Roadmap (Loop Strategy)
+1. **Fix Discovery (Immediate)**: Ensure omitted model, `orchestrator/auto`, and `orchestrator/free` semantics are correct.
+2. **Rust Migration (Q3)**: Extract vector math, token counting, and ML routing to a Rust extension.
+3. **Database Audit (Q3)**: Review Core ERD. Rename all non-snake_case objects. Add UPSERT paths.
+4. **k6 Load Test (Q3)**: Prove lock-free asynchronous operations.
+5. **Documentation**: APA 7th citations required for routing strategies.
+
+*Note: All architectural changes must cite relevant literature in APA 7th format. Scheduled for hourly updates.*
+
 # Product and Technical Gap Baseline
+
+## 2026-08-30 generalize the Models.dev free-cost join beyond opencode_zen
+
+`orchestrator/free` (ADR 0032) was structurally empty in practice: `is_free`
+only ever becomes `True` from a provider's own reported per-token price, and
+of this gateway's six provider sources only OpenRouter's API ever reports
+real pricing — and OpenRouter is deliberately `evidence_only=True` (ZDR
+hardening, commit `952996ec`, untouched by this change) so it never serves
+inference. Of the remaining five, `openai`, `nvidia_nim`, `nvidia_nim_sub`,
+and `bytez` never report pricing themselves. The one existing mitigation, cross-referencing
+`opencode_zen` against Models.dev (`https://models.dev/api.json`), only
+covers a source that is `bootstrap_required = False` and not always
+registered.
+
+ADR 0041 generalizes that already-accepted join (ADR 0032: "this
+source/effective-state split is the contract for adding further providers")
+from one hardcoded `provider_name == "opencode_zen"` branch to a declared
+`ProviderModelSource.models_dev_provider_id` field, set for `opencode_zen`
+("opencode"), `nvidia_nim` and `nvidia_nim_sub` (both "nvidia" — they share
+one upstream NIM catalog under two KV credentials), and `openai` ("openai").
+`discover_all_models` now fetches the Models.dev payload at most once per
+call and shares the identical parsed object across every source that wants
+it, instead of each source refetching it independently.
+
+Re-verified live against `models.dev/api.json` (4,432,167 bytes; 211
+providers; 7,488 models): `nvidia` is a real provider entry (103 models,
+exact `vendor/model` id shape matching NIM's own `/v1/models`, e.g.
+`meta/llama-3.1-8b-instruct`; 99 of 103 all-zero cost, 4 genuinely paid,
+e.g. `deepseek-ai/deepseek-v4-flash`). `openai` is a real provider entry
+(47 models) with every priced model nonzero today (0 free) — expected, and
+self-correcting with no code change if that ever stops being true. `bytez`
+has zero coverage anywhere in the payload (full key/substring scan over all
+211 provider ids) and Bytez's own docs describe billing only in prose
+(account-level credit, no per-model price field); this is documented as a
+permanent gap, not a TODO. The join stays exact-`model_id`-match and
+fail-closed exactly as the existing `is_free`/`_models_dev_cost_is_free`
+classification already was: unmatched ids, missing/partial cost objects, a
+nonzero `cache_read`/`cache_write`-only vector, and a Models.dev fetch
+failure all still leave `is_free = False`.
+
+This restores meaningful `orchestrator/free` coverage from `nvidia_nim`/
+`nvidia_nim_sub` rather than depending entirely on whether `opencode_zen`
+happens to be registered in a given deployment.
+
+## 2026-08-30 review-pipeline pin-bump verification and #911 provider-only streaming fix
+
+Re-checked every open PR fresh (`#868`, `#857`, `#906`, `#911`, `#912`; `#917`
+remains intentionally draft, blocked on an external dependency). None merged
+this cycle: all five are non-draft with `mergeable_state` `blocked` (`#857` is
+`dirty`), and none carries a qualifying `APPROVED` review — `opencode-review`
+and `noema-review` are still failing on every PR's exact head.
+
+**Confirmed the org's pin-bump fix landed but did not resolve the underlying
+gap.** `ContextualWisdomLab/.github#1422` bumped the vendored
+`ORCHESTRATOR_PIN_SHA` default from the stale `b21645116b352967e50fc497b87eb745b9cc8c61`
+to the current `5f2753ace756ddd81049a5221d55e8977572a416`. A fresh rerun of the
+`noema-review`/`opencode-review` required jobs on `#868`'s head, queued after
+that merge, shows the sidecar now correctly vendoring the fresh pin
+(`vendoring contextual-orchestrator @ 5f2753ace756...`) but still failing its
+own startup preflight with the identical signature as before the bump:
+`request_failed status=413 code=request_too_large` → falls back to the live
+OpenRouter ZDR feed → `sidecar exited before healthz`. The same
+`OpenCode Review Dispatch` failure signature was confirmed org-wide, across
+unrelated repositories (`.github` itself, `TEPP`, `DiagramWeave`,
+`psychometrics-commons`), both before and after the merge — this is a distinct
+bug in `scripts/ci/contextual_orchestrator_review_sidecar.sh`'s own startup
+path, independent of which commit is vendored. A dedicated effort (a separate
+session, coordinated mid-cycle) is root-causing that sidecar failure directly;
+this repo's queue remains blocked on it until it lands, at which point every
+open PR here needs a fresh push or rerun to pick up a real review verdict.
+Rerunning the required-check jobs themselves does not help: `opencode-review`
+is a separate polling gate (`gh api .../pulls/{n}/reviews` for an
+`opencode-agent` review on the exact head) that only reflects whether the
+privileged `opencode-review-dispatch.yml` run (in `.github`, triggered via
+`repository_dispatch` from this repo's `pr-review-merge-scheduler.yml`)
+actually posted a review — it does not itself retry that dispatch.
+
+**`#911` (`feat/durable-routing-observations-20260829`)**: verified CodeRabbit's
+four outstanding findings against the exact head. One was still live and
+fixed (pushed `b140eda7`): a blank-string `seed` or `top_logprobs` on
+`/v1/responses` was left as a raw `""` in `body` by `_validate_responses_seed`
+/ `_validate_responses_logprobs` instead of being popped on the omit branch,
+so `_responses_virtual_requires_provider_path`'s `body.get(...) is not None`
+checks saw a truthy empty string and wrongly forced the provider-only
+(non-streamed) path for `orchestrator/auto` / `orchestrator/free` even though
+both fields were semantically omitted — a `400 invalid_stream` for a client
+that never actually set either control. Both validators now pop the key on
+omit, matching the established `_validate_chat_logprobs_surface` convention.
+Added a regression test (`test_streamed_orchestrated_responses_allows_blank_seed_and_top_logprobs`)
+that reproduces the bug on the pre-fix code and passes after. The other three
+findings were already resolved on this head and needed no action: `zdr_only`
+is already stripped from every provider payload via `_ORCHESTRATION_ONLY_KEYS`
+(covering `proxy_completion` and `_orchestrated_provider_completion` alike),
+`text.format`'s provider-only check is already restricted to
+`json_object`/`json_schema` (not the default `"text"` type), and
+`record_stream_usage` failures are already decoupled from SSE completion via
+their own try/except emitting a controlled `response.failed` event (covered by
+the existing `test_stream_usage_failure_remains_inside_the_started_sse_protocol`).
+Full local suite: `2684 passed, 1 failed` — the one failure is the
+unreachable-`fast-mlsirm`-package sandbox gap also documented on PR #917, not
+a regression.
+
+**`#906` (`feat/nim-benchmark-rebuild-20260828`)**: `Full unit and contract
+suite` and the dedicated NIM job both fail on
+`test_smoke_manifest_cannot_authorize_production_routing`
+(`evidence_status == "insufficient_evidence"`, expected
+`"evidence_review_required"`) — a **different** failing assertion than last
+cycle's recorded 3-token budget overage on
+`test_budgeted_client_fallback_and_transport_errors` (which is not failing on
+this run: `2798 passed, 1 failed` vs. the prior `2797 passed, 2 failed`). Both
+symptoms point at the same root cause already flagged for the author: this
+`dry_run` smoke-manifest test still depends on live-provider discovery
+evidence in the hosted runner rather than being fully deterministic, so its
+outcome varies run to run with upstream catalog/availability. Left untouched
+again — needs the author's judgment on whether to tighten the test's
+evidence-floor mocking or accept it as environment noise, not a bot's guess.
+
+**`#912` (`feat/normalized-video-job-resource-20260829`)**: all three of
+CodeRabbit's outstanding findings were re-checked and are already resolved on
+this head (the `VideoJobRegistry` doc already describes the legacy-owner
+compatibility path correctly, the OpenRouter video-generation doc link is
+already valid, and the gap-baseline heading-date nitpick is cosmetic only) —
+no action taken.
+
+**`#857` (`fix/provider-backed-embedding-batch`)**: confirmed `dirty` again,
+this time by the repository's own automated `resolve-pr-857.yml` merge
+attempt, which surfaced real conflicts in 15 files (`CHANGELOG.md`,
+`Dockerfile`, `contextual_orchestrator/__main__.py`, `batch_routing.py`,
+`cost_router.py`, `model_discovery.py`, `orchestrator.py`,
+`provider_bootstrap.py`, `provider_catalog_store.py`, `server.py`,
+`docs/library_research.md`,
+`docs/planning/adrs/0026-trace-purpose-authorization.md`, this gap-baseline
+file, and two test files) before aborting rather than push a bad resolution.
+This corroborates the prior cycles' assessment that the branch (165+ files,
+~14k lines diverged from `main`) is too large to merge-resolve safely in one
+pass; left as-is again. No new code changes this cycle.
+
+A short status comment was left on each of `#868`, `#857`, `#906`, `#911`, and
+`#912` recording the pin-bump-did-not-fix-it finding so the next pass (human
+or agent) does not re-diagnose the same sidecar failure from scratch.
+
+## 2026-08-29 batch-routing object-authorization slice
+
+Protected `main` remains
+`b21645116b352967e50fc497b87eb745b9cc8c61`. The accepted workflow-object
+authorization decision now has a bounded implementation branch for its listed
+batch-job gap: HTTP-created batch routing jobs carry a non-secret
+authenticated-principal digest, and both status and result retrieval require
+the same digest. An external verifier can provide a stable tenant/subject key
+through the optional principal resolver; bool-only adapters retain the
+documented bearer-digest fallback. A mismatch is returned as the existing generic
+`batch_job_not_found` response before the backend is called; results also keep
+the separate trace-purpose gate. Local exact-branch evidence is `61 passed`
+across the cost-router, HTTP, and OpenAPI contract suites. This is branch
+evidence only until the implementation reaches protected `main` through the
+normal review, Checks, and approval gates.
+
+The remaining issue #117 gaps are unchanged: tenant/resource/purpose/lifetime
+claims from an external identity adapter, explicit legacy single-token
+production migration, and ownership for other evidence surfaces still need
+their own decisions and acceptance evidence.
 
 ## 2026-08-29 streamed Responses usage boundary
 

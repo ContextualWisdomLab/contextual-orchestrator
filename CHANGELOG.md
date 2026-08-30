@@ -12,12 +12,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
+  `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
+  declared `ProviderModelSource.models_dev_provider_id` field, and hoisted
+  the Models.dev fetch into `discover_all_models` so every source that wants
+  it shares one fetch instead of repeating it (ADR 0041). Restores real
+  `orchestrator/free` pool coverage from NVIDIA NIM; `bytez` remains a
+  documented permanent gap and `openai` a self-correcting currently-empty
+  one. Classification stays exact-`model_id`-match and fail-closed.
 - Fail-closed commercial release authorization bound to a signed, exact-head
   GitHub evidence snapshot, propagated through every downstream commercial
   readiness report while keeping local product evidence inspectable.
 - Provider-affine asynchronous video jobs now return an opaque gateway id and
   keep status polling and content download bound to the exact provider agent
-  that accepted the submission (ADR 0037).
+  that accepted the submission (ADR 0037); new ownership and first-complete
+  usage observations are stored as separate registry records.
 - A fail-closed, transactional evidence boundary for the optional NVIDIA NIM
   benchmark with immutable task/scorer identities and complete provenance.
 - Bounded first-valid-completion racing for operator-declared equivalent model
@@ -77,10 +86,46 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   SSE usage, record per-step `stream` cost-ledger rows, and expose cost status
   plus usage-record identities. Missing provider usage is explicitly
   unavailable; the gateway does not estimate billing tokens from the final
-  answer, and nested gateway upstreams remain compatible (ADR 0038).
+  answer, and nested gateway upstreams remain compatible (ADR 0040).
 
 ### Fixed
 
+- Discover chat models from metadata-free OpenAI-compatible gateways. A
+  configured gateway whose `/v1/models` rows carry no modality/capability
+  metadata previously produced empty-capability chat rows that runtime
+  auto-discovery silently dropped, while embedding deployments that kept
+  richer `/model/info` evidence survived ("embedding discovers, chat does
+  not"). Transport-compatible identifiers now inherit the `chat`
+  capability, and `--auto-discover-model-agents` uses the same
+  chat-candidate rule as the serving bootstrap. (#868)
+- Accept `orchestrator/auto`, `orchestrator/free`, and the advertised
+  `contextual-orchestrator` gateway default on the structured chat surface:
+  a requested `response_format` is a preference (never a fail-closed tag
+  miss for an untagged-but-available pool), vision stays a hard
+  entitlement, and a trace disclosed on the structured path authorizes
+  trace purpose and audits the disclosure before release, matching the
+  plain chat gate. (#868)
+- Provider/model failures no longer collapse into a generic `internal_error`.
+  A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
+  classifies every upstream HTTP status, network, TLS, and transport failure
+  into OpenAI-compatible error codes (`rate_limit_exceeded`,
+  `authentication_error`, `model_not_found`, `provider_timeout`, ...) with the
+  client status, retryability, and one bounded redacted message (CWE-209).
+  Chat, passthrough, stream, and batch transports all surface the classified
+  cause; a fully-failed agent pool surfaces the final classified failure
+  after measured failover instead of an opaque collapse. Server error
+  payloads carry actionable next-step guidance per failure family.
+- Telemetry spans now carry concrete GenAI semantic-convention evidence:
+  `gen_ai.usage.input_tokens/output_tokens/total_tokens` from provider-reported
+  counts, served `gen_ai.response.model`, `gen_ai.response.finish_reasons`,
+  request latency, and classified `error.type` plus upstream status on
+  failures — replacing exception-class-only error labels. Chat, streaming,
+  and passthrough responses share this evidence path, and finish-reason arrays
+  are bounded to the OpenTelemetry default span-attribute budget.
+- Orchestration traces now include per-step telemetry evidence: streamed,
+  batched, routed, and conducted steps record `model`, `provider`, and
+  `latency_ms` alongside usage so workflow runs answer which model served a
+  step, how long it took, and what it cost.
 - Runtime agent create/PATCH now accepts and persists the explicit
   `stream_usage_supported` capability, and the admin-safe agent view exposes it.
 - Require `--allow-public-bind` for every non-loopback address, not only wildcard
@@ -90,9 +135,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Experimental CEFR criterion-observation gateway with exact contract checks,
   independent rater blindness, bounded structured-output parsing, replay
   provenance, and human-review routing; it emits no final CEFR level or score.
-
-### Fixed
-
 - Accept the standard Chat Completions `stream_options.include_usage=true`
   request and emit provider-reported usage in a usage-only SSE chunk when
   available after the terminal stop chunk; pass the option through live provider
@@ -129,6 +171,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `fast-mlsirm` and its `numpy` dependency are installed in CI and locally.
 - Validate orchestration-trace requests before every chat execution branch and
   require trace-purpose authorization before access-report lookup.
+- Bind HTTP-created batch routing jobs to the authenticated principal and
+  require the same owner for status polling and trace-bearing result retrieval;
+  owner mismatches fail closed as not found.
 - Mixed structured workflows now retain a cost-ledger row for calls whose
   provider omitted usage, using the existing token-counting fallback while
   preserving reported counts for the other calls in the same workflow.

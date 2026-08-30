@@ -147,7 +147,7 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model", "messages"],
+                                "required": ["messages"],
                                 "properties": {
                                     "model": {"type": "string"},
                                     "messages": {"type": "array", "items": {"type": "object"}},
@@ -183,7 +183,7 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model", "prompt"],
+                                "required": ["prompt"],
                                 "properties": {
                                     "model": {"type": "string"},
                                     "prompt": {"oneOf": [{"type": "string"}, {"type": "array"}]},
@@ -378,7 +378,7 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model", "input"],
+                                "required": ["input"],
                                 "properties": {
                                     "model": {"type": "string"},
                                     "input": {"oneOf": [{"type": "string"}, {"type": "array"}]},
@@ -859,7 +859,7 @@ OPENAPI_SPEC = {
         "/api/v1/batch_routing_jobs": {
             "post": {
                 "operationId": "create_batch_routing_job",
-                "summary": "Submit a batch of latency-tolerant requests to the batch backend (pg-llm-batch)",
+                "summary": "Submit a principal-owned batch of latency-tolerant requests to the batch backend (pg-llm-batch)",
                 "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,
@@ -887,23 +887,33 @@ OPENAPI_SPEC = {
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}": {
             "get": {
                 "operationId": "get_batch_routing_job",
-                "summary": "Poll a submitted batch routing job",
+                "summary": "Poll a submitted batch routing job owned by the authenticated principal",
                 "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],
-                "responses": {"200": {"description": "Batch routing job status"}},
+                "responses": {
+                    "200": {"description": "Batch routing job status"},
+                    "404": {
+                        "description": "Batch job is missing or is not owned by the authenticated principal"
+                    },
+                },
             }
         },
         "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results": {
             "post": {
                 "operationId": "create_batch_routing_job_results",
-                "summary": "Retrieve batch results and record their usage + cost",
-                "security": [{"inference_bearer_auth": []}],
+                "summary": "Retrieve principal-owned batch results and record their usage + cost",
+                "security": [{"inference_bearer_auth": [], "trace_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],
-                "responses": {"200": {"description": "Batch results with recorded usage"}},
+                "responses": {
+                    "200": {"description": "Batch results with recorded usage"},
+                    "404": {
+                        "description": "Batch job is missing or is not owned by the authenticated principal"
+                    },
+                },
             }
         },
         "/v1/batch/embeddings": {

@@ -34,6 +34,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    privacy_tags_for_discovered,
     is_routable_discovered_model,
     refresh_price_book,
 )
@@ -187,7 +188,7 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
             (
                 *_GENERIC_SERVING_TAGS,
                 *(("cost:free",) if model.is_free else ()),
-                *(("privacy:zdr",) if model.zdr_capable else ()),
+                *privacy_tags_for_discovered(model),
                 *model.capabilities,
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),

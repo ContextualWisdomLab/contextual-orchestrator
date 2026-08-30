@@ -18,6 +18,7 @@ import struct
 import tempfile
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 from typing import Any, Callable, Mapping
@@ -26,7 +27,11 @@ import uuid
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
-from .cost_router import BatchModelSelectionError, CostRoutingCoordinator
+from .cost_router import (
+    BatchModelSelectionError,
+    CostRoutingCoordinator,
+    InvalidBatchModelError,
+)
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
@@ -45,6 +50,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .pii_protection import DEFAULT_PURPOSE_BY_SCOPE, PURPOSES_BY_SCOPE
+from .provider_errors import ProviderUpstreamError
 from .tool_fallback import ToolFallbackStoppedError
 from .model_group import canonical_group_name
 from .release_authorization import verify_release_authority_snapshot
@@ -346,6 +352,9 @@ class SecurityConfig:
     # relying-party adapter). The core deliberately does not decode JWTs with
     # an unsafe hand-rolled parser or own Keycloak admin credentials.
     bearer_verifier: Callable[[str, str], bool] | None = None
+    # Optional companion seam for external verifiers that can expose a stable,
+    # tenant-scoped principal key without exposing the bearer itself.
+    principal_resolver: Callable[[str], str | None] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -471,13 +480,27 @@ class SecurityConfig:
                 if principal:
                     return principal
             raise RequestError(401, "unauthorized", "authenticated principal is required")
+        return self._principal_digest(token)
+
+    def _principal_digest(self, token: str) -> str:
+        """Hash a stable deployment principal without retaining bearer material."""
         if self.bearer_verifier is None:
             if self.admin_token and self.inference_token:
                 principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
             else:
                 principal_material = f"single:{self.auth_token}"
-        else:
+        elif self.principal_resolver is None:
+            # Back-compatible fallback for adapters that only return bool;
+            # token rotation can intentionally revoke old resource access.
             principal_material = f"bearer:{token}"
+        else:
+            try:
+                resolved = self.principal_resolver(token)
+            except Exception as exc:  # noqa: BLE001 - identity adapter failure denies access
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable") from exc
+            if not isinstance(resolved, str) or not resolved.strip():
+                raise RequestError(401, "unauthorized", "authenticated principal is unavailable")
+            principal_material = f"principal:{resolved}"
         return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -514,14 +537,7 @@ class SecurityConfig:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         session_id = secrets.token_urlsafe(32)
         expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
-        if self.bearer_verifier is None:
-            if self.admin_token and self.inference_token:
-                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
-            else:
-                principal_material = f"single:{self.auth_token}"
-        else:
-            principal_material = f"bearer:{presented_token}"
-        principal = hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
+        principal = self._principal_digest(presented_token)
         with self._session_lock:
             self._purge_expired_admin_sessions_locked(time.monotonic())
             overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
@@ -638,6 +654,36 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
         "error_message": error_message,
         "error_detail": detail,
     }
+
+
+_PROVIDER_FAILURE_GUIDANCE: dict[str, str] = {
+    "invalid_request_error": "Adjust the request parameters and retry.",
+    "authentication_error": "Verify the credential registered for this model in the credential registry.",
+    "payment_required": "Add payment capacity to the provider account that serves this model.",
+    "permission_error": "Request provider access for this model from the operator.",
+    "model_not_found": "Check the model id against the provider's model list and retry with a valid one.",
+    "request_too_large": "Reduce the request size (shorter input or lower max tokens).",
+    "rate_limit_exceeded": "Retry after a short delay; the provider is throttling this model.",
+    "conflict": "Resolve the conflicting in-flight operation before retrying.",
+    "provider_timeout": "The provider accepted but did not finish in time; retrying may succeed.",
+    "provider_connection_error": "The provider was unreachable; check network reachability before retrying.",
+    "tls_failure": "A transport-layer security error interrupted the provider connection; retrying may succeed.",
+    "tls_verification_failed": "Verify the provider endpoint certificate chain before retrying.",
+    "api_error": "The provider reported an internal failure; retrying may succeed.",
+    "service_unavailable": "The provider is temporarily unavailable; retry after a short delay.",
+}
+
+
+def _provider_upstream_message(exc: ProviderUpstreamError) -> str:
+    """Build one caller-actionable sentence for a classified upstream failure.
+
+    The message names which model/agent failed and what to do next; it never
+    echoes raw provider diagnostics beyond the bounded redacted sentence.
+    """
+    guidance = _PROVIDER_FAILURE_GUIDANCE.get(
+        exc.error_code, "Review the request or contact the operator."
+    )
+    return f"Model '{exc.model}' via agent '{exc.agent_id}': {exc}. {guidance}"
 
 
 def _cache_bypass_header(value: str | None) -> bool:
@@ -1447,15 +1493,54 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     return value
 
 def _validate_completions_model(body: dict[str, Any]) -> str:
-    """Legacy Completions ``model`` — required non-empty string (OpenAI parity).
+    """Validate or default the chat/completions model.
 
-    Incidental leading/trailing whitespace is stripped and written back so
-    tools/response_format passthrough (``proxy_completion``) matches the same
-    pool model id as the orchestration path. Form/JS SDKs often pad model names.
+    An omitted ``model`` selects the advertised gateway default so clients do
+    not have to know any deployment name. Explicit JSON null or a blank string
+    are client mistakes, not omissions, and still fail closed (400). Leading
+    and trailing whitespace is stripped and written back so tools/response_format
+    passthrough (``proxy_completion``) matches the same pool model id as the
+    orchestration path; form/JS SDKs often pad model names.
     """
-    if "model" not in body:
-        raise RequestError(400, "invalid_model", "model is required")
     model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
+
+def _validate_chat_model(body: dict[str, Any]) -> str:
+    """Validate or default the Chat Completions model.
+
+    Chat exposes the advertised gateway deployment id as its omitted-model
+    default. Explicit JSON ``null`` is not omission and still fails closed so
+    callers cannot accidentally request the default while believing they named a
+    concrete deployment.
+    """
+    model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -2208,9 +2293,13 @@ def _validate_mode(mode: Any) -> str:
 
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
-    model = body.get("model")
-    if model is not None and (not isinstance(model, str) or not model.strip()):
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if "model" in body:
+        model = body["model"]
+        if not isinstance(model, str):
+            raise RequestError(400, "invalid_model", "model must be a string")
+        if not model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        body["model"] = model.strip()
     required_strings = {
         "/v1/images/generations": ("prompt",),
         "/v1/videos": ("prompt",),
@@ -2248,6 +2337,13 @@ def _require_pool_model(
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
+    Virtual orchestrator-owned ids (:data:`TaskOrchestrator.GATEWAY_DEFAULT_MODEL`,
+    :data:`TaskOrchestrator.AUTO_MODEL`, :data:`TaskOrchestrator.FREE_MODEL`)
+    resolve through routing instead of an exact agent match — the gateway
+    default and auto behave identically (orchestrator-owned auto selection),
+    while the free id additionally requires a zero-cost agent. With a
+    ``required_capability`` the virtual ids resolve to a concrete capable agent
+    model because capability callers need a real deployment to forward to.
     """
     agents = [
         agent
@@ -2255,9 +2351,13 @@ def _require_pool_model(
         if not getattr(agent, "disabled", False)
     ]
     zdr_allowed = getattr(orchestrator, "_zdr_agent_allowed", lambda agent: True)
-    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+    if model_name in {
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        TaskOrchestrator.AUTO_MODEL,
+        TaskOrchestrator.FREE_MODEL,
+    }:
         if required_capability is None:
-            if model_name == TaskOrchestrator.AUTO_MODEL:
+            if model_name != TaskOrchestrator.FREE_MODEL:
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
@@ -3093,7 +3193,7 @@ def _validate_batch_requests(
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = body.get("model", "contextual-orchestrator")
+    default_model = body.get("model", TaskOrchestrator.GATEWAY_DEFAULT_MODEL)
     if not isinstance(default_model, str) or not default_model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     default_model = default_model.strip()
@@ -4618,16 +4718,24 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 
 
 def _validate_responses_model(body: dict[str, Any]) -> str:
-    """Responses API ``model`` — required non-empty string ≤256 chars.
+    """Validate or default the Responses API model.
 
-    OpenAI requires model on Responses. Missing/empty/non-string values fail
-    closed so clients cannot hit passthrough with an implicit mock default and
-    believe a named deployment was selected. Strip + write back so
-    ``proxy_completion`` pool match sees the same id as form/JS padded names.
+    An omitted model selects ``orchestrator/auto`` for the orchestrated path.
+    Explicit JSON
+    null or empty/whitespace strings are client mistakes, not omissions, and
+    fail closed (400). Non-string values also fail closed. Strip + write back
+    so passthrough pool matching sees the same id as form/JS padded names.
     """
     model = body.get("model")
     if model is None:
-        raise RequestError(400, "invalid_model", "model is required on /v1/responses")
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.AUTO_MODEL
+        return TaskOrchestrator.AUTO_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -4757,11 +4865,12 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface. An omitted model
-    is resolved by the orchestrator's explicit ``embedding`` capability pool;
-    no consumer-side sentinel model is accepted.
+    form/JS model names bind to the pool id on every surface. Auto-selection
+    applies only when the caller omits ``model`` entirely; explicit JSON
+    ``null`` still fails closed instead of pretending the client omitted the
+    field.
     """
-    if body.get("model") is None:
+    if "model" not in body:
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4774,8 +4883,11 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
             ) from exc
         body["model"] = model
         return model
+
     model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
     if len(model) > 256:
@@ -4870,7 +4982,7 @@ def _openai_embeddings_response(
     return {
         "object": "list",
         "data": data,
-        "model": model or document.get("model") or "contextual-orchestrator",
+        "model": model or document.get("model") or TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
         "usage": {
             "prompt_tokens": total_tokens,
             "total_tokens": total_tokens,
@@ -5551,7 +5663,11 @@ def build_server(
                 if path.startswith("/api/v1/batch_routing_jobs/"):
                     job_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(coordinator.poll_batch(job_id))
+                        self._send(
+                            coordinator.poll_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                     return
@@ -5901,7 +6017,15 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
@@ -5937,7 +6061,15 @@ def build_server(
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
@@ -6030,6 +6162,7 @@ def build_server(
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
@@ -6306,7 +6439,7 @@ def build_server(
                         max_tokens = _validate_chat_max_completion_tokens(body)
                     else:
                         max_tokens = _validate_completions_max_tokens(body)
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     if "store" in body:
                         _validate_completions_store(body)
@@ -6356,6 +6489,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
                         ))
                     # Batch-channel Completions return a job handle (202), not a
@@ -6486,7 +6620,7 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
@@ -6517,17 +6651,12 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        trace_audited = False
                         if stream and include_usage:
                             raise RequestError(
                                 400,
                                 "invalid_stream_options",
                                 "stream_options.include_usage=true is not supported with tools or response_format",
-                            )
-                        if explicit_trace:
-                            raise RequestError(
-                                400,
-                                "unsupported_trace_disclosure",
-                                "remove include_orchestration_trace or use chat without tools or response_format",
                             )
                         tool_loop = bool(tools_list)
                         if (
@@ -6544,16 +6673,26 @@ def build_server(
                             tool_loop
                             and body.get("include_orchestration_trace") is True
                         ):
+                            if security.bearer_verifier is None:
+                                raise RequestError(
+                                    400,
+                                    "trace_unavailable",
+                                    "orchestration trace is unavailable for single-agent tool passthrough",
+                                )
                             raise RequestError(
                                 400,
-                                "trace_unavailable",
-                                "orchestration trace is unavailable for single-agent tool passthrough",
+                                "unsupported_trace_disclosure",
+                                "remove include_orchestration_trace or use chat without tools or response_format",
                             )
-                        include_trace = (
-                            False
-                            if tool_loop
-                            else include_trace
-                        )
+                        include_trace = False if tool_loop else include_trace
+                        if include_trace:
+                            if security.bearer_verifier is not None:
+                                raise RequestError(
+                                    400,
+                                    "unsupported_trace_disclosure",
+                                    "remove include_orchestration_trace or use chat without tools or response_format",
+                                )
+                            self._authorize_trace_access()
                         started_at = time.perf_counter()
                         if tool_loop:
                             proxied = self._run(
@@ -6614,6 +6753,8 @@ def build_server(
                                 )
                             workflow = orchestrator.get_workflow_run(workflow_run_id)
                             lineage["trace"] = workflow["trace"]
+                            self._audit_trace_disclosure("/v1/chat/completions")
+                            trace_audited = True
                         orchestrator.record_analytics_event(
                             (
                                 "chat_completion_passthrough"
@@ -6627,6 +6768,8 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
+                        if include_trace and not trace_audited:
+                            self._audit_trace_disclosure("/v1/chat/completions")
                         response_payload = (
                             proxied
                             if tool_loop
@@ -6667,7 +6810,7 @@ def build_server(
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the buyer selected on the chat Completions path.
+                    # which deployment the caller selected on the chat Completions path.
                     # The pool was validated before the structured/passthrough
                     # branch so every chat shape shares the same client-error contract.
                     attribution = dict(attribution or {})
@@ -6722,6 +6865,7 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
                             cache_partition=cache_partition,
+                            owner_id=security.principal_id(self.headers),
                             zdr_only=zdr_only,
                         ))
                     # Latency-tolerant requests get dispatched to the batch backend.
@@ -6960,7 +7104,16 @@ def build_server(
                         zdr_only=zdr_only,
                     )
                     metadata = {"actor_scope": "inference"}
-                    job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                    try:
+                        job = self._run(
+                            lambda: coordinator.submit_batch(
+                                batch_requests,
+                                metadata=metadata,
+                                owner_id=security.principal_id(self.headers),
+                            )
+                        )
+                    except InvalidBatchModelError as exc:
+                        raise RequestError(400, "invalid_model", str(exc)) from exc
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
                         {
@@ -6983,7 +7136,11 @@ def build_server(
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
                     self._authorize_trace_access()
                     try:
-                        retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                        retrieved = self._run(
+                            lambda: coordinator.retrieve_batch(
+                                job_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
@@ -7176,14 +7333,20 @@ def build_server(
                             message="stream must be a boolean",
                         ))
                         if stream and model_name not in {
-                            TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
                         }:
                             raise RequestError(
                                 400,
                                 "invalid_stream",
-                                "stream is not supported for this model on /v1/responses; use orchestrator/auto or orchestrator/free",
+                                "stream is not supported for this model on /v1/responses; use the gateway default, orchestrator/auto, or orchestrator/free",
                             )
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    }:
                         _require_pool_model(orchestrator, model_name)
                     responses_attribution = dict(
                         _validate_attribution(body.get("attribution")) or {}
@@ -7193,7 +7356,11 @@ def build_server(
                         responses_attribution["account"] = responses_user_id
                     responses_attribution.setdefault("model_name", body["model"])
                     responses_attribution.setdefault("service", "responses_api")
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    } and stream:
                         if _responses_virtual_requires_provider_path(input_value, body):
                             raise RequestError(
                                 400,
@@ -7245,7 +7412,11 @@ def build_server(
                         )
                         return
                     if (
-                        model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}
+                        model_name in {
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
+                        }
                         and not body.get("tools")
                         and not body.get("response_format")
                         and not (
@@ -7463,7 +7634,15 @@ def build_server(
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
+            except ProviderUpstreamError as exc:
+                self._send_error(
+                    exc.client_status,
+                    exc.error_code,
+                    _provider_upstream_message(exc),
+                    exc.detail,
+                )
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
             finally:
                 if request_policy is not None:
@@ -7884,6 +8063,19 @@ def build_server(
                         result = orchestrator.conduct(messages, **conduct_kwargs)
                 except ConnectionAbortedError:
                     raise
+                except ProviderUpstreamError as exc:
+                    failed = {
+                        **created_response,
+                        "status": "failed",
+                        "error": _error_payload(
+                            exc.error_code,
+                            _provider_upstream_message(exc),
+                            {"request_id": uuid.uuid4().hex, **exc.detail},
+                        )["error"],
+                    }
+                    emit("response.failed", response=failed)
+                    self._write_sse("data: [DONE]\n\n")
+                    return False
                 except Exception:  # noqa: BLE001 - headers sent; terminate with a valid Responses event
                     failed = {
                         **created_response,
@@ -7897,14 +8089,25 @@ def build_server(
                     self._write_sse("data: [DONE]\n\n")
                     return False
                 if coordinator is not None:
-                    result = {
-                        **result,
-                        **coordinator.record_stream_usage(
+                    try:
+                        stream_usage = coordinator.record_stream_usage(
                             result=result,
                             attribution=attribution,
                             model_name=model_name,
-                        ),
-                    }
+                        )
+                    except Exception:  # noqa: BLE001 - headers sent; remain inside SSE
+                        failed = {
+                            **created_response,
+                            "status": "failed",
+                            "error": {
+                                "code": "usage_recording_failed",
+                                "message": "Usage evidence could not be recorded for this response.",
+                            },
+                        }
+                        emit("response.failed", response=failed)
+                        self._write_sse("data: [DONE]\n\n")
+                        return False
+                    result = {**result, **stream_usage}
                 reasoning_done = {
                     **reasoning_item,
                     "status": "completed",
@@ -8058,7 +8261,19 @@ def build_server(
                         return
                     if not self._write_sse(frame({}, finish="error")):
                         return
-                except Exception:  # noqa: BLE001 - headers already sent
+                except ProviderUpstreamError as exc:
+                    payload = _error_payload(
+                        exc.error_code,
+                        _provider_upstream_message(exc),
+                        {"request_id": uuid.uuid4().hex, **exc.detail},
+                    )
+                    if not self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    ):
+                        return
+                    if not self._write_sse(frame({}, finish="error")):
+                        return
+                except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     if not self._write_sse(frame({}, finish="error")):
                         return
                 self._write_sse("data: [DONE]\n\n")
