@@ -1173,12 +1173,16 @@ def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
     assert discovered[0].capabilities == ("embedding",)
 
 
-def test_discover_all_models_continues_after_one_provider_error() -> None:
+def test_discover_all_models_continues_after_one_provider_error(monkeypatch) -> None:
+    monkeypatch.setattr("contextual_orchestrator.model_discovery.time.sleep", lambda *_a: None)
     register_credential("OPENAI_API_KEY", "sk-openai")
     register_credential("OPENROUTER_API_KEY", "sk-router")
+    openai_attempts = 0
 
     def urlopen(request, timeout=None):
+        nonlocal openai_attempts
         if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
+            openai_attempts += 1
             raise urllib.error.URLError("connection refused")
         return _Response({"data": [{"id": "meta/llama-3.3"}]})
 
@@ -1191,6 +1195,9 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].error_code == "transport_error"
     assert "connection refused" not in str(errors[0])
     assert errors[0].__cause__ is None
+    # A persistently-failing provider is retried up to the bounded discovery
+    # retry limit before its failure is reported, not tried once and given up.
+    assert openai_attempts == 3
 
 
 def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> None:
@@ -1368,16 +1375,20 @@ def test_malformed_openrouter_zdr_data_is_ignored(monkeypatch) -> None:
     assert _openrouter_zdr_model_ids(timeout=1.0) == set()
 
 
-def test_discovery_boundary_contains_raw_connection_reset() -> None:
+def test_discovery_boundary_contains_raw_connection_reset(monkeypatch) -> None:
     """A raw ConnectionResetError (not a URLError) still fails inside the boundary.
 
     Regression: ``ConnectionError``/``OSError`` subclasses that are not
     ``URLError`` used to escape ``discover_provider_models`` uncaught, leaking
     provider transport diagnostics to discovery callers.
     """
+    monkeypatch.setattr("contextual_orchestrator.model_discovery.time.sleep", lambda *_a: None)
     register_credential("OPENAI_API_KEY", "sk-openai")
+    attempts = 0
 
     def urlopen(request, timeout=None):
+        nonlocal attempts
+        attempts += 1
         raise ConnectionResetError(104, "Connection reset by peer")
 
     with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
@@ -1390,6 +1401,81 @@ def test_discovery_boundary_contains_raw_connection_reset() -> None:
             assert error.__cause__ is None
         else:  # pragma: no cover
             raise AssertionError("a raw connection reset must become a ProviderDiscoveryError")
+    # A connection reset is transient and retried up to the bounded limit.
+    assert attempts == 3
+
+
+def test_discover_provider_models_recovers_from_one_transient_5xx(monkeypatch) -> None:
+    """Regression for a live incident: Bytez discovery returning one HTTP 500.
+
+    A single transient 5xx must not fail the whole provider — and must not
+    make a first-ever credential registration look unusable to a caller
+    (such as ``provider_catalog_bootstrap``) that trusts discovery success
+    as evidence the credential is durable.
+    """
+    monkeypatch.setattr("contextual_orchestrator.model_discovery.time.sleep", lambda *_a: None)
+    register_credential("BYTEZ_API_KEY", "bytez-key")
+    attempts = 0
+
+    def urlopen(request, timeout=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response({"output": [{"modelId": "meta-llama/Llama-3.3-70B-Instruct"}]})
+
+    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+        discovered = discover_provider_models(BYTEZ_SOURCE)
+
+    assert attempts == 2
+    assert [model.model_id for model in discovered] == ["meta-llama/Llama-3.3-70B-Instruct"]
+
+
+def test_discover_provider_models_gives_up_after_persistent_5xx(monkeypatch) -> None:
+    """A provider that never recovers still fails discovery, just not on attempt one."""
+    monkeypatch.setattr("contextual_orchestrator.model_discovery.time.sleep", lambda *_a: None)
+    register_credential("BYTEZ_API_KEY", "bytez-key")
+    attempts = 0
+
+    def urlopen(request, timeout=None):
+        nonlocal attempts
+        attempts += 1
+        raise urllib.error.HTTPError(request.full_url, 503, "Service Unavailable", {}, None)
+
+    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+        try:
+            discover_provider_models(BYTEZ_SOURCE)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "bytez"
+            assert error.error_code == "http_status_503"
+        else:  # pragma: no cover
+            raise AssertionError("a persistent 5xx must still raise ProviderDiscoveryError")
+    assert attempts == 3
+
+
+def test_discover_provider_models_does_not_retry_a_non_transient_4xx(monkeypatch) -> None:
+    """An auth failure is never transient; retrying it wastes time and cannot succeed."""
+    sleep_calls = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.model_discovery.time.sleep", lambda seconds: sleep_calls.append(seconds)
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-key")
+    attempts = 0
+
+    def urlopen(request, timeout=None):
+        nonlocal attempts
+        attempts += 1
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+        try:
+            discover_provider_models(BYTEZ_SOURCE)
+        except ProviderDiscoveryError as error:
+            assert error.error_code == "http_status_401"
+        else:  # pragma: no cover
+            raise AssertionError("a 401 must still raise ProviderDiscoveryError")
+    assert attempts == 1
+    assert sleep_calls == []
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:

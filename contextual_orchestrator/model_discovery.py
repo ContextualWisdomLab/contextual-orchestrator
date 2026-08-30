@@ -17,23 +17,34 @@ from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 import json
 import math
+import random
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
 from .credentials import get_credential
-from .orchestrator import ModelAgent, ModelClient
+from .orchestrator import ModelAgent, ModelClient, is_transient_error
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+# A provider's own model-list endpoint gets the same bounded, full-jitter
+# retry policy ModelClient applies to inference calls (see
+# ``orchestrator.is_transient_error``/``_backoff_delay``): momentary 5xx,
+# timeout, or connection-reset responses get up to two retries before the
+# provider is reported as failed; non-transient failures (auth, malformed
+# JSON) are never retried.
+DISCOVERY_RETRY_LIMIT = 2
+DISCOVERY_RETRY_BACKOFF_SECONDS = 0.5
+DISCOVERY_RETRY_BACKOFF_CAP_SECONDS = 4.0
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
 # bot signature. A stable, identifying user agent is not a credential and is
@@ -368,6 +379,40 @@ def _fetch_json_same_host_https(
     if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
         raise ValueError("model discovery response exceeds maximum size")
     return json.loads(raw.decode("utf-8"))
+
+
+def _fetch_with_retries(
+    fetch: Callable[..., Any],
+    url: str,
+    *,
+    retry_limit: int = DISCOVERY_RETRY_LIMIT,
+    sleep: Callable[[float], None] = time.sleep,
+    **fetch_kwargs: Any,
+) -> Any:
+    """Call one discovery fetch function, retrying only transient failures.
+
+    ``fetch`` is whichever of :func:`_fetch_json` or
+    :func:`_fetch_configured_gateway_json` the caller already selected for
+    this source, so the retry wrapper never bypasses the SSRF-hardened
+    transport the configured-gateway path uses. Reuses
+    :func:`contextual_orchestrator.orchestrator.is_transient_error` so a
+    provider's momentary 5xx/timeout/connection-reset response gets the same
+    bounded, full-jitter backoff as an inference call, instead of failing
+    discovery for that provider on one blip. Auth failures, other 4xx
+    responses, and malformed JSON (``ValueError``) are not transient and are
+    raised immediately.
+    """
+    last_error: BaseException | None = None
+    for attempt in range(retry_limit + 1):
+        try:
+            return fetch(url, **fetch_kwargs)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            last_error = exc
+            if attempt >= retry_limit or not is_transient_error(exc):
+                raise
+            ceiling = min(DISCOVERY_RETRY_BACKOFF_CAP_SECONDS, DISCOVERY_RETRY_BACKOFF_SECONDS * (2**attempt))
+            sleep(random.uniform(0.0, ceiling))
+    raise last_error  # pragma: no cover - loop always returns or raises above
 
 
 def _valid_price_component(value: object) -> bool:
@@ -1078,7 +1123,8 @@ def discover_provider_models(
             if source.provider_name == "configured_gateway"
             else _fetch_json
         )
-        payload = fetch(
+        payload = _fetch_with_retries(
+            fetch,
             url,
             api_key=api_key,
             auth_scheme=source.auth_scheme,
