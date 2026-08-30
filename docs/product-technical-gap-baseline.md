@@ -38,17 +38,37 @@ against `.github` main post-fix.
 - **`strix`** (same PR, run `33306104587`): was still `in_progress` when this entry was written;
   not yet observed to completion.
 
-**Working hypothesis, not yet confirmed**: three required review workflows
-(`opencode-review-dispatch`'s scheduler pass, `noema-review`, `strix`) each provisioning their
-own sidecar and hitting the same handful of free-tier NIM/OpenRouter routes within the same
-~1-minute window across three PRs simultaneously is a plausible transient rate-limit trigger,
-distinct from the fixed bug. Needs a re-observation once the herd of simultaneous re-runs has
-cleared, plus (if it reproduces) the actual `--preflight-out` JSON artifact from a run that
-captures it — `noema-review` doesn't currently upload one; Strix's does.
+**The "transient rate-limit" hypothesis above was wrong — superseded by evidence, not conjecture.**
+Two real, distinct defects were found and fixed in `ContextualWisdomLab/.github#1440`, both
+grounded in an actually-downloaded `strix-reports` artifact (Strix run `33306775025` on this PR,
+job `99244624298`), not inference from sanitized logs:
 
-**Net**: the `max_tokens` fix is verified correct and merged; it was not sufficient by itself to
-make the pipeline consistently healthy. Do not treat this fix as closing the gap-baseline item
-below until a clean re-run is observed.
+1. **Zero observability for non-Strix workflows.** The launcher already writes real, schema-bounded
+   per-route evidence (`agent_id`/`provider`/`model`/`status`/`error_type`/`http_status` — no raw
+   provider content or secrets) to `--preflight-out` before raising. Only Strix's separate
+   artifact-upload step ever surfaced it; `noema-review`/`opencode-review` had no way to show *why*
+   routes were rejected. Fixed: the sidecar script now prints that file directly into the job log on
+   total rejection.
+2. **The real cause of that specific artifact's failure**: the routing probe marked
+   `nvidia_nim_deepseek_ai_deepseek_v4_flash_0731` "ready" in 18s (other candidates rejected with
+   `TimeoutError`/`HTTP 404` — not a `max_tokens`-too-large `400`, ruling out a per-model-token-limit
+   theory also raised during this investigation). The separate end-to-end gateway check against that
+   *same* healthy route was then cut off by curl's own `--max-time 30` at exactly 30.0s —
+   `"gateway preflight request could not reach the local sidecar"` was that timeout, not a real
+   connectivity failure. 30s undercuts real reasoning-model completion latency and this org's own
+   accuracy-over-speed policy (the job already budgets 120 minutes). Fixed: raised to 120s.
+
+Both fixes are RED-before-GREEN tested (`test_sidecar_surfaces_preflight_route_evidence_when_every_route_is_rejected`,
+`test_gateway_preflight_curl_timeout_tolerates_real_reasoning_latency`) and pushed as
+`ContextualWisdomLab/.github#1440` (open at the time of this entry; not yet merged — per this
+repo's own trust-boundary note, that PR's own CI cannot validate its fixes before merge, since its
+required checks run *main's* pre-fix script).
+
+**Net**: `#1436`'s `max_tokens` fix is verified correct and merged. It was not, by itself,
+sufficient to make the pipeline consistently healthy — `#1440` fixes two more concrete, evidenced
+defects in the same failure chain. Whether the pipeline is now consistently healthy remains to be
+re-observed once `#1440` merges; do not treat either fix as closing this gap-baseline item until
+that clean re-run is confirmed.
 
 ## 2026-08-30 sidecar preflight max_tokens desynchronized from the routing probe
 
