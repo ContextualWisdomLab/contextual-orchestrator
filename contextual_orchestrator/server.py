@@ -6656,11 +6656,17 @@ def build_server(
                         # Single-agent tool passthrough (tool_loop) always makes one
                         # non-streaming upstream call (orchestrator.proxy_completion
                         # forces upstream["stream"] = False) and returns the provider's
-                        # raw JSON body verbatim as response_payload, usage included —
-                        # the same object the non-streaming reply below already sends
-                        # today. _chat_response_sse_chunks (below) already frames that
-                        # usage into a correctly-shaped terminal SSE chunk alongside
-                        # tool_call deltas, so there is nothing to fail closed on here.
+                        # raw JSON body verbatim as response_payload — the same object
+                        # the non-streaming reply below already sends today.
+                        # ModelClient.proxy_send does not require or synthesize a
+                        # "usage" key, so a provider may still omit it.
+                        # _chat_response_sse_chunks (below) already frames that payload
+                        # into a correctly-shaped terminal SSE chunk alongside tool_call
+                        # deltas, honestly labeling usage "reported" when the provider
+                        # sent it and "estimated" (never fabricated as "reported")
+                        # otherwise — the same fallback already exercised for the
+                        # non-tools streaming path — so there is nothing to fail closed
+                        # on here.
                         # response_format-only structured passthrough (conduct mode)
                         # is different: its usage comes from a multi-step workflow's
                         # cost ledger, which may be unmeasured, so it keeps failing

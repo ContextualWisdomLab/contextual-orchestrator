@@ -141,13 +141,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   streams; keep unsupported obfuscation flags fail-closed.
 - Accept `stream_options.include_usage=true` for single-agent `tools`
   passthrough streaming too (e.g. an OpenAI Agents SDK client such as Strix):
-  `_chat_response_sse_chunks` already frames the provider's real, reported
-  usage into a correctly-shaped terminal SSE chunk alongside `tool_call`
-  deltas — the prior blanket rejection covering this case was an overbroad
-  validation gate, not a genuine limitation of the passthrough itself.
-  `response_format`-only structured passthrough (conduct mode, whose usage
-  comes from a multi-step workflow's cost ledger and may be unmeasured)
-  keeps rejecting the combination rather than let it be estimated.
+  `_chat_response_sse_chunks` already frames the one non-streaming upstream
+  call's response into a correctly-shaped terminal SSE chunk alongside
+  `tool_call` deltas, honestly labeling usage `reported` when the provider
+  returned it and falling back to its existing `estimated` labeling (never
+  fabricated as `reported`) when a provider's JSON omits `usage` — the prior
+  blanket rejection covering this case was an overbroad validation gate, not
+  a genuine limitation of the passthrough itself. `response_format`-only
+  structured passthrough (conduct mode, whose usage comes from a multi-step
+  workflow's cost ledger and may be unmeasured with no per-field tag to
+  distinguish it) keeps rejecting the combination rather than risk that
+  estimate being framed as `reported`.
 - Billing usage-export failures now appear in the operator-safe telemetry health
   counters instead of only in emitted error events.
 - Billing usage export now follows accepted ledger writes and skips duplicate,

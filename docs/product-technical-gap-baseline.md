@@ -2091,7 +2091,7 @@ TEPP calibrated quality latents before enabling benchmark priors on any
 revenue-serving route; until then their influence is capped at the same
 budget an unmeasured member already spends.
 
-### GAP RESOLVED (partial) — 2026-08-30 20:5x KST: `stream_options.include_usage` + `tools` gateway rejection
+### GAP RESOLVED (partial) — 2026-08-30 20:57 KST: `stream_options.include_usage` + `tools` gateway rejection
 
 **Symptom**: every Strix scan org-wide against `orchestrator/free` failed closed with
 `400 invalid_stream_options` (evidence: `.github` run `33307905354`, job
@@ -2153,3 +2153,20 @@ root-cause (#925, in normal — not bypassed — review, since it does not touch
 `.github`'s trusted scripts), and a non-streaming workaround is technical debt
 that would need a follow-up revert. Will bypass-merge #1448 only if #925's
 review stalls well beyond this org's accepted multi-hour LLM-review latency.
+
+**Follow-up (2026-08-30, same head): Devin review finding on #925, CONFIRMED
+and fixed.** The `tools`-passthrough narrowing above assumed the one
+upstream call "always" carries provider-reported usage. Traced
+`ModelClient.proxy_send`/`_proxy_send` (`orchestrator.py`): it returns a
+provider's raw JSON verbatim and neither requires nor synthesizes a `usage`
+key, so a real provider omitting it was untested and unproven safe. Added
+`tests/test_stream_options_null_flags_noop_http_honesty.py::test_http_chat_tools_streams_estimated_usage_when_provider_omits_it`,
+a real (loopback `local://`) HTTP provider — `mock://` agents cannot exercise
+this, since `ModelClient._mock_raw` always injects a zero-valued `usage`
+dict — whose tool-call response omits `usage` entirely; confirmed the
+existing `_chat_response_sse_chunks` fallback (already used for the
+non-tools case) correctly labels the resulting chunk `usage_source:
+"estimated"`, never `"reported"` (RED-before-GREEN: flipping that one label
+in `server.py` makes this new test fail). No behavior change was needed —
+this closes the coverage gap and corrects the PR's own comment/README/
+CHANGELOG language, which had overclaimed the guarantee.
