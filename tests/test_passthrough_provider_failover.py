@@ -370,7 +370,14 @@ def test_explicit_grouped_model_413_does_not_degrade_provider_health() -> None:
     assert report["failure_count"] == 0
 
 
-@pytest.mark.parametrize("model", [TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL])
+@pytest.mark.parametrize(
+    "model",
+    [
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        TaskOrchestrator.AUTO_MODEL,
+        TaskOrchestrator.FREE_MODEL,
+    ],
+)
 def test_virtual_model_names_use_provider_failover(model: str) -> None:
     """Virtual selectors retain cross-provider failover instead of becoming sticky."""
     client = SequencedProxyClient(

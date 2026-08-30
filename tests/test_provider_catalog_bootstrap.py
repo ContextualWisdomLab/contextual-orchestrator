@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import threading
 
 import pytest
@@ -18,6 +19,7 @@ from contextual_orchestrator.model_discovery import (
     ProviderDiscoveryError,
     ProviderModelSource,
 )
+from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
 from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
 from contextual_orchestrator.provider_catalog_bootstrap import (
     bootstrap_provider_catalog_runtime,
@@ -152,6 +154,60 @@ def test_empty_catalog_preserves_lkg_but_nonchat_success_withdraws_it() -> None:
             assert "no persisted chat-compatible model" in str(error)
         else:
             raise AssertionError("non-chat-only authoritative catalog must fail")
+    finally:
+        set_backend(None)
+
+
+def test_privacy_analysis_success_persists_and_empty_failure_preserves_lkg() -> None:
+    """The opt-in bootstrap stores grounded evidence without erasing it on failure."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        source = _source("openai", "OPENAI_API_KEY")
+        model = _model(source, "gpt-live")
+        model = type(model)(
+            **{
+                **model.__dict__,
+                "privacy_policy_urls": ("https://provider.example/privacy",),
+            }
+        )
+        evidence = PrivacyPolicyAssessment(
+            subject_provider=source.provider_name,
+            subject_credential=source.credential_name,
+            subject_model=model.model_id,
+            source_url=model.privacy_policy_urls[0],
+            zero_data_retention_available=True,
+            supports_no_training=True,
+            supports_no_prompt_retention=True,
+            evidence_quote="Prompts are not retained.",
+            analyzer_provider="openrouter",
+            analyzer_model="zdr-analyzer",
+            observed_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+        )
+        store = InMemoryProviderCatalogStore()
+
+        first = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(source,),
+            discovery=lambda _sources: ([model], []),
+            analyze_privacy_policies=True,
+            privacy_analysis=lambda models: (list(models), [evidence]),
+            model_limit=1,
+        )
+        assert first.privacy_assessment_count == 1
+        assert store.privacy_assessments(source) == (evidence,)
+
+        second = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(source,),
+            discovery=lambda _sources: ([model], []),
+            analyze_privacy_policies=True,
+            privacy_analysis=lambda models: (list(models), []),
+            model_limit=1,
+        )
+        assert second.privacy_assessment_count == 1
+        assert store.privacy_assessments(source) == (evidence,)
     finally:
         set_backend(None)
 

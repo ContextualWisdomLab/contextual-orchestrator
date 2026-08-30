@@ -1,0 +1,76 @@
+services:
+  wardnet:
+    build:
+      context: https://github.com/ContextualWisdomLab/wardnet.git#233c831bb26fc57b6c4be3435f54306f56fd37a8
+      dockerfile_inline: |
+        FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS build
+        WORKDIR /app
+        COPY Cargo.toml Cargo.lock ./
+        COPY src ./src
+        COPY crates ./crates
+        RUN cargo build --locked --release
+        FROM rust:1.88-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0
+        RUN groupadd --gid 10001 wardnet && useradd --uid 10001 --gid 10001 --create-home wardnet
+        COPY --from=build /app/target/release/waf-ids-ai-soc /usr/local/bin/wardnet
+        USER wardnet
+        HEALTHCHECK --interval=10s --timeout=3s --retries=6 CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+        ENTRYPOINT ["/usr/local/bin/wardnet"]
+    environment:
+      BIND_ADDR: 0.0.0.0:8080
+      EGRESS_DNS_BIND_ADDR: 0.0.0.0:53
+      ADMIN_TOKEN: ${WARDNET_ADMIN_TOKEN:?set the dedicated Wardnet admin token}
+      EGRESS_PROXY_TOKEN: ${WARDNET_EGRESS_PROXY_TOKEN:?set the dedicated Wardnet egress token}
+      CONTROL_PLANE_DATABASE_URL: ${WARDNET_CONTROL_PLANE_DATABASE_URL:?set the Wardnet PostgreSQL URL with sslmode=require or stricter}
+    cap_add: [NET_BIND_SERVICE]
+    networks:
+      default: {}
+      camoufox_egress:
+        ipv4_address: 172.30.0.2
+    restart: unless-stopped
+
+  camofox-browser:
+    image: ghcr.io/redf0x1/camofox-browser@sha256:afaaf9795af8793f3e6353e9e5dd5b03713b6ffed6e80c1b0a179575322bcff0
+    platform: linux/amd64
+    environment:
+      CAMOFOX_HOST: 0.0.0.0
+      CAMOFOX_AUTH_MODE: required
+      CAMOFOX_API_KEY: ${CAMOFOX_API_KEY:?set the Camofox browser API key}
+    dns: [172.30.0.2]
+    depends_on:
+      wardnet:
+        condition: service_healthy
+    networks:
+      camoufox_control: {}
+      camoufox_egress: {}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9377/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    restart: unless-stopped
+
+  camofox-mcp:
+    image: ghcr.io/redf0x1/camofox-mcp@sha256:52791742410fe9a4661afabe9326b6276feaa579616d3d45e76faa7da2f4130b
+    command: ["node", "dist/http.js"]
+    environment:
+      CAMOFOX_TRANSPORT: http
+      CAMOFOX_HTTP_HOST: 0.0.0.0
+      CAMOFOX_HTTP_API_KEY: ${CAMOFOX_MCP_TOKEN:?set the Camofox MCP token}
+      CAMOFOX_URL: http://camofox-browser:9377
+      CAMOFOX_API_KEY: ${CAMOFOX_API_KEY:?set the Camofox browser API key}
+    depends_on:
+      camofox-browser:
+        condition: service_healthy
+    networks:
+      default: {}
+      camoufox_control: {}
+    restart: unless-stopped
+
+networks:
+  camoufox_control:
+    internal: true
+  camoufox_egress:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
