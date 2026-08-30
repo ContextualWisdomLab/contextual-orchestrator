@@ -126,6 +126,7 @@ class ModelGroupRouter:
         # ordering so refresh=False reads never observe a partially refreshed row set.
         self._observation_io_lock = threading.Lock()
         self._member_contexts: dict[str, str] = {}
+        self._retired_member_contexts: dict[str, str] = {}
         # member_id -> {"alpha", "beta", "ewma", "ewma_tps"}; ewma/ewma_tps are
         # None until the first observation of each kind arrives.
         self._members: dict[str, dict[str, float | None]] = {}
@@ -133,6 +134,7 @@ class ModelGroupRouter:
     def register_member(self, member_id: str) -> None:
         """Ensure a member exists in the ledger (idempotent, keeps history)."""
         with self._lock:
+            self._retired_member_contexts.pop(member_id, None)
             self._member_contexts[member_id] = self._resolve_context_key(member_id)
             self._members.setdefault(member_id, self._blank_state(member_id))
 
@@ -162,6 +164,9 @@ class ModelGroupRouter:
             with self._lock:
                 for member_id in list(self._members):
                     if member_id not in keep_member_ids:
+                        self._retired_member_contexts[member_id] = self._member_contexts.get(
+                            member_id, member_id
+                        )
                         del self._members[member_id]
                         self._member_contexts.pop(member_id, None)
             return
@@ -171,6 +176,9 @@ class ModelGroupRouter:
                 self._observation_store.delete_members(self._ledger_name, removed)
                 for member_id in removed:
                     if member_id not in keep_member_ids:
+                        self._retired_member_contexts[member_id] = self._member_contexts.get(
+                            member_id, member_id
+                        )
                         self._members.pop(member_id, None)
                         self._member_contexts.pop(member_id, None)
 
@@ -179,6 +187,9 @@ class ModelGroupRouter:
         if self._observation_store is None:
             with self._lock:
                 for member_id in member_ids:
+                    self._retired_member_contexts[member_id] = self._member_contexts.get(
+                        member_id, member_id
+                    )
                     self._members.pop(member_id, None)
                     self._member_contexts.pop(member_id, None)
             return
@@ -186,6 +197,9 @@ class ModelGroupRouter:
             with self._observation_io_lock:
                 self._observation_store.delete_members(self._ledger_name, member_ids)
                 for member_id in member_ids:
+                    self._retired_member_contexts[member_id] = self._member_contexts.get(
+                        member_id, member_id
+                    )
                     self._members.pop(member_id, None)
                     self._member_contexts.pop(member_id, None)
 
@@ -277,7 +291,8 @@ class ModelGroupRouter:
                     member_id,
                     observation_context_key=observation_context_key,
                 )
-                self._apply_success_locked(state, clamped, throughput_sample)
+                if state is not None:
+                    self._apply_success_locked(state, clamped, throughput_sample)
 
     def observe_failure(
         self,
@@ -300,7 +315,8 @@ class ModelGroupRouter:
                     member_id,
                     observation_context_key=observation_context_key,
                 )
-                self._apply_failure_locked(state)
+                if state is not None:
+                    self._apply_failure_locked(state)
 
     def _resolve_observed_at(self, observed_at: float | None) -> float:
         """Resolve one observation timestamp before any router lock can delay it."""
@@ -460,13 +476,18 @@ class ModelGroupRouter:
         member_id: str,
         *,
         observation_context_key: str | None = None,
-    ) -> dict[str, float | None]:
-        if member_id not in self._member_contexts:
+    ) -> dict[str, float | None] | None:
+        current_context = self._member_contexts.get(member_id)
+        if current_context is None:
+            if member_id in self._retired_member_contexts:
+                return None
             self._member_contexts[member_id] = (
                 observation_context_key
                 if observation_context_key is not None
                 else self._resolve_context_key(member_id)
             )
+        elif observation_context_key is not None and observation_context_key != current_context:
+            return None
         return self._members.setdefault(member_id, self._blank_state(member_id))
 
     def _resolve_context_key(self, member_id: str) -> str:
@@ -486,6 +507,12 @@ class ModelGroupRouter:
         observation_context_key: str | None = None,
     ) -> str:
         if member_id not in self._member_contexts:
+            if member_id in self._retired_member_contexts:
+                return (
+                    observation_context_key
+                    if observation_context_key is not None
+                    else self._resolve_context_key(member_id)
+                )
             self._member_contexts[member_id] = (
                 observation_context_key
                 if observation_context_key is not None

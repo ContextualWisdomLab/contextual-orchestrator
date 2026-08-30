@@ -380,6 +380,33 @@ def test_removed_agent_observation_without_captured_context_uses_stable_fallback
         orchestrator.close()
 
 
+def test_removed_agent_observation_does_not_recreate_runtime_member_state(tmp_path) -> None:
+    removed = ModelAgent("member_a", "mock-model", group_name="shared_model")
+    survivor = ModelAgent("member_b", "mock-model", group_name="shared_model")
+    orchestrator = TaskOrchestrator(
+        [removed, survivor],
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+    context_key = orchestrator._routing_observation_context_for_agent(removed)
+    try:
+        orchestrator.remove_agent("default", removed.id)
+        assert removed.id not in orchestrator._group_router.snapshot(refresh=False)
+        orchestrator._group_router.observe_success(
+            removed.id,
+            0.2,
+            observation_context_key=context_key,
+        )
+        assert removed.id not in orchestrator._group_router.snapshot(refresh=False)
+        with sqlite3.connect(tmp_path / "state.sqlite") as connection:
+            rows = connection.execute(
+                "SELECT member_id, context_key, success FROM routing_observations"
+            ).fetchall()
+        assert rows == [(removed.id, context_key, 1)]
+    finally:
+        orchestrator.close()
+
+
 def test_router_rejects_incomplete_store_contract() -> None:
     with pytest.raises(TypeError):
         ModelGroupRouter(observation_store=object())  # type: ignore[arg-type]
