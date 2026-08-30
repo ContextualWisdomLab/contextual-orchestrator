@@ -292,6 +292,11 @@ def _discover_models_command(argv: list[str]) -> None:
             "this opt-in action may incur provider charges."
         ),
     )
+    parser.add_argument(
+        "--provider-ca-bundle",
+        default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
+        help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
+    )
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")

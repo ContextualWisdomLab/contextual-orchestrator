@@ -28,6 +28,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ModelUnitPrice,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _deduplicate_discovered_models,
     _merge_configured_gateway_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
@@ -235,6 +236,51 @@ def test_configured_gateway_preserves_only_consensus_unit_prices() -> None:
         ModelUnitPrice("output_cost_per_image", 0.04),
         ModelUnitPrice("output_cost_per_second", 0.01),
     )
+
+
+def test_duplicate_discovery_withholds_conflicting_price_and_privacy_evidence() -> None:
+    """Ambiguous duplicate rows must not preserve unverified price/privacy fields."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=1.0,
+                completion_price_per_1k=2.0,
+                unit_prices=(ModelUnitPrice("output_cost_per_image", 0.0),),
+                is_free=True,
+                supports_zero_data_retention=True,
+                supports_no_training=True,
+                supports_no_prompt_retention=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_B",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=1.0,
+                completion_price_per_1k=2.0,
+                unit_prices=(ModelUnitPrice("output_cost_per_image", 0.1),),
+                is_free=False,
+                supports_zero_data_retention=False,
+                supports_no_training=False,
+                supports_no_prompt_retention=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].prompt_price_per_1k is None
+    assert discovered[0].completion_price_per_1k is None
+    assert discovered[0].unit_prices == ()
+    assert discovered[0].is_free is False
+    assert discovered[0].supports_zero_data_retention is None
+    assert discovered[0].supports_no_training is None
+    assert discovered[0].supports_no_prompt_retention is None
 
 
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
@@ -709,6 +755,32 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
         side_effect=urlopen,
     ):
         discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is False
+
+
+def test_non_text_models_without_unit_price_evidence_are_not_classified_free() -> None:
+    """A zero token price alone cannot prove a non-text model is free."""
+    source = ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("image",),
+    )
+
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "image-free-ish",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {"output_modalities": ["image"]},
+                }
+            ]
+        },
+        source,
+    )
 
     assert discovered[0].is_free is False
 

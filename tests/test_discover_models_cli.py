@@ -51,6 +51,24 @@ def test_free_only_help_rejects_name_inference() -> None:
     assert "-free/:free" not in help_text
 
 
+def test_discover_models_provider_ca_bundle_help_is_available() -> None:
+    """The discover-models subcommand exposes the reviewed TLS bundle knob."""
+    stdout = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "discover-models", "--help"],
+        ),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 0
+    assert "--provider-ca-bundle" in stdout.getvalue()
+
+
 def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None:
     set_backend(InMemoryCredentialBackend())
     stdout = StringIO()

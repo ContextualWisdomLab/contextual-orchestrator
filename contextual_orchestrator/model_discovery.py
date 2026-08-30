@@ -425,6 +425,11 @@ def _deduplicate_discovered_models(
             chosen,
             prompt_price_per_1k=None,
             completion_price_per_1k=None,
+            unit_prices=(),
+            is_free=False,
+            supports_zero_data_retention=None,
+            supports_no_training=None,
+            supports_no_prompt_retention=None,
         )
     return list(unique.values())
 
@@ -440,6 +445,42 @@ def _pricing_is_free(pricing: dict[str, Any]) -> bool:
     if values:
         return all(value == 0.0 for value in values)
     return False
+
+
+def _unit_prices_are_free(
+    raw_unit_prices: object,
+    *,
+    outputs: tuple[str, ...],
+) -> bool:
+    """Return whether a non-token price vector is complete and entirely zero."""
+    if not isinstance(raw_unit_prices, dict):
+        return "text" in outputs or not outputs
+    declared: dict[str, float] = {}
+    for key in UNIT_PRICE_DIMENSIONS:
+        if key not in raw_unit_prices:
+            continue
+        value = raw_unit_prices[key]
+        if not _valid_price_component(value):
+            return False
+        declared[key] = float(value)
+    if not declared:
+        return "text" in outputs or not outputs
+    return all(value == 0.0 for value in declared.values())
+
+
+def _row_is_free(
+    row: Mapping[str, Any],
+    *,
+    pricing: dict[str, Any],
+    outputs: tuple[str, ...],
+) -> bool:
+    """Classify only rows whose token and non-token prices are all known zero."""
+    raw_unit_prices = row.get("unit_pricing")
+    if isinstance(row.get("is_free"), bool) and row["is_free"] is False:
+        return False
+    if not _pricing_is_free(pricing):
+        return False
+    return _unit_prices_are_free(raw_unit_prices, outputs=outputs)
 
 
 def _models_dev_cost_is_free(cost: object) -> bool:
@@ -868,10 +909,10 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 unit_prices=unit_prices,
-                is_free=(
-                    row["is_free"]
-                    if isinstance(row.get("is_free"), bool)
-                    else _pricing_is_free(pricing)
+                is_free=_row_is_free(
+                    row,
+                    pricing=pricing,
+                    outputs=outputs,
                 ),
                 supports_zero_data_retention=(
                     row["supports_zero_data_retention"]

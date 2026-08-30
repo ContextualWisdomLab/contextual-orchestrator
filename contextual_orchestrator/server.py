@@ -2293,9 +2293,13 @@ def _validate_mode(mode: Any) -> str:
 
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
-    model = body.get("model")
-    if model is not None and not isinstance(model, str):
-        raise RequestError(400, "invalid_model", "model must be a string")
+    if "model" in body:
+        model = body["model"]
+        if not isinstance(model, str):
+            raise RequestError(400, "invalid_model", "model must be a string")
+        if not model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        body["model"] = model.strip()
     required_strings = {
         "/v1/images/generations": ("prompt",),
         "/v1/videos": ("prompt",),
