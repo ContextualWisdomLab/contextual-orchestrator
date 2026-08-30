@@ -1,5 +1,36 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
+
+Checked whether the `.github` `opencode-review` required check's own verdict-matching logic (the
+`pulls/{pr}/reviews` jq filter matching `opencode-agent[bot]` + current-head `commit_id` +
+`APPROVED`/`CHANGES_REQUESTED`) was itself defective, since it's failed on essentially every PR
+across the org for days. Read its git history instead of guessing:
+
+- **2026-08-27** (`ContextualWisdomLab/.github@d8216de`, "restore OpenCode coverage honesty and
+  mermaid surfaces"): the `opencode-review` job was **rewritten from a rubber stamp into a real
+  fail-closed check**. Before this commit the entire job body was
+  `echo "Review approval remains a separate current-head PR review requirement..."` — always
+  `exit 0`, satisfied by nothing. This commit replaced it with the actual verdict-matching logic,
+  a deliberate hardening (it explicitly excludes low-quality fallback/unsupported-scope approvals
+  from counting — sound defense against a documented prior failure mode, not a bug).
+- **2026-08-29** (`ContextualWisdomLab/.github@5992331`, "exercise exact gateway readiness"): a
+  second, independent, well-intentioned addition — the real end-to-end gateway completion check
+  (`gateway_preflight_request`/`gateway_preflight_response`/`publish_sidecar_evidence`, the whole
+  mechanism this doc's entries below are about). It shipped with `"max_tokens":16` hardcoded —
+  exactly the bug `ContextualWisdomLab/.github#1436` fixed.
+
+**The collision, not a design flaw**: the verdict-checker went strict on the 27th; the dispatch
+that would satisfy it started reliably failing two days later because the *new* gateway check
+introduced on the 29th broke on reasoning-capable routes. Confirmed directly on
+`ContextualWisdomLab/.github#1246` (open since 2026-08-23): a real `opencode-agent[bot]`
+`CHANGES_REQUESTED` review landed on 2026-08-23, and none since, despite the PR head moving
+forward multiple times and presumably hundreds of scheduler passes in between. That gap is the
+most direct evidence available that this — not a checker logic defect — plausibly explains the
+~30-PR backlog observed across `ContextualWisdomLab/.github` on 2026-08-30. The fix path was
+already the right one: make the gateway check reliable (`#1436`, then `#1440` below), not touch
+the verdict-checker.
+
 ## 2026-08-30 post-merge canary: max_tokens fix confirmed, distinct preflight failure surfaced
 
 `ContextualWisdomLab/.github#1436` (the sidecar `max_tokens:16→4096` fix below) merged via
