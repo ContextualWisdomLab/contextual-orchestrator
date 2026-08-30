@@ -668,6 +668,44 @@ def test_free_model_advances_through_the_free_pool_on_retryable_5xx() -> None:
     assert "priced_worker" not in calls
 
 
+def test_free_model_advances_through_the_free_pool_on_non_retryable_4xx() -> None:
+    """A non-retryable 400 on the primary free route advances immediately.
+
+    Reproduces a live incident reported against ContextualWisdomLab/.github#1437:
+    a required Strix run against ``orchestrator/free`` had all three of the
+    sidecar's bounded outer attempts land on the same agent and fail with a
+    provider HTTP 400 ``invalid_request_error`` (``retryable: false``), and
+    the gateway declared the whole free pool exhausted. Each outer attempt
+    starts a fresh gateway process, so this reproduces as: does a single
+    ``route_once`` call advance past a non-retryable failure on the primary
+    free route to a second, distinct free route, with no same-agent retry
+    (unlike the retryable-5xx case above)?
+    """
+    calls: list[str] = []
+
+    class InvalidRequestOnPrimary(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(_http_error(400), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        InvalidRequestOnPrimary(), free_ids=("free_route_a", "free_route_b", "free_route_c")
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+    # Non-retryable: free_route_a is tried exactly once, then failover moves
+    # on immediately -- no same-agent retry, unlike the retryable-5xx case.
+    assert calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in calls
+
+
 def test_free_model_exhausted_pool_fails_closed_never_promotes_to_priced_agent() -> None:
     """Exhausting every free route fails closed with the last classified error.
 
