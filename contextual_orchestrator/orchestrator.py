@@ -271,6 +271,21 @@ class FastMLSIRMJudgeComponents:
     format_error: type[Exception]
 
 
+@dataclass(frozen=True)
+class _InvocationResult:
+    """Provider invocation payload plus the durable-observation context used."""
+
+    output: str
+    served_id: str
+    usage: dict[str, Any] | None
+    observation_context_key: str
+
+    def __iter__(self):
+        yield self.output
+        yield self.served_id
+        yield self.usage
+
+
 def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
     """Resolve the fast-mlsirm adapter symbols without importing unconditionally."""
     try:
@@ -3298,6 +3313,7 @@ class TaskOrchestrator:
         # selection path below funnels through _ranked_agents). The optional
         # store shares only the explicitly configured time window across processes.
         self._group_router = ModelGroupRouter(
+            observation_context_resolver=self._routing_observation_context_for_member,
             observation_store=self._routing_observation_store,
             ledger_name="transport",
         )
@@ -3306,6 +3322,7 @@ class TaskOrchestrator:
         # measured accuracy -- not transport success -- steers future routing.
         self._quality_router = ModelGroupRouter(
             prior_resolver=resolve_quality_prior,
+            observation_context_resolver=self._routing_observation_context_for_member,
             observation_store=self._routing_observation_store,
             ledger_name="quality",
         )
@@ -3673,16 +3690,22 @@ class TaskOrchestrator:
                 )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
                 request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
-                    self._record_group_failure(agent.id)
+                    self._record_group_failure(
+                        agent.id,
+                        observation_context_key=observation_context_key,
+                    )
                 raise
             if measured:
                 self._group_router.observe_success(
-                    agent.id, time.perf_counter() - started_at
+                    agent.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
                 )
             return result
 
@@ -3751,6 +3774,7 @@ class TaskOrchestrator:
         every_failure_was_request_too_large = True
         for candidate in candidates:
             started_at = time.perf_counter()
+            observation_context_key = self._routing_observation_context_for_agent(candidate)
             candidate_payload = dict(upstream)
             candidate_payload["model"] = candidate.model
             if isinstance(file_replicas, dict):
@@ -3788,12 +3812,17 @@ class TaskOrchestrator:
                 if not request_too_large:
                     self._record_failure(candidate.id)
                 if candidate.group_name and not request_too_large:
-                    self._record_group_failure(candidate.id)
+                    self._record_group_failure(
+                        candidate.id,
+                        observation_context_key=observation_context_key,
+                    )
                 continue
             self._record_success(candidate.id)
             if candidate.group_name:
                 self._group_router.observe_success(
-                    candidate.id, time.perf_counter() - started_at
+                    candidate.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
                 )
             return result
         if last_failure is not None and every_failure_was_request_too_large:
@@ -4098,13 +4127,17 @@ class TaskOrchestrator:
             )
 
         synthesis_started = time.perf_counter()
+        synthesis_context_key = self._routing_observation_context_for_agent(final_agent)
         try:
             raw, final_agent = send_synthesis(upstream)
         except Exception as exc:
             if not _is_request_too_large_error(exc):
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
-                self._record_group_failure(final_agent.id)
+                self._record_group_failure(
+                    final_agent.id,
+                    observation_context_key=synthesis_context_key,
+                )
             raise
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:
@@ -4172,19 +4205,26 @@ class TaskOrchestrator:
                     {"role": "system", "content": repair_instruction},
                 ]
             repair_started = time.perf_counter()
+            repair_context_key = self._routing_observation_context_for_agent(final_agent)
             try:
                 repaired, final_agent = send_synthesis(repair_upstream)
             except Exception as exc:
                 if not _is_request_too_large_error(exc):
                     self._record_failure(final_agent.id)
                 if final_agent.group_name and not _is_request_too_large_error(exc):
-                    self._record_group_failure(final_agent.id)
+                    self._record_group_failure(
+                        final_agent.id,
+                        observation_context_key=repair_context_key,
+                    )
                 raise
             repaired_output = provider_output(repaired)
             if _structured_output_error(repaired_output, response_format) is not None:
                 self._record_failure(final_agent.id)
                 if final_agent.group_name:
-                    self._record_group_failure(final_agent.id)
+                    self._record_group_failure(
+                        final_agent.id,
+                        observation_context_key=repair_context_key,
+                    )
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
@@ -4206,7 +4246,9 @@ class TaskOrchestrator:
         self._record_success(final_agent.id)
         if final_agent.group_name:
             self._group_router.observe_success(
-                final_agent.id, time.perf_counter() - synthesis_started
+                final_agent.id,
+                time.perf_counter() - synthesis_started,
+                observation_context_key=synthesis_context_key,
             )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
@@ -4406,6 +4448,7 @@ class TaskOrchestrator:
         agent = self._requested_agent(model_name) or self._select_agent(
             text, "worker", free_only=model_name == self.FREE_MODEL
         )
+        observation_context_key = self._routing_observation_context_for_agent(agent)
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
@@ -4421,7 +4464,10 @@ class TaskOrchestrator:
                 yield delta
         except Exception:
             if agent.group_name or model_name == self.FREE_MODEL:
-                self._record_group_failure(agent.id)
+                self._record_group_failure(
+                    agent.id,
+                    observation_context_key=observation_context_key,
+                )
             raise
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
         if usage_callback is not None:
@@ -4429,7 +4475,9 @@ class TaskOrchestrator:
         if agent.group_name or model_name == self.FREE_MODEL:
             try:
                 self._group_router.observe_success(
-                    agent.id, time.perf_counter() - started_at
+                    agent.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
                 )
             except RoutingObservationPersistenceError:
                 # ponytail: preserve an already-emitted stream; surface the
@@ -5220,13 +5268,14 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
-            attempt_answer, attempt_served_id, attempt_usage = self._invoke(
+            invocation = self._invoke(
                 candidate,
                 messages,
                 text=text,
                 role="worker",
                 allowed_agent_ids=allowed_agent_ids,
             )
+            attempt_answer, attempt_served_id, attempt_usage = invocation
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -5252,6 +5301,7 @@ class TaskOrchestrator:
                 latency_seconds=latency_seconds,
                 usage=attempt_usage,
                 free_only=free_only,
+                observation_context_key=getattr(invocation, "observation_context_key", None),
                 prompt_context=prompt_context,
             )
             row["realtime_judge"] = {
@@ -5292,6 +5342,7 @@ class TaskOrchestrator:
         latency_seconds: float,
         usage: dict[str, Any] | None,
         free_only: bool,
+        observation_context_key: str | None = None,
         prompt_context: str | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
@@ -5303,13 +5354,24 @@ class TaskOrchestrator:
         """
         output_tokens = self._usage_completion_tokens(usage)
 
-        def _record(accepted: bool, irt_row: tuple[int, ...] = ()) -> None:
+        def _record(
+            accepted: bool,
+            irt_row: tuple[int, ...] = (),
+            *,
+            observation_context_key: str | None = None,
+        ) -> None:
             if accepted:
                 self._quality_router.observe_success(
-                    served_id, latency_seconds, output_tokens=output_tokens
+                    served_id,
+                    latency_seconds,
+                    output_tokens=output_tokens,
+                    observation_context_key=observation_context_key,
                 )
             else:
-                self._record_quality_failure(served_id)
+                self._record_quality_failure(
+                    served_id,
+                    observation_context_key=observation_context_key,
+                )
             if prompt_context is not None:
                 self._observe_contextual_quality(
                     prompt_context,
@@ -5339,7 +5401,11 @@ class TaskOrchestrator:
             and all(type(value) is int and value in (0, 1) for value in raw_irt_row)
             else ()
         )
-        _record(accepted, irt_row)
+        _record(
+            accepted,
+            irt_row,
+            observation_context_key=observation_context_key,
+        )
         return base
 
     @staticmethod
@@ -6185,15 +6251,21 @@ class TaskOrchestrator:
         error: BaseException | None,
         *,
         capability: str,
+        observation_context_key: str | None = None,
     ) -> None:
         """Share race completion evidence with normal stability/circuit ledgers."""
         self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
         if error is not None and not _is_request_too_large_error(error):
-            self._record_group_failure(endpoint_id)
+            self._record_group_failure(
+                endpoint_id,
+                observation_context_key=observation_context_key,
+            )
             self._record_failure(endpoint_id)
 
     def _race_attempt_collector(
-        self, capability: str
+        self,
+        capability: str,
+        observation_contexts: dict[str, str] | None = None,
     ) -> tuple[
         Callable[[str, Any | None, BaseException | None], None],
         Callable[[str | None], None],
@@ -6214,7 +6286,15 @@ class TaskOrchestrator:
             error: BaseException | None,
         ) -> None:
             self._record_race_attempt(
-                endpoint_id, value, error, capability=capability
+                endpoint_id,
+                value,
+                error,
+                capability=capability,
+                observation_context_key=(
+                    None
+                    if observation_contexts is None
+                    else observation_contexts.get(endpoint_id)
+                ),
             )
             if error is not None or value is None:
                 return
@@ -6262,6 +6342,10 @@ class TaskOrchestrator:
                 raise ValueError(
                     "immediate_race endpoint count exceeds the supported concurrency capacity"
                 )
+            observation_contexts = {
+                agent.id: self._routing_observation_context_for_agent(agent)
+                for agent in race_members
+            }
             def call(agent: ModelAgent) -> dict[str, Any] | tuple[bytes, str]:
                 payload = {
                     key: value for key, value in body.items()
@@ -6279,7 +6363,10 @@ class TaskOrchestrator:
                 )
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
-            attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
+            attempt_completed, finalize_attempts = self._race_attempt_collector(
+                capability,
+                observation_contexts,
+            )
             try:
                 outcome = race_first_valid(
                     [
@@ -6313,11 +6400,16 @@ class TaskOrchestrator:
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability=capability)
                 self._group_router.observe_success(
-                    outcome.winner_endpoint_id, outcome.completion_ms / 1000
+                    outcome.winner_endpoint_id,
+                    outcome.completion_ms / 1000,
+                    observation_context_key=observation_contexts.get(
+                        outcome.winner_endpoint_id
+                    ),
                 )
                 return outcome.value
         last_error: Exception | None = None
         for agent in candidates:
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             payload = {
                 key: value
                 for key, value in body.items()
@@ -6344,15 +6436,24 @@ class TaskOrchestrator:
                     every_failure_was_request_too_large and request_too_large
                 )
                 if not request_too_large:
-                    self._record_group_failure(agent.id)
+                    self._record_group_failure(
+                        agent.id,
+                        observation_context_key=observation_context_key,
+                    )
                 continue
             if selection_sink is not None:
                 selected_result = selection_sink(agent, result)
                 self._group_router.observe_success(
-                    agent.id, time.perf_counter() - started_at
+                    agent.id,
+                    time.perf_counter() - started_at,
+                    observation_context_key=observation_context_key,
                 )
                 return selected_result
-            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
+            self._group_router.observe_success(
+                agent.id,
+                time.perf_counter() - started_at,
+                observation_context_key=observation_context_key,
+            )
             return result
         if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
@@ -6371,7 +6472,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
-    ) -> tuple[str, str, dict[str, Any] | None]:
+    ) -> _InvocationResult:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
         ``ModelClient`` handles provider transport retries. This layer classifies
@@ -6410,6 +6511,10 @@ class TaskOrchestrator:
                 )
             effort_profile = self._role_effort_profile(role)
             request_settings = self.client.request_settings_snapshot()
+            observation_contexts = {
+                agent.id: self._routing_observation_context_for_agent(agent)
+                for agent in race_members
+            }
 
             def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
@@ -6422,7 +6527,10 @@ class TaskOrchestrator:
                 return output, agent.id, usage
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
-            attempt_completed, finalize_attempts = self._race_attempt_collector("text")
+            attempt_completed, finalize_attempts = self._race_attempt_collector(
+                "text",
+                observation_contexts,
+            )
             try:
                 outcome = race_first_valid(
                 [
@@ -6456,8 +6564,18 @@ class TaskOrchestrator:
                     outcome.winner_endpoint_id,
                     outcome.completion_ms / 1000,
                     output_tokens=output_tokens,
+                    observation_context_key=observation_contexts.get(
+                        outcome.winner_endpoint_id
+                    ),
                 )
-                return outcome.value
+                return _InvocationResult(
+                    output=outcome.value[0],
+                    served_id=outcome.value[1],
+                    usage=outcome.value[2],
+                    observation_context_key=observation_contexts.get(
+                        outcome.winner_endpoint_id, outcome.winner_endpoint_id
+                    ),
+                )
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         every_failure_was_request_too_large = True
         # The final classified upstream failure survives the candidate loop so a
@@ -6466,6 +6584,7 @@ class TaskOrchestrator:
         last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
+            observation_context_key = self._routing_observation_context_for_agent(agent)
             while True:
                 try:
                     attempt_start = time.perf_counter()
@@ -6480,7 +6599,10 @@ class TaskOrchestrator:
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
-                        self._record_group_failure(agent.id)
+                        self._record_group_failure(
+                            agent.id,
+                            observation_context_key=observation_context_key,
+                        )
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
                     if isinstance(exc, ProviderUpstreamError):
@@ -6533,9 +6655,15 @@ class TaskOrchestrator:
                         agent.id,
                         time.perf_counter() - attempt_start,
                         output_tokens=output_tokens,
+                        observation_context_key=observation_context_key,
                     )
                 self._record_success(agent.id)
-                return output, agent.id, usage
+                return _InvocationResult(
+                    output=output,
+                    served_id=agent.id,
+                    usage=usage,
+                    observation_context_key=observation_context_key,
+                )
         if every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
@@ -6637,19 +6765,39 @@ class TaskOrchestrator:
             if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
                 state["opened_at"] = time.monotonic()
 
-    def _record_group_failure(self, agent_id: str) -> None:
+    def _record_group_failure(
+        self,
+        agent_id: str,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
+    ) -> None:
         """Record provider failure without replacing an already active error."""
         try:
-            self._group_router.observe_failure(agent_id)
+            self._group_router.observe_failure(
+                agent_id,
+                observation_context_key=observation_context_key,
+                observed_at=observed_at,
+            )
         except RoutingObservationPersistenceError:
             _LOGGER.error(
                 "durable routing observation failed while recording provider failure"
             )
 
-    def _record_quality_failure(self, agent_id: str) -> None:
+    def _record_quality_failure(
+        self,
+        agent_id: str,
+        *,
+        observation_context_key: str | None = None,
+        observed_at: float | None = None,
+    ) -> None:
         """Record judge failure without aborting a usable-answer failover."""
         try:
-            self._quality_router.observe_failure(agent_id)
+            self._quality_router.observe_failure(
+                agent_id,
+                observation_context_key=observation_context_key,
+                observed_at=observed_at,
+            )
         except RoutingObservationPersistenceError:
             _LOGGER.error(
                 "durable quality observation failed while recording provider failure"
@@ -6664,6 +6812,23 @@ class TaskOrchestrator:
             if agent.id == agent_id:
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
+
+    def _routing_observation_context_for_agent(self, agent: ModelAgent) -> str:
+        """Stable context key for durable routing evidence tied to one agent shape."""
+        payload = {
+            "auth_scheme": agent.auth_scheme,
+            "base_url": agent.base_url,
+            "group_name": canonical_group_name(agent.group_name) if agent.group_name else "",
+            "id": agent.id,
+            "model": agent.model,
+            "provider_name": agent.provider_name,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def _routing_observation_context_for_member(self, agent_id: str) -> str:
+        return self._routing_observation_context_for_agent(self._agent(agent_id))
 
     def _agent_in_pool(self, agent_pool_id: str, worker_agent_id: str) -> ModelAgent:
         """Resolve an agent only through the pool boundary it can belong to.

@@ -28,9 +28,30 @@ def test_store_shares_current_window_and_keeps_ledgers_separate(tmp_path) -> Non
     first = SqliteRoutingObservationStore(path, 10, clock=clock)
     second = SqliteRoutingObservationStore(path, 10, clock=clock)
 
-    first.append("transport", "member_a", success=True, latency_seconds=0.2, output_tokens=20)
-    first.append("transport", "member_b", success=False)
-    first.append("quality", "member_a", success=True, latency_seconds=0.5)
+    first.append(
+        "transport",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=clock(),
+        success=True,
+        latency_seconds=0.2,
+        output_tokens=20,
+    )
+    first.append(
+        "transport",
+        "member_b",
+        context_key="member_b:v1",
+        observed_at=clock(),
+        success=False,
+    )
+    first.append(
+        "quality",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=clock(),
+        success=True,
+        latency_seconds=0.5,
+    )
 
     assert second.window_seconds == 10
     assert [(row.member_id, row.success) for row in second.load("transport")] == [
@@ -41,18 +62,25 @@ def test_store_shares_current_window_and_keeps_ledgers_separate(tmp_path) -> Non
 
     clock.value = 111
     assert second.load("transport") == []
-    first.append("transport", "member_c", success=False)
+    first.append(
+        "transport",
+        "member_c",
+        context_key="member_c:v1",
+        observed_at=clock(),
+        success=False,
+    )
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT count(*) FROM routing_observations").fetchone()[0] == 1
+        assert connection.execute("SELECT count(*) FROM routing_observations").fetchone()[0] == 4
     first.close()
     second.close()
 
 
 def test_store_deletes_only_requested_members(tmp_path) -> None:
-    store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60)
-    store.append("transport", "member_a", success=False)
-    store.append("transport", "member_b", success=False)
-    store.append("quality", "member_a", success=False)
+    clock = _Clock(100.0)
+    store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60, clock=clock)
+    store.append("transport", "member_a", context_key="member_a:v1", observed_at=91.0, success=False)
+    store.append("transport", "member_b", context_key="member_b:v1", observed_at=92.0, success=False)
+    store.append("quality", "member_a", context_key="member_a:v1", observed_at=93.0, success=False)
 
     store.delete_members("transport", ["member_a", "member_a"])
 
@@ -82,21 +110,25 @@ def test_store_constructor_validates_configuration(path, window, clock, error, t
 def test_store_validates_attempt_shape(tmp_path) -> None:
     store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60)
     with pytest.raises(ValueError):
-        store.append("", "member", success=False)
+        store.append("", "member", context_key="member:v1", observed_at=1.0, success=False)
     with pytest.raises(ValueError):
-        store.append("transport", "", success=False)
+        store.append("transport", "", context_key="member:v1", observed_at=1.0, success=False)
+    with pytest.raises(ValueError):
+        store.append("transport", "member", context_key="", observed_at=1.0, success=False)
     with pytest.raises(TypeError):
-        store.append("transport", "member", success=1)  # type: ignore[arg-type]
+        store.append("transport", "member", context_key="member:v1", observed_at=1.0, success=1)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        store.append("transport", "member", success=True, latency_seconds=True)
+        store.append("transport", "member", context_key="member:v1", observed_at=1.0, success=True, latency_seconds=True)
     with pytest.raises(ValueError):
-        store.append("transport", "member", success=True, latency_seconds=-1)
+        store.append("transport", "member", context_key="member:v1", observed_at=1.0, success=True, latency_seconds=-1)
     with pytest.raises(ValueError):
-        store.append("transport", "member", success=False, latency_seconds=0.1)
+        store.append("transport", "member", context_key="member:v1", observed_at=1.0, success=False, latency_seconds=0.1)
     with pytest.raises(ValueError):
-        store.append("transport", "member", success=True, latency_seconds=0.1, output_tokens=0)
+        store.append("transport", "member", context_key="member:v1", observed_at=1.0, success=True, latency_seconds=0.1, output_tokens=0)
     with pytest.raises(ValueError):
-        store.append("transport", "member", success=False, output_tokens=1)
+        store.append("transport", "member", context_key="member:v1", observed_at=1.0, success=False, output_tokens=1)
+    with pytest.raises(ValueError):
+        store.append("transport", "member", context_key="member:v1", observed_at=float("nan"), success=False)
     store.close()
 
 
@@ -154,7 +186,7 @@ def test_router_serializes_store_operations_with_memory_updates() -> None:
         def append(self, *args, **kwargs) -> None:
             self._assert_lock_order()
 
-        def load(self, ledger_name: str) -> list:
+        def load(self, ledger_name: str, active_contexts=None) -> list:
             self._assert_lock_order()
             return []
 
@@ -308,6 +340,78 @@ def test_router_deletes_persisted_context_when_members_leave(tmp_path) -> None:
     router.observe_failure("member_a")
     router.forget_members(set())
     assert store.load("transport") == []
+
+
+def test_store_load_ignores_stale_member_context_after_restart(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    store = SqliteRoutingObservationStore(path, 60, clock=_Clock(100.0))
+    store.append(
+        "transport",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=90.0,
+        success=True,
+        latency_seconds=0.2,
+    )
+
+    rows = store.load("transport", {"member_a": "member_a:v2"})
+
+    assert rows == []
+
+
+def test_store_load_orders_by_observed_completion_time_not_insert_order(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    store = SqliteRoutingObservationStore(path, 60, clock=_Clock(100.0))
+    store.append(
+        "transport",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=95.0,
+        success=False,
+    )
+    store.append(
+        "transport",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=90.0,
+        success=True,
+        latency_seconds=0.1,
+    )
+
+    rows = store.load("transport", {"member_a": "member_a:v1"})
+
+    assert [(row.success, row.latency_seconds) for row in rows] == [
+        (True, 0.1),
+        (False, None),
+    ]
+
+
+def test_shorter_writer_window_does_not_delete_longer_window_evidence(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    long_window = SqliteRoutingObservationStore(path, 60, clock=_Clock(100.0))
+    short_window = SqliteRoutingObservationStore(path, 10, clock=_Clock(100.0))
+    long_window.append(
+        "transport",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=50.0,
+        success=False,
+    )
+
+    short_window.append(
+        "transport",
+        "member_b",
+        context_key="member_b:v1",
+        observed_at=100.0,
+        success=False,
+    )
+
+    rows = long_window.load(
+        "transport",
+        {"member_a": "member_a:v1", "member_b": "member_b:v1"},
+    )
+
+    assert [row.member_id for row in rows] == ["member_a", "member_b"]
 
 
 def test_task_orchestrator_opt_in_store_survives_restart_and_reports_policy(tmp_path) -> None:
