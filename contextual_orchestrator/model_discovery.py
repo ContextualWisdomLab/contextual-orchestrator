@@ -445,6 +445,7 @@ def _deduplicate_discovered_models(
             supports_zero_data_retention=None,
             supports_no_training=None,
             supports_no_prompt_retention=None,
+            zdr_capable=False,
         )
     return list(unique.values())
 
@@ -465,11 +466,21 @@ def _pricing_is_free(pricing: dict[str, Any]) -> bool:
 def _unit_prices_are_free(
     raw_unit_prices: object,
     *,
+    provider_declares_free: bool,
+    inputs: tuple[str, ...],
     outputs: tuple[str, ...],
 ) -> bool:
     """Return whether a non-token price vector is complete and entirely zero."""
+    non_text_modalities = {
+        modality for modality in (*inputs, *outputs) if modality != "text"
+    }
     if not isinstance(raw_unit_prices, dict):
-        return "text" in outputs or not outputs
+        return provider_declares_free or not non_text_modalities
+    unknown_dimensions = {
+        key for key in raw_unit_prices if isinstance(key, str) and key not in UNIT_PRICE_DIMENSIONS
+    }
+    if unknown_dimensions:
+        return False
     declared: dict[str, float] = {}
     for key in UNIT_PRICE_DIMENSIONS:
         if key not in raw_unit_prices:
@@ -479,7 +490,7 @@ def _unit_prices_are_free(
             return False
         declared[key] = float(value)
     if not declared:
-        return "text" in outputs or not outputs
+        return provider_declares_free or not non_text_modalities
     return all(value == 0.0 for value in declared.values())
 
 
@@ -487,15 +498,22 @@ def _row_is_free(
     row: Mapping[str, Any],
     *,
     pricing: dict[str, Any],
+    inputs: tuple[str, ...],
     outputs: tuple[str, ...],
 ) -> bool:
     """Classify only rows whose token and non-token prices are all known zero."""
     raw_unit_prices = row.get("unit_pricing")
+    provider_declares_free = isinstance(row.get("is_free"), bool) and row["is_free"]
     if isinstance(row.get("is_free"), bool) and row["is_free"] is False:
         return False
     if not _pricing_is_free(pricing):
         return False
-    return _unit_prices_are_free(raw_unit_prices, outputs=outputs)
+    return _unit_prices_are_free(
+        raw_unit_prices,
+        provider_declares_free=provider_declares_free,
+        inputs=inputs,
+        outputs=outputs,
+    )
 
 
 def _models_dev_cost_is_free(cost: object) -> bool:
@@ -927,6 +945,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 is_free=_row_is_free(
                     row,
                     pricing=pricing,
+                    inputs=inputs,
                     outputs=outputs,
                 ),
                 supports_zero_data_retention=(

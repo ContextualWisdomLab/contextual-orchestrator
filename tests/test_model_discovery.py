@@ -282,6 +282,34 @@ def test_duplicate_discovery_withholds_conflicting_price_and_privacy_evidence() 
     assert discovered[0].supports_zero_data_retention is None
     assert discovered[0].supports_no_training is None
     assert discovered[0].supports_no_prompt_retention is None
+    assert discovered[0].zdr_capable is False
+
+
+def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
+    """Conflicting duplicate rows must not preserve a positive ZDR route tag."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                zdr_capable=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_B",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                zdr_capable=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].zdr_capable is False
 
 
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
@@ -686,6 +714,67 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
     assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
+
+
+def test_discovery_does_not_mark_multimodal_input_rows_free_without_unit_prices() -> None:
+    """Non-text inputs require explicit zero non-token price evidence."""
+    source = ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
+                }
+            ]
+        },
+        source,
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is False
+
+
+def test_discovery_does_not_mark_rows_free_with_unknown_unit_price_dimensions() -> None:
+    """Unknown unit dimensions keep free status unknown rather than zero-cost."""
+    source = ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "text-chat",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                    },
+                    "unit_pricing": {"per_call": 0},
+                }
+            ]
+        },
+        source,
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is False
 
 
 def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
