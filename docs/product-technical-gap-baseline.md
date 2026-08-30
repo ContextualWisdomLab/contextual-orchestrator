@@ -2190,3 +2190,53 @@ succeed on their own against `orchestrator/free`, and the
 (`.github`) becomes unnecessary technical debt — file a follow-up PR in
 `.github` to revert it and restore real SSE streaming for Strix scans.
 Do not let this workaround become permanent by omission.
+
+**CONFIRMED (2026-08-30, ~21:52 KST): `.github#1451`'s narrower-scope claim
+proven correct, with a real posted verdict as evidence.** Earlier today
+`.github#1451`'s own PR body/comments overclaimed "blocking every PR
+org-wide" for the `pingora_edge_policy.py:345` coverage gap; corrected in
+that PR's comments once verified. The precise mechanism:
+`opencode-review-dispatch.yml`'s `coverage-evidence` job measures the
+*target PR's own repository's* coverage (it clones and tests whichever
+repo the reviewed PR lives in) — for a `.github`-hosted PR that happens to
+equal `.github`'s own `scripts/ci`, so the fix only unblocks `.github`
+PRs specifically. Confirmed by contrast: `fast-mlsirm#1473`'s post-merge
+dispatch (run `33311678659`) still failed `coverage-evidence`, but for a
+completely unrelated reason native to that repo (a Rust extension import
+error, `cannot import name '_core' from partially initialized module
+'fast_mlsirm'`, plus 69.8% docstring coverage) — proving the fix's scope
+boundary directly rather than assuming it.
+
+**End-to-end proof the `.github` scope now works**: `.github#1452`'s
+dispatch (run `33312352417`) is the first all the way through today:
+`coverage-evidence` succeeded, `Run OpenCode PR Review model pool`
+succeeded, and `opencode-agent[bot]` posted a real, substantive,
+evidence-based review on the current head — `CHANGES_REQUESTED` citing
+that PR's own unrelated failing checks (`osv-scan`, cancelled `Strix`),
+plus a genuine Changed-File Evidence Map covering the actual diff. Not a
+rubber stamp, not a coverage-gate skip: the review mechanism itself is
+now demonstrably working for `.github`-hosted PRs. Minor unresolved
+detail on that same run: "Publish repository_dispatch OpenCode status"
+failed after the verdict was already correctly published and enforced —
+a downstream status-publish step, not the review pipeline itself; not yet
+investigated.
+
+**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+`noema-review` run, flagged by the user as "still not working" after the
+above fixes landed): `TaskOrchestrator._invoke()`
+(`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
+call/retry/failover loop) has no overall wall-clock deadline. Each
+attempt is capped at `ModelClient.timeout = 90s`, but a hanging (not
+erroring) candidate plus one same-agent retry can chain past 90s +
+backoff + 90s = 180s+ before any response — well past
+`contextual_orchestrator_review_sidecar.sh`'s 120s outer
+`curl --max-time` bound on its own gateway-preflight self-check, so the
+sidecar sees exactly "0 bytes received after 120002ms" even though
+nothing is truly hung, just still working through an unbounded internal
+retry chain. Reproduced once (`.github` run `33312258611`, job
+`99259327051`); org-wide evidence since the pingora/Strix fixes landed
+shows this is now occasional, not the dominant failure mode (most
+`.github`-hosted PRs' `noema-review`/dispatch runs succeed). Correct fix
+is an overall deadline on `_invoke`'s candidate/retry loop, not another
+timeout increase on the sidecar's client side — deferred rather than
+rushed into this heavily-tested core file without dedicated validation.
