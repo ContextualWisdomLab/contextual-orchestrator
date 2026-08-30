@@ -149,12 +149,12 @@ def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
         thread.join(timeout=5)
 
 
-def test_http_embeddings_null_model_auto_selects_enabled_embedding_agent() -> None:
+def test_http_embeddings_null_model_is_rejected() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(port, "/v1/embeddings", {"model": None, "input": "invoice"})
-        assert status == 200, body
-        assert body["model"] == "mock-planner"
+        assert status == 400, body
+        assert "invalid_model" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)

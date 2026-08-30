@@ -402,6 +402,26 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert body["echo"]["response_format"] == {"type": "json_object"}
 
 
+def test_http_gateway_default_response_format_resolves_concrete_agent() -> None:
+    """The virtual gateway default remains valid on provider-native passthrough."""
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                "messages": [{"role": "user", "content": "give me JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 200
+    assert body["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
+
+
 @pytest.mark.parametrize(
     ("agents", "model", "expected_message"),
     [

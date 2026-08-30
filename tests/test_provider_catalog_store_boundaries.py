@@ -351,6 +351,12 @@ def test_mixed_eligibility_skips_tag_inserts_for_uneligible_models() -> None:
     bench_row_id = provider_model_id(source, "bench-only-model")
     assert all(params[0] == eligible_row_id for params in tag_inserts)
     assert all(params[0] != bench_row_id for params in tag_inserts)
+    privacy_prunes = [
+        params
+        for statement, params in connection_calls
+        if "DELETE FROM model_policy_assessment" in statement
+    ]
+    assert privacy_prunes == [(provider_account_id(source),)]
 
 
 if __name__ == "__main__":  # pragma: no cover
