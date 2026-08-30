@@ -172,8 +172,11 @@ transactionally into these relations.
 - Operators may opt into multi-process observation sharing with
   `--routing-observation-window-seconds` alongside `--state-db`. The normalized
   `routing_observations` table replays only the selected time window and uses
-  retention-only semantics; calibrated decay, cross-model quality weights, and
-  production horizontal-scaling claims remain outside this slice.
+  retention-only semantics. Physical pruning is bounded by the shared
+  database's largest registered routing-observation window so shorter-window
+  peers cannot erase longer-window evidence; calibrated decay, cross-model
+  quality weights, and production horizontal-scaling claims remain outside this
+  slice.
 - Video job durability still depends on the configured shared job registry;
   standalone mode makes no durability claim.
 - Cancellable conducted-answer streaming and opt-in spend-capped live

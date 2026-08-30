@@ -43,9 +43,12 @@ tokens when available.
 
 Each router refresh replays only rows at or after `now - window_seconds`, in
 completion order, using the existing estimator and priors. Writes prune rows
-outside the window. Separate short-lived SQLite connections and a transactional
-write boundary permit multiple gateway processes to use the same database; a
-storage error propagates so configured durable evidence is never silently
+transactionally, but the physical prune boundary is the shared database's
+largest registered observation window rather than the current writer's local
+window. Separate short-lived SQLite connections and a transactional write
+boundary permit multiple gateway processes to use the same database without a
+short-window process deleting evidence still required by a longer-window peer;
+a storage error propagates so configured durable evidence is never silently
 reported as local-only evidence. Non-stream success-observation requests
 therefore fail closed. Provider-failure recording preserves the active provider
 failure and logs the durable-evidence outage so failover can continue. A stream

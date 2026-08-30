@@ -101,6 +101,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Completions convention and keeping the streamed-orchestration decision
   (`_responses_virtual_requires_provider_path`) honest about what was
   actually supplied.
+- The opt-in durable routing-observation store now prunes rows by the shared
+  database's largest registered routing-observation window, not by whichever
+  writer happens to have the shortest local window. Mixed-window gateway
+  processes therefore keep physically bounded storage without erasing active
+  evidence required by a longer-window peer.
 - Discover chat models from metadata-free OpenAI-compatible gateways. A
   configured gateway whose `/v1/models` rows carry no modality/capability
   metadata previously produced empty-capability chat rows that runtime

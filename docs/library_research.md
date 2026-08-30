@@ -75,6 +75,13 @@ Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_abla
 and keep route/conduct defaults unchanged until `production_default_change_allowed`
 returns true.
 
+## Time-windowed routing-observation persistence (2026-08-30)
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Shared replay store | Existing stdlib `sqlite3`; repository `state_db`; ADR 0039 routing-observation contract | Keep the opt-in routing-observation store on stdlib SQLite and persist a database-wide maximum retention window in metadata so transactional pruning stays physically bounded without letting a short-window process delete a longer-window peer's evidence. | WAL tuning, a second queue/service, active-lease coordination, or a speculative PostgreSQL migration for this bounded slice. |
+| Replay/prune policy | Existing router `window_seconds` replay boundary; SQLite transaction semantics | Reuse per-router `window_seconds` for logical replay, but prune rows by the shared maximum registered window during writes. This preserves completion-order replay and cross-process safety while keeping storage bounded. | Unbounded history, calibrated decay, row-count heuristics, and inferred provider equivalence. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

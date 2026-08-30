@@ -655,16 +655,18 @@ The bounded fix keeps the opt-in SQLite slice but changes the durable contract:
 each row now carries a caller-supplied completion timestamp plus an active
 member-context key derived from the serving agent shape, router refresh loads
 only rows whose `(member_id, context_key)` matches the current member set, and
-shared writers no longer prune rows by their local window. This preserves
+shared writers prune transactionally by the database's largest registered
+routing-observation window instead of their local window. This preserves
 restart continuity for the same agent shape while failing closed on stale or
-reassigned evidence rather than routing with the wrong history.
+reassigned evidence and prevents a short-window peer from deleting evidence a
+longer-window peer still needs.
 
-Exact branch evidence on Saturday, August 30, 2026 used `uv run pytest -q`
-from the clean `commercial-loop-20260830-pr911-root-cause` worktree:
-`tests/test_routing_observation_store.py`,
-`tests/test_measured_routing_evidence.py`, and
-`tests/test_model_group.py` passed (`84 passed in 2.35s`). Added regressions
-cover stale-context rejection, completion-time ordering, and mixed-window
+Exact branch evidence on August 30, 2026 used `uv run pytest -q` from the clean
+`commercial-loop-20260830-pr911-ordering-refresh` worktree:
+`tests/test_routing_observation_store.py` passed (`24 passed in 1.74s`), then
+`tests/test_routing_observation_store.py tests/test_measured_routing_evidence.py tests/test_model_group.py`
+passed (`86 passed in 2.91s`). Added regressions cover physical pruning of
+rows older than the shared maximum retention window while preserving mixed-window
 coexistence. Hosted protected checks, independent review, conflict resolution,
 and normal merge remain required before this becomes protected-main evidence.
 
@@ -675,9 +677,11 @@ operator choice. `--routing-observation-window-seconds SECONDS` requires
 `--state-db PATH` and enables the normalized `routing_observations` SQLite table.
 Each completed transport or quality attempt is stored in its logical ledger;
 router reads replay only observations inside the selected wall-clock window,
-and writes prune rows outside it. Separate gateway processes can therefore
-share current-window success/failure, measured latency, and provider-reported
-completion-token evidence through the existing state database.
+and writes prune rows outside the database-wide maximum registered
+routing-observation window. Separate gateway processes can therefore share
+current-window success/failure, measured latency, and provider-reported
+completion-token evidence through the existing state database without letting a
+shorter-window peer erase a longer-window peer's active evidence.
 
 This is deliberately a retention-only slice: the default remains process-local;
 there is no calibrated decay, cross-model quality weighting, inferred provider

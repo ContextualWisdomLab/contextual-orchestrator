@@ -71,7 +71,7 @@ def test_store_shares_current_window_and_keeps_ledgers_separate(tmp_path) -> Non
         success=False,
     )
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT count(*) FROM routing_observations").fetchone()[0] == 4
+        assert connection.execute("SELECT count(*) FROM routing_observations").fetchone()[0] == 1
     first.close()
     second.close()
 
@@ -458,6 +458,43 @@ def test_shorter_writer_window_does_not_delete_longer_window_evidence(tmp_path) 
     )
 
     assert [row.member_id for row in rows] == ["member_a", "member_b"]
+
+
+def test_store_prunes_only_rows_older_than_database_retention_window(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    clock = _Clock(50.0)
+    short_window = SqliteRoutingObservationStore(path, 10, clock=clock)
+    long_window = SqliteRoutingObservationStore(path, 60, clock=clock)
+    short_window.append(
+        "transport",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=50.0,
+        success=False,
+    )
+    long_window.append(
+        "transport",
+        "member_b",
+        context_key="member_b:v1",
+        observed_at=90.0,
+        success=False,
+    )
+
+    clock.value = 111.0
+    short_window.append(
+        "transport",
+        "member_c",
+        context_key="member_c:v1",
+        observed_at=111.0,
+        success=False,
+    )
+
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(
+            "SELECT member_id FROM routing_observations ORDER BY observed_at, observation_id"
+        ).fetchall()
+
+    assert rows == [("member_b",), ("member_c",)]
 
 
 def test_task_orchestrator_opt_in_store_survives_restart_and_reports_policy(tmp_path) -> None:

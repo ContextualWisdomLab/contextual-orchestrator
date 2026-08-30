@@ -79,6 +79,12 @@ class SqliteRoutingObservationStore:
         "CREATE INDEX IF NOT EXISTS routing_observations_ledger_time "
         "ON routing_observations(ledger_name, member_id, context_key, observed_at, observation_id)"
     )
+    _METADATA_TABLE_NAME = "routing_observation_metadata"
+    _CREATE_METADATA_TABLE_SQL = (
+        "CREATE TABLE IF NOT EXISTS routing_observation_metadata ("
+        "metadata_key TEXT PRIMARY KEY, metadata_value INTEGER NOT NULL)"
+    )
+    _MAX_RETENTION_WINDOW_KEY = "max_retention_window_seconds"
 
     def __init__(
         self,
@@ -101,8 +107,10 @@ class SqliteRoutingObservationStore:
             connection = self._connect()
             try:
                 connection.execute(self._CREATE_TABLE_SQL)
+                connection.execute(self._CREATE_METADATA_TABLE_SQL)
                 self._ensure_schema(connection)
                 connection.execute(self._CREATE_INDEX_SQL)
+                self._register_retention_window(connection)
                 connection.commit()
             finally:
                 connection.close()
@@ -136,6 +144,29 @@ class SqliteRoutingObservationStore:
                 "ADD COLUMN context_key TEXT NOT NULL DEFAULT ''"
             )
 
+    def _register_retention_window(self, connection: sqlite3.Connection) -> None:
+        """Persist the largest configured shared-retention window for this database."""
+        row = connection.execute(
+            "SELECT metadata_value FROM routing_observation_metadata WHERE metadata_key = ?",
+            (self._MAX_RETENTION_WINDOW_KEY,),
+        ).fetchone()
+        current = self._window_seconds if row is None else max(int(row[0]), self._window_seconds)
+        connection.execute(
+            "INSERT INTO routing_observation_metadata(metadata_key, metadata_value) "
+            "VALUES(?, ?) "
+            "ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value",
+            (self._MAX_RETENTION_WINDOW_KEY, current),
+        )
+
+    def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
+        """Return the physical prune boundary from the shared database-wide window."""
+        row = connection.execute(
+            "SELECT metadata_value FROM routing_observation_metadata WHERE metadata_key = ?",
+            (self._MAX_RETENTION_WINDOW_KEY,),
+        ).fetchone()
+        max_window_seconds = self._window_seconds if row is None else max(int(row[0]), 1)
+        return self._now() - float(max_window_seconds)
+
     @staticmethod
     def _validate_ledger_name(ledger_name: str) -> None:
         """Validate the fixed logical ledger identifier."""
@@ -165,7 +196,7 @@ class SqliteRoutingObservationStore:
         latency_seconds: float | None = None,
         output_tokens: int | None = None,
     ) -> None:
-        """Append one validated attempt and prune rows outside the time window."""
+        """Append one validated attempt and prune rows outside the shared retention window."""
         self._validate_ledger_name(ledger_name)
         self._validate_member_id(member_id)
         self._validate_context_key(context_key)
@@ -207,6 +238,10 @@ class SqliteRoutingObservationStore:
                         None if not success else output_tokens,
                     ),
                 )
+                connection.execute(
+                    "DELETE FROM routing_observations WHERE observed_at < ?",
+                    (self._retention_cutoff(connection),),
+                )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -219,7 +254,7 @@ class SqliteRoutingObservationStore:
         ledger_name: str,
         active_contexts: Mapping[str, str] | None = None,
     ) -> list[RoutingObservation]:
-        """Return only observations still inside the configured time window."""
+        """Return only observations still inside this router's configured replay window."""
         self._validate_ledger_name(ledger_name)
         cutoff = self._now() - self._window_seconds
         active = dict(active_contexts or {})
