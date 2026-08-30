@@ -56,21 +56,33 @@ from .provider_catalog_store import (
 
 _CATALOG_REFRESH_EVIDENCE_LOCK = threading.Lock()
 
-# The two-value classification a discovery failure collapses to for the
-# credential-rollback report. An authentication failure (a credential the
-# provider itself rejects) is never treated as an isolated, self-resolving
-# outage: left alone, a genuinely invalid/expired/revoked credential would
-# stay silently disabled forever with the rollback path quietly excusing it
-# every run. Everything else -- a real transient outage (5xx/timeout/
-# transport failure) or a successful-but-empty listing -- is eligible for the
-# isolated-outage tolerance. Only this exact vocabulary is ever attached to a
-# report; a raw provider/test error string never reaches it (see
-# ``_classify_discovery_error_code``).
+# The classification a discovery failure collapses to for the
+# credential-rollback report. Classification defaults to non-tolerable
+# (``UNKNOWN_FAILURE_CLASSIFICATION``): only a code that is unambiguously one
+# specific, self-resolving condition is ever promoted out of it. An
+# authentication failure (a credential the provider itself rejects) is never
+# treated as an isolated, self-resolving outage: left alone, a genuinely
+# invalid/expired/revoked credential would stay silently disabled forever
+# with the rollback path quietly excusing it every run. A transient failure
+# is narrowed to conditions standard retry semantics call retryable -- a rate
+# limit (429), a request-timeout status (408), any 5xx server error, or a
+# below-HTTP-layer timeout/transport failure -- and nothing else. A
+# persistent 4xx other than 401/403 (400 Bad Request, 404 Not Found, ...) or
+# an unparseable response almost always means a genuinely broken
+# integration -- a wrong endpoint, a malformed request shape, or a provider
+# that moved/retired the API -- not a blip that clears on its own, so it is
+# deliberately left non-tolerable even though it is also not an
+# authentication failure specifically. Only this exact vocabulary is ever
+# attached to a report; a raw provider/test error string never reaches it
+# (see ``_classify_discovery_error_code``).
 AUTHENTICATION_FAILURE_CLASSIFICATION = "authentication_failure"
 TRANSIENT_FAILURE_CLASSIFICATION = "transient_failure"
 UNKNOWN_FAILURE_CLASSIFICATION = "unknown_failure"
 _AUTHENTICATION_FAILURE_ERROR_CODES = frozenset({"http_status_401", "http_status_403"})
-_TRANSIENT_FAILURE_ERROR_CODES = frozenset({"timeout", "transport_error", "invalid_response"})
+_TRANSIENT_NON_HTTP_ERROR_CODES = frozenset({"timeout", "transport_error"})
+_TRANSIENT_HTTP_STATUS_CODES = frozenset(
+    {"http_status_408", "http_status_429"} | {f"http_status_{code}" for code in range(500, 600)}
+)
 
 
 def _classify_discovery_error_code(error_code: object) -> str:
@@ -80,15 +92,17 @@ def _classify_discovery_error_code(error_code: object) -> str:
     produces ``http_status_<code>``, ``timeout``, ``transport_error``, or
     ``invalid_response`` along the real discovery path. Anything else --
     including a test double's free-form string -- collapses to
-    ``UNKNOWN_FAILURE_CLASSIFICATION`` so arbitrary text can never reach a
-    report consumed outside this process.
+    ``UNKNOWN_FAILURE_CLASSIFICATION`` (the same non-tolerable default a
+    persistent 4xx or an unparseable response gets), so arbitrary text can
+    never reach a report consumed outside this process and an unrecognized
+    condition is never mistaken for a self-resolving one.
     """
     if not isinstance(error_code, str):
         return UNKNOWN_FAILURE_CLASSIFICATION
     normalized = error_code.strip().casefold()
     if normalized in _AUTHENTICATION_FAILURE_ERROR_CODES:
         return AUTHENTICATION_FAILURE_CLASSIFICATION
-    if normalized in _TRANSIENT_FAILURE_ERROR_CODES or normalized.startswith("http_status_"):
+    if normalized in _TRANSIENT_NON_HTTP_ERROR_CODES or normalized in _TRANSIENT_HTTP_STATUS_CODES:
         return TRANSIENT_FAILURE_CLASSIFICATION
     return UNKNOWN_FAILURE_CLASSIFICATION
 
@@ -195,19 +209,25 @@ def evaluate_provider_credential_inventory(
     design (last-known-good models retained, pool still served) by tolerating
     -- as a warning, not a failure -- exactly one provider's credential
     missing from ``report["registered_credentials"]`` when the report's own
-    evidence explains it as an isolated, non-authentication discovery
-    failure. Every other gap still hard-fails, because each is exactly a case
-    the tolerance must not silently swallow:
+    evidence classifies it ``TRANSIENT_FAILURE_CLASSIFICATION`` (see
+    ``_classify_discovery_error_code``: only a narrow, genuinely retryable
+    set of conditions -- a rate limit, a request timeout, a 5xx, a transport
+    failure -- ever gets that classification). Every other gap still
+    hard-fails, because each is exactly a case the tolerance must not
+    silently swallow:
 
     - a credential never supplied to the caller at all (a real configuration
       gap, checked against ``environ`` -- bootstrap transport only, never a
       runtime secret read);
     - a rollback with no ``providers_with_errors`` evidence tying it to a
       discovery failure (could hide a real bug elsewhere);
-    - a credential the provider itself rejected (``provider_error_
-      classifications`` names it an authentication failure) -- left alone, a
-      genuinely invalid/expired/revoked credential would stay silently
-      disabled forever with every run quietly excusing it;
+    - a rollback whose classification is anything other than transient --
+      an authentication failure (a credential the provider itself rejected),
+      a persistent non-auth 4xx (a wrong endpoint, a malformed request
+      shape), an unparseable response, or an unrecognized code. Defaulting
+      to hard-fail here (rather than allow-listing only authentication
+      failures) matters because a permanently broken integration is just as
+      capable of silently passing forever as an invalid credential is;
     - more than ``max_tolerated_missing_providers`` providers missing at
       once -- a broad outage, not the isolated single-provider blip this
       tolerance exists for, and reason enough to suspect the catalog itself
@@ -249,17 +269,23 @@ def evaluate_provider_credential_inventory(
             None,
         )
 
-    authentication_failed = sorted(
+    non_transient = sorted(
         name
         for name in missing
         if error_classifications.get(provider_by_credential.get(name, ""))
-        == AUTHENTICATION_FAILURE_CLASSIFICATION
+        != TRANSIENT_FAILURE_CLASSIFICATION
     )
-    if authentication_failed:
+    if non_transient:
+        observed = {
+            name: error_classifications.get(
+                provider_by_credential.get(name, ""), UNKNOWN_FAILURE_CLASSIFICATION
+            )
+            for name in non_transient
+        }
         return ProviderCredentialInventoryVerdict(
             False,
-            "credential inventory mismatch: authentication failure (not a transient "
-            f"outage) for: {authentication_failed}",
+            "credential inventory mismatch: not a tolerated transient outage "
+            f"for: {observed}",
             None,
         )
 
@@ -391,13 +417,14 @@ def refresh_persisted_provider_catalog(
             refresh_failures += 1
             providers_with_errors.add(source.provider_name)
             # A successful-but-empty listing carries no HTTP status of its
-            # own to classify; it is never an authentication failure (the
-            # credential worked well enough to get an authenticated
-            # response), so it is conservatively transient rather than
-            # unknown -- keeping it eligible for the isolated-outage
-            # tolerance instead of forcing every empty listing to hard-fail.
+            # own to classify, and -- same reasoning as a persistent 4xx --
+            # is at least as likely to be a genuinely broken integration (a
+            # wrong task/query filter on our side, or a provider account
+            # with zero eligible models) as a self-resolving blip. Default
+            # it to the same non-tolerable bucket rather than assuming
+            # transient.
             error_classifications.setdefault(
-                source.provider_name, TRANSIENT_FAILURE_CLASSIFICATION
+                source.provider_name, UNKNOWN_FAILURE_CLASSIFICATION
             )
         else:
             eligible_ids = {

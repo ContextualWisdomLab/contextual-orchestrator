@@ -52,14 +52,21 @@ that must not be silently swallowed:
 - the secret was never supplied to the job at all (`environ` empty — a real configuration gap);
 - the report gives no `providers_with_errors` evidence tying the rollback to a discovery failure (an
   unexplained rollback, which could hide a real bug elsewhere);
-- **the provider rejected the credential itself** — `ProviderDiscoveryError.error_code` (already
-  computed by `model_discovery._provider_discovery_error_code`, just previously discarded before
-  reaching the report) is now bucketed into a small report-safe classification
-  (`provider_error_classifications`: `authentication_failure` for `http_status_401`/`403`,
-  `transient_failure` for everything else — timeouts, transport errors, other `http_status_*`, and a
-  successful-but-empty listing). An invalid/expired/revoked key must never be excused as a transient
-  blip: left alone, `evaluate_provider_credential_inventory` would otherwise let that provider stay
-  silently disabled forever, no alert, every run;
+- **the rollback isn't classified as a genuinely retryable, transient condition** —
+  `ProviderDiscoveryError.error_code` (already computed by
+  `model_discovery._provider_discovery_error_code`, just previously discarded before reaching the
+  report) is now bucketed into a small report-safe classification
+  (`provider_error_classifications`), and `evaluate_provider_credential_inventory` default-denies:
+  only `transient_failure` is tolerated, everything else hard-fails. `transient_failure` is
+  deliberately narrow — a rate limit (`http_status_429`), a request-timeout status
+  (`http_status_408`), any `http_status_5xx`, or a below-HTTP-layer `timeout`/`transport_error` — the
+  set standard retry semantics call retryable. `authentication_failure` (`http_status_401`/`403`), a
+  persistent non-auth 4xx (`http_status_400`/`404`/…), an unparseable response (`invalid_response`), a
+  successful-but-empty listing, and anything unrecognized all collapse to `unknown_failure` and
+  hard-fail. An invalid/expired credential or a permanently broken integration (wrong endpoint,
+  malformed request shape, a provider that moved/retired the API) must never be excused as a
+  transient blip: left alone, either would let that provider stay silently disabled forever, no
+  alert, every run;
 - **more than one provider's credential is missing at once** — bounded at exactly one provider
   (`max_tolerated_missing_providers=1`) so a broader outage (several providers degraded
   simultaneously) still fails instead of reporting success while serving a stale catalog. The bound
@@ -68,24 +75,36 @@ that must not be silently swallowed:
   transient blip this round does not count against the bound.
 
 Only when a single provider's credential is missing, the secret was supplied, and its classification is
-`transient_failure` does the job print a `::warning::` (with `providers_with_errors`,
+exactly `transient_failure` does the job print a `::warning::` (with `providers_with_errors`,
 `catalog_refresh_failure_count`, `restored_credentials`) and succeed — matching what the bootstrap
 design already promises: the pool keeps serving from last-known-good/other-provider models. The
 existing `catalog_model_count`/`eligible_model_count`/`selected_agent_ids` checks are unchanged and
 still fail the job if the pool itself is unhealthy.
 
-This design was reached through review feedback on the PR (from both an automated reviewer and
-CodeRabbit), not the initial cut: the first version only checked whether the missing credential's
-provider appeared anywhere in `providers_with_errors`, with no auth/transient distinction and no bound
-on how many providers could be missing at once — silently masking both an invalid credential and a
-broad multi-provider outage. New regression coverage in `tests/test_provider_catalog_bootstrap.py`
-(a transient HTTP 500 tolerated as a warning; an HTTP 401/403 still hard-failing; two simultaneous
-provider failures still hard-failing) and `tests/test_provider_catalog_bootstrap_boundaries.py`
-(the verdict function's own edge cases) exercises all of it end to end through
-`bootstrap_provider_catalog_runtime`, not just the workflow's string content.
-`tests/test_provider_bootstrap_secret_normalization.py` now asserts the workflow delegates to this
-tested function instead of pinning inline branching logic. 100% statement and docstring coverage on
-`provider_catalog_bootstrap.py`; full suite green.
+**Two review rounds, not one.** The first cut only checked whether the missing credential's provider
+appeared anywhere in `providers_with_errors`, with no auth/transient distinction and no bound on
+simultaneous providers. Devin and CodeRabbit's first pass caught both gaps (fixed above). Devin's
+*second* pass on that fix caught a narrower version of the same underlying problem: the original
+transient bucket was `_TRANSIENT_FAILURE_ERROR_CODES | {any http_status_*}`, so a *persistent* non-auth
+4xx (400, 404, …) or a successful-but-empty listing — either plausibly a permanently broken
+integration, not a blip — was still being tolerated forever. Narrowed to the retryable-only set above,
+plus the default-deny reframing so a future new classification value is hard-fail by default rather
+than silently allowed. Devin's research-grounding finding on this entry was declined: this is a CI
+reliability bugfix (isolating transient vs. permanent provider failures), not a novel algorithm or
+research claim, and no other CI-only fix in this repo's history (`abb9aaa6`, `b3278df7`, `c328c1e8`,
+`1bbda718`, `8abc4b45`) attaches a paper either.
+
+Regression coverage in `tests/test_provider_catalog_bootstrap.py` (a genuinely retryable status —
+408/429/5xx — tolerated as a warning; an HTTP 401/403 authentication failure still hard-failing; a
+persistent non-auth 4xx and an unparseable response still hard-failing; two simultaneous provider
+failures still hard-failing) and `tests/test_provider_catalog_bootstrap_boundaries.py` (the verdict
+function's own edge cases: fully healthy, unconfigured secret, unexplained rollback, non-string error
+code) exercises all of it end to end through `bootstrap_provider_catalog_runtime`, not just the
+workflow's string content. `tests/test_provider_bootstrap_secret_normalization.py` now asserts the
+workflow delegates to this tested function instead of pinning inline branching logic. 100% statement
+and docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (71 tests across
+`tests/test_provider_bootstrap*.py`/`tests/test_provider_catalog_bootstrap*.py`); full
+`python -m pytest tests -q` run separately for final confirmation.
 
 ## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
 

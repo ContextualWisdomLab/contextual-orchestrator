@@ -24,6 +24,7 @@ from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
 from contextual_orchestrator.provider_catalog_bootstrap import (
     AUTHENTICATION_FAILURE_CLASSIFICATION,
     TRANSIENT_FAILURE_CLASSIFICATION,
+    UNKNOWN_FAILURE_CLASSIFICATION,
     bootstrap_provider_catalog_runtime,
     evaluate_provider_credential_inventory,
 )
@@ -348,8 +349,77 @@ def test_authentication_failure_is_classified_and_still_hard_fails() -> None:
             )
             assert verdict.ok is False
             assert verdict.warning_message is None
-            assert "authentication failure" in verdict.hard_fail_reason
+            assert "not a tolerated transient outage" in verdict.hard_fail_reason
+            assert "'BYTEZ_API_KEY': 'authentication_failure'" in verdict.hard_fail_reason
             assert "BYTEZ_API_KEY" in verdict.hard_fail_reason
+    finally:
+        set_backend(None)
+
+
+def test_persistent_client_error_is_not_excused_as_a_transient_outage() -> None:
+    """A persistent non-auth 4xx (a wrong endpoint, a malformed request
+    shape) is not retryable-transient by standard semantics and must not be
+    tolerated as an isolated outage -- it would otherwise let a genuinely
+    broken integration pass every scheduled sync indefinitely.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        for code in ("http_status_400", "http_status_404", "invalid_response"):
+            report = bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=InMemoryProviderCatalogStore(),
+                sources=(openai, bytez),
+                discovery=lambda _sources, code=code: (
+                    [_model(openai, "gpt-live")],
+                    [ProviderDiscoveryError("bytez", code)],
+                ),
+                model_limit=4,
+            )
+            assert dict(report.provider_error_classifications) == {
+                "bytez": UNKNOWN_FAILURE_CLASSIFICATION
+            }
+
+            verdict = evaluate_provider_credential_inventory(
+                report.as_dict(), _environment()
+            )
+            assert verdict.ok is False
+            assert verdict.warning_message is None
+            assert "not a tolerated transient outage" in verdict.hard_fail_reason
+            assert "'BYTEZ_API_KEY': 'unknown_failure'" in verdict.hard_fail_reason
+    finally:
+        set_backend(None)
+
+
+def test_genuinely_retryable_http_statuses_are_transient() -> None:
+    """429 (rate limited), 408 (request timeout), and 5xx are exactly the
+    conditions standard retry semantics call retryable -- confirm each one
+    still gets the tolerated classification.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        bytez = _source("bytez", "BYTEZ_API_KEY")
+        for code in ("http_status_408", "http_status_429", "http_status_500", "http_status_503"):
+            report = bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=InMemoryProviderCatalogStore(),
+                sources=(openai, bytez),
+                discovery=lambda _sources, code=code: (
+                    [_model(openai, "gpt-live")],
+                    [ProviderDiscoveryError("bytez", code)],
+                ),
+                model_limit=4,
+            )
+            assert dict(report.provider_error_classifications) == {
+                "bytez": TRANSIENT_FAILURE_CLASSIFICATION
+            }
+            verdict = evaluate_provider_credential_inventory(
+                report.as_dict(), _environment()
+            )
+            assert verdict.ok is True
+            assert verdict.hard_fail_reason is None
     finally:
         set_backend(None)
 
