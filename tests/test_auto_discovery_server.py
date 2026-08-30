@@ -47,6 +47,58 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert "bootstrap_agent" in result["updated"]
 
 
+def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(
+    monkeypatch,
+) -> None:
+    """A free vision-input model becomes a normal agent, not a blind-free one.
+
+    Reproduces the second locus of ContextualWisdomLab/.github#1198's incident
+    (Devin review on PR #933): ``_auto_discover_runtime_agents`` activates
+    every routable discovered model directly through
+    ``model_discovery.agent_from_discovered`` and never consulted
+    ``model_discovery.free_discovered_models``'s exclusion at all, so NVIDIA
+    NIM's ``meta/llama-3.2-90b-vision-instruct`` kept its ``cost:free`` tag and
+    stayed blindly selectable by ``orchestrator/free`` through this second
+    path even after that first function was fixed. Pre-fix, every assertion
+    from ``_is_free_agent`` onward here fails: the agent is (wrongly) treated
+    as free-pool eligible and ``orchestrator/free`` is (wrongly) advertised.
+    """
+    vision = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.2-90b-vision-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([vision], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert len(result["added"]) == 1
+    agent = next(
+        candidate for candidate in orchestrator.agents if candidate.id == result["added"][0]
+    )
+    # The model is a legitimate chat-capable agent (e.g. for a caller that
+    # explicitly requests it with an image) and its price evidence is honest.
+    assert agent.disabled is False
+    assert "cost:free" in agent.tags
+    # It must never be selectable by the capability-blind free pool.
+    assert orchestrator._is_free_agent(agent) is False
+    assert orchestrator.FREE_MODEL not in {
+        row["id"] for row in orchestrator.list_openai_models()["data"]
+    }
+
+
 def test_auto_discovery_activates_bare_chat_but_not_embedding_ids(monkeypatch) -> None:
     """A metadata-free gateway listing still activates chat deployments.
 

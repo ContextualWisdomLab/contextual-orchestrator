@@ -1313,6 +1313,21 @@ def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
     request without knowing in advance that the request must carry that extra
     modality. Absence of modality evidence is not evidence of a multimodal
     requirement, so an empty ``input_modalities`` tuple never triggers this.
+
+    This is a deliberately conservative reading: catalog fields such as
+    Models.dev's ``modalities.input`` document *supported* inputs, not which
+    ones a given request must supply, so a model that lists ``text`` next to
+    ``image`` still trips this check. ContextualWisdomLab/.github#1198's
+    incident model (NVIDIA NIM's ``meta/llama-3.2-90b-vision-instruct``) is
+    exactly that shape -- Models.dev reports its inputs as ``text`` *and*
+    ``image`` -- yet NIM's live deployment rejected a plain tool-calling
+    request against it three times in a row. With no reliable per-deployment
+    tool-calling signal available (see :func:`general_free_serving_candidates`
+    for the incident writeup), treating "declares any non-text input" as
+    disqualifying for *blind* serving is the only evidence-based reading that
+    actually keeps that incident fixed; a model believed to also serve plain
+    text requests just fine can still be reached through a pool that is not
+    modality-blind (see :func:`general_free_serving_candidates`'s docstring).
     """
     return any(
         modality.strip().casefold() != "text"
@@ -1322,7 +1337,28 @@ def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
 
 
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
-    """Return zero-cost models fit for the general-purpose free serving pool.
+    """Return the complete zero-cost model inventory (price evidence only).
+
+    This is pure price-based inventory: every model whose structured
+    provider/catalog pricing evidence is entirely zero, regardless of input
+    or output modality. Reporting surfaces that answer "is this model free"
+    -- the ``discover-models`` CLI's ``--free-only`` report, ``free_tier_count``,
+    and the free-tier data-privacy totals -- need this complete inventory, not
+    a servable subset.
+
+    Fitness for the general-purpose *blind* serving pool (``orchestrator/free``)
+    is a stricter, separate question: see :func:`general_free_serving_candidates`.
+    An earlier revision of this function conflated the two, which silently
+    undercounted genuinely free models that are simply unsuited to
+    capability-blind serving in every "is this model free" report.
+    """
+    return [model for model in discovered if model.is_free]
+
+
+def general_free_serving_candidates(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Return free models fit for the general-purpose blind serving pool.
 
     A zero price alone does not certify fitness for arbitrary callers: the
     free pool (``orchestrator/free``) serves every role and request shape --
@@ -1332,14 +1368,31 @@ def free_discovered_models(discovered: list[DiscoveredModel]) -> list[Discovered
     an extra input modality (e.g. an image) could ever use meaningfully;
     :func:`_requires_non_text_input` excludes exactly those rows here, using
     catalog evidence discovery already records, not a per-model name rule.
-    Such a model remains fully discovered (and eligible for a pool that is
-    not modality-blind, e.g. one built for vision/multimodal tasks) --
-    it is only withheld from the general-purpose free pool.
+    Such a model remains fully discovered, fully counted in
+    :func:`free_discovered_models`'s price-based inventory, and eligible for
+    a pool that is not modality-blind (e.g. one built for vision/multimodal
+    tasks) -- it is only withheld from *this* general-purpose free selector.
+
+    Reproduces ContextualWisdomLab/.github#1198's required Strix Security Scan
+    failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passed every existing chat-capability
+    check, yet NIM's live deployment rejected Strix's tool-calling request
+    against it with a definitive HTTP 400 three independent times in a row --
+    because the free pool had no other candidate to fail over to, this one
+    vision-input model alone exhausted the whole tool-calling pool.
+
+    This is the selector every runtime pool-construction path must apply
+    before treating a discovered model as eligible for blind free serving
+    (e.g. tagging an agent ``cost:free`` in a context where that tag alone
+    drives ``orchestrator/free`` routing). ``TaskOrchestrator._is_free_agent``
+    additionally re-checks an agent's persisted ``input:<modality>`` tags at
+    selection time, so a durable agent-pool row written by an older build --
+    before this exclusion existed -- cannot bypass it either.
     """
     return [
         model
-        for model in discovered
-        if model.is_free and not _requires_non_text_input(model)
+        for model in free_discovered_models(discovered)
+        if not _requires_non_text_input(model)
     ]
 
 

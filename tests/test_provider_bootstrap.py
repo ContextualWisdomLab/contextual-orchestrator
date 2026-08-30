@@ -283,6 +283,41 @@ def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
     } <= set(tags)
 
 
+def test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligible():
+    """A bootstrap-activated free vision agent stays out of orchestrator/free.
+
+    Third locus of ContextualWisdomLab/.github#1198's incident (Devin review
+    on PR #933): ``provider_bootstrap._active_agent_from_discovered`` (used by
+    ``bootstrap_provider_runtime`` and, through it,
+    ``provider_catalog_bootstrap.bootstrap_provider_catalog_runtime``) tags an
+    agent ``cost:free`` from raw price evidence alone, with no serving-pool
+    modality check -- exactly like the ``_auto_discover_runtime_agents`` path
+    this incident already fixed once. The fix lives in
+    ``TaskOrchestrator._is_free_agent`` (a single choke point every
+    ``FREE_MODEL`` selection path shares, including this one and any future
+    pool-construction path), not in this tagging function: ``cost:free`` must
+    keep meaning "honest zero price" here, because
+    ``provider_catalog_store.py``'s durable catalog round trip reconstructs
+    ``DiscoveredModel.is_free`` from exactly this tag (see
+    ``test_serving_tags_preserve_only_explicit_free_and_modality_evidence`` and
+    ``test_last_known_good_restores_free_and_modality_evidence``).
+    """
+    vision_model = replace(
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "meta/llama-3.2-90b-vision-instruct", 0.0),
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+    agent = provider_bootstrap._active_agent_from_discovered(vision_model)
+    orchestrator = TaskOrchestrator([agent])
+
+    assert agent.disabled is False
+    assert "cost:free" in agent.tags
+    assert orchestrator._is_free_agent(agent) is False
+
+
 def test_serving_tags_preserve_explicit_no_zdr_evidence():
     """Explicit unsupported zero-data retention survives tag normalization."""
     model = replace(

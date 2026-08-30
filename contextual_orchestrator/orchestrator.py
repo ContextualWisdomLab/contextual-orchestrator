@@ -5835,8 +5835,44 @@ class TaskOrchestrator:
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
 
+    @staticmethod
+    def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
+        """Return whether an agent's discovery-derived tags declare non-text input.
+
+        ``ModelAgent`` carries no dedicated modality field; every discovery
+        pathway (``model_discovery.agent_from_discovered``,
+        ``provider_bootstrap.serving_tags_for_discovered``) instead records
+        each declared input modality as an ``input:<modality>`` tag. Mirrors
+        ``model_discovery._requires_non_text_input``'s evidence-based check
+        against those tags rather than against ``DiscoveredModel`` directly,
+        so it is the single choke point every ``FREE_MODEL`` selection path
+        shares -- including an agent row loaded from a durable pool store
+        that was written before this exclusion existed, or one activated by
+        a pool-construction path this repository adds later. Absence of any
+        ``input:`` tag is not evidence of a non-text requirement, so an agent
+        with no modality tags at all is never excluded here.
+        """
+        return any(
+            tag.startswith("input:")
+            and tag[len("input:"):].strip().casefold() != "text"
+            for tag in agent.tags
+        )
+
     def _is_free_agent(self, agent: ModelAgent) -> bool:
-        """Return true only for explicitly zero-priced configured models."""
+        """Return true only for zero-priced models fit for blind free serving.
+
+        Zero price alone does not certify fitness for ``orchestrator/free``:
+        that pool serves every role and request shape -- including
+        tool-calling requests -- without knowing in advance which capability
+        a request will need. An agent whose tags declare a non-text input
+        modality (e.g. a vision-input deployment) is therefore never treated
+        as free here, even when it is honestly tagged ``cost:free`` for price
+        inventory purposes elsewhere (see
+        ``contextual_orchestrator.model_discovery.general_free_serving_candidates``
+        for the equivalent discovery-time selector and its incident writeup).
+        """
+        if self._agent_requires_non_text_input(agent):
+            return False
         if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
             return True
         return self.price_per_million.get(agent.model) == 0 and sum(

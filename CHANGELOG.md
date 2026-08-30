@@ -209,6 +209,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   this exact agent with an identical HTTP 400 `invalid_request_error`. A
   model excluded here remains fully discovered and price-evidenced; it is
   only withheld from the free/tool-calling default pool.
+- Devin's review on PR #933 found the fix above incomplete: `free_discovered_models()`
+  itself is now pure price-based inventory again (every zero-priced model
+  counts, restoring correct `--free-only`, `free_tier_count`, and free-tier
+  data-privacy totals), and a new, separately named selector,
+  `general_free_serving_candidates()`, carries the modality-based exclusion
+  for composing the blind `orchestrator/free` pool specifically. More
+  importantly, that exclusion previously lived only inside the one function
+  this PR touched: `_auto_discover_runtime_agents` (`--auto-discover-model-agents`)
+  and `provider_bootstrap._active_agent_from_discovered` (used by both
+  `bootstrap_provider_runtime` and, through it,
+  `provider_catalog_bootstrap.bootstrap_provider_catalog_runtime`) tag an
+  agent `cost:free` directly from raw price evidence and never consulted it,
+  so the incident model could still reach a live `cost:free` agent through
+  either path. The fix is now a single choke point, `TaskOrchestrator._is_free_agent`,
+  which every `orchestrator/free` selection path shares: an agent whose tags
+  declare a non-text input modality is never treated as free-pool eligible
+  there, regardless of which code built it or how old that agent-pool row is
+  -- while `cost:free` keeps meaning "honest zero price" everywhere else,
+  preserving `provider_catalog_store.py`'s durable `is_free` round trip.
+  Verified against three explicit modality fixtures (text-only, vision-only,
+  and text+image); evaluated and rejected narrowing the exclusion to spare a
+  model that "also declares text" (Devin's other suggestion) because the
+  incident model itself declares both `text` and `image` per Models.dev, so
+  that narrowing would have silently re-admitted it.
 
 ### Changed
 
