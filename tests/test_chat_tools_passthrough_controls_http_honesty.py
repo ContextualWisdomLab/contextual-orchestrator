@@ -68,6 +68,29 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def _post_raw(port: int, payload: dict) -> tuple[int, str, str]:
+    """POST and return (status, content_type, raw body) — for SSE responses."""
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return (
+                response.status,
+                response.headers.get("content-type", ""),
+                response.read().decode("utf-8"),
+            )
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
+
+
 def _server():
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -146,8 +169,21 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
         thread.join(timeout=5)
 
 
-def test_http_structured_stream_usage_fails_closed_before_execution() -> None:
-    """Structured passthrough cannot emit usage SSE, so reject it before provider work."""
+def test_http_structured_stream_usage_emits_honest_usage_chunk() -> None:
+    """Structured/tools passthrough honors stream_options.include_usage=true.
+
+    Regression for the OpenAI Agents SDK / Strix compatibility gap: an SDK
+    that defaults to requesting ``stream_options.include_usage=true``
+    alongside ``tools`` (function-calling) or ``response_format`` used to be
+    rejected with a 400 ``invalid_stream_options`` before the request ever
+    reached a model. The gateway already strips ``stream_options`` before
+    forwarding to the actual upstream provider (``_ORCHESTRATION_ONLY_KEYS``)
+    and already re-frames the completed provider/conducted response as SSE
+    via ``_chat_response_sse_chunks``, which honestly emits the response's
+    real reported usage (or a clearly ``usage_source: "estimated"`` fallback)
+    — there was no honesty gap to protect against, just an unnecessarily
+    strict early rejection.
+    """
     server, thread, port = _server()
     try:
         for payload in (
@@ -160,9 +196,21 @@ def test_http_structured_stream_usage_fails_closed_before_execution() -> None:
                 "stream_options": {"include_usage": True},
             },
         ):
-            status, body = _post(port, payload)
-            assert status == 400, (payload, body)
-            assert "invalid_stream_options" in json.dumps(body)
+            status, content_type, sse = _post_raw(port, payload)
+            assert status == 200, (payload, sse)
+            assert content_type.startswith("text/event-stream")
+            assert sse.endswith("data: [DONE]\n\n")
+            usage_chunks = [
+                json.loads(frame[len("data: ") :])
+                for frame in sse.split("\n\n")
+                if frame.startswith("data: ")
+                and frame != "data: [DONE]"
+                and json.loads(frame[len("data: ") :]).get("usage") is not None
+            ]
+            assert len(usage_chunks) == 1, (payload, sse)
+            usage = usage_chunks[0]["usage"]
+            assert usage["usage_source"] in ("reported", "estimated")
+            assert {"prompt_tokens", "completion_tokens", "total_tokens"} <= set(usage)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -207,7 +255,7 @@ if __name__ == "__main__":
     test_http_tools_passthrough_rejects_invalid_temperature()
     test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n()
     test_http_tools_passthrough_rejects_invalid_user_and_stream_options()
-    test_http_structured_stream_usage_fails_closed_before_execution()
+    test_http_structured_stream_usage_emits_honest_usage_chunk()
     test_http_tools_passthrough_accepts_coerced_sampling()
     test_http_response_format_passthrough_rejects_seed()
     print("ok")

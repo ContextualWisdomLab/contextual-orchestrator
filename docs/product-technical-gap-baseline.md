@@ -1,5 +1,58 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 chat tools/response_format passthrough rejected stream_options.include_usage
+
+A live hosted Strix run against `ContextualWisdomLab/.github` main
+(`ContextualWisdomLab/.github` run `33307905354`, job `99247611184`, step 23
+"Run Strix (quick)") failed all 3 retry attempts identically with
+`openai.BadRequestError: 400 invalid_stream_options — stream_options ... not
+supported with tools or response_format`, via `strix.core.execution._run_cycle`
+→ the OpenAI Agents SDK (`agents.result.stream_events`) → `openai._base_client`.
+Strix now routes through `orchestrator/free`; the Agents SDK defaults every
+streamed tool-calling turn to `stream_options.include_usage=true`, which this
+gateway's `/v1/chat/completions` tools/response_format passthrough
+(`server.py`) rejected unconditionally before any provider work — a
+structural blocker, not an intermittent one: Strix cannot complete any scan
+against `orchestrator/free` while this holds.
+
+**Reproduced locally** with zero network access (`mock://` agent pool): the
+exact same request shape (`tools` + `stream: true` +
+`stream_options: {"include_usage": true}`) against a local `build_server()`
+instance reproduces byte-for-byte the same `invalid_stream_options` 400.
+
+**Root-caused**: the rejection at `server.py`'s tools/response_format
+passthrough branch (`if stream and include_usage: raise ...`) was defensive,
+not load-bearing. Two independent facts make it unnecessary:
+
+1. `stream_options` is already in `TaskOrchestrator._ORCHESTRATION_ONLY_KEYS`
+   (`orchestrator.py`) and is stripped from the `upstream` dict before the
+   actual provider call — it was never forwarded upstream, so honoring it
+   client-side cannot cause an upstream protocol violation.
+2. The passthrough branch's completed response — the raw provider JSON for
+   `tools` (`orchestrator.proxy_completion(..., single_agent=True)`, which a
+   non-streamed OpenAI-compatible completion reports usage on
+   unconditionally) or the conduct pipeline's aggregated result for
+   `response_format`-only (verified directly: `CostRoutingCoordinator.complete(mode="conduct", ...)`
+   already returns a populated `usage` key) — is exactly the `payload` that
+   `_chat_response_sse_chunks()` re-frames as SSE, and that function already
+   honestly emits `usage_source: "reported"` from real payload usage, or a
+   clearly labeled `usage_source: "estimated"` fallback otherwise. This exact
+   machinery is already exercised for the ordinary (non-tools) stream path;
+   nothing new needed building.
+
+**Fix** (`contextual_orchestrator/server.py`): removed the upfront
+`invalid_stream_options` rejection for `stream_options.include_usage=true`
+combined with `tools`/`response_format`; `include_usage` was already threaded
+through to `_chat_response_sse_chunks` at the call site, so no other code
+change was required. Updated the two existing `*_http_honesty` tests that
+asserted the old 400 (`tests/test_chat_tools_passthrough_controls_http_honesty.py`,
+`tests/test_stream_options_null_flags_noop_http_honesty.py`) to assert the
+correct 200 + honest usage-chunk behavior instead, confirming real
+`usage_source: "reported"` values end-to-end over HTTP for both the `tools`
+and `response_format` shapes. Full local suite green after the fix
+(`python -m pytest tests -q`, see the PR for the exact count). README updated
+to describe the corrected behavior for both routing modes.
+
 ## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
 
 Checked whether the `.github` `opencode-review` required check's own verdict-matching logic (the

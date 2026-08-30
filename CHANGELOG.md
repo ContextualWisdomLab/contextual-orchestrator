@@ -90,6 +90,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `/v1/chat/completions` no longer rejects `stream_options.include_usage=true`
+  when combined with `tools` or `response_format`. That combination is the
+  OpenAI Agents SDK's default streaming shape (used by Strix, among others)
+  and was fail-closed with a 400 `invalid_stream_options` before any provider
+  work, even though `stream_options` is already stripped before the upstream
+  provider call and the completed response already carries genuine usage by
+  the time it is re-framed as SSE — an unnecessarily strict rejection, not an
+  honesty requirement. The usage-only SSE chunk now reports real
+  provider/conducted usage (`usage_source: "reported"`) when available, or a
+  clearly labeled estimate (`usage_source: "estimated"`) otherwise.
 - Discover chat models from metadata-free OpenAI-compatible gateways. A
   configured gateway whose `/v1/models` rows carry no modality/capability
   metadata previously produced empty-capability chat rows that runtime

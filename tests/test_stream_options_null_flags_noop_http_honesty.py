@@ -173,6 +173,15 @@ def test_http_chat_accepts_include_usage_true() -> None:
 
 
 def test_http_chat_structured_streams_include_usage() -> None:
+    """stream_options.include_usage=true is honored on tools/response_format passthrough.
+
+    Regression for the OpenAI Agents SDK / Strix compatibility gap (that SDK
+    defaults to requesting include_usage alongside tool definitions): the
+    gateway used to reject this combination with a 400 before doing any
+    provider work, even though stream_options is already stripped before
+    upstream forwarding and the completed response already carries genuine
+    usage by the time it is re-framed as SSE.
+    """
     server, thread, port = _server()
     try:
         for structured in (
@@ -189,7 +198,7 @@ def test_http_chat_structured_streams_include_usage() -> None:
             },
             {"response_format": {"type": "json_object"}},
         ):
-            status, _, body = _post_raw(
+            status, content_type, body = _post_raw(
                 port,
                 "/v1/chat/completions",
                 {
@@ -202,8 +211,18 @@ def test_http_chat_structured_streams_include_usage() -> None:
                     **structured,
                 },
             )
-            assert status == 400, (structured, body)
-            assert "invalid_stream_options" in body
+            assert status == 200, (structured, body)
+            assert content_type.startswith("text/event-stream")
+            assert body.endswith("data: [DONE]\n\n")
+            usage_chunks = [
+                json.loads(frame[len("data: ") :])
+                for frame in body.split("\n\n")
+                if frame.startswith("data: ")
+                and frame != "data: [DONE]"
+                and json.loads(frame[len("data: ") :]).get("usage") is not None
+            ]
+            assert len(usage_chunks) == 1, (structured, body)
+            assert usage_chunks[0]["usage"]["usage_source"] in ("reported", "estimated")
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -6652,12 +6652,15 @@ def build_server(
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
                         trace_audited = False
-                        if stream and include_usage:
-                            raise RequestError(
-                                400,
-                                "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with tools or response_format",
-                            )
+                        # stream_options.include_usage is honored here: the
+                        # provider/conducted response this passthrough re-frames
+                        # as SSE already carries genuine usage (a non-streamed
+                        # provider call reports usage unconditionally; the
+                        # conduct path's returned payload already aggregates it)
+                        # by the time _chat_response_sse_chunks below reads
+                        # payload["usage"] — no estimate is needed for the
+                        # common case, and the honest labeled fallback covers
+                        # the rest. See test_chat_tools_stream_options_http_honesty.py.
                         tool_loop = bool(tools_list)
                         if (
                             tool_loop
