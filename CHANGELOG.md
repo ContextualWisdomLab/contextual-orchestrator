@@ -101,6 +101,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Completions convention and keeping the streamed-orchestration decision
   (`_responses_virtual_requires_provider_path`) honest about what was
   actually supplied.
+- Discover chat models from metadata-free OpenAI-compatible gateways. A
+  configured gateway whose `/v1/models` rows carry no modality/capability
+  metadata previously produced empty-capability chat rows that runtime
+  auto-discovery silently dropped, while embedding deployments that kept
+  richer `/model/info` evidence survived ("embedding discovers, chat does
+  not"). Transport-compatible identifiers now inherit the `chat`
+  capability, and `--auto-discover-model-agents` uses the same
+  chat-candidate rule as the serving bootstrap. (#868)
+- Accept `orchestrator/auto`, `orchestrator/free`, and the advertised
+  `contextual-orchestrator` gateway default on the structured chat surface:
+  a requested `response_format` is a preference (never a fail-closed tag
+  miss for an untagged-but-available pool), vision stays a hard
+  entitlement, and a trace disclosed on the structured path authorizes
+  trace purpose and audits the disclosure before release, matching the
+  plain chat gate. (#868)
 - Provider/model failures no longer collapse into a generic `internal_error`.
   A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
   classifies every upstream HTTP status, network, TLS, and transport failure
@@ -131,9 +146,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Experimental CEFR criterion-observation gateway with exact contract checks,
   independent rater blindness, bounded structured-output parsing, replay
   provenance, and human-review routing; it emits no final CEFR level or score.
-
-### Fixed
-
 - Accept the standard Chat Completions `stream_options.include_usage=true`
   request and emit provider-reported usage in a usage-only SSE chunk when
   available after the terminal stop chunk; pass the option through live provider

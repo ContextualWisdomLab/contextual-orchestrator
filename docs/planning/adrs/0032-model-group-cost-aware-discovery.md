@@ -19,6 +19,42 @@ Stability uses the posterior mean of a Bernoulli success probability under a uni
 
 OpenRouter discovery reads its provider-reported per-token prices and recognizes explicit zero prices. OpenCode Zen discovery intersects its documented `/zen/v1/models` availability response with the `opencode` catalog in Models.dev, which OpenCode documents as a source for its own model catalog. Only structured cost records whose declared monetary components are all exactly zero are classified free. A missing, malformed, unmatched, or temporarily unavailable metadata record remains unknown; model-name suffixes are never treated as price evidence. All available models remain discoverable for later policy decisions.
 
+Privacy discovery is also model-specific rather than inferred from price. The
+OpenRouter ZDR endpoint inventory is joined to every paid and free catalog row;
+absence from a successfully fetched, structurally valid, **non-empty** inventory
+is explicit non-support. The official response schema permits an empty `data`
+array, so a completely empty inventory remains unknown, as does an inventory
+failure; discovery does not turn either ambiguous state into blanket
+non-support. Free-model endpoint/provider policy
+records additionally expose whether at least one route prohibits training or
+prompt retention and retain their HTTPS policy sources. A configured gateway may
+publish the same fields through model metadata, but a logical model receives a
+value only when every deployment agrees. Thus free status never implies privacy,
+and paid status never implies retention.
+
+OpenAI catalog rows also retain OpenAI's official data-controls documentation
+as policy evidence. Because approval and enablement are organization/project
+settings that the Models API does not disclose, discovery leaves the actual ZDR
+status unknown instead of converting endpoint eligibility into a false runtime
+claim. This source/effective-state split is the contract for adding further
+providers.
+
+When Wardnet is registered in the credential registry, discovery delegates
+policy crawling to Wardnet's authenticated bounded outbound-fetch API. Wardnet,
+not this Python service, owns destination policy, DNS pinning, redirects, and
+body limits. Contextual-orchestrator then selects only a discovered route with
+explicit ZDR evidence, requests a strict JSON-schema assessment, and accepts a
+verdict only when its evidence quote is a literal substring of the crawled
+document. The analyzer may enrich no-training and no-prompt-retention fields;
+optional ZDR availability is reported as policy analysis and never substituted
+for proof that an account enabled ZDR.
+An optional Camoufox MCP renderer handles client-rendered policy pages after
+Wardnet approval. Each browser tab uses Wardnet's dedicated-token egress proxy;
+deployment also assigns Wardnet as the Camoufox container UDP/TCP DNS resolver,
+disables Firefox trusted recursive resolution, and blocks direct egress.
+Rendering fails back to the bounded static document when that full boundary is
+unavailable.
+
 Durable provider-catalog refreshes store explicit cost, capability, and directed
 modality evidence in normalized serving-tag rows. Last-known-good reads reconstruct
 those semantics before selection and Agent Pool synchronization; otherwise
@@ -99,6 +135,12 @@ OpenAI. (2026). *OpenAI OpenAPI specification: Responses streaming events*.
 https://github.com/openai/openai-openapi/blob/master/openapi.yaml
 
 OpenRouter. (2026). *List all models and their properties*. https://openrouter.ai/docs/api/api-reference/models/get-models
+
+OpenRouter. (2026). *Preview the impact of ZDR on the available endpoints*. https://openrouter.ai/docs/api/api-reference/endpoints/preview-the-impact-of-zdr-on-the-available-endpoints
+
+OpenRouter. (2026). *Provider logging and data policies*. https://openrouter.ai/docs/guides/privacy/provider-logging
+
+OpenRouter. (2026). *Zero data retention enforcement*. https://openrouter.ai/docs/features/provider-routing#zero-data-retention-enforcement
 
 OpenRouter. (2026). *Create speech*. https://openrouter.ai/docs/api/api-reference/speech/create-audio-speech
 

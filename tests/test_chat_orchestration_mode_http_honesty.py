@@ -66,6 +66,47 @@ def test_http_chat_accepts_mode_route() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_omitted_model_defaults_to_gateway_virtual_model() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "messages": [{"role": "user", "content": "say hi"}],
+                "mode": "route",
+            },
+        )
+        assert status == 200, body
+        assert body.get("model") == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_null_model() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": None,
+                "messages": [{"role": "user", "content": "say hi"}],
+                "mode": "route",
+            },
+        )
+        assert status == 400, body
+        assert "invalid_model" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_accepts_orchestration_mode_auto() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -81,6 +122,39 @@ def test_http_chat_accepts_orchestration_mode_auto() -> None:
             },
         )
         assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_conduct_accepts_advertised_gateway_default_model() -> None:
+    """The listed gateway deployment must reach the explicit conduct path."""
+    orchestrator = build()
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "analyze and verify this synthetic task",
+                    }
+                ],
+                "orchestration_mode": "conduct",
+                "include_orchestration_trace": True,
+            },
+        )
+        assert status == 200, body
+        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        assert body["orchestration"]["mode"] == "conduct"
+        assert len(body["orchestration"]["trace"]) > 1
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -130,6 +204,8 @@ def test_http_chat_rejects_mode_non_string() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_mode_route()
+    test_http_chat_omitted_model_defaults_to_gateway_virtual_model()
+    test_http_chat_rejects_null_model()
     test_http_chat_accepts_orchestration_mode_auto()
     test_http_chat_rejects_invalid_mode()
     test_http_chat_rejects_mode_non_string()

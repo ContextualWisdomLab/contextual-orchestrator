@@ -11,6 +11,9 @@ from pathlib import Path
 import ssl
 import sys
 import tempfile
+from unittest.mock import Mock, patch
+
+import certifi
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -21,6 +24,13 @@ def test_default_verifies_against_system_store() -> None:
     context = ModelClient()._ssl_context
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
+
+
+def test_default_adds_certifi_roots_to_system_store() -> None:
+    context = Mock()
+    with patch("contextual_orchestrator.orchestrator.ssl.create_default_context", return_value=context):
+        assert ModelClient._build_ssl_context(None) is context
+    context.load_verify_locations.assert_called_once_with(cafile=certifi.where())
 
 
 def test_insecure_skip_verify_is_rejected() -> None:

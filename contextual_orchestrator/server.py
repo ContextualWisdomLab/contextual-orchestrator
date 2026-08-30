@@ -18,6 +18,7 @@ import struct
 import tempfile
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 from typing import Any, Callable, Mapping
@@ -1502,15 +1503,54 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     return value
 
 def _validate_completions_model(body: dict[str, Any]) -> str:
-    """Legacy Completions ``model`` — required non-empty string (OpenAI parity).
+    """Validate or default the chat/completions model.
 
-    Incidental leading/trailing whitespace is stripped and written back so
-    tools/response_format passthrough (``proxy_completion``) matches the same
-    pool model id as the orchestration path. Form/JS SDKs often pad model names.
+    An omitted ``model`` selects the advertised gateway default so clients do
+    not have to know any deployment name. Explicit JSON null or a blank string
+    are client mistakes, not omissions, and still fail closed (400). Leading
+    and trailing whitespace is stripped and written back so tools/response_format
+    passthrough (``proxy_completion``) matches the same pool model id as the
+    orchestration path; form/JS SDKs often pad model names.
     """
-    if "model" not in body:
-        raise RequestError(400, "invalid_model", "model is required")
     model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
+    return model
+
+
+def _validate_chat_model(body: dict[str, Any]) -> str:
+    """Validate or default the Chat Completions model.
+
+    Chat exposes the advertised gateway deployment id as its omitted-model
+    default. Explicit JSON ``null`` is not omission and still fails closed so
+    callers cannot accidentally request the default while believing they named a
+    concrete deployment.
+    """
+    model = body.get("model")
+    if model is None:
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        return TaskOrchestrator.GATEWAY_DEFAULT_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -2263,9 +2303,13 @@ def _validate_mode(mode: Any) -> str:
 
 def _validate_capability_request(path: str, body: dict[str, Any]) -> None:
     """Validate the required trust-boundary fields for media/rerank passthrough."""
-    model = body.get("model")
-    if model is not None and (not isinstance(model, str) or not model.strip()):
-        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if "model" in body:
+        model = body["model"]
+        if not isinstance(model, str):
+            raise RequestError(400, "invalid_model", "model must be a string")
+        if not model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        body["model"] = model.strip()
     required_strings = {
         "/v1/images/generations": ("prompt",),
         "/v1/videos": ("prompt",),
@@ -2303,6 +2347,13 @@ def _require_pool_model(
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
+    Virtual orchestrator-owned ids (:data:`TaskOrchestrator.GATEWAY_DEFAULT_MODEL`,
+    :data:`TaskOrchestrator.AUTO_MODEL`, :data:`TaskOrchestrator.FREE_MODEL`)
+    resolve through routing instead of an exact agent match — the gateway
+    default and auto behave identically (orchestrator-owned auto selection),
+    while the free id additionally requires a zero-cost agent. With a
+    ``required_capability`` the virtual ids resolve to a concrete capable agent
+    model because capability callers need a real deployment to forward to.
     """
     agents = [
         agent
@@ -2310,9 +2361,13 @@ def _require_pool_model(
         if not getattr(agent, "disabled", False)
     ]
     zdr_allowed = getattr(orchestrator, "_zdr_agent_allowed", lambda agent: True)
-    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+    if model_name in {
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        TaskOrchestrator.AUTO_MODEL,
+        TaskOrchestrator.FREE_MODEL,
+    }:
         if required_capability is None:
-            if model_name == TaskOrchestrator.AUTO_MODEL:
+            if model_name != TaskOrchestrator.FREE_MODEL:
                 if any(zdr_allowed(agent) for agent in agents):
                     return model_name
                 raise RequestError(400, "invalid_model", "no enabled model is available")
@@ -3148,7 +3203,7 @@ def _validate_batch_requests(
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = body.get("model", "contextual-orchestrator")
+    default_model = body.get("model", TaskOrchestrator.GATEWAY_DEFAULT_MODEL)
     if not isinstance(default_model, str) or not default_model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     default_model = default_model.strip()
@@ -4673,16 +4728,24 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 
 
 def _validate_responses_model(body: dict[str, Any]) -> str:
-    """Responses API ``model`` — required non-empty string ≤256 chars.
+    """Validate or default the Responses API model.
 
-    OpenAI requires model on Responses. Missing/empty/non-string values fail
-    closed so clients cannot hit passthrough with an implicit mock default and
-    believe a named deployment was selected. Strip + write back so
-    ``proxy_completion`` pool match sees the same id as form/JS padded names.
+    An omitted model selects ``orchestrator/auto`` for the orchestrated path.
+    Explicit JSON
+    null or empty/whitespace strings are client mistakes, not omissions, and
+    fail closed (400). Non-string values also fail closed. Strip + write back
+    so passthrough pool matching sees the same id as form/JS padded names.
     """
     model = body.get("model")
     if model is None:
-        raise RequestError(400, "invalid_model", "model is required on /v1/responses")
+        if "model" in body:
+            raise RequestError(
+                400,
+                "invalid_model",
+                "model must be a string when present; omit the field to use the default",
+            )
+        body["model"] = TaskOrchestrator.AUTO_MODEL
+        return TaskOrchestrator.AUTO_MODEL
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
@@ -4812,11 +4875,12 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
     """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface. An omitted model
-    is resolved by the orchestrator's explicit ``embedding`` capability pool;
-    no consumer-side sentinel model is accepted.
+    form/JS model names bind to the pool id on every surface. Auto-selection
+    applies only when the caller omits ``model`` entirely; explicit JSON
+    ``null`` still fails closed instead of pretending the client omitted the
+    field.
     """
-    if body.get("model") is None:
+    if "model" not in body:
         if orchestrator is None:
             raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
         try:
@@ -4829,8 +4893,11 @@ def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = 
             ) from exc
         body["model"] = model
         return model
+
     model = body.get("model")
-    if not isinstance(model, str) or not model.strip():
+    if not isinstance(model, str):
+        raise RequestError(400, "invalid_model", "model must be a string")
+    if not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
     model = model.strip()
     if len(model) > 256:
@@ -4925,7 +4992,7 @@ def _openai_embeddings_response(
     return {
         "object": "list",
         "data": data,
-        "model": model or document.get("model") or "contextual-orchestrator",
+        "model": model or document.get("model") or TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
         "usage": {
             "prompt_tokens": total_tokens,
             "total_tokens": total_tokens,
@@ -5968,6 +6035,7 @@ def build_server(
                     exc.detail,
                 )
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
@@ -6011,6 +6079,7 @@ def build_server(
                     exc.detail,
                 )
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
@@ -6103,6 +6172,7 @@ def build_server(
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
@@ -6379,7 +6449,7 @@ def build_server(
                         max_tokens = _validate_chat_max_completion_tokens(body)
                     else:
                         max_tokens = _validate_completions_max_tokens(body)
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     if "store" in body:
                         _validate_completions_store(body)
@@ -6560,7 +6630,7 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    model_name = _validate_completions_model(body)
+                    model_name = _validate_chat_model(body)
                     _require_pool_model(orchestrator, model_name)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
@@ -6591,6 +6661,7 @@ def build_server(
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
+                        trace_audited = False
                         if stream and include_usage:
                             raise RequestError(
                                 400,
@@ -6693,6 +6764,7 @@ def build_server(
                             workflow = orchestrator.get_workflow_run(workflow_run_id)
                             lineage["trace"] = workflow["trace"]
                             self._audit_trace_disclosure("/v1/chat/completions")
+                            trace_audited = True
                         orchestrator.record_analytics_event(
                             (
                                 "chat_completion_passthrough"
@@ -6706,6 +6778,8 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
+                        if include_trace and not trace_audited:
+                            self._audit_trace_disclosure("/v1/chat/completions")
                         response_payload = (
                             proxied
                             if tool_loop
@@ -6746,7 +6820,7 @@ def build_server(
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the buyer selected on the chat Completions path.
+                    # which deployment the caller selected on the chat Completions path.
                     # The pool was validated before the structured/passthrough
                     # branch so every chat shape shares the same client-error contract.
                     attribution = dict(attribution or {})
@@ -7269,14 +7343,20 @@ def build_server(
                             message="stream must be a boolean",
                         ))
                         if stream and model_name not in {
-                            TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
                         }:
                             raise RequestError(
                                 400,
                                 "invalid_stream",
-                                "stream is not supported for this model on /v1/responses; use orchestrator/auto or orchestrator/free",
+                                "stream is not supported for this model on /v1/responses; use the gateway default, orchestrator/auto, or orchestrator/free",
                             )
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}:
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    }:
                         _require_pool_model(orchestrator, model_name)
                     responses_attribution = dict(
                         _validate_attribution(body.get("attribution")) or {}
@@ -7286,7 +7366,11 @@ def build_server(
                         responses_attribution["account"] = responses_user_id
                     responses_attribution.setdefault("model_name", body["model"])
                     responses_attribution.setdefault("service", "responses_api")
-                    if model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL} and stream:
+                    if model_name in {
+                        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                        TaskOrchestrator.AUTO_MODEL,
+                        TaskOrchestrator.FREE_MODEL,
+                    } and stream:
                         if _responses_virtual_requires_provider_path(input_value, body):
                             raise RequestError(
                                 400,
@@ -7338,7 +7422,11 @@ def build_server(
                         )
                         return
                     if (
-                        model_name in {TaskOrchestrator.AUTO_MODEL, TaskOrchestrator.FREE_MODEL}
+                        model_name in {
+                            TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+                            TaskOrchestrator.AUTO_MODEL,
+                            TaskOrchestrator.FREE_MODEL,
+                        }
                         and not body.get("tools")
                         and not body.get("response_format")
                         and not (
@@ -7564,6 +7652,7 @@ def build_server(
                     exc.detail,
                 )
             except Exception:
+                traceback.print_exc()
                 self._send_error(500, "internal_error", "internal server error")
             finally:
                 if request_policy is not None:

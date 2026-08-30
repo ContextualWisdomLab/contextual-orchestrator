@@ -324,6 +324,17 @@ def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
         orchestrator, "orchestrator/auto", required_capability="embedding"
     ) == "paid-embedding"
     assert _require_pool_model(
+        orchestrator,
+        TaskOrchestrator.GATEWAY_DEFAULT_MODEL,
+        required_capability="embedding",
+    ) == "paid-embedding"
+    assert (
+        orchestrator.select_capability_agent(
+            "embedding", TaskOrchestrator.GATEWAY_DEFAULT_MODEL
+        ).model
+        == "paid-embedding"
+    )
+    assert _require_pool_model(
         orchestrator, "orchestrator/free", required_capability="embedding"
     ) == "free-embedding"
     with pytest.raises(RequestError, match="no enabled video model"):
