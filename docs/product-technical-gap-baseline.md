@@ -1,5 +1,48 @@
 # Product and Technical Gap Baseline
 
+## 2026-08-30 generalize the Models.dev free-cost join beyond opencode_zen
+
+`orchestrator/free` (ADR 0032) was structurally empty in practice: `is_free`
+only ever becomes `True` from a provider's own reported per-token price, and
+of this gateway's five provider sources only OpenRouter's API ever reports
+real pricing — and OpenRouter is deliberately `evidence_only=True` (ZDR
+hardening, commit `952996ec`, untouched by this change) so it never serves
+inference. `openai`, `nvidia_nim`, `nvidia_nim_sub`, and `bytez` never report
+pricing themselves. The one existing mitigation, cross-referencing
+`opencode_zen` against Models.dev (`https://models.dev/api.json`), only
+covers a source that is `bootstrap_required = False` and not always
+registered.
+
+ADR 0041 generalizes that already-accepted join (ADR 0032: "this
+source/effective-state split is the contract for adding further providers")
+from one hardcoded `provider_name == "opencode_zen"` branch to a declared
+`ProviderModelSource.models_dev_provider_id` field, set for `opencode_zen`
+("opencode"), `nvidia_nim` and `nvidia_nim_sub` (both "nvidia" — they share
+one upstream NIM catalog under two KV credentials), and `openai` ("openai").
+`discover_all_models` now fetches the Models.dev payload at most once per
+call and shares the identical parsed object across every source that wants
+it, instead of each source refetching it independently.
+
+Re-verified live against `models.dev/api.json` (4,432,167 bytes; 211
+providers; 7,488 models): `nvidia` is a real provider entry (103 models,
+exact `vendor/model` id shape matching NIM's own `/v1/models`, e.g.
+`meta/llama-3.1-8b-instruct`; 99 of 103 all-zero cost, 4 genuinely paid,
+e.g. `deepseek-ai/deepseek-v4-flash`). `openai` is a real provider entry
+(47 models) with every priced model nonzero today (0 free) — expected, and
+self-correcting with no code change if that ever stops being true. `bytez`
+has zero coverage anywhere in the payload (full key/substring scan over all
+211 provider ids) and Bytez's own docs describe billing only in prose
+(account-level credit, no per-model price field); this is documented as a
+permanent gap, not a TODO. The join stays exact-`model_id`-match and
+fail-closed exactly as the existing `is_free`/`_models_dev_cost_is_free`
+classification already was: unmatched ids, missing/partial cost objects, a
+nonzero `cache_read`/`cache_write`-only vector, and a Models.dev fetch
+failure all still leave `is_free = False`.
+
+This restores meaningful `orchestrator/free` coverage from `nvidia_nim`/
+`nvidia_nim_sub` rather than depending entirely on whether `opencode_zen`
+happens to be registered in a given deployment.
+
 ## 2026-08-30 review-pipeline pin-bump verification and #911 provider-only streaming fix
 
 Re-checked every open PR fresh (`#868`, `#857`, `#906`, `#911`, `#912`; `#917`
