@@ -6473,6 +6473,24 @@ class TaskOrchestrator:
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
+                        # Deliberately terminal, even inside a free/auto virtual
+                        # pool with untried candidates remaining: every path that
+                        # raises this (the provider's own explicit terminal
+                        # tool-execution-state signal via
+                        # _provider_tool_execution_stopped, or a FAIL_CLOSED
+                        # verdict from classify_tool_failure below) resolves to
+                        # ambiguous_outcome, permission_denied, policy_blocked, or
+                        # invalid_arguments -- the exact ADR 0001 safety invariants
+                        # ("permission and policy failures never fall through to
+                        # another agent"; "non-idempotent timeout or transport
+                        # uncertainty never replays automatically") that a
+                        # different candidate cannot make safer: an ambiguous
+                        # server-side outcome is ambiguous regardless of which
+                        # agent asks next, and authorization/policy denial must
+                        # not be worked around by trying a different one. Do not
+                        # convert this to failover without an explicit product
+                        # decision distinguishing which failure kinds that would
+                        # actually be safe for.
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
