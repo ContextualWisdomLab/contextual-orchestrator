@@ -160,6 +160,7 @@ The remaining issue #117 gaps are unchanged: tenant/resource/purpose/lifetime
 claims from an external identity adapter, explicit legacy single-token
 production migration, and ownership for other evidence surfaces still need
 their own decisions and acceptance evidence.
+
 ## 2026-08-29 streamed Responses usage boundary
 
 Protected `main` remains

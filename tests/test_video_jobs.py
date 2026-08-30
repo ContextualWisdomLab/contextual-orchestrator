@@ -14,6 +14,9 @@ from contextual_orchestrator.orchestrator import (
 )
 from contextual_orchestrator.video_jobs import (
     VideoJobContractError,
+    VideoJobOwner,
+    VideoJobRecord,
+    VideoJobUsage,
     VideoJobRegistry,
     video_agent_affinity_key,
 )
@@ -52,6 +55,96 @@ def test_register_replaces_provider_id_and_preserves_owner() -> None:
     assert owner.provider_job_id == "provider-job"
     assert owner.agent_id == "declared_video_agent"
     assert owner.gateway_job_id == response["id"]
+
+
+def test_register_uses_normalized_ownership_and_usage_records() -> None:
+    factory = _SharedRegistryFactory()
+    registry = VideoJobRegistry(factory)
+
+    response = registry.register(
+        {
+            "id": "provider-job",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 2},
+        },
+        "declared_video_agent",
+        "principal_one",
+    )
+
+    record = factory._registries["video_job_records"][response["id"]]
+    usage = factory._registries["video_job_usages"][response["id"]]
+    assert isinstance(record, VideoJobRecord)
+    assert isinstance(usage, VideoJobUsage)
+    assert record.owner_id == "principal_one"
+    assert usage.prompt_tokens == 7 and usage.completion_tokens == 2
+    assert not hasattr(record, "provider_usage")
+    assert registry.owner(response["id"], "principal_one").provider_usage == {
+        "prompt_tokens": 7,
+        "completion_tokens": 2,
+    }
+
+
+def test_stale_owner_observation_cannot_replace_first_complete_usage() -> None:
+    factory = _SharedRegistryFactory()
+    first = VideoJobRegistry(factory)
+    response = first.register(
+        {"id": "provider-job"}, "declared_video_agent", "principal_one"
+    )
+    stale_owner = first.owner(response["id"], "principal_one")
+    second = VideoJobRegistry(factory)
+
+    first.observe_provider_result(
+        stale_owner, {"usage": {"input_tokens": 7, "output_tokens": 2}}
+    )
+    second.observe_provider_result(
+        stale_owner, {"usage": {"input_tokens": 9, "output_tokens": 3}}
+    )
+
+    assert first.owner(response["id"], "principal_one").provider_usage == {
+        "prompt_tokens": 7,
+        "completion_tokens": 2,
+    }
+
+
+def test_legacy_stale_owner_observation_cannot_replace_usage() -> None:
+    factory = _SharedRegistryFactory()
+    legacy = VideoJobOwner(
+        gateway_job_id="videojob_legacy",
+        provider_job_id="provider-job",
+        agent_id="declared_video_agent",
+        submitted_at=1,
+        owner_id="principal_one",
+    )
+    factory.mapping("video_job_owners")[legacy.gateway_job_id] = legacy
+    registry = VideoJobRegistry(factory)
+    stale_owner = registry.owner(legacy.gateway_job_id, "principal_one")
+
+    registry.observe_provider_result(
+        stale_owner, {"usage": {"input_tokens": 7, "output_tokens": 2}}
+    )
+    registry.observe_provider_result(
+        stale_owner, {"usage": {"input_tokens": 9, "output_tokens": 3}}
+    )
+
+    assert registry.owner(legacy.gateway_job_id, "principal_one").provider_usage == {
+        "prompt_tokens": 7,
+        "completion_tokens": 2,
+    }
+
+
+def test_legacy_owner_records_remain_readable_during_normalization() -> None:
+    factory = _SharedRegistryFactory()
+    legacy = VideoJobOwner(
+        gateway_job_id="videojob_legacy",
+        provider_job_id="provider-job",
+        agent_id="declared_video_agent",
+        submitted_at=1,
+        owner_id="principal_one",
+    )
+    factory.mapping("video_job_owners")[legacy.gateway_job_id] = legacy
+
+    assert VideoJobRegistry(factory).owner(
+        legacy.gateway_job_id, "principal_one"
+    ) == legacy
 
 
 def test_video_agent_affinity_changes_with_provider_account_routing() -> None:
