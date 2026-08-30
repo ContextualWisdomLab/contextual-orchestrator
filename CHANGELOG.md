@@ -90,6 +90,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `TaskOrchestrator._invoke`'s route/Conduct primary chat call now classifies
+  a `ProviderUpstreamError` (5xx, 429, network) directly from its own
+  already-computed `retryable` flag (`tool_fallback.classify_provider_transport_failure`)
+  instead of `classify_tool_failure`'s tool-execution-oriented message-text
+  heuristics. A plain, side-effect-free completion request can always be
+  safely retried or handed to the next ranked candidate, so this classifier
+  never returns `fail_closed`; previously an upstream error body that
+  happened to also contain a tool-fallback keyword (e.g. a 500 whose message
+  said "invalid arguments") could be misclassified into an
+  `invalid_arguments`/permission/policy fail-closed row and stop
+  `orchestrator/free`/`orchestrator/auto` failover on a request that never
+  touched a tool. `orchestrator/free` still never advances into a priced
+  agent, and exhausting every free/auto candidate still fails closed with the
+  last classified provider error; `classify_tool_failure` itself, and the
+  provider's own `tool_execution_stopped` signal, are unchanged. See
+  [ADR 0001's amendment](docs/adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+  Motivated by the `orchestrator/free` review-sidecar reliability gap in
+  `ContextualWisdomLab/.github` PR #1433.
 - Provider/model failures no longer collapse into a generic `internal_error`.
   A typed provider-error taxonomy (`contextual_orchestrator.provider_errors`)
   classifies every upstream HTTP status, network, TLS, and transport failure

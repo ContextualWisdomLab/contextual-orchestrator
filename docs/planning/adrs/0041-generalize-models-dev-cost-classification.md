@@ -158,6 +158,24 @@ touches can turn a paid model free.
   `opencode_zen` and removes up to three duplicate fetches when multiple
   supported sources are registered.
 
+## Amendment (2026-08-30): bounded retry on the shared fetch
+
+Restoring real `orchestrator/free` coverage for `nvidia_nim`/`nvidia_nim_sub`
+onto this one shared, unauthenticated, third-party fetch also made it a
+single point of failure for their entire free-tier classification: this
+module already documents that `models.dev` has been observed live to reject
+urllib's default user agent as a bot signature (`_HTTP_USER_AGENT`), and the
+fetch had exactly one attempt. `_fetch_models_dev_metadata` now retries a
+failed fetch up to `_MODELS_DEV_FETCH_ATTEMPTS` (3) times with a short fixed
+delay before degrading to `None`, so one transient blip in a third-party
+service this gateway does not control no longer has to erase `nvidia_nim`'s
+and `nvidia_nim_sub`'s free-tier evidence for an entire discovery run. The
+cost-safety argument above is unchanged: every failure mode this ADR lists
+still leaves `is_free = False` once the retry budget is genuinely exhausted;
+nothing about the retry can turn a paid model free. Motivated by the
+`orchestrator/free` review-sidecar reliability gap in
+`ContextualWisdomLab/.github` PR #1433.
+
 ## References
 
 Models.dev. (2026). *Models.dev API*. https://models.dev/api.json

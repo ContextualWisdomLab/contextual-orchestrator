@@ -27,6 +27,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _MODELS_DEV_FETCH_ATTEMPTS,
     _fetch_json,
     _price_per_1k,
     agent_from_discovered,
@@ -548,6 +549,71 @@ def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false
 
     assert errors == []
     assert [model.is_free for model in discovered] == [False, False]
+
+
+def test_discover_all_models_shared_models_dev_fetch_retries_a_transient_failure() -> None:
+    """A single transient Models.dev failure recovers on retry instead of erasing coverage.
+
+    Regression for the ContextualWisdomLab/.github#1433 ``orchestrator/free``
+    reliability gap: NVIDIA NIM's free-tier coverage depends entirely on this
+    one unauthenticated, third-party fetch (ADR 0041) succeeding, so a lone
+    blip must not degrade every dependent provider's evidence for the run.
+    """
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    attempts = {"models_dev": 0}
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            attempts["models_dev"] += 1
+            if attempts["models_dev"] < 2:
+                raise urllib.error.URLError("transient blip")
+            return _Response(
+                {
+                    "nvidia": {
+                        "models": {
+                            "meta/llama-3.1-8b-instruct": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            }
+                        }
+                    }
+                }
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert attempts["models_dev"] == 2
+    assert [model.is_free for model in discovered] == [True]
+
+
+def test_discover_all_models_shared_models_dev_fetch_gives_up_after_retry_budget() -> None:
+    """Exhausting the bounded retry budget still degrades to unknown cost, not a crash."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    attempts = {"models_dev": 0}
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            attempts["models_dev"] += 1
+            raise urllib.error.URLError("still offline")
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert attempts["models_dev"] == _MODELS_DEV_FETCH_ATTEMPTS
+    assert [model.is_free for model in discovered] == [False]
 
 
 def test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev() -> None:

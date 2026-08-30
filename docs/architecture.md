@@ -65,6 +65,14 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
 - `TaskOrchestrator.route_once`: the low-latency routing path.
 - `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `TaskOrchestrator._invoke`: the shared route/Conduct invocation path. A
+  request-time failure of the primary provider call (5xx, 429, network, or a
+  413 request-size rejection) advances to the next ranked candidate within
+  the same cost tier — `orchestrator/free` never fails over into a priced
+  agent, and `orchestrator/auto` only fails over inside the primary's own
+  declared model group — instead of surfacing an opaque error; exhausting
+  every eligible candidate still fails closed with the last classified
+  provider error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.

@@ -71,6 +71,7 @@ from .tool_fallback import (
     ToolFailureKind,
     ToolFallbackAction,
     ToolFallbackStoppedError,
+    classify_provider_transport_failure,
     classify_tool_failure,
     downgrade_to_failover,
 )
@@ -6425,15 +6426,18 @@ class TaskOrchestrator:
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
-                    decision = classify_tool_failure(exc)
+                        # The primary chat call is a bounded, side-effect-free
+                        # model request, not a tool invocation: classify from
+                        # the provider's own already-computed retryability
+                        # instead of classify_tool_failure's message-text
+                        # heuristics, so free/auto virtual-model failover can
+                        # never be accidentally downgraded to fail-closed by
+                        # incidental wording in an upstream error body (e.g. a
+                        # 400 that happens to mention "invalid arguments").
+                        decision = classify_provider_transport_failure(exc.retryable)
+                    else:
+                        decision = classify_tool_failure(exc)
                     action = decision.action
-                    if (
-                        isinstance(exc, ProviderUpstreamError)
-                        and not exc.retryable
-                        and action is ToolFallbackAction.RETRY_SAME_AGENT
-                    ):
-                        decision = downgrade_to_failover(decision)
-                        action = decision.action
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
                     if (
