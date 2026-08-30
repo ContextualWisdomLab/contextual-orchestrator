@@ -32,6 +32,7 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+import certifi
 from jsonschema.validators import validator_for
 
 from .chat_capability import (
@@ -1255,6 +1256,7 @@ class ModelClient:
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
         self.temperature = temperature
+        self.ca_bundle = ca_bundle
         if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -1281,7 +1283,9 @@ class ModelClient:
                 return ssl.create_default_context(cafile=ca_bundle)
             except OSError as exc:
                 raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
-        return ssl.create_default_context()
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
+        return context
 
     @staticmethod
     def _normalize_allowed_provider_hosts(hosts: Iterable[str] | None) -> frozenset[str]:
@@ -3232,6 +3236,11 @@ class TaskOrchestrator:
         "synthesizer": ("writing", "reasoning", "planning"),
         "embedding": ("embedding",),
     }
+    #: Gateway-default virtual model name advertised on ``/v1/models`` and
+    #: accepted by every inference endpoint as orchestrator-owned auto
+    #: selection. Kept beside :data:`AUTO_MODEL` because both are virtual ids:
+    #: neither maps to a concrete agent until routing resolves one.
+    GATEWAY_DEFAULT_MODEL = "contextual-orchestrator"
     AUTO_MODEL = "orchestrator/auto"
     FREE_MODEL = "orchestrator/free"
 
@@ -3595,7 +3604,12 @@ class TaskOrchestrator:
             else None
         )
         if replica_agent_ids is not None and agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             agent = next(
                 (
@@ -3623,7 +3637,7 @@ class TaskOrchestrator:
         upstream["stream"] = False
         if requested_model not in (
             None,
-            "contextual-orchestrator",
+            self.GATEWAY_DEFAULT_MODEL,
             self.AUTO_MODEL,
             self.FREE_MODEL,
         ):
@@ -3661,7 +3675,7 @@ class TaskOrchestrator:
                     for candidate in self.agents
                     if self._zdr_agent_allowed(candidate)
                 }
-                if requested_model == self.AUTO_MODEL
+                if requested_model in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
                 else None
             )
         ))
@@ -3797,12 +3811,17 @@ class TaskOrchestrator:
                 "response_format.json_schema is missing a schema"
             )
         task = self._latest_user_text(messages)
+        # Vision is a hard entitling capability the request payload cannot
+        # grant, so it stays a required tag. ``response_format`` is a gateway
+        # contract that any general chat synthesizer can honor because the
+        # provider payload itself carries the format: prefer a deployment that
+        # advertises it, but never fail closed merely because the pool does not
+        # tag it. Missing format filtering is therefore a 400, not a 500 or a
+        # silent fallback. Deferred (virtual/gateway-default) model names must
+        # resolve to a concrete synthesizer even without that tag.
         prompt_context = self._prompt_interaction(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
-        selection_tags = (
-            *required_tags,
-            *(("response_format",) if chat_body.get("response_format") else ()),
-        )
+        response_format_requested = bool(chat_body.get("response_format"))
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
         required_agent_id = body.get("_required_agent_id")
@@ -3829,15 +3848,23 @@ class TaskOrchestrator:
                 final_agent = self._select_agent(
                     task,
                     "synthesizer",
-                    required_tags=selection_tags,
+                    required_tags=required_tags,
                     free_only=free_only,
+                    prefer_tags=(
+                        (("response_format",) if response_format_requested else ())
+                    ),
                     prompt_context=prompt_context,
                 )
             except RuntimeError as exc:
-                if selection_tags:
+                if required_tags:
                     raise ValueError(
                         "no enabled model supports required tags: "
-                        + ", ".join(selection_tags)
+                        + ", ".join(required_tags)
+                    ) from exc
+                if response_format_requested:
+                    raise ValueError(
+                        "no enabled model can serve the requested response_format; "
+                        "the pool has no chat synthesizer"
                     ) from exc
                 raise
         replica_agent_ids = (
@@ -3846,7 +3873,12 @@ class TaskOrchestrator:
             else None
         )
         if replica_agent_ids is not None and final_agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             final_agent = next(
                 (
@@ -3854,7 +3886,7 @@ class TaskOrchestrator:
                     for candidate in self._ranked_agents(
                     task,
                     "synthesizer",
-                    required_tags=selection_tags,
+                    required_tags=required_tags,
                     free_only=free_only,
                     prompt_context=prompt_context,
                     )
@@ -3875,7 +3907,7 @@ class TaskOrchestrator:
         self._raise_if_spend_budget_exceeded()
         workflow = self.conduct(
             messages,
-            model_name=self.FREE_MODEL if free_only else "contextual-orchestrator",
+            model_name=self.FREE_MODEL if free_only else self.GATEWAY_DEFAULT_MODEL,
         )
         in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -3993,7 +4025,7 @@ class TaskOrchestrator:
                 final_agent,
                 task,
                 "synthesizer",
-                required_tags=selection_tags,
+                required_tags=required_tags,
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
             )
@@ -4231,7 +4263,7 @@ class TaskOrchestrator:
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
-            "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL
+            self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL
         }:
             return None
         if type(requested_model) is not str or not requested_model:
@@ -4272,7 +4304,7 @@ class TaskOrchestrator:
         mode: str = "auto",
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
@@ -4320,13 +4352,13 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         ):
@@ -4337,14 +4369,14 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str = "auto",
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
         return mode == "route" or (
             mode == "auto"
             and (
-                model_name not in {"contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         )
@@ -4354,7 +4386,7 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         workflow_run_id: str | None = None,
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         owner_id: str | None = None,
         include_usage: bool = False,
         usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
@@ -4450,7 +4482,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         mode: str,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
     ) -> str:
         snapshot = getattr(self.client, "request_settings_snapshot", None)
@@ -4477,7 +4509,7 @@ class TaskOrchestrator:
         workflow_run_id: str | None = None,
         *,
         bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         cache_partition: str | None = None,
         owner_id: str | None = None,
     ) -> dict[str, Any]:
@@ -5120,7 +5152,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
     ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace.
 
@@ -5299,7 +5331,7 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
-        model_name: str = "contextual-orchestrator",
+        model_name: str = GATEWAY_DEFAULT_MODEL,
         progress: Any = None,
         workflow_run_id: str | None = None,
     ) -> dict[str, Any]:
@@ -5314,7 +5346,7 @@ class TaskOrchestrator:
             if message.get("role") == "system" and isinstance(message.get("content"), str)
         )
         plan_source = "template"
-        if model_name not in {"contextual-orchestrator", self.AUTO_MODEL}:
+        if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
             steps = self._plan(task, model_name=model_name)
         elif self.policy.workflow_planning == "generated":
             try:
@@ -5590,7 +5622,7 @@ class TaskOrchestrator:
         return steps
 
     def _plan(
-        self, task: str, *, model_name: str = "contextual-orchestrator"
+        self, task: str, *, model_name: str = GATEWAY_DEFAULT_MODEL
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
         free_only = model_name == self.FREE_MODEL
@@ -5972,6 +6004,7 @@ class TaskOrchestrator:
         *,
         free_only: bool = False,
         required_tags: tuple[str, ...] = (),
+        prefer_tags: tuple[str, ...] = (),
         prompt_context: str | None = None,
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
@@ -5979,7 +6012,10 @@ class TaskOrchestrator:
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
         excluded by the capability contract enforced by
         :func:`is_general_chat_candidate`; this is an endpoint-compatibility
-        gate, not a task-keyword heuristic.
+        gate, not a task-keyword heuristic. ``required_tags`` must all be
+        present (hard entitlements); ``prefer_tags`` only influence
+        tie-breaking when a candidate already carries them, so a pool that
+        does not advertise an optional gateway capability still resolves.
         """
         ranked = [
             agent
@@ -5993,6 +6029,14 @@ class TaskOrchestrator:
             if _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
+        if prefer_tags and ranked:
+            preferred = [
+                agent
+                for agent in ranked
+                if all(tag in agent.tags for tag in prefer_tags)
+            ]
+            if preferred:
+                ranked = preferred
         if not ranked:
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         selected = ranked[0]
@@ -6008,7 +6052,11 @@ class TaskOrchestrator:
         capability = {"embeddings": "embedding"}.get(capability, capability)
         if not capability:
             raise ValueError("capability must be a non-empty string")
-        virtual_model = model_name in {self.AUTO_MODEL, self.FREE_MODEL}
+        virtual_model = model_name in {
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
         free_only = model_name == self.FREE_MODEL
         exact_models = {agent.model for agent in self.candidates}
         requested_group = (
@@ -6399,6 +6447,8 @@ class TaskOrchestrator:
                 )
                 return outcome.value
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
+        bounded_provider_response_failures = 0
+        last_provider_response_error: ProviderResponseError | None = None
         every_failure_was_request_too_large = True
         # The final classified upstream failure survives the candidate loop so a
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
@@ -6421,10 +6471,19 @@ class TaskOrchestrator:
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
-                    if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
+                    if isinstance(exc, ToolFallbackStoppedError):
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
+                    if isinstance(exc, ProviderResponseError):
+                        if allowed_agent_ids is None:
+                            raise
+                        bounded_provider_response_failures += 1
+                        last_provider_response_error = exc
+                        decision = classify_tool_failure(exc)
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        self._record_failure(agent.id)
+                        break
                     decision = classify_tool_failure(exc)
                     action = decision.action
                     if (
@@ -6476,7 +6535,12 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
-        if every_failure_was_request_too_large:
+        if (
+            last_provider_response_error is not None
+            and bounded_provider_response_failures == len(candidates)
+        ):
+            raise last_provider_response_error
+        if candidates and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
@@ -6878,7 +6942,7 @@ class TaskOrchestrator:
         created = 1_700_000_000  # stable epoch so list responses are deterministic
         data: list[dict[str, Any]] = [
             {
-                "id": "contextual-orchestrator",
+                "id": self.GATEWAY_DEFAULT_MODEL,
                 "object": "model",
                 "created": created,
                 "owned_by": "contextual-orchestrator",
