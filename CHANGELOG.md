@@ -16,6 +16,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   routing, configured with `--routing-observation-window-seconds` alongside
   `--state-db`; it shares completed attempt evidence across gateway processes
   without inventing decay or cross-model equivalence (ADR 0039).
+- Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
+  `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
+  declared `ProviderModelSource.models_dev_provider_id` field, and hoisted
+  the Models.dev fetch into `discover_all_models` so every source that wants
+  it shares one fetch instead of repeating it (ADR 0041). Restores real
+  `orchestrator/free` pool coverage from NVIDIA NIM; `bytez` remains a
+  documented permanent gap and `openai` a self-correcting currently-empty
+  one. Classification stays exact-`model_id`-match and fail-closed.
 - Fail-closed commercial release authorization bound to a signed, exact-head
   GitHub evidence snapshot, propagated through every downstream commercial
   readiness report while keeping local product evidence inspectable.
