@@ -431,6 +431,26 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
     return decision_value, reason.strip()
 
 
+AUTH_SCHEME_RAW_TOKEN = "raw-token"
+"""Sentinel ``auth_scheme`` for a provider whose Authorization header carries
+the bare credential with no scheme word at all. Bytez documents its API as
+``Authorization: <token>`` (https://docs.bytez.com/http-reference/list/models.md)
+-- unlike ``Bearer``-style providers, it takes no prefix word before the key.
+"""
+
+
+def format_authorization_header(auth_scheme: str, api_key: str) -> str:
+    """Return one provider's Authorization header value for a credential.
+
+    Every provider except the :data:`AUTH_SCHEME_RAW_TOKEN` sentinel sends its
+    credential behind a literal scheme word (``Bearer <key>``); that sentinel
+    sends the bare credential instead, with no scheme word or separator.
+    """
+    if auth_scheme == AUTH_SCHEME_RAW_TOKEN:
+        return api_key
+    return f"{auth_scheme} {api_key}"
+
+
 @dataclass(frozen=True)
 class ModelAgent:
     """Configuration for one model-backed worker in the agent pool."""
@@ -451,8 +471,9 @@ class ModelAgent:
     # Explicit KV credential for an authenticated loopback gateway. Keep this
     # separate from ``credential_key`` so mlx:// workers remain keyless.
     local_credential_key: str = ""
-    # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
-    # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
+    # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default), or
+    # the AUTH_SCHEME_RAW_TOKEN sentinel (Bytez) for a bare, prefix-free
+    # credential. See format_authorization_header().
     auth_scheme: str = "Bearer"
     # Optional measured-routing group: agents sharing a canonical group name are
     # one logical model whose members are ordered by observed speed/stability
@@ -1622,7 +1643,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -1820,7 +1841,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -1998,7 +2019,7 @@ class ModelClient:
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {"content-type": "application/json"}  # pragma: no cover
         if api_key:  # pragma: no cover
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
@@ -2044,7 +2065,7 @@ class ModelClient:
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {}  # pragma: no cover
         if api_key:  # pragma: no cover
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             headers=headers,
@@ -2080,7 +2101,7 @@ class ModelClient:
             "content-length": str(content_length),
         }
         if api_key:  # pragma: no cover
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=body,
@@ -2148,7 +2169,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
@@ -2436,7 +2457,7 @@ class ModelClient:
             self._provider_url(agent, "/files"),
             data=body,
             headers={
-                "authorization": f"{agent.auth_scheme} {api_key}",
+                "authorization": format_authorization_header(agent.auth_scheme, api_key),
                 "content-type": f"multipart/form-data; boundary={boundary}",
             },
             method="POST",
@@ -2458,7 +2479,7 @@ class ModelClient:
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
-                "authorization": f"{agent.auth_scheme} {api_key}",
+                "authorization": format_authorization_header(agent.auth_scheme, api_key),
                 "content-type": "application/json",
             },
             method=method,
@@ -2486,7 +2507,7 @@ class ModelClient:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
-            headers={"authorization": f"{agent.auth_scheme} {api_key}"},
+            headers={"authorization": format_authorization_header(agent.auth_scheme, api_key)},
             method="GET",
         )
         with self._open_provider(request, destination) as response:
