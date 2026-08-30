@@ -30,9 +30,17 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+# Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
+# 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
+# bot signature. A stable, identifying user agent is not a credential and is
+# safe to send on every request, authenticated or not.
+_HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
-_MODELS_DEV_OPENCODE_PROVIDER = "opencode"
+# Sentinel distinguishing "no shared Models.dev payload supplied" (fall back to
+# a lazy per-call fetch) from an explicitly supplied ``None`` -- the honest
+# outcome of a real fetch failure. Never compare to it with ``==``.
+_NOT_FETCHED = object()
 _OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 
@@ -71,6 +79,7 @@ class ProviderModelSource:
     capabilities: tuple[str, ...] = ()
     bootstrap_required: bool = True
     evidence_only: bool = False
+    models_dev_provider_id: str | None = None
 
 
 # NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
@@ -81,6 +90,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         credential_name="OPENAI_API_KEY",
         list_url="https://api.openai.com/v1/models",
         chat_base_url="https://api.openai.com/v1",
+        models_dev_provider_id="openai",
     ),
     ProviderModelSource(
         provider_name="openrouter",
@@ -97,6 +107,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         chat_base_url="https://opencode.ai/zen/v1",
         capabilities=("chat",),
         bootstrap_required=False,
+        models_dev_provider_id="opencode",
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -104,6 +115,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
         capabilities=("chat",),
+        models_dev_provider_id="nvidia",
     ),
     ProviderModelSource(
         provider_name="nvidia_nim_sub",
@@ -111,6 +123,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
         capabilities=("chat",),
+        models_dev_provider_id="nvidia",
     ),
     ProviderModelSource(
         provider_name="bytez",
@@ -163,7 +176,9 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"user-agent": _HTTP_USER_AGENT}
+    if api_key:
+        headers["authorization"] = f"{auth_scheme} {api_key}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
@@ -466,9 +481,20 @@ def _apply_discovered_model_evidence(
 
 
 def discover_provider_models(
-    source: ProviderModelSource, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+    source: ProviderModelSource,
+    *,
+    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    models_dev_metadata: Any = _NOT_FETCHED,
 ) -> list[DiscoveredModel]:
-    """Discover one provider's models, or ``[]`` if its credential is not registered."""
+    """Discover one provider's models, or ``[]`` if its credential is not registered.
+
+    ``models_dev_metadata`` lets a caller that already fetched
+    ``https://models.dev/api.json`` (e.g. :func:`discover_all_models`, once,
+    for every source that wants it) hand the parsed payload in directly so
+    this call does not repeat the fetch. Leaving it at the default sentinel
+    preserves this function's existing lazy, per-call fetch-on-demand
+    behavior for every other caller, tests included.
+    """
     api_key = get_credential(source.credential_name)
     if not api_key:
         return []
@@ -482,12 +508,15 @@ def discover_provider_models(
         # subclasses, so a raw provider transport failure can never escape the
         # discovery boundary with provider text attached.
         raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
-    if source.provider_name == "opencode_zen":
-        try:
-            metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-            metadata = None
-        payload = _merge_models_dev_metadata(payload, metadata, _MODELS_DEV_OPENCODE_PROVIDER)
+    if source.models_dev_provider_id:
+        if models_dev_metadata is _NOT_FETCHED:
+            try:
+                metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+            except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+                metadata = None
+        else:
+            metadata = models_dev_metadata
+        payload = _merge_models_dev_metadata(payload, metadata, source.models_dev_provider_id)
     if source.style == "bytez":
         discovered = _parse_bytez(payload, source)
     else:
@@ -504,12 +533,33 @@ def discover_all_models(
 
     One provider's failure never blocks the others: errors are collected and
     returned alongside whatever models were successfully discovered.
+
+    Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
+    ``openai``) each want the same Models.dev catalog. When any registered
+    source declares ``models_dev_provider_id``, fetch it here exactly once and
+    hand every source the identical parsed payload, instead of each source
+    independently repeating the fetch inside :func:`discover_provider_models`.
     """
     discovered: list[DiscoveredModel] = []
     errors: list[ProviderDiscoveryError] = []
+    models_dev_metadata: Any = _NOT_FETCHED
+    if any(
+        source.models_dev_provider_id and get_credential(source.credential_name)
+        for source in sources
+    ):
+        try:
+            models_dev_metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            models_dev_metadata = None
     for source in sources:
         try:
-            discovered.extend(discover_provider_models(source, timeout=timeout))
+            discovered.extend(
+                discover_provider_models(
+                    source,
+                    timeout=timeout,
+                    models_dev_metadata=models_dev_metadata,
+                )
+            )
         except ProviderDiscoveryError as exc:
             errors.append(exc)
     # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
