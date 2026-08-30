@@ -75,7 +75,8 @@ def test_catalog_sync_supplies_the_complete_provider_inventory() -> None:
 
     for credential_name in PROVIDER_CREDENTIAL_NAMES:
         assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
-        assert f"'{credential_name}'," in workflow
+    assert "from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES" in workflow
+    assert "expected = set(PROVIDER_CREDENTIAL_NAMES)" in workflow
 
 
 def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() -> None:

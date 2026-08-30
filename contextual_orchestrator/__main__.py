@@ -620,6 +620,15 @@ def main(argv: list[str] | None = None) -> None:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):
             parser.error("--serve requires a KV auth credential or explicit local token")
+        if (
+            (args.production or args.allow_public_bind)
+            and split_requested
+            and admin_token == inference_token
+        ):
+            parser.error(
+                "--production/--allow-public-bind requires admin and inference tokens "
+                "to resolve to distinct credential values"
+            )
         serve(
             orchestrator,
             host=args.host,

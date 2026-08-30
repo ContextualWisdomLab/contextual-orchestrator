@@ -306,6 +306,52 @@ def _fetch_configured_gateway_json(
     return json.loads(raw.decode("utf-8"))
 
 
+class _TrustedDiscoveryRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Allow authenticated discovery redirects only within one trusted HTTPS host."""
+
+    def __init__(self, trusted_host: str) -> None:
+        self._trusted_host = trusted_host.casefold()
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urlsplit(newurl)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.hostname.casefold() != self._trusted_host:
+            raise urllib.error.HTTPError(
+                newurl,
+                code,
+                "unsafe redirect during authenticated model discovery",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _fetch_json_same_host_https(
+    url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float
+) -> Any:
+    """Fetch JSON while rejecting redirects outside the original trusted HTTPS host."""
+    if not url.startswith("https://"):
+        raise ValueError(f"refusing non-https model discovery URL: {url!r}")
+    parsed = urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError(f"refusing discovery URL without hostname: {url!r}")
+    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    opener = urllib.request.build_opener(
+        _TrustedDiscoveryRedirectHandler(parsed.hostname)
+    )
+    try:
+        response = opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise TimeoutError(str(exc.reason)) from exc
+        raise
+    with response:
+        raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+        raise ValueError("model discovery response exceeds maximum size")
+    return json.loads(raw.decode("utf-8"))
+
+
 def _valid_price_component(value: object) -> bool:
     """Return whether one price component is finite, numeric, and non-negative."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -880,7 +926,7 @@ def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
     """Read public OpenRouter ZDR evidence for discovered provider models."""
     api_key = get_credential("OPENROUTER_API_KEY") or ""
     try:
-        payload = _fetch_json(
+        payload = _fetch_json_same_host_https(
             _OPENROUTER_ZDR_ENDPOINTS_URL,
             api_key=api_key,
             timeout=timeout,

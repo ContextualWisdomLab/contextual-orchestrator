@@ -79,7 +79,7 @@ HTTP serving is hardened for local lab use:
   addresses and `localhost` remain available for local development.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - `/healthz` is a minimal unauthenticated process probe; use the administrator-authenticated `/readyz` endpoint for secret-free orchestration, sync-routing, and optional batch dependency status. Liveness stays available during optional dependency degradation.
-- Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
+- Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per standard Chat request or start with `--expose-trace-by-default` when the caller is trusted. Requests that also use `tools` or `response_format` still fail with `unsupported_trace_disclosure`; remove the trace flag for structured or tool requests.
 - State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.

@@ -814,15 +814,19 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
 
     def urlopen(request, timeout=None):
-        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
-            return _Response({"data": [{"model_id": "openai/shared-model"}]})
         if request.full_url == other_source.list_url:
             return _Response({"data": [{"id": "openai/shared-model"}]})
         return _Response({"data": [{"id": "openai/shared-model"}]})
 
-    with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        side_effect=urlopen,
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={"data": [{"model_id": "openai/shared-model"}]},
+        ),
     ):
         discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
 
@@ -835,19 +839,54 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
 
 def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-openrouter")
-    seen_requests = []
+    seen_calls = []
 
-    def urlopen(request, timeout=None):
-        seen_requests.append(request)
-        return _Response({"data": [{"model_id": "openai/shared-model"}]})
+    def fetch(url, *, api_key="", auth_scheme="Bearer", timeout):
+        seen_calls.append((url, api_key, auth_scheme, timeout))
+        return {"data": [{"model_id": "openai/shared-model"}]}
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        side_effect=urlopen,
+        "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+        side_effect=fetch,
     ):
         from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
 
         assert _openrouter_zdr_model_ids(timeout=1.0) == {"openai/shared-model"}
+
+    assert seen_calls == [
+        ("https://openrouter.ai/api/v1/endpoints/zdr", "sk-openrouter", "Bearer", 1.0)
+    ]
+
+
+def test_openrouter_zdr_evidence_rejects_cross_host_redirects() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    seen_requests = []
+
+    class _RedirectingOpener:
+        def __init__(self, handler):
+            self._handler = handler
+
+        def open(self, request, timeout=None):
+            seen_requests.append(request)
+            return self._handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {"Location": "https://evil.example/zdr"},
+                "https://evil.example/zdr",
+            )
+
+    def build_opener(handler):
+        return _RedirectingOpener(handler)
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.build_opener",
+        side_effect=build_opener,
+    ):
+        from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+        assert _openrouter_zdr_model_ids(timeout=1.0) == set()
 
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-openrouter"
 
@@ -864,15 +903,19 @@ def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
 
     def urlopen(request, timeout=None):
-        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
-            return _Response({"data": [{"model_id": "openai/shared-model"}]})
         if request.full_url == other_source.list_url:
             return _Response({"data": [{"id": "shared-model"}]})
         return _Response({"data": [{"id": "openai/shared-model"}]})
 
-    with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        side_effect=urlopen,
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={"data": [{"model_id": "openai/shared-model"}]},
+        ),
     ):
         discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
 
@@ -895,22 +938,24 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
     register_credential("NVIDIA_NIM_API_KEY", "nim-key")
 
     def urlopen(request, timeout=None):
-        if request.full_url == "https://openrouter.ai/api/v1/endpoints/zdr":
-            return _Response(
-                {
-                    "data": [
-                        {"model_id": "openai/shared-model"},
-                        {"model_id": "other/shared-model"},
-                    ]
-                }
-            )
         if request.full_url == other_source.list_url:
             return _Response({"data": [{"id": "shared-model"}]})
         return _Response({"data": [{"id": "openai/shared-model"}]})
 
-    with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        side_effect=urlopen,
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={
+                "data": [
+                    {"model_id": "openai/shared-model"},
+                    {"model_id": "other/shared-model"},
+                ]
+            },
+        ),
     ):
         discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
 
@@ -923,7 +968,7 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
 
 def test_malformed_openrouter_zdr_data_is_ignored(monkeypatch) -> None:
     monkeypatch.setattr(
-        "contextual_orchestrator.model_discovery._fetch_json",
+        "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
         lambda *args, **kwargs: {"data": {"model_id": "not-a-list"}},
     )
 
