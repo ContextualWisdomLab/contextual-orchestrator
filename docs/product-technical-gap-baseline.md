@@ -1,5 +1,124 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 hourly loop: #868 test-mock fix, #857 narrow hardening, #906 stale-base merge
+
+Fresh status check confirmed #868/#911/#912 were still `BLOCKED` purely on the
+known org-wide `opencode-review`/`noema-review` failure (stale
+`ORCHESTRATOR_PIN_SHA` vendored in `ContextualWisdomLab/.github`, fix pending
+in `.github#1422`) — none had picked up an approval since the last pass, so
+none were merged this cycle. #911/#912 had no other non-systemic failures
+(`Full unit and contract suite` green on both) and needed no code changes.
+
+**#868** (`fix/gateway-default-chat-model`) had one genuine, non-systemic
+failure at the start of this pass: `Full unit and contract suite` failed with
+`AttributeError: 'Namespace' object has no attribute 'provider_ca_bundle'` in
+`_discover_models_command` (`contextual_orchestrator/__main__.py:305`) — its
+own `argparse.ArgumentParser` never declared `--provider-ca-bundle`, even
+though the function read `args.provider_ca_bundle` unconditionally (26 tests
+failed: 8 directly on the missing attribute, 18 in
+`test_auto_discovery_server.py` because their `discover_all_models` mocks
+were fixed-arity lambdas that could not accept the `ca_bundle=` keyword the
+server-startup call site already passes). Mid-fix, the PR owner
+independently pushed `51fc34bb` adding the identical `--provider-ca-bundle`
+argument — this pass rebased its own unpushed commit on top of that (no
+history rewritten, since the commit had never been shared) and kept only the
+non-duplicate half: widening the 18 test lambdas to `**_kwargs`. Pushed as
+`e16cfed2`. Full local suite: `2745 passed, 1 skipped, 1 failed` — the one
+failure is `tests/test_psychometric_routing.py` needing the private
+`fast-mlsirm` package, unreachable in this sandbox (same documented blocker
+as PR #917), not a regression.
+
+**#857** (`fix/provider-backed-embedding-batch`) remains far too diverged to
+merge-resolve in one pass (165 files / ~13.9k lines vs current `main`,
+consistent with the prior pass's "too large" call) — left as-is otherwise.
+The three findings named for re-verification this cycle
+(`ProviderEmbeddingBatchBackend.submit` concurrency, `chat()` deadline
+propagation, `zdr_only` leaking into provider payloads) were checked against
+the PR's current head: the first two are already resolved there (Devin's
+"Caller deadline is ignored on chat passthrough" thread is marked resolved,
+and `submit`/`_run_job` already serialize every state transition under
+`self._registry.lock(...)` with a bounded `ThreadPoolExecutor`), and
+`zdr_only` does not exist anywhere in this PR's diff — that finding belongs to
+**PR #911** instead (open, unresolved CodeRabbit thread on `server.py`'s
+`_validate_zdr_only` not stripping the field from provider request bodies),
+not #857; apparently conflated across PRs in an earlier pass's notes. Of
+#857's 21 still-unresolved review threads, two were narrowly safe to fix
+without touching the stale-merge problem, pushed as `9b9f9e4d` (a plain
+commit on the existing head, no merge, no rebase):
+- `CostRoutingCoordinator.__init__`'s readiness-recovery loop and
+  `_run_provider_readiness_job` both indexed `self._readiness_jobs[job_id]`
+  with no presence check; a durable (Valkey/Redis) backend can expire that
+  document's TTL between the key listing and the lookup, raising `KeyError`
+  out of `__init__` (failing server construction) or silently killing the
+  readiness worker thread (leaving the job stuck `queued`/`running`
+  forever). Both sites now check `isinstance(..., dict)` and return/continue.
+- `tests/test_naruon_ecosystem_connector.py` called
+  `urllib.request.urlopen(req)` with no timeout, unlike every other HTTP test
+  in the file (`timeout=10`); added it.
+Validated with the Rust `_token_packer` extension built locally (`maturin
+develop --release`, needed because `build_token_counter` now hard-requires it
+— itself one of the 21 still-open findings, left alone): focused suite 54
+passed; full suite `2748 passed, 1 skipped, 1 failed` (same `fast-mlsirm`
+sandbox gap as above). The remaining ~19 unresolved threads (Dockerfile
+`test-runner` stage missing the `orchestrator` user — Major; unbounded
+OpenRouter endpoint enumeration; a resolver workflow pinned to a mutable ref;
+several Minor/Info items) were left untouched — the Dockerfile one needs a
+real `docker build` to fix safely (no daemon available in this sandbox), and
+the rest touch enough surrounding logic to risk the kind of regression this
+PR has already spent 268 commits chasing.
+
+**#906** (`feat/nim-benchmark-rebuild-20260828`) was reported `dirty` by
+GitHub's cached `mergeable_state`; a real trial merge of `origin/main` showed
+the branch was NOT irreconcilably diverged as `dirty` implied — the only
+textual conflict, across all 28 changed files plus everything `main` gained
+over the PR's stale base (33 commits), was in `CHANGELOG.md` (both sides
+appended bullets to the same `### Added`/`### Fixed` region). Resolved by
+keeping both sides' bullets under the file's one-header-per-type-per-version
+convention and merging `origin/main` into the PR branch (a merge commit; no
+rebase, no history rewritten). That merge then surfaced two real, narrow
+regressions against this PR's own test suite, both fixed and pushed together
+as `7ba5fefc`:
+- `tests/test_nim_benchmark_workflow_contract.py` read
+  `.github/workflows/tests.yml`, which `main` renamed to `ci.yml` in
+  `9b0a356d` ("use conventional workflow filename") sometime in those 33
+  commits; the `nim_benchmark_quality` job content the tests check for is
+  present and intact under the new name — repointed both reads.
+- `tests/test_nim_benchmark_release_acceptance.py::
+  test_budgeted_client_fallback_and_transport_errors` matched the old error
+  string `"provider .* request failed"`. `main`'s new
+  `contextual_orchestrator/provider_errors.py` (PR #879) reclassifies
+  provider HTTP failures through `ProviderUpstreamError` (still a
+  `RuntimeError` subclass) with the fixed message `"provider rejected the
+  request with HTTP {status}"` — updated the match regex.
+
+One more failure surfaced by the full suite, `tests/
+test_nim_benchmark_release_acceptance.py::
+test_smoke_manifest_cannot_authorize_production_routing`, is **not** caused
+by this merge: it was verified to fail identically — same
+`configured_total_token_budget=1280` vs `observed_budget_tokens=1283` on task
+`trick_arithmetic_lily_pads`/policy `conduct_bounded` — on this PR's own
+unmerged head `b0167b08`, before touching `main` at all. That contradicts the
+PR description's claimed "NIM focused and release/workflow tests: 112
+passed." This pass left it untouched rather than loosening the equal-budget
+assertion or the `30`/`0.9` evidence thresholds without the PR author's input
+on why observed token usage grew by exactly 3 tokens for that one locked
+task; it needs the author's judgment (a legitimate token-counting fix
+elsewhere in the 32-commit branch history vs. an actual regression), not a
+bot's guess. Full suite after both merge-fixes: `2797 passed, 2 failed` (the
+token-budget gap above, plus the same sandbox-only `fast-mlsirm` gap).
+`opencode-review` and `strix` were already failing on this PR before the
+merge for the same org-wide systemic reason (the `strix` job's own log shows
+it calling out to `api.opencode.ai`, consistent with `AGENTS.md`'s
+"OpenCode/Noema/Strix share this repo's gateway backend" migration note);
+`noema-review` was passing even pre-merge. None of this is a new regression
+from the merge itself.
+
+Nothing was merged to protected `main` this cycle — the org-wide
+`opencode-review`/`noema-review` gate blocks every open PR here until
+`ContextualWisdomLab/.github#1422` lands; that PR remains blocked on its own
+`pull_request_target` trust-boundary deadlock and is out of this repo's
+control. No new PRs had opened since the prior pass.
+
 ## 2026-08-30 PR #868 docstring-coverage fix
 
 `Full unit and contract suite` was failing exclusively on
