@@ -419,10 +419,70 @@ def test_execution_deadline_is_separate_from_result_retention(monkeypatch) -> No
         execution_timeout_seconds=5,
     )
 
-    job = backend.reserve([])
+    job = backend.submit([])
 
+    assert backend.wait(job, timeout=1)["status"] == "completed"
     assert backend._deadlines[job.job_id] == 1005.0
     assert client.expirations["batch_job_registry:provider_embedding_deadlines"] == 123
+    backend.close()
+
+
+def test_queued_job_gets_its_lifetime_only_after_worker_claim() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+
+    def runner(_requests):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first_started.set()
+            assert release_first.wait(timeout=1)
+        return [[float(calls)]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        max_concurrency=1,
+        claim_lease_seconds=0.05,
+        execution_timeout_seconds=0.05,
+    )
+    first = backend.submit([EmbeddingBatchRequest(input_text="first")])
+    assert first_started.wait(timeout=1)
+    second = backend.submit([EmbeddingBatchRequest(input_text="second")])
+    assert second.job_id not in backend._deadlines
+    assert threading.Event().wait(0.1) is False
+    backend.cancel(first, reason="release queued worker")
+    release_first.set()
+
+    assert backend.wait(second, timeout=1)["status"] == "completed"
+    backend.close()
+
+
+def test_batch_lifetime_allows_one_client_timeout_per_request() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+
+    def runner(requests):
+        # Model the coordinator's worst case: each request becomes one
+        # sequential provider shard and consumes most of its client timeout.
+        for _request in requests:
+            assert threading.Event().wait(0.04) is False
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=0.05,
+        execution_timeout_seconds=0.05,
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="one"), EmbeddingBatchRequest(input_text="two")]
+    )
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
     backend.close()
 
 

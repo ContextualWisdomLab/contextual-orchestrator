@@ -748,7 +748,6 @@ class ProviderEmbeddingBatchBackend:
             raise RuntimeError("provider embedding backend is closed")
         job_id = f"providerembed_{uuid.uuid4().hex}"
         self._requests[job_id] = list(requests)
-        self._deadlines[job_id] = time.time() + self._execution_timeout_seconds
         self._states[job_id] = "reserved"
         return BatchJob(
             job_id=job_id,
@@ -772,10 +771,7 @@ class ProviderEmbeddingBatchBackend:
 
     def _run_job(self, job_id: str) -> None:
         """Execute or reclaim one persisted job until it becomes terminal."""
-        deadline_epoch = float(
-            self._deadlines.get(job_id, time.time() + self._registry.retention_seconds)
-        )
-        self._deadlines[job_id] = deadline_epoch
+        deadline_epoch = self._execution_deadline(job_id)
         while (
             not self._closed.is_set()
             and self._states.get(job_id) in {"queued", "running"}
@@ -802,6 +798,28 @@ class ProviderEmbeddingBatchBackend:
             event = self._terminal_events.pop(job_id, None)
             if event is not None:
                 event.set()
+
+    def _execution_deadline(self, job_id: str) -> float:
+        """Persist a bounded lifetime beginning with the first execution claim."""
+        existing = self._deadlines.get(job_id)
+        if existing is not None:
+            return float(existing)
+        with self._registry.lock(
+            "provider_embedding_job_execution",
+            job_id,
+            lease_seconds=self._claim_lease_seconds,
+        ):
+            existing = self._deadlines.get(job_id)
+            if existing is None:
+                request_count = len(self._requests[job_id])
+                deadline = time.time() + self._execution_timeout_seconds * max(1, request_count)
+                set_if_absent = getattr(self._deadlines, "set_if_absent", None)
+                if callable(set_if_absent):
+                    set_if_absent(job_id, deadline)
+                else:
+                    self._deadlines[job_id] = deadline
+                existing = self._deadlines[job_id]
+        return float(existing)
 
     def _fail_expired_job(self, job_id: str) -> None:
         """Claim and atomically terminate provider work past its deadline."""
