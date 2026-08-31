@@ -13,6 +13,8 @@ from contextual_orchestrator import (
     CostRoutingCoordinator,
     InMemoryConfigStore,
     ModelAgent,
+    PriceBook,
+    PriceEntry,
     TaskOrchestrator,
 )
 from contextual_orchestrator.orchestrator import ModelClient
@@ -23,7 +25,12 @@ from contextual_orchestrator.token_counting import (
 
 
 class _SyntheticProviderClient(ModelClient):
+    def __init__(self):
+        super().__init__()
+        self.embedding_calls = []
+
     def embed(self, agent, texts):
+        self.embedding_calls.append(list(texts))
         return [[float(len(text))] for text in texts]
 
     def embed_with_usage(self, agent, texts):
@@ -42,14 +49,23 @@ def test_unknown_tokenizer_uses_authoritative_provider_usage() -> None:
         "provider_embedding", "provider-embedding-model", "https://provider.synthetic.invalid/v1", tags=("embedding",)
     )
     orchestrator = TaskOrchestrator([agent], client=_SyntheticProviderClient())
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("provider.synthetic.invalid", "provider-embedding-model", 1.0, 0.0)
+    )
     coordinator = CostRoutingCoordinator(
-        orchestrator, embedding_token_counter=UnavailableEmbeddingTokenCounter()
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=UnavailableEmbeddingTokenCounter(),
     )
 
     document = coordinator.complete_embeddings_batch(["synthetic input"])
 
     assert document["status"] == "completed"
     assert document["total_tokens"] == len("synthetic input".encode("utf-8"))
+    assert document["cost_micro_usd"] > 0
 
 
 def test_unknown_tokenizer_rejects_missing_provider_usage() -> None:
@@ -140,6 +156,26 @@ def test_provider_batch_failure_is_terminal_without_payload_leak() -> None:
     backend.close()
 
 
+def test_provider_batch_cancellation_preserves_the_reason() -> None:
+    release = threading.Event()
+
+    def runner(_requests):
+        release.wait(timeout=1)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+    backend.cancel(job, reason="synchronous request deadline elapsed")
+
+    assert backend.poll(job)["cancellation"] == {
+        "reason": "synchronous request deadline elapsed"
+    }
+    release.set()
+    backend.close()
+
+
 def test_remote_embedding_member_selects_provider_backend() -> None:
     agent = ModelAgent(
         "synthetic_embedding",
@@ -161,3 +197,28 @@ def test_remote_embedding_member_selects_provider_backend() -> None:
         time.sleep(0.01)
     assert document["status"] == "completed"
     assert [item["embedding"] for item in document["embeddings"]] == [[13.0], [13.0]]
+
+
+def test_provider_embedding_requests_are_sharded_by_the_existing_token_limit() -> None:
+    agent = ModelAgent(
+        "synthetic_embedding",
+        "synthetic-embedding-model",
+        base_url="https://synthetic.invalid/v1",
+        tags=("embedding",),
+    )
+    client = _SyntheticProviderClient()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client),
+        embedding_token_counter=_SyntheticExactCounter(),
+    )
+    coordinator.config.set("routing", "embedding_max_tokens_per_request", 3)
+
+    document = coordinator.complete_embeddings_batch(
+        ["one two", "three four", "five"],
+        model=agent.model,
+        agent_id=agent.id,
+        wait_timeout=1,
+    )
+
+    assert document["status"] == "completed"
+    assert client.embedding_calls == [["one two"], ["three four", "five"]]

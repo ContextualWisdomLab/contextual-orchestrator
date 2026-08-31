@@ -28,6 +28,10 @@ exclusive work. PyO3's module interface supports an in-package extension, so
 the existing Rust library can be loaded without adding a provider SDK or a
 second tokenization implementation.
 
+Chubby's production experience likewise separates coarse-grained advisory
+locking from the application-specific checks needed before publishing state;
+that operational boundary grounds the explicit terminal-publication fence here.
+
 ## Decision
 
 1. **Lease loss is observable.** A durable execution claim exposes an
@@ -80,6 +84,13 @@ second tokenization implementation.
 - Chat estimates remain outside this narrow compliance boundary.
 
 ## References
+
+Burrows, M. (2006). *The Chubby lock service for loosely-coupled distributed
+systems*. 7th USENIX Symposium on Operating Systems Design and Implementation.
+https://research.google/pubs/the-chubby-lock-service-for-loosely-coupled-distributed-systems/
+
+The publisher-hosted paper is linked rather than copied because repository
+redistribution permission was not established.
 
 Redis Ltd. (n.d.). *Distributed locks with Redis*.
 https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/

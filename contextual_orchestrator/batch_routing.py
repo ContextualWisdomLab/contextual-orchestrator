@@ -817,6 +817,8 @@ class ProviderEmbeddingBatchBackend:
         }
         if status == "failed":
             document["failure"] = dict(self._errors.get(job.job_id, {}))
+        elif status == "cancelled":
+            document["cancellation"] = dict(self._cancellations.get(job.job_id, {}))
         elif status == "completed":
             document["usage"] = dict(self._usage.get(job.job_id, {}))
         return document

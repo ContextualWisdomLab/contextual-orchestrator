@@ -7023,6 +7023,7 @@ def build_server(
                                 metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                 zdr_only=zdr_only,
                                 agent_id=agent.id,
+                                wait_timeout=float(orchestrator.client.timeout),
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
