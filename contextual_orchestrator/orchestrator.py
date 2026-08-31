@@ -46,11 +46,7 @@ from .release_authorization import evaluate_release_authorization
 from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
-from .endpoint_race import (
-    EndpointAttempt,
-    EndpointEquivalenceContract,
-    race_first_valid,
-)
+from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
 from .provider_errors import (
     ProviderUpstreamError,
     classify_provider_failure,
@@ -101,32 +97,21 @@ _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
 )
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
-    {
-        "text",
-        "image",
-        "video",
-        "speech",
-        "transcription",
-        "embedding",
-        "rerank",
-        "audio",
-    }
+    {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
 )
 MAX_PROVIDER_PROBE_TIMEOUT = 30.0
-_SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset(
-    {
-        "ConnectionError",
-        "HTTPError",
-        "OSError",
-        "RuntimeError",
-        "SSLError",
-        "TimeoutError",
-        "TypeError",
-        "UnknownError",
-        "URLError",
-        "ValueError",
-    }
-)
+_SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
+    "ConnectionError",
+    "HTTPError",
+    "OSError",
+    "RuntimeError",
+    "SSLError",
+    "TimeoutError",
+    "TypeError",
+    "UnknownError",
+    "URLError",
+    "ValueError",
+})
 
 
 def _safe_provider_probe_error_type(exc: Exception) -> str:
@@ -183,12 +168,11 @@ class ProviderRequestTooLargeError(ProviderUpstreamError):
         )
 
 
-def _structured_output_error(content: str, response_format: object) -> str | None:
+def _structured_output_error(
+    content: str, response_format: object
+) -> str | None:
     """Return a bounded contract error for strict JSON Schema output."""
-    if (
-        not isinstance(response_format, Mapping)
-        or response_format.get("type") != "json_schema"
-    ):
+    if not isinstance(response_format, Mapping) or response_format.get("type") != "json_schema":
         return None
     specification = response_format.get("json_schema")
     schema = specification.get("schema") if isinstance(specification, Mapping) else None
@@ -257,9 +241,7 @@ def _cost_usd_decimal(output_tokens: int, price_per_million: float) -> Decimal:
     return Decimal(output_tokens) * Decimal(str(price_per_million)) / Decimal(1_000_000)
 
 
-_COMMERCIAL_REPORT_CACHE: ContextVar[
-    dict[tuple[Any, Any, Any], dict[str, Any]] | None
-] = ContextVar(
+_COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
 )
@@ -287,9 +269,7 @@ def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str,
 
 
 SECRET_PATTERNS = (
-    re.compile(
-        r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"
-    ),
+    re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
 )
 
@@ -310,18 +290,12 @@ class FastMLSIRMJudgeComponents:
 def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
     """Resolve the fast-mlsirm adapter symbols without importing unconditionally."""
     try:
-        from fast_mlsirm import (
-            ContextualOrchestratorJudge,
-            JudgeCriterion,
-            JudgeFormatError,
-        )
+        from fast_mlsirm import ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError
     except ModuleNotFoundError as exc:
         if exc.name == "fast_mlsirm":
             return None
         raise
-    return FastMLSIRMJudgeComponents(
-        ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError
-    )
+    return FastMLSIRMJudgeComponents(ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError)
 
 
 @dataclass
@@ -345,13 +319,9 @@ class _FastMLSIJudgeAdapter:
         """Expose the existing gateway client capability to fast-mlsirm."""
         return self.orchestrator.client
 
-    def complete(
-        self, messages: list[ChatMessage], mode: str | None = None
-    ) -> dict[str, Any]:
+    def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         """Return one judge completion through the constrained adapter."""
-        if mode is not None and (
-            type(mode) is not str or mode not in {"auto", "route", "conduct"}
-        ):
+        if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
         output, served_id, usage = self.orchestrator._invoke(
             self._agent(),
@@ -361,9 +331,7 @@ class _FastMLSIJudgeAdapter:
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
         )
-        return self._completion_payload(
-            output, served_id, usage, self.mode if mode is None else mode
-        )
+        return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
     def complete_structured(
         self,
@@ -373,9 +341,7 @@ class _FastMLSIJudgeAdapter:
         response_format: dict[str, Any],
     ) -> dict[str, Any]:
         """Route a Judge JSON-schema request through the existing gateway proxy."""
-        if mode is not None and (
-            type(mode) is not str or mode not in {"auto", "route", "conduct"}
-        ):
+        if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
@@ -397,12 +363,8 @@ class _FastMLSIJudgeAdapter:
             agent, "chat/completions", request
         )
         output = ModelClient._response_content(agent, response)
-        usage = (
-            response.get("usage") if isinstance(response.get("usage"), dict) else None
-        )
-        return self._completion_payload(
-            output, agent.id, usage, self.mode if mode is None else mode
-        )
+        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
 
     def _completion_payload(
         self,
@@ -484,10 +446,7 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
-    if not isinstance(decision_value, str) or decision_value not in {
-        "ACCEPT",
-        "REJECT",
-    }:
+    if not isinstance(decision_value, str) or decision_value not in {"ACCEPT", "REJECT"}:
         raise ValueError("judge decision is not an allowed enum value")
     reason = decision["reason"]
     if not isinstance(reason, str) or not reason.strip():
@@ -555,9 +514,7 @@ class ModelAgent:
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
         if self.group_name:
-            object.__setattr__(
-                self, "group_name", canonical_group_name(self.group_name)
-            )
+            object.__setattr__(self, "group_name", canonical_group_name(self.group_name))
         if type(self.local_credential_key) is not str:
             raise TypeError("local_credential_key must be a string")
         if self.local_credential_key and urlparse(self.base_url).scheme != "local":
@@ -617,9 +574,7 @@ class ModelAgent:
             priority=int(value.get("priority", 0)),
             disabled=bool(value.get("disabled", False)),
             provider_name=value.get("provider_name", ""),
-            provider_exclusions=tuple(
-                value.get("provider_exclusions", value.get("provider_exclusion", ()))
-            ),
+            provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
             auth_scheme=value.get("auth_scheme", "Bearer"),
             group_name=value.get("group_name", ""),
@@ -634,10 +589,14 @@ def _is_general_chat_agent(agent: ModelAgent) -> bool:
     return is_general_chat_candidate(
         agent.model,
         capabilities=(
-            tag.split(":", 1)[1] for tag in agent.tags if tag.startswith("capability:")
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("capability:")
         ),
         output_modalities=(
-            tag.split(":", 1)[1] for tag in agent.tags if tag.startswith("output:")
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("output:")
         ),
     )
 
@@ -716,9 +675,7 @@ class OrchestrationPolicy:
 
     def __post_init__(self) -> None:
         if self.verifier_judge != "model":
-            raise ValueError(
-                "keyword-based verifier_judge modes are unsupported; use 'model'"
-            )
+            raise ValueError("keyword-based verifier_judge modes are unsupported; use 'model'")
         if isinstance(self.realtime_judge, bool) is False:
             raise ValueError("realtime_judge must be a boolean")
 
@@ -777,9 +734,7 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
         return cached
     payload = _http_error_payload(error)
     details = payload.get("error") if isinstance(payload, dict) else None
-    result = (
-        isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
-    )
+    result = isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
     try:
         setattr(error, cache_key, result)
     except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
@@ -821,10 +776,9 @@ def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
         else None
     )
     return (
-        (
-            isinstance(details, str)
-            or (isinstance(details, dict) and details.get("code") == "invalid_tools")
-        )
+        (isinstance(details, str) or (
+            isinstance(details, dict) and details.get("code") == "invalid_tools"
+        ))
         and isinstance(message, str)
         and "tool.function.description" in message.casefold()
         and "1024" in message
@@ -851,10 +805,7 @@ def _is_local_provider_url(base_url: str) -> bool:
         parsed.port
     except ValueError:
         return False
-    return (
-        parsed.scheme in LOCAL_PROVIDER_SCHEMES
-        and parsed.hostname in LOCAL_PROVIDER_HOSTS
-    )
+    return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
 
 
 def _is_direct_mlx_provider_url(base_url: str) -> bool:
@@ -896,9 +847,7 @@ _LOCAL_PROVIDER_STATES_GUARD = threading.Lock()
 def _local_provider_state(base_url: str) -> _LocalProviderState:
     """Return the shared in-process coordinator for one loopback provider endpoint."""
     parsed = urlparse(base_url)
-    key = urlunsplit(
-        ("http", (parsed.netloc or base_url).lower(), parsed.path.rstrip("/"), "", "")
-    )
+    key = urlunsplit(("http", (parsed.netloc or base_url).lower(), parsed.path.rstrip("/"), "", ""))
     with _LOCAL_PROVIDER_STATES_GUARD:
         return _LOCAL_PROVIDER_STATES.setdefault(key, _LocalProviderState())
 
@@ -930,9 +879,7 @@ def _local_provider_slot(
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(
-                    "local provider endpoint is busy past its request deadline"
-                )
+                raise TimeoutError("local provider endpoint is busy past its request deadline")
             state.condition.wait(remaining)
 
     try:
@@ -996,11 +943,9 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
                     if not isinstance(part, dict):
                         continue
                     part_type = part.get("type")
-                    if part_type in {
-                        "input_text",
-                        "output_text",
-                        "text",
-                    } and isinstance(part.get("text"), str):
+                    if part_type in {"input_text", "output_text", "text"} and isinstance(
+                        part.get("text"), str
+                    ):
                         parts.append({"type": "text", "text": part["text"]})
                     elif part_type in {"input_image", "image_url"}:
                         image_url = part.get("image_url")
@@ -1020,32 +965,24 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             if content:
                 messages.append({"role": role, "content": content})
         elif item_type == "function_call_output":
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": str(item.get("call_id", "")),
-                    "content": _responses_text(
-                        item.get("output", item.get("content", ""))
-                    ),
-                }
-            )
+            messages.append({
+                "role": "tool",
+                "tool_call_id": str(item.get("call_id", "")),
+                "content": _responses_text(item.get("output", item.get("content", ""))),
+            })
         elif item_type == "function_call":
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": str(item.get("call_id", "")),
-                            "type": "function",
-                            "function": {
-                                "name": str(item.get("name", "")),
-                                "arguments": str(item.get("arguments", "{}")),
-                            },
-                        }
-                    ],
-                }
-            )
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": str(item.get("call_id", "")),
+                    "type": "function",
+                    "function": {
+                        "name": str(item.get("name", "")),
+                        "arguments": str(item.get("arguments", "{}")),
+                    },
+                }],
+            })
         elif item_type in {"input_file", "reasoning", "item_reference"}:
             continue
         else:
@@ -1057,28 +994,16 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
         "stream": False,
     }
     for key in (
-        "temperature",
-        "top_p",
-        "max_tokens",
-        "stop",
-        "seed",
-        "presence_penalty",
-        "frequency_penalty",
-        "logit_bias",
-        "logprobs",
-        "top_logprobs",
-        "user",
-        "parallel_tool_calls",
-        "tool_choice",
+        "temperature", "top_p", "max_tokens", "stop", "seed", "presence_penalty",
+        "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "user",
+        "parallel_tool_calls", "tool_choice",
     ):
         if key in request:
             payload[key] = request[key]
     if "max_output_tokens" in request and "max_tokens" not in payload:
         payload["max_tokens"] = request["max_output_tokens"]
 
-    response_format = _responses_text_format_to_chat_response_format(
-        request.get("text")
-    )
+    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
     if response_format is None and isinstance(request.get("response_format"), dict):
         response_format = request["response_format"]
     if response_format is not None:
@@ -1143,47 +1068,35 @@ def _canonical_provider_usage(
     return canonical
 
 
-def _chat_to_responses_payload(
-    data: dict[str, Any], request: dict[str, Any]
-) -> dict[str, Any]:
+def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") if isinstance(choice, dict) else {}
     message = message if isinstance(message, dict) else {}
     content = message.get("content")
     if not isinstance(content, str):
-        content = (
-            message.get("reasoning")
-            if isinstance(message.get("reasoning"), str)
-            else ""
-        )
+        content = message.get("reasoning") if isinstance(message.get("reasoning"), str) else ""
 
     output: list[dict[str, Any]] = []
     if content or not message.get("tool_calls"):
-        output.append(
-            {
-                "id": f"msg_{uuid.uuid4().hex}",
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": content, "annotations": []}
-                ],
-            }
-        )
+        output.append({
+            "id": f"msg_{uuid.uuid4().hex}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": content, "annotations": []}],
+        })
     for tool_call in message.get("tool_calls", []):
         if not isinstance(tool_call, dict):
             continue
         function = tool_call.get("function") or {}
-        output.append(
-            {
-                "id": f"fc_{tool_call.get('id', uuid.uuid4().hex)}",
-                "type": "function_call",
-                "status": "completed",
-                "call_id": str(tool_call.get("id", uuid.uuid4().hex)),
-                "name": str(function.get("name", "")),
-                "arguments": str(function.get("arguments", "{}")),
-            }
-        )
+        output.append({
+            "id": f"fc_{tool_call.get('id', uuid.uuid4().hex)}",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": str(tool_call.get("id", uuid.uuid4().hex)),
+            "name": str(function.get("name", "")),
+            "arguments": str(function.get("arguments", "{}")),
+        })
 
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     input_tokens = int(usage.get("prompt_tokens", 0) or 0)
@@ -1195,15 +1108,11 @@ def _chat_to_responses_payload(
         "model": data.get("model", request.get("model", "local-model")),
         "output": output,
         "output_text": content,
-        "status": "completed"
-        if choice.get("finish_reason") != "length"
-        else "incomplete",
+        "status": "completed" if choice.get("finish_reason") != "length" else "incomplete",
         "usage": {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": int(
-                usage.get("total_tokens", input_tokens + output_tokens) or 0
-            ),
+            "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
         },
     }
     if isinstance(request.get("metadata"), dict):
@@ -1227,9 +1136,7 @@ def is_transient_error(exc: BaseException) -> bool:
     ):
         return False
     # Network-level failures (DNS, connection reset, read timeout) are transient.
-    if isinstance(
-        exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)
-    ):
+    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True
     if isinstance(exc, socket.gaierror):
         return exc.errno == socket.EAI_AGAIN
@@ -1259,9 +1166,7 @@ def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> 
     if not isinstance(data, dict):
         return
     attributes: dict[str, Any] = {
-        "contextual_orchestrator.latency_ms": round(
-            (time.monotonic() - started_monotonic) * 1000, 2
-        )
+        "contextual_orchestrator.latency_ms": round((time.monotonic() - started_monotonic) * 1000, 2)
     }
     served_model = data.get("model")
     if isinstance(served_model, str) and served_model:
@@ -1328,7 +1233,10 @@ def _is_request_too_large_error(exc: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, ProviderRequestTooLargeError) or (
             isinstance(current, urllib.error.HTTPError)
-            and (current.code == 413 or _is_oversized_tool_description_error(current))
+            and (
+                current.code == 413
+                or _is_oversized_tool_description_error(current)
+            )
         ):
             return True
         if current.__cause__ is not None:
@@ -1355,13 +1263,15 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
                 _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
             ):
                 return True
-        if isinstance(current, urllib.error.HTTPError) and current.code in (
-            _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
         ):
             return True
-        if isinstance(
-            current, urllib.error.HTTPError
-        ) and _is_provider_tool_description_limit_error(current):
+        if (
+            isinstance(current, urllib.error.HTTPError)
+            and _is_provider_tool_description_limit_error(current)
+        ):
             return True
         if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
             return True
@@ -1408,26 +1318,19 @@ class ModelClient:
         self.retry_backoff_cap = retry_backoff_cap
         self.temperature = temperature
         self.ca_bundle = ca_bundle
-        if (
-            type(local_concurrency) is not int
-            or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY
-        ):
+        if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
         self.local_concurrency = local_concurrency
         self.chat_template_args = dict(chat_template_args or {})
-        self.allowed_provider_hosts = self._normalize_allowed_provider_hosts(
-            allowed_provider_hosts
-        )
+        self.allowed_provider_hosts = self._normalize_allowed_provider_hosts(allowed_provider_hosts)
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
         if not verify_tls:
-            raise ValueError(
-                "provider TLS verification cannot be disabled; configure a trusted ca_bundle"
-            )
+            raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
         # TLS trust for provider egress. The system trust store is the default;
         # ca_bundle points at a custom CA for a reviewed corporate gateway.
         self._ssl_context = self._build_ssl_context(ca_bundle)
@@ -1440,39 +1343,29 @@ class ModelClient:
             try:
                 return ssl.create_default_context(cafile=ca_bundle)
             except OSError as exc:
-                raise ValueError(
-                    f"provider CA bundle could not be loaded: {ca_bundle}"
-                ) from exc
+                raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
         context = ssl.create_default_context()
         context.load_verify_locations(cafile=certifi.where())
         return context
 
     @staticmethod
-    def _normalize_allowed_provider_hosts(
-        hosts: Iterable[str] | None,
-    ) -> frozenset[str]:
+    def _normalize_allowed_provider_hosts(hosts: Iterable[str] | None) -> frozenset[str]:
         """Normalize an explicit provider-host policy once at client construction."""
         if hosts is None:
             return frozenset()
         if isinstance(hosts, (str, bytes)):
-            raise ValueError(
-                "allowed_provider_hosts must be an iterable of host strings"
-            )
+            raise ValueError("allowed_provider_hosts must be an iterable of host strings")
         normalized: set[str] = set()
         try:
             values = iter(hosts)
         except TypeError as exc:
-            raise ValueError(
-                "allowed_provider_hosts must be an iterable of host strings"
-            ) from exc
+            raise ValueError("allowed_provider_hosts must be an iterable of host strings") from exc
         for host in values:
             if type(host) is not str:
                 raise ValueError("allowed_provider_hosts must contain only strings")
             value = host.strip().lower()
             if not value or any(character in value for character in "/?#"):
-                raise ValueError(
-                    "allowed_provider_hosts entries must be bare host names"
-                )
+                raise ValueError("allowed_provider_hosts entries must be bare host names")
             normalized.add(value)
         return frozenset(normalized)
 
@@ -1488,15 +1381,9 @@ class ModelClient:
         return {
             "temperature": scoped.get("temperature", self.default_temperature),
             "top_p": scoped.get("top_p", self.default_top_p),
-            "presence_penalty": scoped.get(
-                "presence_penalty", self.default_presence_penalty
-            ),
-            "frequency_penalty": scoped.get(
-                "frequency_penalty", self.default_frequency_penalty
-            ),
-            "max_output_tokens": scoped.get(
-                "max_output_tokens", self.max_output_tokens
-            ),
+            "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
+            "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
+            "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
         }
 
     @contextmanager
@@ -1504,9 +1391,7 @@ class ModelClient:
         """Apply provider settings to only the current server request thread."""
         previous = getattr(self._local, "request_settings", None)
         current = self.request_settings_snapshot()
-        current.update(
-            {key: value for key, value in overrides.items() if value is not None}
-        )
+        current.update({key: value for key, value in overrides.items() if value is not None})
         self._local.request_settings = current
         try:
             yield
@@ -1543,24 +1428,17 @@ class ModelClient:
             return vectors
         destination = self._validate_provider(agent)  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
-        response = self._send_raw(
-            agent, "embeddings", payload, destination
-        )  # pragma: no cover
-        data = (
-            response.get("data") if isinstance(response, dict) else None
-        )  # pragma: no cover
+        response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
+        data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
         if not isinstance(data, list) or len(data) != len(texts):  # pragma: no cover
             raise RuntimeError(  # pragma: no cover
                 f"provider {agent.id} returned an invalid embeddings payload"
             )
         vectors = []  # pragma: no cover
         for entry in data:  # pragma: no cover
-            vector = (
-                entry.get("embedding") if isinstance(entry, dict) else None
-            )  # pragma: no cover
+            vector = entry.get("embedding") if isinstance(entry, dict) else None  # pragma: no cover
             if not isinstance(vector, list) or not all(  # pragma: no cover
-                isinstance(value, (int, float)) and math.isfinite(float(value))
-                for value in vector
+                isinstance(value, (int, float)) and math.isfinite(float(value)) for value in vector
             ):
                 raise RuntimeError(  # pragma: no cover
                     f"provider {agent.id} returned a non-numeric embedding vector"
@@ -1583,15 +1461,11 @@ class ModelClient:
         applied without threading kwargs through every orchestrator hop.
         """
         if not is_chat_compatible_model_id(agent.model):
-            raise ValueError(
-                "model is not chat-compatible and cannot serve a chat request"
-            )
+            raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         settings = self.request_settings_snapshot()
-        effective_temperature = (
-            settings["temperature"] if temperature is None else temperature
-        )
+        effective_temperature = settings["temperature"] if temperature is None else temperature
         effective_top_p = settings["top_p"] if top_p is None else top_p
         effective_presence = settings["presence_penalty"]
         effective_frequency = settings["frequency_penalty"]
@@ -1627,23 +1501,17 @@ class ModelClient:
             payload["chat_template_kwargs"] = self.chat_template_args
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
-        with (
-            traced(
-                f"chat {agent.model}",
-                {
-                    "gen_ai.operation.name": "chat",
-                    "gen_ai.provider.name": agent.provider_name
-                    or parsed_provider.hostname
-                    or agent.id,
-                    "gen_ai.request.model": agent.model,
-                    "contextual_orchestrator.agent_id": agent.id,
-                    "server.address": parsed_provider.hostname or "",
-                    "server.port": parsed_provider.port
-                    or (443 if parsed_provider.scheme == "https" else 80),
-                },
-            ),
-            _local_provider_slot(agent, self.local_concurrency, self.timeout),
-        ):
+        with traced(
+            f"chat {agent.model}",
+            {
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "server.address": parsed_provider.hostname or "",
+                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+            },
+        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
 
     def apply_effort_profile(
@@ -1657,9 +1525,9 @@ class ModelClient:
         """Apply an opt-in profile while proving provider support before egress."""
         if api_surface not in {"chat.completions", "responses"}:
             raise ValueError("api_surface must be chat.completions or responses")
-        supports = agent.reasoning_effort_supported is True or (
-            agent.reasoning_effort_supported is None
-            and agent.base_url.startswith("mock://")
+        supports = (
+            agent.reasoning_effort_supported is True
+            or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
         )
         applied = apply_request_profile(
             payload,
@@ -1673,9 +1541,7 @@ class ModelClient:
                 applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
         return applied
 
-    def probe(
-        self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT
-    ) -> dict[str, Any]:
+    def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
 
         ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
@@ -1698,9 +1564,7 @@ class ModelClient:
         failure_code = "provider_probe_failed"
         try:
             if agent.base_url.startswith("mock://"):
-                content = self._mock(
-                    agent, [{"role": "user", "content": "Reply with exactly OK."}]
-                )
+                content = self._mock(agent, [{"role": "user", "content": "Reply with exactly OK."}])
                 usage = None
             else:
                 destination = self._validate_provider(agent)
@@ -1712,7 +1576,9 @@ class ModelClient:
                     with self._open_provider(
                         registry_request, destination, timeout=probe_timeout
                     ) as registry_response:
-                        registry = json.loads(registry_response.read().decode("utf-8"))
+                        registry = json.loads(
+                            registry_response.read().decode("utf-8")
+                        )
                     model_ids = {
                         item.get("id")
                         for item in registry.get("data", [])
@@ -1730,15 +1596,10 @@ class ModelClient:
                     "stream": False,
                     "max_tokens": 1,
                 }
-                if (
-                    _is_direct_mlx_provider_url(agent.base_url)
-                    and self.chat_template_args
-                ):
+                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
-                    content = self._send(
-                        agent, payload, destination, timeout=probe_timeout
-                    )
+                    content = self._send(agent, payload, destination, timeout=probe_timeout)
                 usage = self.take_usage()
             if not content.strip():
                 failure_code = "provider_empty_probe_response"
@@ -1771,9 +1632,7 @@ class ModelClient:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
-        for attempt in range(
-            retry_limit + 1
-        ):  # pragma: no branch - retry limits are validated non-negative
+        for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
                 return (
                     self._send(agent, payload, destination)
@@ -1785,9 +1644,7 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        if isinstance(
-            last_error, urllib.error.HTTPError
-        ) and _is_tool_execution_stopped(last_error):
+        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
@@ -1803,21 +1660,15 @@ class ModelClient:
             raise last_error
         # Classify instead of collapsing: a 401/404/429 upstream failure is
         # caller-actionable and must not surface as one opaque internal error.
-        raise classify_provider_failure(
-            last_error, agent_id=agent.id, model=agent.model
-        )
+        raise classify_provider_failure(last_error, agent_id=agent.id, model=agent.model)
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
-        return (
-            self.local_max_retries
-            if _is_local_provider_url(agent.base_url)
-            else self.max_retries
-        )
+        return self.local_max_retries if _is_local_provider_url(agent.base_url) else self.max_retries
 
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
-        ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2**attempt))
+        ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
         return random.uniform(0.0, ceiling)
 
     def _send(
@@ -1833,9 +1684,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = format_authorization_header(
-                agent.auth_scheme, api_key
-            )
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -1861,26 +1710,19 @@ class ModelClient:
     def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
         """Extract text and explain provider responses that contain reasoning only."""
         choices = data.get("choices")
-        message = (
-            choices[0].get("message") if isinstance(choices, list) and choices else None
-        )
+        message = choices[0].get("message") if isinstance(choices, list) and choices else None
         content = message.get("content") if isinstance(message, dict) else None
         if isinstance(content, str):
             return content
         if isinstance(message, dict) and message.get("reasoning"):
             raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
-                'for mlx-lm set chat_template_args={"enable_thinking": false} or increase max_output_tokens'
+                "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
             )
-        raise ProviderResponseError(
-            f"provider {agent.id} response did not contain assistant content"
-        )
-
+        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
     @staticmethod
     def _connect_validated(
-        destination: ProviderDestination,
-        timeout: float | None,
-        source_address: tuple[str, int] | None,
+        destination: ProviderDestination, timeout: float | None, source_address: tuple[str, int] | None
     ) -> socket.socket:
         """Connect to one already-resolved address without performing another DNS lookup."""
         family, sockaddr = destination
@@ -1900,13 +1742,8 @@ class ModelClient:
         try:
             addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
         except socket.gaierror as exc:
-            raise RuntimeError(
-                f"provider host {hostname!r} could not be resolved"
-            ) from exc
-        resolved = [
-            (family, sockaddr)
-            for family, _type, _proto, _canonname, sockaddr in addresses
-        ]
+            raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
+        resolved = [(family, sockaddr) for family, _type, _proto, _canonname, sockaddr in addresses]
         if not resolved:
             raise RuntimeError(f"provider host {hostname!r} has no stream address")
         return resolved
@@ -1927,9 +1764,7 @@ class ModelClient:
             or parsed.password
             or parsed.fragment
         ):
-            raise RuntimeError(
-                "provider request URL must be an HTTP(S) URL without userinfo or fragments"
-            )
+            raise RuntimeError("provider request URL must be an HTTP(S) URL without userinfo or fragments")
         try:
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
         except ValueError as exc:
@@ -1947,9 +1782,7 @@ class ModelClient:
                 context=self._ssl_context,
             )
         else:
-            connection = http.client.HTTPConnection(
-                parsed.hostname, port, timeout=connection_timeout
-            )
+            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=connection_timeout)
         connection._create_connection = (  # type: ignore[attr-defined]
             lambda _address, timeout, source_address: self._connect_validated(
                 destination, timeout, source_address
@@ -2016,9 +1849,7 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": settings["temperature"]
-            if temperature is None
-            else temperature,
+            "temperature": settings["temperature"] if temperature is None else temperature,
             "stream": True,
             "max_tokens": settings["max_output_tokens"],
         }
@@ -2030,30 +1861,21 @@ class ModelClient:
             payload["stream_options"] = {"include_usage": True}
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
-        with (
-            traced(
-                f"chat {agent.model}",
-                {
-                    "gen_ai.operation.name": "chat",
-                    "gen_ai.provider.name": agent.provider_name
-                    or parsed_provider.hostname
-                    or agent.id,
-                    "gen_ai.request.model": agent.model,
-                    "contextual_orchestrator.agent_id": agent.id,
-                    "server.address": parsed_provider.hostname or "",
-                    "server.port": parsed_provider.port
-                    or (443 if parsed_provider.scheme == "https" else 80),
-                },
-            ),
-            _local_provider_slot(agent, self.local_concurrency, self.timeout),
-        ):  # pragma: no cover
+        with traced(
+            f"chat {agent.model}",
+            {
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "server.address": parsed_provider.hostname or "",
+                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+            },
+        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)
 
     def _stream_send(
-        self,
-        agent: ModelAgent,
-        payload: dict[str, Any],
-        destination: ProviderDestination | None = None,
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
@@ -2061,9 +1883,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
-            headers["authorization"] = format_authorization_header(
-                agent.auth_scheme, api_key
-            )
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -2113,11 +1933,7 @@ class ModelClient:
                     if delta:
                         yield delta
             _record_provider_response_telemetry(
-                {
-                    "usage": stream_usage,
-                    "model": stream_model,
-                    "choices": stream_choices,
-                },
+                {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
                 started,
             )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
@@ -2168,11 +1984,10 @@ class ModelClient:
         normalized_endpoint = endpoint.strip("/")
         if normalized_endpoint.startswith("v1/"):
             normalized_endpoint = normalized_endpoint[3:]
-        if normalized_endpoint in {
-            "chat/completions",
-            "completions",
-            "responses",
-        } and not is_chat_compatible_model_id(agent.model):
+        if (
+            normalized_endpoint in {"chat/completions", "completions", "responses"}
+            and not is_chat_compatible_model_id(agent.model)
+        ):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
@@ -2189,18 +2004,16 @@ class ModelClient:
             f"{operation_name} {agent.model}",
             {
                 "gen_ai.operation.name": operation_name,
-                "gen_ai.provider.name": agent.provider_name
-                or parsed_provider.hostname
-                or agent.id,
+                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
                 "gen_ai.request.model": agent.model,
                 "contextual_orchestrator.agent_id": agent.id,
                 "server.address": parsed_provider.hostname or "",
-                "server.port": parsed_provider.port
-                or (443 if parsed_provider.scheme == "https" else 80),
+                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ):
-            if normalized_endpoint == "chat/completions" and _is_local_provider_url(
-                agent.base_url
+            if (
+                normalized_endpoint == "chat/completions"
+                and _is_local_provider_url(agent.base_url)
             ):
                 # Preserve caller ownership while supplying the configured cap
                 # that local OpenAI-compatible servers require when SDKs omit it.
@@ -2209,9 +2022,7 @@ class ModelClient:
                     "max_tokens",
                     self.request_settings_snapshot()["max_output_tokens"],
                 )
-            if normalized_endpoint == "responses" and _is_local_provider_url(
-                agent.base_url
-            ):
+            if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
                 chat_payload = _responses_to_chat_payload(payload)
                 if "response_format" in chat_payload and not (
                     "response_format" in agent.tags
@@ -2220,13 +2031,8 @@ class ModelClient:
                     raise ValueError(
                         "selected model does not support the requested response format"
                     )
-                chat_payload.setdefault(
-                    "max_tokens", self.request_settings_snapshot()["max_output_tokens"]
-                )
-                if (
-                    _is_direct_mlx_provider_url(agent.base_url)
-                    and self.chat_template_args
-                ):
+                chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
+                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                     chat_response = self._send_raw_with_retry(
@@ -2237,9 +2043,7 @@ class ModelClient:
                         allow_transient_retries=allow_transient_retries,
                     )
                 return _chat_to_responses_payload(chat_response, payload)
-            with _local_provider_slot(
-                agent, self.local_concurrency, self.timeout
-            ):  # pragma: no cover
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
                 return self._send_raw_with_retry(
                     agent,
                     normalized_endpoint,
@@ -2257,9 +2061,7 @@ class ModelClient:
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {"content-type": "application/json"}  # pragma: no cover
         if api_key:  # pragma: no cover
-            headers["authorization"] = format_authorization_header(
-                agent.auth_scheme, api_key
-            )
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
@@ -2267,18 +2069,14 @@ class ModelClient:
             method="POST",
         )
         try:
-            with self._open_provider(
-                request, self._validate_provider(agent)
-            ) as response:  # pragma: no cover
+            with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
                 return response.read(), response.headers.get_content_type()
         except Exception as exc:  # noqa: BLE001 - classify provider transport failures
             raise classify_provider_failure(
                 exc, agent_id=agent.id, model=agent.model, transport="passthrough"
             ) from None
 
-    def proxy_get_json(
-        self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int
-    ) -> dict[str, Any]:
+    def proxy_get_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
         """Retrieve provider JSON from the exact agent that owns an async job."""
         if agent.base_url.startswith("mock://"):
             return {"id": endpoint.rsplit("/", 1)[-1], "status": "completed"}
@@ -2290,16 +2088,10 @@ class ModelClient:
             max_response_bytes=max_response_bytes,
         )
 
-    def proxy_delete_json(
-        self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int
-    ) -> dict[str, Any]:
+    def proxy_delete_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
         """Delete a provider resource owned by an exact provider-affine agent."""
         if agent.base_url.startswith("mock://"):
-            return {
-                "id": endpoint.rsplit("/", 1)[-1],
-                "object": "file",
-                "deleted": True,
-            }
+            return {"id": endpoint.rsplit("/", 1)[-1], "object": "file", "deleted": True}
         return self._batch_json(  # pragma: no cover - real provider integration
             agent,
             "DELETE",
@@ -2308,18 +2100,14 @@ class ModelClient:
             max_response_bytes=max_response_bytes,
         )
 
-    def proxy_get_bytes(
-        self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int
-    ) -> tuple[bytes, str]:
+    def proxy_get_bytes(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> tuple[bytes, str]:
         """Retrieve provider media from the exact agent that owns an async job."""
         if agent.base_url.startswith("mock://"):
             return b"mock video", "video/mp4"
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {}  # pragma: no cover
         if api_key:  # pragma: no cover
-            headers["authorization"] = format_authorization_header(
-                agent.auth_scheme, api_key
-            )
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             headers=headers,
@@ -2328,9 +2116,7 @@ class ModelClient:
         with self._open_provider(  # pragma: no cover
             request, self._validate_provider(agent)
         ) as response:
-            return self._read_bounded_response(
-                response, max_response_bytes
-            ), response.headers.get_content_type()
+            return self._read_bounded_response(response, max_response_bytes), response.headers.get_content_type()
 
     def proxy_upload(
         self,
@@ -2357,9 +2143,7 @@ class ModelClient:
             "content-length": str(content_length),
         }
         if api_key:  # pragma: no cover
-            headers["authorization"] = format_authorization_header(
-                agent.auth_scheme, api_key
-            )
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=body,
@@ -2370,9 +2154,7 @@ class ModelClient:
             request, self._validate_provider(agent)
         ) as response:
             result = json.loads(
-                self._read_bounded_response(response, max_response_bytes).decode(
-                    "utf-8"
-                )
+                self._read_bounded_response(response, max_response_bytes).decode("utf-8")
             )
         if not isinstance(result, dict):  # pragma: no cover
             raise ProviderResponseError("file provider returned a non-object response")
@@ -2398,9 +2180,7 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        if isinstance(
-            last_error, urllib.error.HTTPError
-        ) and _is_tool_execution_stopped(last_error):
+        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
@@ -2432,9 +2212,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = format_authorization_header(
-                agent.auth_scheme, api_key
-            )
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
@@ -2515,19 +2293,10 @@ class ModelClient:
         if _is_local_provider_url(agent.base_url):
             parsed = urlparse(agent.base_url)
             if parsed.username or parsed.password or parsed.query or parsed.fragment:
-                raise RuntimeError(
-                    f"{agent.id} local provider URL must not contain credentials or query data"
-                )
-            addresses = self._resolve_addresses(
-                parsed.hostname or "", parsed.port or 80
-            )
-            if any(
-                not ipaddress.ip_address(sockaddr[0]).is_loopback
-                for _family, sockaddr in addresses
-            ):
-                raise RuntimeError(
-                    f"{agent.id} local provider resolves to a non-loopback address"
-                )
+                raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
+            addresses = self._resolve_addresses(parsed.hostname or "", parsed.port or 80)
+            if any(not ipaddress.ip_address(sockaddr[0]).is_loopback for _family, sockaddr in addresses):
+                raise RuntimeError(f"{agent.id} local provider resolves to a non-loopback address")
             return addresses[0]
         credential_name = _provider_credential_name(agent)
         if credential_name and get_credential(credential_name) is None:
@@ -2539,9 +2308,7 @@ class ModelClient:
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
-            raise RuntimeError(
-                f"{agent.id} base_url must not contain credentials, query data, or fragments"
-            )
+            raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
         if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")
@@ -2555,9 +2322,7 @@ class ModelClient:
                 or ip_address.is_multicast
                 or ip_address.is_reserved
             ):
-                raise RuntimeError(
-                    f"{agent.id} provider resolves to non-public address"
-                )
+                raise RuntimeError(f"{agent.id} provider resolves to non-public address")
         return addresses[0]
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
@@ -2565,35 +2330,20 @@ class ModelClient:
         parsed = urlparse(agent.base_url)
         if _is_local_provider_url(agent.base_url):
             if parsed.username or parsed.password or parsed.query or parsed.fragment:
-                raise RuntimeError(
-                    f"{agent.id} local provider URL must not contain credentials or query data"
-                )
-            base_url = urlunsplit(
-                ("http", parsed.netloc, parsed.path.rstrip("/"), "", "")
-            )
+                raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
+            base_url = urlunsplit(("http", parsed.netloc, parsed.path.rstrip("/"), "", ""))
         elif parsed.scheme in {"http", "https"} and parsed.hostname:
             base_url = agent.base_url.rstrip("/")
         else:
             raise RuntimeError(f"{agent.id} base_url must be an http(s) provider URL")
-        if (
-            not path.startswith("/")
-            or path.startswith("//")
-            or "\r" in path
-            or "\n" in path
-        ):
+        if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
             raise RuntimeError("provider path must be a single absolute URL path")
         return f"{base_url}{path}"
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
-        last = next(
-            (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
-        )
+        last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         role = "worker"
-        system = (
-            messages[0]["content"]
-            if messages and messages[0].get("role") == "system"
-            else ""
-        )
+        system = messages[0]["content"] if messages and messages[0].get("role") == "system" else ""
         match = re.search(r"Role: ([a-z]+)", system)
         if match:
             role = match.group(1)
@@ -2626,21 +2376,13 @@ class ModelClient:
                 for custom_id, messages in requests.items()
             }
         elif _is_local_provider_url(agent.base_url):
-            results = self._local_batch_chat(
-                agent, requests, temperature, effort_profile
-            )
+            results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
             batch_error: ProviderUpstreamError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
-                    agent,
-                    requests,
-                    temperature,
-                    poll_interval,
-                    poll_timeout,
-                    destination,
-                    effort_profile,
+                    agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
                 )
             except Exception as exc:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
@@ -2664,9 +2406,7 @@ class ModelClient:
         """Run local OpenAI-compatible requests concurrently through mlx-lm."""
         request_settings = self.request_settings_snapshot()
 
-        def complete(
-            custom_id: str, messages: list[ChatMessage]
-        ) -> tuple[str, dict[str, Any]]:
+        def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
             with self.request_settings(**request_settings):
                 if effort_profile is not None:
                     content = self.chat(
@@ -2680,13 +2420,8 @@ class ModelClient:
                 return custom_id, {"content": content, "usage": self.take_usage()}
 
         if self.local_concurrency == 1 or len(requests) <= 1:
-            return dict(
-                complete(custom_id, messages)
-                for custom_id, messages in requests.items()
-            )
-        with ThreadPoolExecutor(
-            max_workers=min(self.local_concurrency, len(requests))
-        ) as pool:
+            return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
+        with ThreadPoolExecutor(max_workers=min(self.local_concurrency, len(requests))) as pool:
             futures = [
                 pool.submit(copy_context().run, complete, custom_id, messages)
                 for custom_id, messages in requests.items()
@@ -2706,63 +2441,37 @@ class ModelClient:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
         settings = self.request_settings_snapshot()
         lines = [
-            json.dumps(
-                {
-                    "custom_id": custom_id,
-                    "method": "POST",
-                    "url": "/v1/chat/completions",
-                    "body": _pin_openrouter_zdr(
-                        agent,
-                        self.apply_effort_profile(
-                            agent,
-                            {
-                                "model": agent.model,
-                                "messages": messages,
-                                "temperature": settings["temperature"]
-                                if temperature is None
-                                else temperature,
-                                "max_tokens": settings["max_output_tokens"],
-                            },
-                            effort_profile,
-                        ),
-                    ),
-                },
-                ensure_ascii=False,
-            )
+            json.dumps({
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": self.apply_effort_profile(agent, {
+                    "model": agent.model,
+                    "messages": messages,
+                    "temperature": settings["temperature"] if temperature is None else temperature,
+                    "max_tokens": settings["max_output_tokens"],
+                }, effort_profile),
+            }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
-        input_file_id = self._batch_upload(
-            agent, "\n".join(lines).encode("utf-8"), destination
-        )
-        batch_id = self._batch_json(
-            agent,
-            "POST",
-            "/batches",
-            {
-                "input_file_id": input_file_id,
-                "endpoint": "/v1/chat/completions",
-                "completion_window": "24h",
-            },
-            destination,
-        )["id"]
+        input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
+        batch_id = self._batch_json(agent, "POST", "/batches", {
+            "input_file_id": input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        }, destination)["id"]
         deadline = time.monotonic() + poll_timeout
         while True:
-            batch = self._batch_json(
-                agent, "GET", f"/batches/{batch_id}", destination=destination
-            )
+            batch = self._batch_json(agent, "GET", f"/batches/{batch_id}", destination=destination)
             status = batch.get("status")
             if status == "completed":
                 break
             if status in {"failed", "expired", "cancelled"}:
                 raise RuntimeError(f"batch {batch_id} ended with status {status}")
             if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"batch {batch_id} still {status} after {poll_timeout}s"
-                )
+                raise TimeoutError(f"batch {batch_id} still {status} after {poll_timeout}s")
             self._sleep(poll_interval)
-        raw = self._batch_raw(
-            agent, f"/files/{batch['output_file_id']}/content", destination
-        )
+        raw = self._batch_raw(agent, f"/files/{batch['output_file_id']}/content", destination)
         results: dict[str, dict[str, Any]] = {}
         for line in raw.decode("utf-8").splitlines():
             if not line.strip():
@@ -2777,30 +2486,21 @@ class ModelClient:
         return results
 
     def _batch_upload(
-        self,
-        agent: ModelAgent,
-        payload: bytes,
-        destination: ProviderDestination | None = None,
+        self, agent: ModelAgent, payload: bytes, destination: ProviderDestination | None = None
     ) -> str:
         """Upload a JSONL batch input via multipart/form-data; returns the file id."""
         boundary = f"co-batch-{uuid.uuid4().hex}"
         api_key = get_credential(agent.credential_name) or ""
         body = (
-            (
-                f'--{boundary}\r\ncontent-disposition: form-data; name="purpose"\r\n\r\nbatch\r\n'
-                f'--{boundary}\r\ncontent-disposition: form-data; name="file"; filename="batch.jsonl"\r\n'
-                "content-type: application/jsonl\r\n\r\n"
-            ).encode("utf-8")
-            + payload
-            + f"\r\n--{boundary}--\r\n".encode("utf-8")
-        )
+            f"--{boundary}\r\ncontent-disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n"
+            f"--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; filename=\"batch.jsonl\"\r\n"
+            "content-type: application/jsonl\r\n\r\n"
+        ).encode("utf-8") + payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
         request = urllib.request.Request(
             self._provider_url(agent, "/files"),
             data=body,
             headers={
-                "authorization": format_authorization_header(
-                    agent.auth_scheme, api_key
-                ),
+                "authorization": format_authorization_header(agent.auth_scheme, api_key),
                 "content-type": f"multipart/form-data; boundary={boundary}",
             },
             method="POST",
@@ -2822,19 +2522,13 @@ class ModelClient:
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
-                "authorization": format_authorization_header(
-                    agent.auth_scheme, api_key
-                ),
+                "authorization": format_authorization_header(agent.auth_scheme, api_key),
                 "content-type": "application/json",
             },
             method=method,
         )
         with self._open_provider(request, destination) as response:
-            raw = (
-                response.read()
-                if max_response_bytes is None
-                else self._read_bounded_response(response, max_response_bytes)
-            )
+            raw = response.read() if max_response_bytes is None else self._read_bounded_response(response, max_response_bytes)
             return json.loads(raw.decode("utf-8"))
 
     @staticmethod
@@ -2844,32 +2538,19 @@ class ModelClient:
         if declared is not None:
             try:
                 if int(declared) > max_bytes:
-                    raise ProviderResponseError(
-                        "provider response exceeds the configured limit"
-                    )
+                    raise ProviderResponseError("provider response exceeds the configured limit")
             except ValueError as exc:
-                raise ProviderResponseError(
-                    "provider returned an invalid content length"
-                ) from exc
+                raise ProviderResponseError("provider returned an invalid content length") from exc
         body = response.read(max_bytes + 1)
         if len(body) > max_bytes:
-            raise ProviderResponseError(
-                "provider response exceeds the configured limit"
-            )
+            raise ProviderResponseError("provider response exceeds the configured limit")
         return body
 
-    def _batch_raw(
-        self,
-        agent: ModelAgent,
-        path: str,
-        destination: ProviderDestination | None = None,
-    ) -> bytes:
+    def _batch_raw(self, agent: ModelAgent, path: str, destination: ProviderDestination | None = None) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
-            headers={
-                "authorization": format_authorization_header(agent.auth_scheme, api_key)
-            },
+            headers={"authorization": format_authorization_header(agent.auth_scheme, api_key)},
             method="GET",
         )
         with self._open_provider(request, destination) as response:
@@ -2894,9 +2575,7 @@ def _coerce_input_text(value: Any) -> str:
                     parts.append(content)
                 elif isinstance(content, list):
                     for chunk in content:
-                        if isinstance(chunk, dict) and isinstance(
-                            chunk.get("text"), str
-                        ):
+                        if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
                             parts.append(chunk["text"])
     return " ".join(parts)
 
@@ -3078,9 +2757,7 @@ class _AgentPoolStore:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_pool)")}
         if "payload" in columns:
             if tag_exists or exclusion_exists:
-                raise RuntimeError(
-                    "legacy agent_pool conflicts with normalized child tables"
-                )
+                raise RuntimeError("legacy agent_pool conflicts with normalized child tables")
             conn.execute("ALTER TABLE agent_pool RENAME TO agent_pool_legacy_payloads")
             cls._create_normalized_schema(conn)
             rows = conn.execute(
@@ -3106,9 +2783,7 @@ class _AgentPoolStore:
             columns.add("stream_usage_supported")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
-            raise RuntimeError(
-                f"unsupported agent_pool schema; missing columns: {missing}"
-            )
+            raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
         cls._create_normalized_schema(conn)
 
     def __init__(self, path: str) -> None:
@@ -3164,12 +2839,9 @@ class _AgentPoolStore:
         is dropped. Fresh normalized databases have no legacy table and this
         becomes a no-op.
         """
-        legacy_exists = (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_pool_legacy_payloads'"
-            ).fetchone()
-            is not None
-        )
+        legacy_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_pool_legacy_payloads'"
+        ).fetchone() is not None
         if not legacy_exists:
             return
         for agent_id, raw_payload in list(
@@ -3183,8 +2855,7 @@ class _AgentPoolStore:
                 continue
             canonical = canonical_group_name(group_name)
             conn.execute(
-                "INSERT OR IGNORE INTO model_group (group_name) VALUES (?)",
-                (canonical,),
+                "INSERT OR IGNORE INTO model_group (group_name) VALUES (?)", (canonical,)
             )
             conn.execute(
                 "INSERT OR REPLACE INTO model_group_member (agent_id, group_name) VALUES (?, ?)",
@@ -3225,19 +2896,14 @@ class _AgentPoolStore:
                 if conn.execute("SELECT changes()").fetchone()[0] == 0:
                     self._insert_agent(conn, agent)
                 else:
-                    conn.execute(
-                        "DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,)
-                    )
+                    conn.execute("DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,))
                     conn.execute(
                         "DELETE FROM agent_pool_provider_exclusions WHERE agent_id = ?",
                         (agent.id,),
                     )
                     conn.executemany(
                         "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
-                        [
-                            (agent.id, position, tag)
-                            for position, tag in enumerate(agent.tags)
-                        ],
+                        [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
                     )
                     conn.executemany(
                         """
@@ -3247,15 +2913,11 @@ class _AgentPoolStore:
                         """,
                         [
                             (agent.id, position, provider)
-                            for position, provider in enumerate(
-                                agent.provider_exclusions
-                            )
+                            for position, provider in enumerate(agent.provider_exclusions)
                         ],
                     )
                 # Model-group membership is a normalized relation beside the pool.
-                conn.execute(
-                    "DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,)
-                )
+                conn.execute("DELETE FROM model_group_member WHERE agent_id = ?", (agent.id,))
                 if agent.group_name:
                     conn.execute(
                         "INSERT OR IGNORE INTO model_group (group_name) VALUES (?)",
@@ -3270,10 +2932,7 @@ class _AgentPoolStore:
                     "SELECT 1 FROM model_group_member "
                     "WHERE model_group_member.group_name = model_group.group_name)"
                 )
-                conn.execute(
-                    "DELETE FROM endpoint_equivalence_member WHERE agent_id = ?",
-                    (agent.id,),
-                )
+                conn.execute("DELETE FROM endpoint_equivalence_member WHERE agent_id = ?", (agent.id,))
                 conn.execute(
                     "DELETE FROM endpoint_equivalence_contract WHERE NOT EXISTS ("
                     "SELECT 1 FROM endpoint_equivalence_member "
@@ -3293,18 +2952,12 @@ class _AgentPoolStore:
                         "cancellation_supported=excluded.cancellation_supported, "
                         "execution_policy=excluded.execution_policy",
                         (
-                            contract.contract_id,
-                            contract.model_revision,
-                            contract.reasoning_effort_profile,
-                            contract.structured_output_contract,
-                            contract.accuracy_class,
-                            contract.data_residency_policy,
-                            contract.retention_policy,
-                            contract.context_limit,
-                            contract.pricing_evidence_id,
-                            int(contract.hedge_eligible),
-                            int(contract.cancellation_supported),
-                            contract.execution_policy,
+                            contract.contract_id, contract.model_revision,
+                            contract.reasoning_effort_profile, contract.structured_output_contract,
+                            contract.accuracy_class, contract.data_residency_policy,
+                            contract.retention_policy, contract.context_limit,
+                            contract.pricing_evidence_id, int(contract.hedge_eligible),
+                            int(contract.cancellation_supported), contract.execution_policy,
                         ),
                     )
                     conn.execute(
@@ -3313,10 +2966,7 @@ class _AgentPoolStore:
                     )
                     conn.executemany(
                         "INSERT INTO endpoint_equivalence_capability (contract_id, capability_name) VALUES (?, ?)",
-                        [
-                            (contract.contract_id, name)
-                            for name in contract.capability_set
-                        ],
+                        [(contract.contract_id, name) for name in contract.capability_set],
                     )
                     conn.execute(
                         "INSERT INTO endpoint_equivalence_member (agent_id, contract_id) VALUES (?, ?)",
@@ -3372,17 +3022,12 @@ class _AgentPoolStore:
             capabilities_by_contract.setdefault(contract_id, []).append(capability_name)
         contract_by_agent = {
             row[0]: {
-                "contract_id": row[1],
-                "model_revision": row[2],
+                "contract_id": row[1], "model_revision": row[2],
                 "reasoning_effort_profile": row[3],
-                "structured_output_contract": row[4],
-                "accuracy_class": row[5],
-                "data_residency_policy": row[6],
-                "retention_policy": row[7],
-                "context_limit": row[8],
-                "pricing_evidence_id": row[9],
-                "hedge_eligible": bool(row[10]),
-                "cancellation_supported": bool(row[11]),
+                "structured_output_contract": row[4], "accuracy_class": row[5],
+                "data_residency_policy": row[6], "retention_policy": row[7],
+                "context_limit": row[8], "pricing_evidence_id": row[9],
+                "hedge_eligible": bool(row[10]), "cancellation_supported": bool(row[11]),
                 "execution_policy": row[12],
                 "capability_set": tuple(capabilities_by_contract.get(row[1], ())),
             }
@@ -3438,16 +3083,12 @@ class _StateStore:
         f"CREATE INDEX IF NOT EXISTS {_INDEX_NAME} ON {_TABLE_NAME}(kind, seq)"
     )
     _DELETE_KEYED_SQL = "DELETE FROM orchestration_records WHERE kind = ? AND key = ?"
-    _INSERT_SQL = (
-        "INSERT INTO orchestration_records (kind, key, payload) VALUES (?, ?, ?)"
-    )
+    _INSERT_SQL = "INSERT INTO orchestration_records (kind, key, payload) VALUES (?, ?, ?)"
     _PRUNE_STREAM_SQL = (
         "DELETE FROM orchestration_records WHERE kind = ? AND seq NOT IN ("
         "SELECT seq FROM orchestration_records WHERE kind = ? ORDER BY seq DESC LIMIT ?)"
     )
-    _SELECT_ALL_SQL = (
-        "SELECT payload FROM orchestration_records WHERE kind = ? ORDER BY seq"
-    )
+    _SELECT_ALL_SQL = "SELECT payload FROM orchestration_records WHERE kind = ? ORDER BY seq"
     _SELECT_LIMIT_SQL = "SELECT payload FROM orchestration_records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
 
     def __init__(self, path: str) -> None:
@@ -3497,25 +3138,12 @@ class _StateStore:
             # _LEGACY_TABLE_NAME/_TABLE_NAME/_LEGACY_INDEX_NAME are fixed
             # class-level string literals, never derived from request or
             # database content -- no injection surface despite the f-string shape.
-            rename_sql = (
-                f"ALTER TABLE {self._LEGACY_TABLE_NAME} RENAME TO {self._TABLE_NAME}"
-            )
+            rename_sql = f"ALTER TABLE {self._LEGACY_TABLE_NAME} RENAME TO {self._TABLE_NAME}"
             drop_index_sql = f"DROP INDEX IF EXISTS {self._LEGACY_INDEX_NAME}"
-            self._conn.execute(
-                rename_sql
-            )  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            self._conn.execute(
-                drop_index_sql
-            )  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            self._conn.execute(rename_sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            self._conn.execute(drop_index_sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
-    def save(
-        self,
-        kind: str,
-        key: str | None,
-        payload: dict[str, Any],
-        *,
-        durable: bool = False,
-    ) -> None:
+    def save(self, kind: str, key: str | None, payload: dict[str, Any], *, durable: bool = False) -> None:
         """Persist one typed state record, optionally on the durable path."""
         if kind in self._STREAM_LIMITS and not durable:
             with self._stream_condition:
@@ -3540,9 +3168,7 @@ class _StateStore:
     def _drain_stream_queue(self) -> None:
         while True:
             with self._stream_condition:
-                while not self._stream_closing and not any(
-                    self._stream_events.values()
-                ):
+                while not self._stream_closing and not any(self._stream_events.values()):
                     self._stream_condition.wait()
                 event = self._next_stream_event()
                 if event is None:
@@ -3582,9 +3208,7 @@ class _StateStore:
             if limit is None:
                 rows = self._conn.execute(self._SELECT_ALL_SQL, (kind,)).fetchall()
             else:
-                rows = self._conn.execute(
-                    self._SELECT_LIMIT_SQL, (kind, limit)
-                ).fetchall()
+                rows = self._conn.execute(self._SELECT_LIMIT_SQL, (kind, limit)).fetchall()
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
 
@@ -3601,7 +3225,9 @@ class _StateStore:
                 if row[0] not in retained_keys
             }
             for key in stale_keys:
-                self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
+                self._conn.execute(
+                    self._DELETE_KEYED_SQL, (kind, key)
+                )
             self._conn.commit()
 
     def close(self) -> None:
@@ -3622,9 +3248,7 @@ class _ResponseCache:
     so callers can never mutate a cached entry. Thread-safe (the HTTP server is threaded).
     """
 
-    def __init__(
-        self, ttl: float, max_entries: int = 256, clock: Any = time.monotonic
-    ) -> None:
+    def __init__(self, ttl: float, max_entries: int = 256, clock: Any = time.monotonic) -> None:
         self.ttl = ttl
         self.max_entries = max_entries
         self._clock = clock
@@ -3711,9 +3335,7 @@ class TaskOrchestrator:
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
         if self._pool_store is not None:
             stored = {agent.id: agent for agent in self._pool_store.load_all()}
-            agents = [stored.pop(agent.id, agent) for agent in agents] + list(
-                stored.values()
-            )
+            agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
         self.candidates = list(agents)
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if not self.agents and not allow_empty_agents:  # pragma: no cover
@@ -3810,11 +3432,7 @@ class TaskOrchestrator:
         if cache_provider is not None and cache_ttl:
             raise ValueError("cache_provider and cache_ttl cannot both be configured")
         self._cache_provider = cache_provider
-        self._cache = (
-            _ResponseCache(cache_ttl, cache_max_entries)
-            if cache_ttl and cache_ttl > 0
-            else None
-        )
+        self._cache = _ResponseCache(cache_ttl, cache_max_entries) if cache_ttl and cache_ttl > 0 else None
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
@@ -3897,41 +3515,29 @@ class TaskOrchestrator:
         items: list[dict[str, Any]] = []
         with self._provider_readiness_lock:
             for agent in self.candidates:
-                provider = agent.provider_name or self._infer_provider_name(
-                    agent.base_url
-                )
+                provider = agent.provider_name or self._infer_provider_name(agent.base_url)
                 if agent.disabled:
-                    items.append(
-                        {
-                            "agent_id": agent.id,
-                            "model": agent.model,
-                            "provider": provider,
-                            "status": "disabled",
-                        }
-                    )
+                    items.append({
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": provider,
+                        "status": "disabled",
+                    })
                     continue
                 if refresh:
                     item = dict(self.client.probe(agent, timeout=probe_timeout))
                     item["provider"] = provider
                     items.append(redact_value(item))
                 else:
-                    items.append(
-                        {
-                            "agent_id": agent.id,
-                            "model": agent.model,
-                            "provider": provider,
-                            "status": "unprobed",
-                        }
-                    )
+                    items.append({
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": provider,
+                        "status": "unprobed",
+                    })
         active = [item for item in items if item["status"] != "disabled"]
-        status = (
-            "unprobed"
-            if not refresh
-            else (
-                "ready"
-                if active and all(item["status"] == "ready" for item in active)
-                else "not_ready"
-            )
+        status = "unprobed" if not refresh else (
+            "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
         )
         return {
             "status": status,
@@ -3961,9 +3567,7 @@ class TaskOrchestrator:
             self._analytics_events.append(event)
         for event in self._store.load("audit", self._audit_events.maxlen):
             self._audit_events.append(event)
-        for event in self._store.load(
-            "authorization", self._authorization_events.maxlen
-        ):
+        for event in self._store.load("authorization", self._authorization_events.maxlen):
             self._authorization_events.append(event)
 
     # Orchestration-only body keys that must not be forwarded to the provider.
@@ -4001,13 +3605,12 @@ class TaskOrchestrator:
         contract.
         """
         normalized_endpoint = endpoint.strip("/")
-        api_surface = (
-            "responses" if normalized_endpoint == "responses" else "chat.completions"
-        )
+        api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
             normalized_endpoint == "responses"
             or any(
-                key in body and not _is_omit_equivalent_control(key, body.get(key))
+                key in body
+                and not _is_omit_equivalent_control(key, body.get(key))
                 for key in _PASSTHROUGH_TRIGGER_KEYS
             )
         ):
@@ -4045,8 +3648,9 @@ class TaskOrchestrator:
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and (
-            agent is None or not self._zdr_agent_allowed(agent)
+        if (
+            isinstance(required_agent_id, str)
+            and (agent is None or not self._zdr_agent_allowed(agent))
         ):
             raise RuntimeError("required file provider is unavailable")
         if agent is not None and agent.disabled:
@@ -4075,10 +3679,10 @@ class TaskOrchestrator:
                 (
                     candidate
                     for candidate in self._ranked_agents(
-                        text,
-                        "worker",
-                        free_only=requested_model == self.FREE_MODEL,
-                        prompt_context=prompt_context,
+                    text,
+                    "worker",
+                    free_only=requested_model == self.FREE_MODEL,
+                    prompt_context=prompt_context,
                     )
                     if candidate.id in replica_agent_ids
                 ),
@@ -4122,28 +3726,23 @@ class TaskOrchestrator:
                 )
             return result
 
-        allowed_agent_ids = (
-            {agent.id}
-            if isinstance(required_agent_id, str)
+        allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
+            if requested_model == self.FREE_MODEL
             else (
                 {
                     candidate.id
                     for candidate in self.agents
-                    if self._is_general_free_agent(candidate)
-                    and self._zdr_agent_allowed(candidate)
+                    if self._zdr_agent_allowed(candidate)
                 }
-                if requested_model == self.FREE_MODEL
-                else (
-                    {
-                        candidate.id
-                        for candidate in self.agents
-                        if self._zdr_agent_allowed(candidate)
-                    }
-                    if requested_model in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
-                    else None
-                )
+                if requested_model in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
+                else None
             )
-        )
+        ))
         if replica_agent_ids is not None:
             allowed_agent_ids = (
                 replica_agent_ids
@@ -4223,7 +3822,8 @@ class TaskOrchestrator:
                 last_failure = (exc, candidate)
                 request_too_large = _is_request_too_large_error(exc)
                 every_failure_was_request_too_large = (
-                    every_failure_was_request_too_large and request_too_large
+                    every_failure_was_request_too_large
+                    and request_too_large
                 )
                 if not request_too_large:
                     self._record_failure(candidate.id)
@@ -4270,10 +3870,7 @@ class TaskOrchestrator:
         messages = chat_body.get("messages")
         if not isinstance(messages, list) or not messages:
             raise ValueError("structured completion requires non-empty messages")
-        if (
-            _structured_output_error("null", chat_body.get("response_format"))
-            == "schema_missing"
-        ):
+        if _structured_output_error("null", chat_body.get("response_format")) == "schema_missing":
             raise ProviderResponseError(
                 "response_format.json_schema is missing a schema"
             )
@@ -4295,14 +3892,19 @@ class TaskOrchestrator:
         file_replicas = body.get("_file_replicas")
         final_agent = (
             next(
-                (agent for agent in self.agents if agent.id == required_agent_id),
+                (
+                    agent
+                    for agent in self.agents
+                    if agent.id == required_agent_id
+                ),
                 None,
             )
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and (
-            final_agent is None or not self._zdr_agent_allowed(final_agent)
+        if (
+            isinstance(required_agent_id, str)
+            and (final_agent is None or not self._zdr_agent_allowed(final_agent))
         ):
             raise RuntimeError("required file provider is unavailable")
         if final_agent is None:
@@ -4313,7 +3915,7 @@ class TaskOrchestrator:
                     required_tags=required_tags,
                     free_only=free_only,
                     prefer_tags=(
-                        ("response_format",) if response_format_requested else ()
+                        (("response_format",) if response_format_requested else ())
                     ),
                     prompt_context=prompt_context,
                 )
@@ -4346,11 +3948,11 @@ class TaskOrchestrator:
                 (
                     candidate
                     for candidate in self._ranked_agents(
-                        task,
-                        "synthesizer",
-                        required_tags=required_tags,
-                        free_only=free_only,
-                        prompt_context=prompt_context,
+                    task,
+                    "synthesizer",
+                    required_tags=required_tags,
+                    free_only=free_only,
+                    prompt_context=prompt_context,
                     )
                     if candidate.id in replica_agent_ids
                 ),
@@ -4371,12 +3973,12 @@ class TaskOrchestrator:
             messages,
             model_name=self.FREE_MODEL if free_only else self.GATEWAY_DEFAULT_MODEL,
         )
-        in_flight_tokens = sum(
-            _step_output_token_count(step) for step in workflow["trace"]
-        )
+        in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
         in_flight_cost = sum(
-            _step_output_token_count(step) / 1_000_000 * self.price_per_million[model]
+            _step_output_token_count(step)
+            / 1_000_000
+            * self.price_per_million[model]
             for step in workflow["trace"]
             if (
                 model := model_by_agent.get(
@@ -4437,9 +4039,7 @@ class TaskOrchestrator:
                     ]
                 else:
                     synthesis_messages[guidance_index]["content"] = (
-                        f"{content}\n\n{guidance}"
-                        if isinstance(content, str)
-                        else guidance
+                        f"{content}\n\n{guidance}" if isinstance(content, str) else guidance
                     )
             upstream = {
                 key: value
@@ -4461,28 +4061,23 @@ class TaskOrchestrator:
             self.AUTO_MODEL,
             self.FREE_MODEL,
         }
-        allowed_agent_ids = (
-            {final_agent.id}
-            if isinstance(required_agent_id, str)
+        allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
+            if free_only
             else (
                 {
                     candidate.id
                     for candidate in self.agents
-                    if self._is_general_free_agent(candidate)
-                    and self._zdr_agent_allowed(candidate)
+                    if self._zdr_agent_allowed(candidate)
                 }
-                if free_only
-                else (
-                    {
-                        candidate.id
-                        for candidate in self.agents
-                        if self._zdr_agent_allowed(candidate)
-                    }
-                    if virtual_model
-                    else None
-                )
+                if virtual_model
+                else None
             )
-        )
+        ))
         if replica_agent_ids is not None:
             allowed_agent_ids = (
                 replica_agent_ids
@@ -4569,7 +4164,6 @@ class TaskOrchestrator:
             if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)
             raise
-
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:
                 try:
@@ -4580,10 +4174,10 @@ class TaskOrchestrator:
             if isinstance(output, str):
                 return output
             return "".join(
-                _responses_text(item.get("content"))
-                for item in response.get("output", [])
-                if isinstance(item, dict) and item.get("type") == "message"
-            )
+                    _responses_text(item.get("content"))
+                    for item in response.get("output", [])
+                    if isinstance(item, dict) and item.get("type") == "message"
+                )
 
         synthesis_output = provider_output(raw)
         synthesis_step: dict[str, Any] = {
@@ -4678,10 +4272,7 @@ class TaskOrchestrator:
         if isinstance(echo, dict):
             if response_request:
                 original_instructions = body.get("instructions")
-                if (
-                    isinstance(original_instructions, str)
-                    and original_instructions.strip()
-                ):
+                if isinstance(original_instructions, str) and original_instructions.strip():
                     echo["instructions"] = original_instructions
                 else:
                     echo.pop("instructions", None)
@@ -4713,11 +4304,7 @@ class TaskOrchestrator:
             self._store.save("workflow_run", workflow_run_id, record)
         self._append_audit_event(
             "workflow_run_created",
-            {
-                "workflow_run_id": workflow_run_id,
-                "mode": "conduct",
-                "agent_count": len(trace),
-            },
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
         )
         self.record_analytics_event(
             "workflow_run_created",
@@ -4740,9 +4327,7 @@ class TaskOrchestrator:
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
-            self.GATEWAY_DEFAULT_MODEL,
-            self.AUTO_MODEL,
-            self.FREE_MODEL,
+            self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL
         }:
             return None
         if type(requested_model) is not str or not requested_model:
@@ -4756,9 +4341,7 @@ class TaskOrchestrator:
                 and (not _REQUEST_ZDR_ONLY.get() or not candidate.disabled)
             )
         ]
-        configured_exact = any(
-            candidate.model == requested_model for candidate in self.candidates
-        )
+        configured_exact = any(candidate.model == requested_model for candidate in self.candidates)
         if not matches and not configured_exact:
             try:
                 requested_group = canonical_group_name(requested_model)
@@ -4777,9 +4360,7 @@ class TaskOrchestrator:
                     matches = []
         if not matches:
             raise ValueError(f"requested model {requested_model!r} is not configured")
-        return next(
-            (candidate for candidate in matches if not candidate.disabled), matches[0]
-        )
+        return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
     def complete(
         self,
@@ -4795,13 +4376,9 @@ class TaskOrchestrator:
             raise TypeError("bypass_cache must be a boolean")
         if not isinstance(model_name, str) or not model_name.strip():
             raise ValueError("model_name must be a non-empty string")
-        if cache_partition is not None and (
-            not isinstance(cache_partition, str) or not cache_partition.strip()
-        ):
+        if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
             raise ValueError("cache_partition must be a non-empty string when provided")
-        cache = (
-            self._cache_provider if self._cache_provider is not None else self._cache
-        )
+        cache = self._cache_provider if self._cache_provider is not None else self._cache
         if cache is None or bypass_cache:
             result = self._dispatch(messages, mode, model_name)
             result["cache_status"] = "bypass" if bypass_cache else "disabled"
@@ -4845,8 +4422,7 @@ class TaskOrchestrator:
         if mode == "route" or (
             mode == "auto"
             and (
-                model_name
-                not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         ):
@@ -4864,8 +4440,7 @@ class TaskOrchestrator:
         return mode == "route" or (
             mode == "auto"
             and (
-                model_name
-                not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
+                model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}
                 or not self._needs_workflow(text)
             )
         )
@@ -4910,9 +4485,7 @@ class TaskOrchestrator:
         if usage_callback is not None:
             usage_callback(usage)
         if agent.group_name or model_name == self.FREE_MODEL:
-            self._group_router.observe_success(
-                agent.id, time.perf_counter() - started_at
-            )
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
         # Real-time judging after the stream: already-sent bytes cannot be
         # recalled, so the verdict never changes this response -- it feeds the
@@ -4932,8 +4505,7 @@ class TaskOrchestrator:
             "role": "worker",
             "agent_id": agent.id,
             "model": agent.model,
-            "provider": agent.provider_name
-            or self._infer_provider_name(agent.base_url),
+            "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
             "subtask": "Direct route (streamed)",
             "access": [],
             "latency_ms": round(latency_seconds * 1000, 2),
@@ -4949,7 +4521,9 @@ class TaskOrchestrator:
                 "policy_mode": "route",
                 "prompt_text": text,
                 "answer": answer,
-                "trace": [trace_step],
+                "trace": [
+                    trace_step
+                ],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {**verification, "verifier_output": answer},
             }
@@ -4960,21 +4534,12 @@ class TaskOrchestrator:
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
             "workflow_run_created",
-            {
-                "workflow_run_id": record["workflow_run_id"],
-                "mode": "route",
-                "agent_count": 1,
-            },
+            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
         )
         self.record_analytics_event(
             "workflow_run_created",
-            {
-                "workflow_run_id": record["workflow_run_id"],
-                "run_mode": "route",
-                "policy_mode": "route",
-                "trace_step_count": 1,
-                "trace_complete": self._is_trace_complete(record),
-            },
+            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
     def _cache_key(
@@ -4985,21 +4550,13 @@ class TaskOrchestrator:
         cache_partition: str | None = None,
     ) -> str:
         snapshot = getattr(self.client, "request_settings_snapshot", None)
-        parameters = (
-            snapshot()
-            if callable(snapshot)
-            else {
-                "temperature": getattr(self.client, "default_temperature", None),
-                "top_p": getattr(self.client, "default_top_p", None),
-                "presence_penalty": getattr(
-                    self.client, "default_presence_penalty", None
-                ),
-                "frequency_penalty": getattr(
-                    self.client, "default_frequency_penalty", None
-                ),
-                "max_output_tokens": getattr(self.client, "max_output_tokens", None),
-            }
-        )
+        parameters = snapshot() if callable(snapshot) else {
+            "temperature": getattr(self.client, "default_temperature", None),
+            "top_p": getattr(self.client, "default_top_p", None),
+            "presence_penalty": getattr(self.client, "default_presence_penalty", None),
+            "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
+            "max_output_tokens": getattr(self.client, "max_output_tokens", None),
+        }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
         return build_response_cache_key(
             messages,
@@ -5021,10 +4578,7 @@ class TaskOrchestrator:
         owner_id: str | None = None,
     ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
-        if (
-            self.budget_max_output_tokens is not None
-            or self.budget_max_cost_usd is not None
-        ):
+        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
@@ -5107,17 +4661,13 @@ class TaskOrchestrator:
             effective_cost = (
                 spent_cost + additional_cost_usd if spent_cost is not None else None
             )
-            if (
-                budget["exceeded"]
-                or (
-                    budget["max_output_tokens"] is not None
-                    and spent_tokens >= budget["max_output_tokens"]
-                )
-                or (
-                    budget["max_cost_usd"] is not None
-                    and effective_cost is not None
-                    and effective_cost >= budget["max_cost_usd"]
-                )
+            if budget["exceeded"] or (
+                budget["max_output_tokens"] is not None
+                and spent_tokens >= budget["max_output_tokens"]
+            ) or (
+                budget["max_cost_usd"] is not None
+                and effective_cost is not None
+                and effective_cost >= budget["max_cost_usd"]
             ):
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
 
@@ -5145,22 +4695,15 @@ class TaskOrchestrator:
         ``route_once``; results are persisted as normal route runs (with provider usage
         when reported) so spend analytics and the admin console see them unchanged.
         """
-        if (
-            self.budget_max_output_tokens is not None
-            or self.budget_max_cost_usd is not None
-        ):
+        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        selected = [
-            (prompt, self._select_agent(prompt, "worker")) for prompt in prompts
-        ]
+        selected = [(prompt, self._select_agent(prompt, "worker")) for prompt in prompts]
         agents_by_id = {agent.id: agent for _, agent in selected}
         requests_by_agent: dict[str, dict[str, list[ChatMessage]]] = {}
         for index, (prompt, agent) in enumerate(selected):
-            requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [
-                {"role": "user", "content": prompt}
-            ]
+            requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
 
         answers: dict[int, dict[str, Any]] = {}
         batch_latency_ms_by_agent: dict[str, float] = {}
@@ -5187,38 +4730,27 @@ class TaskOrchestrator:
                 # canonical requested task_{index} identifiers, so hostile or
                 # duplicate identifiers cannot reach this loop. These guards only
                 # document that contract and are unreachable today.
-                prefix, suffix = custom_id.rsplit(
-                    "_", 1
-                )  # pragma: no cover - contract pinned above
+                prefix, suffix = custom_id.rsplit("_", 1)  # pragma: no cover - contract pinned above
                 index = int(suffix)  # pragma: no cover
                 if (  # pragma: no cover - contract pinned above
                     prefix != "task"
                     or custom_id != f"task_{index}"
                     or not 0 <= index < len(selected)
                 ):
-                    raise RuntimeError(
-                        "batch provider returned an invalid request identifier"
-                    )
+                    raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:  # pragma: no cover - results keys are unique
-                    raise RuntimeError(
-                        "batch provider returned a duplicate request identifier"
-                    )
+                    raise RuntimeError("batch provider returned a duplicate request identifier")
                 answers[index] = result
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
             result = answers[index]
             row: dict[str, Any] = {
-                "id": 0,
-                "role": "worker",
-                "agent_id": agent.id,
+                "id": 0, "role": "worker", "agent_id": agent.id,
                 "model": agent.model,
-                "provider": agent.provider_name
-                or self._infer_provider_name(agent.base_url),
+                "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
                 "latency_ms": batch_latency_ms_by_agent[agent.id],
-                "subtask": "Direct route (batched)",
-                "access": [],
-                "output": result["content"],
+                "subtask": "Direct route (batched)", "access": [], "output": result["content"],
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
@@ -5232,11 +4764,7 @@ class TaskOrchestrator:
                     "answer": result["content"],
                     "trace": [row],
                     "policy_snapshot": self.policy.as_dict(),
-                    "verification": {
-                        "accepted": True,
-                        "reason": "single route path (batched)",
-                        "verifier_output": "",
-                    },
+                    "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
                 }
             )
             self._replace_workflow_run(record)
@@ -5245,21 +4773,12 @@ class TaskOrchestrator:
                 self._store.save("workflow_run", record["workflow_run_id"], record)
             self._append_audit_event(
                 "workflow_run_created",
-                {
-                    "workflow_run_id": record["workflow_run_id"],
-                    "mode": "route",
-                    "agent_count": 1,
-                },
+                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
             )
             self.record_analytics_event(
                 "workflow_run_created",
-                {
-                    "workflow_run_id": record["workflow_run_id"],
-                    "run_mode": "route",
-                    "policy_mode": "route",
-                    "trace_step_count": 1,
-                    "trace_complete": self._is_trace_complete(record),
-                },
+                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
             )
             records.append(record)
         return records
@@ -5277,12 +4796,10 @@ class TaskOrchestrator:
                 [{"role": "user", "content": prompt}], mode=mode, owner_id=owner_id
             )
             workflow_run_ids.append(record["workflow_run_id"])
-            results.append(
-                {
-                    "workflow_run_id": record["workflow_run_id"],
-                    "answer": record["answer"],
-                }
-            )
+            results.append({
+                "workflow_run_id": record["workflow_run_id"],
+                "answer": record["answer"],
+            })
 
         evaluation_run_id = f"eval_{uuid.uuid4().hex}"
         evaluation = {
@@ -5318,9 +4835,7 @@ class TaskOrchestrator:
         )
         return evaluation
 
-    def compare_to_baseline(
-        self, prompts: list[str], mode: str = "auto"
-    ) -> dict[str, Any]:
+    def compare_to_baseline(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
         """Measure the orchestration engine against a single-worker baseline.
 
         For each prompt: run the full orchestration (route/conduct per mode) and a
@@ -5347,54 +4862,38 @@ class TaskOrchestrator:
 
             orchestrated_steps = len(orchestrated["trace"])
             baseline_steps = len(baseline["trace"])
-            results.append(
-                {
-                    "prompt": prompt[:120],
-                    "orchestrated": {
-                        "mode": orchestrated["mode"],
-                        "latency_ms": orchestrated_latency,
-                        "steps": orchestrated_steps,
-                        "verified": bool(
-                            orchestrated.get("verification", {}).get("accepted")
-                        ),
-                        "answer_length": len(orchestrated["answer"]),
-                    },
-                    "baseline": {
-                        "mode": baseline["mode"],
-                        "latency_ms": baseline_latency,
-                        "steps": baseline_steps,
-                        "answer_length": len(baseline["answer"]),
-                    },
-                    "latency_overhead_ms": round(
-                        orchestrated_latency - baseline_latency, 2
-                    ),
-                    "structural_coverage_delta": orchestrated_steps - baseline_steps,
-                }
-            )
+            results.append({
+                "prompt": prompt[:120],
+                "orchestrated": {
+                    "mode": orchestrated["mode"],
+                    "latency_ms": orchestrated_latency,
+                    "steps": orchestrated_steps,
+                    "verified": bool(orchestrated.get("verification", {}).get("accepted")),
+                    "answer_length": len(orchestrated["answer"]),
+                },
+                "baseline": {
+                    "mode": baseline["mode"],
+                    "latency_ms": baseline_latency,
+                    "steps": baseline_steps,
+                    "answer_length": len(baseline["answer"]),
+                },
+                "latency_overhead_ms": round(orchestrated_latency - baseline_latency, 2),
+                "structural_coverage_delta": orchestrated_steps - baseline_steps,
+            })
 
         count = len(results)
 
         def avg(select: Any) -> float:
-            return (
-                round(sum(select(row) for row in results) / count, 2) if count else 0.0
-            )
+            return round(sum(select(row) for row in results) / count, 2) if count else 0.0
 
         aggregate = {
-            "orchestrated_avg_latency_ms": avg(
-                lambda row: row["orchestrated"]["latency_ms"]
-            ),
+            "orchestrated_avg_latency_ms": avg(lambda row: row["orchestrated"]["latency_ms"]),
             "baseline_avg_latency_ms": avg(lambda row: row["baseline"]["latency_ms"]),
             "avg_latency_overhead_ms": avg(lambda row: row["latency_overhead_ms"]),
             "orchestrated_avg_steps": avg(lambda row: row["orchestrated"]["steps"]),
             "baseline_avg_steps": avg(lambda row: row["baseline"]["steps"]),
-            "avg_structural_coverage_delta": avg(
-                lambda row: row["structural_coverage_delta"]
-            ),
-            "verified_share": round(
-                sum(1 for row in results if row["orchestrated"]["verified"]) / count, 2
-            )
-            if count
-            else 0.0,
+            "avg_structural_coverage_delta": avg(lambda row: row["structural_coverage_delta"]),
+            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / count, 2) if count else 0.0,
         }
         return {
             "mode": mode,
@@ -5434,19 +4933,15 @@ class TaskOrchestrator:
         run = self.get_workflow_run(workflow_run_id, owner_id=owner_id)
         access_report = []
         for step in run["trace"]:
-            access_report.append(
-                {
-                    "step_id": step["id"],
-                    "role": step["role"],
-                    "agent_id": step["agent_id"],
-                    "access": step["access"],
-                    "accessed_outputs": [
-                        run["trace"][index]["output"]
-                        for index in step["access"]
-                        if index < len(run["trace"])
-                    ],
-                }
-            )
+            access_report.append({
+                "step_id": step["id"],
+                "role": step["role"],
+                "agent_id": step["agent_id"],
+                "access": step["access"],
+                "accessed_outputs": [
+                    run["trace"][index]["output"] for index in step["access"] if index < len(run["trace"])
+                ],
+            })
         return {
             "workflow_run_id": workflow_run_id,
             "policy_snapshot": run["policy_snapshot"],
@@ -5454,9 +4949,7 @@ class TaskOrchestrator:
             "verifier": run.get("verification"),
         }
 
-    def patch_agent(
-        self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]
-    ) -> dict[str, Any]:
+    def patch_agent(self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
         """Apply governance updates to an agent and emit an audit event."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
@@ -5469,23 +4962,16 @@ class TaskOrchestrator:
             elif status in {"disabled", "excluded", "inactive", "quarantine"}:
                 patched = replace(patched, disabled=True)
             else:  # pragma: no cover
-                raise ValueError(
-                    "status must be active, enabled, disabled, excluded, inactive, or quarantine"
-                )
+                raise ValueError("status must be active, enabled, disabled, excluded, inactive, or quarantine")
         if "priority" in patch:
             patched = replace(patched, priority=int(patch["priority"]))
         if "tags" in patch:
             patched = replace(patched, tags=tuple(patch["tags"]))
         if "provider_exclusions" in patch:
-            patched = replace(
-                patched, provider_exclusions=tuple(patch["provider_exclusions"])
-            )
+            patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
         if "group_name" in patch:
             group_name = str(patch["group_name"])
-            patched = replace(
-                patched,
-                group_name=canonical_group_name(group_name) if group_name else "",
-            )
+            patched = replace(patched, group_name=canonical_group_name(group_name) if group_name else "")
         if "endpoint_equivalence" in patch:
             value = patch["endpoint_equivalence"]
             if value is not None and not isinstance(value, dict):
@@ -5496,10 +4982,7 @@ class TaskOrchestrator:
                 patched, stream_usage_supported=patch["stream_usage_supported"]
             )
 
-        updated_candidates = [
-            patched if agent.id == worker_agent_id else agent
-            for agent in self.candidates
-        ]
+        updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
         if not updated_agents:
             raise ValueError("cannot disable the last enabled agent")
@@ -5544,23 +5027,13 @@ class TaskOrchestrator:
 
     def list_model_groups(self) -> list[dict[str, Any]]:
         """Return operator-defined logical models and measured member evidence."""
-        names = sorted(
-            {
-                canonical_group_name(agent.group_name)
-                for agent in self.candidates
-                if agent.group_name
-            }
-        )
+        names = sorted({canonical_group_name(agent.group_name) for agent in self.candidates if agent.group_name})
         return [self.get_model_group(name) for name in names]
 
     def get_model_group(self, group_name: str) -> dict[str, Any]:
         """Return one logical model group or raise ``KeyError`` when absent."""
         name = canonical_group_name(group_name)
-        members = [
-            agent
-            for agent in self.candidates
-            if agent.group_name and canonical_group_name(agent.group_name) == name
-        ]
+        members = [agent for agent in self.candidates if agent.group_name and canonical_group_name(agent.group_name) == name]
         if not members:
             raise KeyError(name)
         ranked_ids = self._measured_member_order([agent.id for agent in members])
@@ -5573,20 +5046,13 @@ class TaskOrchestrator:
                 for capability in sorted(MODEL_CAPABILITIES)
                 if any(capability in agent.tags for agent in members)
             },
-            "members": [
-                self._agent_to_admin_payload(self._agent(agent_id))
-                for agent_id in ranked_ids
-            ],
+            "members": [self._agent_to_admin_payload(self._agent(agent_id)) for agent_id in ranked_ids],
         }
 
-    def set_model_group(
-        self, group_name: str, member_agent_ids: list[str]
-    ) -> dict[str, Any]:
+    def set_model_group(self, group_name: str, member_agent_ids: list[str]) -> dict[str, Any]:
         """Create or replace a group membership using configured agent identifiers."""
         name = canonical_group_name(group_name)
-        if not member_agent_ids or any(
-            type(agent_id) is not str for agent_id in member_agent_ids
-        ):
+        if not member_agent_ids or any(type(agent_id) is not str for agent_id in member_agent_ids):
             raise ValueError("member_agent_ids must be a non-empty list of strings")
         if len(member_agent_ids) != len(set(member_agent_ids)):
             raise ValueError("member_agent_ids must not contain duplicates")
@@ -5626,10 +5092,7 @@ class TaskOrchestrator:
             elif agent.id in previous and self._pool_store is not None:
                 self._pool_store.save(agent)
         self._routers_forget_members({agent.id for agent in updated})
-        self._append_audit_event(
-            "model_group_set",
-            {"group_name": name, "member_agent_ids": sorted(requested)},
-        )
+        self._append_audit_event("model_group_set", {"group_name": name, "member_agent_ids": sorted(requested)})
         return self.get_model_group(name)
 
     def delete_model_group(self, group_name: str) -> dict[str, Any]:
@@ -5640,10 +5103,7 @@ class TaskOrchestrator:
         self._routers_reset_members(member_ids)
         for agent_id in member_ids:
             self._routers_register_member(agent_id)
-        self.candidates = [
-            replace(agent, group_name="") if agent.id in member_ids else agent
-            for agent in self.candidates
-        ]
+        self.candidates = [replace(agent, group_name="") if agent.id in member_ids else agent for agent in self.candidates]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         if self._pool_store is not None:
             for agent in self.candidates:
@@ -5664,45 +5124,27 @@ class TaskOrchestrator:
             raise ValueError(f"agent {agent.id} already exists")
         if not agent.base_url.startswith("mock://"):
             parsed = urlparse(agent.base_url)
-            if not _is_local_provider_url(agent.base_url) and (
-                parsed.scheme != "https" or not parsed.hostname
-            ):
-                raise ValueError(
-                    "non-mock remote agents must use an https base_url; local agents use mlx://loopback"
-                )
+            if not _is_local_provider_url(agent.base_url) and (parsed.scheme != "https" or not parsed.hostname):
+                raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
             if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
-                raise ValueError(
-                    "non-mock agents require credential_key or legacy api_key_env"
-                )
+                raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]
-        self.agents = [
-            candidate for candidate in self.candidates if not candidate.disabled
-        ]
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
         self._routers_register_member(agent.id)
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
             "agent_added",
-            {
-                "agent_pool_id": agent_pool_id,
-                "worker_agent_id": agent.id,
-                "model": agent.model,
-            },
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": agent.id, "model": agent.model},
         )
         self.record_analytics_event(
             "agent_added",
-            {
-                "agent_pool_id": agent_pool_id,
-                "agent_id": agent.id,
-                "model": agent.model,
-            },
+            {"agent_pool_id": agent_pool_id, "agent_id": agent.id, "model": agent.model},
         )
         return self._agent_to_admin_payload(agent)
 
-    def sync_discovered_agents(
-        self, discovered_agents: list[ModelAgent]
-    ) -> dict[str, list[str]]:
+    def sync_discovered_agents(self, discovered_agents: list[ModelAgent]) -> dict[str, list[str]]:
         """Upsert auto-discovered agents into the pool; persists when agents_db is set.
 
         Unlike :meth:`add_agent`, an id that already exists is replaced in place
@@ -5711,9 +5153,7 @@ class TaskOrchestrator:
         freshly discovered model never starts serving traffic before an operator
         (or the cost router) opts it in via ``patch_agent``.
         """
-        existing_by_id = {
-            agent.id: index for index, agent in enumerate(self.candidates)
-        }
+        existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
         updated_candidates = list(self.candidates)
         added: list[str] = []
         updated: list[str] = []
@@ -5733,9 +5173,7 @@ class TaskOrchestrator:
             if self._pool_store is not None:
                 self._pool_store.save(agent)
         self.candidates = updated_candidates
-        self.agents = [
-            candidate for candidate in self.candidates if not candidate.disabled
-        ]
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
         for agent in discovered_agents:
             self._routers_register_member(agent.id)
@@ -5753,16 +5191,10 @@ class TaskOrchestrator:
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
         target = self._agent_in_pool(agent_pool_id, worker_agent_id)
-        remaining_enabled = [
-            agent
-            for agent in self.candidates
-            if agent.id != worker_agent_id and not agent.disabled
-        ]
+        remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
-        self.candidates = [
-            agent for agent in self.candidates if agent.id != worker_agent_id
-        ]
+        self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         self._rebuild_budget_meter()
         self._routers_forget_members({agent.id for agent in self.candidates})
@@ -5772,11 +5204,7 @@ class TaskOrchestrator:
             self._pool_store.save(replace(target, disabled=True, group_name=""))
         self._append_audit_event(
             "agent_removed",
-            {
-                "agent_pool_id": agent_pool_id,
-                "worker_agent_id": worker_agent_id,
-                "model": target.model,
-            },
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": worker_agent_id, "model": target.model},
         )
         self.record_analytics_event(
             "agent_removed",
@@ -5811,8 +5239,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if self._is_general_free_agent(candidate)
-            and self._zdr_agent_allowed(candidate)
+            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
         allowed_agent_ids = free_ids if free_only else None
 
@@ -5845,8 +5272,7 @@ class TaskOrchestrator:
                 "role": "worker",
                 "agent_id": candidate.id,
                 "model": candidate.model,
-                "provider": candidate.provider_name
-                or self._infer_provider_name(candidate.base_url),
+                "provider": candidate.provider_name or self._infer_provider_name(candidate.base_url),
                 "subtask": "Direct route",
                 "access": [],
                 "latency_ms": round(latency_seconds * 1000, 2),
@@ -5878,19 +5304,15 @@ class TaskOrchestrator:
             # _realtime_route_judge; keep the last (best-available) answer but
             # fail over to the next measured candidate while budget remains.
 
-        final_row = (
-            trace_rows[-1]
-            if trace_rows
-            else {
-                "id": 0,
-                "role": "worker",
-                "agent_id": "",
-                "subtask": "Direct route",
-                "access": [],
-                "latency_ms": None,
-                "output": "",
-            }
-        )
+        final_row = trace_rows[-1] if trace_rows else {
+            "id": 0,
+            "role": "worker",
+            "agent_id": "",
+            "subtask": "Direct route",
+            "access": [],
+            "latency_ms": None,
+            "output": "",
+        }
         return self._with_effort_snapshot(
             {
                 "mode": "route",
@@ -5995,8 +5417,7 @@ class TaskOrchestrator:
         caller_instructions = "\n\n".join(
             message["content"]
             for message in messages
-            if message.get("role") == "system"
-            and isinstance(message.get("content"), str)
+            if message.get("role") == "system" and isinstance(message.get("content"), str)
         )
         plan_source = "template"
         if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}:
@@ -6017,8 +5438,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if self._is_general_free_agent(candidate)
-            and self._zdr_agent_allowed(candidate)
+            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
@@ -6076,11 +5496,7 @@ class TaskOrchestrator:
                         f"Role: {step.role}\n"
                         "Use only the original task and the accessed prior steps. "
                         "Return concise, directly useful work."
-                        + (
-                            f"\n\nCaller instructions:\n{caller_instructions}"
-                            if caller_instructions
-                            else ""
-                        )
+                        + (f"\n\nCaller instructions:\n{caller_instructions}" if caller_instructions else "")
                     ),
                 },
                 *copy.deepcopy(messages),
@@ -6103,9 +5519,7 @@ class TaskOrchestrator:
             row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
             row["model"] = agent.model
-            row["provider"] = agent.provider_name or self._infer_provider_name(
-                agent.base_url
-            )
+            row["provider"] = agent.provider_name or self._infer_provider_name(agent.base_url)
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
@@ -6124,12 +5538,8 @@ class TaskOrchestrator:
 
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
-            verification = self._judge_verifier_output(
-                last_output("verifier"), upstream, last_output("worker")
-            )
-            if (
-                self.policy.verifier_judge == "model"
-            ):  # pragma: no branch - OrchestrationPolicy validates this to be constant
+            verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
+            if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
                 verification = self._model_judge_verification(
                     task,
                     verification,
@@ -6137,30 +5547,18 @@ class TaskOrchestrator:
                     allowed_agent_ids=judge_agent_ids,
                 )
             answer = outputs[steps[-1].id]
-            if (
-                not verification["accepted"]
-                and self.policy.verifier_required
-                and last_output("worker")
-            ):
+            if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
         else:
-            verification = self._judge_verifier_output(
-                outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, "")
-            )
-            if (
-                self.policy.verifier_judge == "model"
-            ):  # pragma: no branch - OrchestrationPolicy validates this to be constant
+            verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
+            if self.policy.verifier_judge == "model":  # pragma: no branch - OrchestrationPolicy validates this to be constant
                 verification = self._model_judge_verification(
                     task,
                     verification,
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
                 )
-            answer = (
-                outputs[steps[2].id]
-                if not self.policy.verifier_required
-                else outputs[steps[-1].id]
-            )
+            answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
@@ -6189,11 +5587,7 @@ class TaskOrchestrator:
             self._store.save("workflow_run", workflow_run_id, record)
         self._append_audit_event(
             "workflow_run_created",
-            {
-                "workflow_run_id": workflow_run_id,
-                "mode": "conduct",
-                "agent_count": len(trace),
-            },
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
         )
         self.record_analytics_event(
             "workflow_run_created",
@@ -6271,12 +5665,8 @@ class TaskOrchestrator:
             raise ValueError("plan contains no JSON object")
         data = json.loads(raw[start : end + 1])
         raw_steps = data.get("steps")
-        if not isinstance(raw_steps, list) or not (
-            2 <= len(raw_steps) <= self.policy.max_workflow_steps
-        ):
-            raise ValueError(
-                f"plan must have 2..{self.policy.max_workflow_steps} steps"
-            )
+        if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
+            raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
         known_agents = {agent.id: agent for agent in self.agents}
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
@@ -6310,42 +5700,15 @@ class TaskOrchestrator:
     ) -> list[WorkflowStep]:
         requested = self._requested_agent(model_name)
         free_only = model_name == self.FREE_MODEL
-        thinker = (
-            requested or self._select_agent(task, "thinker", free_only=free_only)
-        ).id
-        worker = (
-            requested or self._select_agent(task, "worker", free_only=free_only)
-        ).id
-        verifier = (
-            requested or self._select_agent(task, "verifier", free_only=free_only)
-        ).id
-        synthesizer = (
-            requested or self._select_agent(task, "synthesizer", free_only=free_only)
-        ).id
+        thinker = (requested or self._select_agent(task, "thinker", free_only=free_only)).id
+        worker = (requested or self._select_agent(task, "worker", free_only=free_only)).id
+        verifier = (requested or self._select_agent(task, "verifier", free_only=free_only)).id
+        synthesizer = (requested or self._select_agent(task, "synthesizer", free_only=free_only)).id
         return [
-            WorkflowStep(
-                0,
-                "thinker",
-                thinker,
-                "Decompose the task and identify the best execution strategy.",
-            ),
-            WorkflowStep(
-                1, "worker", worker, "Execute the core task using the plan.", (0,)
-            ),
-            WorkflowStep(
-                2,
-                "verifier",
-                verifier,
-                "Find concrete errors, gaps, and unsupported claims.",
-                (0, 1),
-            ),
-            WorkflowStep(
-                3,
-                "synthesizer",
-                synthesizer,
-                "Produce the final answer, incorporating only verified work.",
-                (0, 1, 2),
-            ),
+            WorkflowStep(0, "thinker", thinker, "Decompose the task and identify the best execution strategy."),
+            WorkflowStep(1, "worker", worker, "Execute the core task using the plan.", (0,)),
+            WorkflowStep(2, "verifier", verifier, "Find concrete errors, gaps, and unsupported claims.", (0, 1)),
+            WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
         ]
 
     def _static_rank_key(
@@ -6417,23 +5780,18 @@ class TaskOrchestrator:
         candidates = [
             agent
             for agent in source
-            if not agent.disabled and self._zdr_agent_allowed(agent)
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
             if (
                 not free_only
-                or (
-                    self._is_general_free_agent(agent)
-                    if chat_only
-                    else self._is_free_agent(agent)
-                )
+                or (self._is_general_free_agent(agent) if chat_only else self._is_free_agent(agent))
             )
             and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
         if not candidates:
             if _REQUEST_ZDR_ONLY.get():
-                raise RuntimeError(
-                    "no ZDR-eligible agent is available for the active privacy policy"
-                )
+                raise RuntimeError("no ZDR-eligible agent is available for the active privacy policy")
             if free_only:
                 raise RuntimeError("no enabled zero-cost model is available")
             if chat_only:
@@ -6442,9 +5800,7 @@ class TaskOrchestrator:
         affinities = self._semantic_affinities(text, candidates)
         static = sorted(
             candidates,
-            key=lambda agent: self._static_rank_key(
-                agent, role, affinities.get(agent.id)
-            ),
+            key=lambda agent: self._static_rank_key(agent, role, affinities.get(agent.id)),
         )
         eligible = [agent for agent in static if role not in agent.provider_exclusions]
         excluded = [agent for agent in static if role in agent.provider_exclusions]
@@ -6454,34 +5810,23 @@ class TaskOrchestrator:
             self._refine_partition(excluded, role), prompt_context
         )
 
-    def _refine_partition(
-        self, partition: list[ModelAgent], role: str
-    ) -> list[ModelAgent]:
+    def _refine_partition(self, partition: list[ModelAgent], role: str) -> list[ModelAgent]:
         """Group-refine one role-partition with measured intra-group ordering."""
         groups: dict[str, list[ModelAgent]] = {}
         for agent in partition:
-            key = (
-                canonical_group_name(agent.group_name)
-                if agent.group_name
-                else f"agent:{agent.id}"
-            )
+            key = canonical_group_name(agent.group_name) if agent.group_name else f"agent:{agent.id}"
             groups.setdefault(key, []).append(agent)
         ordered: list[ModelAgent] = []
         for members in groups.values():
             if not members[0].group_name:
                 ordered.extend(members)
                 continue
-            eligible = [
-                member for member in members if role not in member.provider_exclusions
-            ]
-            excluded = [
-                member for member in members if role in member.provider_exclusions
-            ]
+            eligible = [member for member in members if role not in member.provider_exclusions]
+            excluded = [member for member in members if role in member.provider_exclusions]
             for sub_partition in (eligible, excluded):
                 by_id = {member.id: member for member in sub_partition}
                 ordered.extend(
-                    by_id[member_id]
-                    for member_id in self._measured_member_order(list(by_id))
+                    by_id[member_id] for member_id in self._measured_member_order(list(by_id))
                 )
         return ordered
 
@@ -6520,9 +5865,7 @@ class TaskOrchestrator:
         by_id = {candidate.id: candidate for candidate in candidates}
         evidenced_ids = [agent_id for agent_id, _score in evidence]
         return [by_id[agent_id] for agent_id in evidenced_ids] + [
-            candidate
-            for candidate in candidates
-            if candidate.id not in set(evidenced_ids)
+            candidate for candidate in candidates if candidate.id not in set(evidenced_ids)
         ]
 
     def _observe_contextual_quality(
@@ -6598,7 +5941,7 @@ class TaskOrchestrator:
         question independently of each other.
         """
         return requires_non_text_input(
-            tag[len("input:") :] for tag in agent.tags if tag.startswith("input:")
+            tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
         )
 
     def _is_free_agent(self, agent: ModelAgent) -> bool:
@@ -6616,11 +5959,9 @@ class TaskOrchestrator:
         """
         if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
             return True
-        return (
-            self.price_per_million.get(agent.model) == 0
-            and sum(candidate.model == agent.model for candidate in self.candidates)
-            == 1
-        )
+        return self.price_per_million.get(agent.model) == 0 and sum(
+            candidate.model == agent.model for candidate in self.candidates
+        ) == 1
 
     def _is_general_free_agent(self, agent: ModelAgent) -> bool:
         """Return true only for zero-priced models fit for *blind* free serving.
@@ -6640,9 +5981,7 @@ class TaskOrchestrator:
         pool store that was written before this exclusion existed, or one
         activated by a pool-construction path this repository adds later.
         """
-        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(
-            agent
-        )
+        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 
@@ -6847,9 +6186,7 @@ class TaskOrchestrator:
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
 
-    def _capability_agents(
-        self, capability: str, model_name: str | None = None
-    ) -> list[ModelAgent]:
+    def _capability_agents(self, capability: str, model_name: str | None = None) -> list[ModelAgent]:
         """Return measured candidates supporting a capability, optionally within one group."""
         capability = capability.strip().lower()
         capability = {"embeddings": "embedding"}.get(capability, capability)
@@ -6864,23 +6201,17 @@ class TaskOrchestrator:
         exact_models = {agent.model for agent in self.candidates}
         requested_group = (
             canonical_group_name(model_name)
-            if model_name is not None
-            and model_name not in exact_models
-            and not virtual_model
+            if model_name is not None and model_name not in exact_models and not virtual_model
             else None
         )
-        if (
-            model_name is not None
-            and not virtual_model
-            and not any(
-                agent.model == model_name
-                or (
-                    agent.group_name
-                    and requested_group is not None
-                    and canonical_group_name(agent.group_name) == requested_group
-                )
-                for agent in self.candidates
+        if model_name is not None and not virtual_model and not any(
+            agent.model == model_name
+            or (
+                agent.group_name
+                and requested_group is not None
+                and canonical_group_name(agent.group_name) == requested_group
             )
+            for agent in self.candidates
         ):
             raise ValueError(f"requested model {model_name!r} is not configured")
         ranked = [
@@ -6890,18 +6221,13 @@ class TaskOrchestrator:
                 # (not a blind general-chat one), so free_only here uses
                 # _ranked_agents' price-only _is_free_agent branch: a capable
                 # agent's own non-text input tag is expected, not disqualifying.
-                "",
-                capability,
-                free_only=free_only,
-                chat_only=False,
+                "", capability, free_only=free_only, chat_only=False
             )
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions
             and (
-                model_name is None
-                or virtual_model
-                or agent.model == model_name
+                model_name is None or virtual_model or agent.model == model_name
                 or (
                     agent.group_name
                     and requested_group is not None
@@ -6910,14 +6236,10 @@ class TaskOrchestrator:
             )
         ]
         if not ranked:
-            raise RuntimeError(
-                f"no enabled agent available for capability={capability}"
-            )
+            raise RuntimeError(f"no enabled agent available for capability={capability}")
         return ranked
 
-    def select_capability_agent(
-        self, capability: str, model_name: str | None = None
-    ) -> ModelAgent:
+    def select_capability_agent(self, capability: str, model_name: str | None = None) -> ModelAgent:
         """Select a measured member supporting a capability, optionally within one group."""
         return self._capability_agents(capability, model_name)[0]
 
@@ -6928,9 +6250,7 @@ class TaskOrchestrator:
         """Return replicas proven equivalent for the requested capability."""
         if len(candidates) < 2 or not candidates[0].group_name:
             return []
-        declared = [
-            agent for agent in candidates if agent.endpoint_equivalence is not None
-        ]
+        declared = [agent for agent in candidates if agent.endpoint_equivalence is not None]
         if len(declared) < 2:
             return []
         first = declared[0]
@@ -6981,13 +6301,10 @@ class TaskOrchestrator:
             {
                 "capability": capability,
                 "endpoint_id": endpoint_id,
-                "validation_outcome": "provider_error"
-                if error is not None
-                else "completed",
+                "validation_outcome": "provider_error" if error is not None else "completed",
                 "usage": usage,
                 "duplicate_cost_evidence": (
-                    "provider_reported_usage"
-                    if usage is not None
+                    "provider_reported_usage" if usage is not None
                     else "unavailable_requires_provider_invoice"
                 ),
             },
@@ -7028,7 +6345,9 @@ class TaskOrchestrator:
             value: Any | None,
             error: BaseException | None,
         ) -> None:
-            self._record_race_attempt(endpoint_id, value, error, capability=capability)
+            self._record_race_attempt(
+                endpoint_id, value, error, capability=capability
+            )
             if error is not None or value is None:
                 return
             with state_lock:
@@ -7075,32 +6394,24 @@ class TaskOrchestrator:
                 raise ValueError(
                     "immediate_race endpoint count exceeds the supported concurrency capacity"
                 )
-
             def call(agent: ModelAgent) -> dict[str, Any] | tuple[bytes, str]:
                 payload = {
-                    key: value
-                    for key, value in body.items()
+                    key: value for key, value in body.items()
                     if key not in self._ORCHESTRATION_ONLY_KEYS
                 }
                 payload["model"] = agent.model
                 provider_endpoint = (
                     "images"
-                    if agent.provider_name == "openrouter"
-                    and endpoint == "images/generations"
+                    if agent.provider_name == "openrouter" and endpoint == "images/generations"
                     else endpoint
                 )
                 return (
                     self.client.proxy_send_bytes(agent, provider_endpoint, payload)
-                    if binary
-                    else self.client.proxy_send(agent, provider_endpoint, payload)
+                    if binary else self.client.proxy_send(agent, provider_endpoint, payload)
                 )
 
-            contract = EndpointEquivalenceContract(
-                **race_members[0].endpoint_equivalence
-            )  # type: ignore[arg-type]
-            attempt_completed, finalize_attempts = self._race_attempt_collector(
-                capability
-            )
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
+            attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
             try:
                 outcome = race_first_valid(
                     [
@@ -7114,12 +6425,10 @@ class TaskOrchestrator:
                     ],
                     validate=(
                         (
-                            lambda value: (
-                                isinstance(value, tuple)
-                                and len(value) == 2
-                                and isinstance(value[0], bytes)
-                                and bool(value[0])
-                            )
+                            lambda value: isinstance(value, tuple)
+                            and len(value) == 2
+                            and isinstance(value[0], bytes)
+                            and bool(value[0])
                         )
                         if binary
                         else (lambda value: isinstance(value, dict) and bool(value))
@@ -7130,7 +6439,9 @@ class TaskOrchestrator:
                 )
             except RuntimeError:
                 outcome = None
-            finalize_attempts(None if outcome is None else outcome.winner_endpoint_id)
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id
+            )
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability=capability)
                 self._group_router.observe_success(
@@ -7147,8 +6458,7 @@ class TaskOrchestrator:
             payload["model"] = agent.model
             provider_endpoint = (
                 "images"
-                if agent.provider_name == "openrouter"
-                and endpoint == "images/generations"
+                if agent.provider_name == "openrouter" and endpoint == "images/generations"
                 else endpoint
             )
             started_at = time.perf_counter()
@@ -7174,9 +6484,7 @@ class TaskOrchestrator:
                     agent.id, time.perf_counter() - started_at
                 )
                 return selected_result
-            self._group_router.observe_success(
-                agent.id, time.perf_counter() - started_at
-            )
+            self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
             return result
         if saw_failure and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
@@ -7242,26 +6550,20 @@ class TaskOrchestrator:
                         if effort_profile is not None
                         else self.client.chat(agent, messages)
                     )
-                    usage = (
-                        self.client.take_usage()
-                        if hasattr(self.client, "take_usage")
-                        else None
-                    )
+                    usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 return output, agent.id, usage
 
-            contract = EndpointEquivalenceContract(
-                **race_members[0].endpoint_equivalence
-            )  # type: ignore[arg-type]
+            contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
             try:
                 outcome = race_first_valid(
-                    [
-                        EndpointAttempt(
-                            agent.id,
-                            contract,
-                            lambda agent=agent: call(agent),
-                        )
-                        for agent in race_members
+                [
+                    EndpointAttempt(
+                        agent.id,
+                        contract,
+                        lambda agent=agent: call(agent),
+                    )
+                    for agent in race_members
                     ],
                     validate=lambda value: isinstance(value[0], str) and bool(value[0]),
                     deadline_seconds=self.client.timeout,
@@ -7270,16 +6572,16 @@ class TaskOrchestrator:
                 )
             except RuntimeError:
                 outcome = None
-            finalize_attempts(None if outcome is None else outcome.winner_endpoint_id)
+            finalize_attempts(
+                None if outcome is None else outcome.winner_endpoint_id
+            )
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability="text")
                 self._record_success(outcome.winner_endpoint_id)
                 usage = outcome.value[2]
                 output_tokens = None
                 if isinstance(usage, dict):
-                    reported = usage.get(
-                        "completion_tokens", usage.get("output_tokens")
-                    )
+                    reported = usage.get("completion_tokens", usage.get("output_tokens"))
                     if type(reported) is int and reported > 0:
                         output_tokens = reported
                 self._group_router.observe_success(
@@ -7388,11 +6690,7 @@ class TaskOrchestrator:
                 # provider-reported completion tokens when available feeding the
                 # tokens-per-second EWMA (Jacobson 1988 estimator). Token counts
                 # are never inferred from text length or chunk counts.
-                usage = (
-                    self.client.take_usage()
-                    if hasattr(self.client, "take_usage")
-                    else None
-                )
+                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 output_tokens = self._usage_completion_tokens(usage)
                 total_tokens = self._usage_total_tokens(usage)
                 if agent.group_name or allowed_agent_ids is not None:
@@ -7415,9 +6713,7 @@ class TaskOrchestrator:
             )
         if last_upstream_error is not None:
             raise last_upstream_error
-        raise RuntimeError(
-            f"all {len(candidates)} candidate agents failed for role={role}"
-        ) from None
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
         self,
@@ -7434,7 +6730,9 @@ class TaskOrchestrator:
             "retry_attempt": retry_attempt,
         }
         observed_kind = (
-            decision.kind if decision.observed_kind is None else decision.observed_kind
+            decision.kind
+            if decision.observed_kind is None
+            else decision.observed_kind
         )
         if observed_kind is not decision.kind:
             event_detail["observed_failure_kind"] = observed_kind.value
@@ -7487,11 +6785,7 @@ class TaskOrchestrator:
             and _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
-        eligible = [
-            agent
-            for agent in ordered
-            if not agent.disabled and role not in agent.provider_exclusions
-        ]
+        eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
         return healthy or eligible
@@ -7509,14 +6803,9 @@ class TaskOrchestrator:
 
     def _record_failure(self, agent_id: str) -> None:
         with self._circuit_lock:
-            state = self._circuit.setdefault(
-                agent_id, {"failures": 0.0, "opened_at": 0.0}
-            )
+            state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
             state["failures"] += 1.0
-            if (
-                state["failures"] >= self.circuit_failure_threshold
-                and not state["opened_at"]
-            ):
+            if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
                 state["opened_at"] = time.monotonic()
 
     def _record_success(self, agent_id: str) -> None:
@@ -7666,10 +6955,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            if (
-                judge_adapter.served_agent_id is not None
-                and judge_adapter.served_agent_id != judge.id
-            ):
+            if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
                 verification["judge_agent_id"] = judge_adapter.served_agent_id
             if result.usage:
                 verification["judge_usage"] = result.usage
@@ -7716,9 +7002,7 @@ class TaskOrchestrator:
                 "judge": "model",
             }
 
-    def _judge_verifier_output(
-        self, verifier_output: str, thinker_output: str, worker_output: str
-    ) -> dict[str, Any]:
+    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
         """Prepare evidence for the model judge without making a heuristic decision."""
         del thinker_output, worker_output
         return {
@@ -7727,9 +7011,7 @@ class TaskOrchestrator:
             "verifier_output": verifier_output,
         }
 
-    def _protected_event_detail(
-        self, detail: dict[str, Any], pii_fields: Iterable[str]
-    ) -> dict[str, Any]:
+    def _protected_event_detail(self, detail: dict[str, Any], pii_fields: Iterable[str]) -> dict[str, Any]:
         """Encrypt explicitly declared PII fields before an event enters memory or storage."""
         fields = tuple(pii_fields)
         if not fields:
@@ -7755,11 +7037,7 @@ class TaskOrchestrator:
             "event_type": event_type,
             "event_detail": self._protected_event_detail(detail, pii_fields),
         }
-        events = (
-            self._authorization_events
-            if stream == "authorization"
-            else self._audit_events
-        )
+        events = self._authorization_events if stream == "authorization" else self._audit_events
         events.append(event)
         if self._store is not None:
             self._store.save(stream, None, event, durable=durable)
@@ -7798,30 +7076,23 @@ class TaskOrchestrator:
             "id": agent.id,
             "model": agent.model,
             "base_url": agent.base_url,
-            "provider_name": agent.provider_name
-            or self._infer_provider_name(agent.base_url),
+            "provider_name": agent.provider_name or self._infer_provider_name(agent.base_url),
             "priority": agent.priority,
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
             "stream_usage_supported": agent.stream_usage_supported,
             "group_name": agent.group_name,
-            "group_routing": self._group_router.member_report(agent.id)
-            if agent.group_name
-            else None,
+            "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
 
-    def list_agents(
-        self, page_number: int = 1, page_size: int = 10
-    ) -> list[dict[str, Any]]:
+    def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
         """Return a paginated admin-safe view of configured agents."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        return [
-            self._agent_to_admin_payload(agent) for agent in self.candidates[start:end]
-        ]
+        return [self._agent_to_admin_payload(agent) for agent in self.candidates[start:end]]
 
     def list_openai_models(self) -> dict[str, Any]:
         """Return an OpenAI-compatible ``/v1/models`` list from the agent pool.
@@ -7844,23 +7115,19 @@ class TaskOrchestrator:
                 "owned_by": "contextual-orchestrator",
             }
         ]
-        data.append(
-            {
-                "id": self.AUTO_MODEL,
+        data.append({
+            "id": self.AUTO_MODEL,
+            "object": "model",
+            "created": created,
+            "owned_by": "contextual-orchestrator",
+        })
+        if any(self._is_general_free_agent(agent) for agent in self.agents):
+            data.append({
+                "id": self.FREE_MODEL,
                 "object": "model",
                 "created": created,
                 "owned_by": "contextual-orchestrator",
-            }
-        )
-        if any(self._is_general_free_agent(agent) for agent in self.agents):
-            data.append(
-                {
-                    "id": self.FREE_MODEL,
-                    "object": "model",
-                    "created": created,
-                    "owned_by": "contextual-orchestrator",
-                }
-            )
+            })
         seen: set[str] = {item["id"] for item in data}
         # Model-group aliases are addressable model ids (a logical name routes
         # to the best measured member), so advertise them like real models.
@@ -7923,8 +7190,7 @@ class TaskOrchestrator:
         run_ids = [
             run_id
             for run_id in self._run_order
-            if owner_id is None
-            or self._workflow_runs[run_id].get("owner_id") == owner_id
+            if owner_id is None or self._workflow_runs[run_id].get("owner_id") == owner_id
         ][start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
 
@@ -7966,15 +7232,9 @@ class TaskOrchestrator:
             restored_event = dict(event)
             try:
                 metadata = detail.get(ENCRYPTED_FIELDS_KEY)
-                key_name = (
-                    metadata.get("key_name")
-                    if isinstance(metadata, dict)
-                    else self._pii_key_name
-                )
+                key_name = metadata.get("key_name") if isinstance(metadata, dict) else self._pii_key_name
                 if not isinstance(key_name, str) or not key_name:
-                    raise PiiProtectionError(
-                        "encrypted field metadata has no valid key name"
-                    )
+                    raise PiiProtectionError("encrypted field metadata has no valid key name")
                 encryptor = encryptors.get(key_name)
                 if encryptor is None:
                     encryptor = load_pii_encryptor(key_name)
@@ -7988,9 +7248,7 @@ class TaskOrchestrator:
             restored.append(restored_event)
         return restored
 
-    def list_recent_authorization_decisions(
-        self, page_number: int = 1, page_size: int = 25
-    ) -> list[dict[str, Any]]:
+    def list_recent_authorization_decisions(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
         """Return recent secret-free authorization decisions in newest-first order."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
@@ -8014,9 +7272,7 @@ class TaskOrchestrator:
         event = {
             "event_time": int(time.time()),
             "event_name": event_name,
-            "event_detail": redact_value(
-                self._protected_event_detail(detail, pii_fields)
-            ),
+            "event_detail": redact_value(self._protected_event_detail(detail, pii_fields)),
         }
         self._analytics_events.append(event)
         if self._store is not None:
@@ -8047,9 +7303,7 @@ class TaskOrchestrator:
             for sign, run in ((-1, previous), (1, record)):
                 if run is None:
                     continue
-                for model, output_tokens in self._run_budget_output_by_model(
-                    run
-                ).items():
+                for model, output_tokens in self._run_budget_output_by_model(run).items():
                     before = self._budget_model_output_tokens.get(model, 0)
                     after = before + sign * output_tokens
                     price = self.price_per_million.get(model)
@@ -8069,12 +7323,8 @@ class TaskOrchestrator:
         with self._budget_spend_lock:
             output_by_model: dict[str, int] = {}
             for run in self._workflow_runs.values():
-                for model, output_tokens in self._run_budget_output_by_model(
-                    run
-                ).items():
-                    output_by_model[model] = (
-                        output_by_model.get(model, 0) + output_tokens
-                    )
+                for model, output_tokens in self._run_budget_output_by_model(run).items():
+                    output_by_model[model] = output_by_model.get(model, 0) + output_tokens
             self._budget_model_output_tokens = output_by_model
             self._budget_spent_output_tokens = sum(output_by_model.values())
             self._budget_spent_cost_usd = sum(
@@ -8086,9 +7336,7 @@ class TaskOrchestrator:
                 start=Decimal(0),
             )
 
-    def spend_analytics(
-        self, price_per_million: dict[str, float] | None = None
-    ) -> dict[str, Any]:
+    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
 
         Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
@@ -8112,21 +7360,13 @@ class TaskOrchestrator:
                 )
                 estimated = estimate_tokens(step.get("output", ""))
                 usage = step.get("usage")
-                reported_prompt = (
-                    usage.get("prompt_tokens") if isinstance(usage, dict) else None
-                )
+                reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
                 if isinstance(reported_prompt, int):
                     reported_prompt_tokens += reported_prompt
                     any_reported_prompt = True
                 effective, is_reported = _step_output_tokens(step)
                 bucket = by_model.setdefault(
-                    model,
-                    {
-                        "estimated_output_tokens": 0,
-                        "output_tokens": 0,
-                        "step_count": 0,
-                        "reported_steps": 0,
-                    },
+                    model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
                 )
                 bucket["estimated_output_tokens"] += estimated
                 bucket["output_tokens"] += effective
@@ -8155,17 +7395,15 @@ class TaskOrchestrator:
                 usage_source = "reported"
             else:
                 usage_source = "mixed"
-            rows.append(
-                {
-                    "model": model,
-                    "estimated_output_tokens": bucket["estimated_output_tokens"],
-                    "output_tokens": bucket["output_tokens"],
-                    "usage_source": usage_source,
-                    "step_count": bucket["step_count"],
-                    "price_per_million_usd": price,
-                    "estimated_cost_usd": cost,
-                }
-            )
+            rows.append({
+                "model": model,
+                "estimated_output_tokens": bucket["estimated_output_tokens"],
+                "output_tokens": bucket["output_tokens"],
+                "usage_source": usage_source,
+                "step_count": bucket["step_count"],
+                "price_per_million_usd": price,
+                "estimated_cost_usd": cost,
+            })
 
         return {
             "measurement_status": "local_runtime_estimate",
@@ -8179,9 +7417,7 @@ class TaskOrchestrator:
                 "estimated_output_tokens": total_output_tokens,
                 "estimated_prompt_tokens": total_prompt_tokens,
                 "reported_prompt_tokens": reported_prompt_tokens,
-                "prompt_tokens_source": "reported"
-                if any_reported_prompt
-                else "estimated",
+                "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
                 "estimated_cost_usd": float(total_cost_usd) if prices else None,
                 "currency": "USD",
             },
@@ -8193,18 +7429,12 @@ class TaskOrchestrator:
             ),
         }
 
-    def _budget_block(
-        self, spent_tokens: int, spent_cost: float | None
-    ) -> dict[str, Any]:
+    def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
         token_limit = self.budget_max_output_tokens
         cost_limit = self.budget_max_cost_usd
         exceeded = bool(
             (token_limit is not None and spent_tokens >= token_limit)
-            or (
-                cost_limit is not None
-                and spent_cost is not None
-                and spent_cost >= cost_limit
-            )
+            or (cost_limit is not None and spent_cost is not None and spent_cost >= cost_limit)
         )
         return {
             "enabled": token_limit is not None or cost_limit is not None,
@@ -8212,13 +7442,10 @@ class TaskOrchestrator:
             "max_cost_usd": cost_limit,
             "spent_output_tokens": spent_tokens,
             "spent_cost_usd": spent_cost,
-            "remaining_output_tokens": max(0, token_limit - spent_tokens)
-            if token_limit is not None
-            else None,
+            "remaining_output_tokens": max(0, token_limit - spent_tokens) if token_limit is not None else None,
             "remaining_cost_usd": (
                 round(max(0.0, cost_limit - spent_cost), 6)
-                if cost_limit is not None and spent_cost is not None
-                else None
+                if cost_limit is not None and spent_cost is not None else None
             ),
             "exceeded": exceeded,
         }
@@ -8233,15 +7460,11 @@ class TaskOrchestrator:
             spent_cost if self.price_per_million else None,
         )
 
-    def analytics_snapshot(
-        self, locale_bundles: dict[str, dict[str, str]] | None = None
-    ) -> dict[str, Any]:
+    def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
         runs = list(self._workflow_runs.values())
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
-        trace_complete_count = sum(
-            1 for run in conducted_runs if self._is_trace_complete(run)
-        )
+        trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         policy_safe_count = sum(1 for run in runs if self._is_policy_safe_run(run))
         event_counts = Counter(event["event_name"] for event in self._analytics_events)
         successful_chat_requests = sum(
@@ -8253,9 +7476,7 @@ class TaskOrchestrator:
         route_count = sum(1 for run in runs if run["mode"] == "route")
         conduct_count = sum(1 for run in runs if run["mode"] == "conduct")
         step_count = sum(len(run["trace"]) for run in runs)
-        provider_exclusion_misses = sum(
-            self._provider_exclusion_miss_count(run) for run in runs
-        )
+        provider_exclusion_misses = sum(self._provider_exclusion_miss_count(run) for run in runs)
         locale_parity = self._locale_key_parity(locale_bundles or {})
 
         return {
@@ -8275,9 +7496,7 @@ class TaskOrchestrator:
                     "label": "Trace-complete workflow rate",
                     "numerator": trace_complete_count,
                     "denominator": len(conducted_runs),
-                    "value_percent": self._percent(
-                        trace_complete_count, len(conducted_runs)
-                    ),
+                    "value_percent": self._percent(trace_complete_count, len(conducted_runs)),
                     "source": "workflow_runs conduct traces",
                 },
                 {
@@ -8306,22 +7525,10 @@ class TaskOrchestrator:
                 {
                     "metric_name": "agent_health_coverage",
                     "label": "Agent health coverage",
-                    "numerator": len(
-                        [
-                            agent
-                            for agent in self.agents
-                            if agent.id and agent.model and agent.base_url
-                        ]
-                    ),
+                    "numerator": len([agent for agent in self.agents if agent.id and agent.model and agent.base_url]),
                     "denominator": len(self.agents),
                     "value_percent": self._percent(
-                        len(
-                            [
-                                agent
-                                for agent in self.agents
-                                if agent.id and agent.model and agent.base_url
-                            ]
-                        ),
+                        len([agent for agent in self.agents if agent.id and agent.model and agent.base_url]),
                         len(self.agents),
                     ),
                     "source": "agent pool configuration",
@@ -8333,9 +7540,7 @@ class TaskOrchestrator:
                     "label": "Provider exclusion miss rate",
                     "value": provider_exclusion_misses,
                     "denominator": step_count,
-                    "value_percent": self._percent(
-                        provider_exclusion_misses, step_count
-                    ),
+                    "value_percent": self._percent(provider_exclusion_misses, step_count),
                     "source": "workflow trace agent selections",
                 },
                 {
@@ -8357,17 +7562,13 @@ class TaskOrchestrator:
         admin_state = self.admin_state()
         runs = list(self._workflow_runs.values())
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
-        trace_complete_count = sum(
-            1 for run in conducted_runs if self._is_trace_complete(run)
-        )
+        trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         event_counts = analytics["event_counts"]
         criteria = [
             self._criterion(
                 "api_compatibility",
                 "OpenAI-compatible API",
-                "pass"
-                if event_counts.get("chat_completion_requested", 0) > 0
-                else "warn",
+                "pass" if event_counts.get("chat_completion_requested", 0) > 0 else "warn",
                 f"{event_counts.get('chat_completion_requested', 0)} compatible chat requests recorded",
                 "Run a /v1/chat/completions smoke test before an enterprise evaluation.",
             ),
@@ -8396,9 +7597,7 @@ class TaskOrchestrator:
             self._criterion(
                 "analytics_truthfulness",
                 "Analytics truthfulness",
-                "pass"
-                if analytics["measurement_status"] == "local_runtime_snapshot"
-                else "fail",
+                "pass" if analytics["measurement_status"] == "local_runtime_snapshot" else "fail",
                 analytics["source_note"],
                 "Label metrics as proposed definitions unless backed by measured runtime telemetry.",
             ),
@@ -8406,11 +7605,7 @@ class TaskOrchestrator:
             self._provider_egress_criterion(),
         ]
         summary = self._criteria_summary(criteria)
-        readiness_summary = {
-            "pass": summary["pass"],
-            "warn": summary["warn"],
-            "fail": summary["fail"],
-        }
+        readiness_summary = {"pass": summary["pass"], "warn": summary["warn"], "fail": summary["fail"]}
         if summary["fail"]:
             readiness_status = "not_ready"
         elif summary["warn"]:
@@ -8446,9 +7641,7 @@ class TaskOrchestrator:
         analytics_guardrails = self._metrics_by_name(analytics["guardrails"])
         documentation = self._commercial_documentation_profile()
         security_profile = security_profile or {}
-        policy_safe_metric = self._metrics_by_name(analytics["kpis"])[
-            "policy_safe_routing_rate"
-        ]
+        policy_safe_metric = self._metrics_by_name(analytics["kpis"])["policy_safe_routing_rate"]
         provider_metric = analytics_guardrails["provider_exclusion_miss_rate"]
         locale_metric = analytics_guardrails["locale_key_parity"]
 
@@ -8456,9 +7649,7 @@ class TaskOrchestrator:
             self._criterion(
                 "product_capability_evidence",
                 "Product capability evidence",
-                "pass"
-                if sales_readiness["readiness_status"] == "sales_ready"
-                else "warn",
+                "pass" if sales_readiness["readiness_status"] == "sales_ready" else "warn",
                 (
                     f"sales_readiness={sales_readiness['readiness_status']}; "
                     f"{sales_readiness['readiness_summary']['pass']} sales criteria passing"
@@ -8519,10 +7710,7 @@ class TaskOrchestrator:
             self._criterion(
                 "support_and_localization",
                 "Support and localization",
-                "pass"
-                if locale_metric.get("value_percent") == 100.0
-                and documentation["has_security_policy"]
-                else "warn",
+                "pass" if locale_metric.get("value_percent") == 100.0 and documentation["has_security_policy"] else "warn",
                 (
                     f"locale_key_parity={locale_metric.get('value_percent')}%; "
                     f"security_policy={documentation['has_security_policy']}"
@@ -8532,9 +7720,7 @@ class TaskOrchestrator:
             self._criterion(
                 "commercial_value_case",
                 "Commercial value case",
-                "pass"
-                if target_contract_value_krw >= DEFAULT_COMMERCIAL_TARGET_VALUE_KRW
-                else "warn",
+                "pass" if target_contract_value_krw >= DEFAULT_COMMERCIAL_TARGET_VALUE_KRW else "warn",
                 (
                     f"target_contract_value_krw={target_contract_value_krw:,}; "
                     "value case uses compatibility API, evidence control plane, replay, and audit controls"
@@ -8543,11 +7729,7 @@ class TaskOrchestrator:
             ),
         ]
         summary = self._criteria_summary(criteria)
-        commercial_summary = {
-            "pass": summary["pass"],
-            "warn": summary["warn"],
-            "fail": summary["fail"],
-        }
+        commercial_summary = {"pass": summary["pass"], "warn": summary["warn"], "fail": summary["fail"]}
         if commercial_summary["fail"]:
             commercial_status = "not_commercial_ready"
         elif commercial_summary["warn"]:
@@ -8596,22 +7778,9 @@ class TaskOrchestrator:
                 "product_scope",
                 "Product scope",
                 "Economic buyer",
-                [
-                    "README.md",
-                    "docs/product_planning.md",
-                    "docs/commercial_readiness.md",
-                ],
+                ["README.md", "docs/product_planning.md", "docs/commercial_readiness.md"],
                 "repository_artifact",
-                "ready"
-                if all(
-                    has_file(path)
-                    for path in (
-                        "README.md",
-                        "docs/product_planning.md",
-                        "docs/commercial_readiness.md",
-                    )
-                )
-                else "blocked",
+                "ready" if all(has_file(path) for path in ("README.md", "docs/product_planning.md", "docs/commercial_readiness.md")) else "blocked",
                 "Single enterprise orchestration control plane is documented.",
                 "Keep product scope unified for buyer review.",
             ),
@@ -8619,16 +7788,9 @@ class TaskOrchestrator:
                 "compatible_inference_api",
                 "Compatible inference API",
                 "Platform reviewer",
-                [
-                    "/v1/chat/completions",
-                    "docs/rest_api_design.md",
-                    "tests/test_api_contract.py",
-                ],
+                ["/v1/chat/completions", "docs/rest_api_design.md", "tests/test_api_contract.py"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/rest_api_design.md")
-                and has_file("tests/test_api_contract.py")
-                else "blocked",
+                "ready" if has_file("docs/rest_api_design.md") and has_file("tests/test_api_contract.py") else "blocked",
                 "OpenAI-compatible endpoint and API contract tests are present.",
                 "Restore API contract docs and tests before buyer review.",
             ),
@@ -8648,9 +7810,7 @@ class TaskOrchestrator:
                 "Product owner",
                 ["/api/v1/sales_readiness/latest", "tests/test_sales_readiness.py"],
                 "measured_local",
-                "ready"
-                if commercial["sales_readiness"]["readiness_summary"]["fail"] == 0
-                else "blocked",
+                "ready" if commercial["sales_readiness"]["readiness_summary"]["fail"] == 0 else "blocked",
                 f"sales_readiness={commercial['sales_readiness']['readiness_status']}",
                 "Resolve sales-readiness failures before commercial review.",
             ),
@@ -8658,10 +7818,7 @@ class TaskOrchestrator:
                 "commercial_readiness",
                 "Commercial readiness",
                 "Economic buyer",
-                [
-                    "/api/v1/commercial_readiness/latest",
-                    "tests/test_commercial_readiness.py",
-                ],
+                ["/api/v1/commercial_readiness/latest", "tests/test_commercial_readiness.py"],
                 "measured_local",
                 "ready" if commercial["commercial_summary"]["fail"] == 0 else "blocked",
                 f"commercial_status={commercial['commercial_status']}",
@@ -8673,9 +7830,7 @@ class TaskOrchestrator:
                 "Analytics reviewer",
                 ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
                 "measured_local",
-                "ready"
-                if analytics["measurement_status"] == "local_runtime_snapshot"
-                else "blocked",
+                "ready" if analytics["measurement_status"] == "local_runtime_snapshot" else "blocked",
                 analytics["source_note"],
                 "Keep measured local evidence separate from production KPI proposals.",
             ),
@@ -8683,10 +7838,7 @@ class TaskOrchestrator:
                 "access_list_evidence",
                 "Access-list evidence",
                 "Security and compliance reviewer",
-                [
-                    "/api/v1/access_reports/{workflow_run_id}",
-                    "docs/product_planning.md",
-                ],
+                ["/api/v1/access_reports/{workflow_run_id}", "docs/product_planning.md"],
                 "repository_artifact",
                 "ready" if has_file("docs/product_planning.md") else "blocked",
                 "Workflow trace and access-report evidence are documented.",
@@ -8706,17 +7858,9 @@ class TaskOrchestrator:
                 "security_posture",
                 "Security posture",
                 "Security reviewer",
-                [
-                    "SECURITY.md",
-                    "tests/test_security_hardening.py",
-                    "CodeQL",
-                    "Dependency review",
-                    "Trivy",
-                ],
+                ["SECURITY.md", "tests/test_security_hardening.py", "CodeQL", "Dependency review", "Trivy"],
                 "measured_local",
-                "ready"
-                if commercial_rows["security_and_access_control"]["status"] == "pass"
-                else "blocked",
+                "ready" if commercial_rows["security_and_access_control"]["status"] == "pass" else "blocked",
                 commercial_rows["security_and_access_control"]["evidence"],
                 "Resolve concrete security failures before buyer review.",
             ),
@@ -8724,12 +7868,7 @@ class TaskOrchestrator:
                 "visual_stakeholder_evidence",
                 "Visual stakeholder evidence",
                 "Stakeholder reviewer",
-                [
-                    "docs/figma_artifacts.md",
-                    "Figma design file",
-                    "FigJam board",
-                    "Figma Slides deck",
-                ],
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
                 "figma_artifact",
                 "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "Editable Figma, FigJam, and Slides artifacts are recorded.",
@@ -8741,9 +7880,7 @@ class TaskOrchestrator:
                 "Procurement reviewer",
                 ["docs/commercial_buyer_diligence_packet.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/commercial_buyer_diligence_packet.md")
-                else "blocked",
+                "ready" if has_file("docs/commercial_buyer_diligence_packet.md") else "blocked",
                 "Buyer questions map to evidence paths and caveats.",
                 "Restore the buyer diligence packet before procurement review.",
             ),
@@ -8753,9 +7890,7 @@ class TaskOrchestrator:
                 "Procurement reviewer",
                 ["docs/commercial_buyer_acceptance_runbook.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/commercial_buyer_acceptance_runbook.md")
-                else "blocked",
+                "ready" if has_file("docs/commercial_buyer_acceptance_runbook.md") else "blocked",
                 "Go, warning, and no-go rules are documented.",
                 "Restore acceptance runbook before procurement review.",
             ),
@@ -8763,14 +7898,9 @@ class TaskOrchestrator:
                 "buyer_evidence_manifest",
                 "Buyer evidence manifest",
                 "Deal owner",
-                [
-                    "docs/commercial_buyer_evidence_manifest.md",
-                    "/api/v1/commercial_evidence_manifests/latest",
-                ],
+                ["docs/commercial_buyer_evidence_manifest.md", "/api/v1/commercial_evidence_manifests/latest"],
                 "measured_local",
-                "ready"
-                if has_file("docs/commercial_buyer_evidence_manifest.md")
-                else "blocked",
+                "ready" if has_file("docs/commercial_buyer_evidence_manifest.md") else "blocked",
                 "Buyer evidence is indexed by owner, source, evidence type, and completion state.",
                 "Restore the manifest document and endpoint before buyer review.",
             ),
@@ -8778,15 +7908,9 @@ class TaskOrchestrator:
                 "packaging_decision",
                 "Packaging decision",
                 "Procurement and security reviewer",
-                [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/library_research.md")
-                and has_file("docs/commercial_plugin_operating_model.md")
-                else "blocked",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
                 "Single repo and one deployable product remain the current decision.",
                 "Document extraction triggers before changing package boundaries.",
             ),
@@ -8804,12 +7928,7 @@ class TaskOrchestrator:
                 "buyer_specific_roi_legal",
                 "Buyer-specific ROI and legal proof",
                 "Economic buyer and procurement",
-                [
-                    "ROI model",
-                    "legal questionnaire",
-                    "data-processing terms",
-                    "support plan",
-                ],
+                ["ROI model", "legal questionnaire", "data-processing terms", "support plan"],
                 "proposed_until_buyer_specific",
                 "warning",
                 "ROI, legal, procurement, and deployment evidence require a named buyer.",
@@ -8838,9 +7957,7 @@ class TaskOrchestrator:
             "items": items,
             "related_runtime_reports": {
                 "commercial_status": commercial["commercial_status"],
-                "sales_readiness_status": commercial["sales_readiness"][
-                    "readiness_status"
-                ],
+                "sales_readiness_status": commercial["sales_readiness"]["readiness_status"],
                 "analytics_measurement_status": analytics["measurement_status"],
             },
         }
@@ -8914,12 +8031,7 @@ class TaskOrchestrator:
                 "figma_stakeholder_artifacts",
                 "Figma stakeholder artifacts",
                 "Stakeholder reviewer",
-                [
-                    "docs/figma_artifacts.md",
-                    "Figma design file",
-                    "FigJam board",
-                    "Figma Slides deck",
-                ],
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
                 "figma_artifact",
                 "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "Editable Figma, FigJam, and Slides artifacts are recorded without Code Connect.",
@@ -8955,15 +8067,9 @@ class TaskOrchestrator:
                 "packaging_decision",
                 "Packaging decision",
                 "Procurement and security reviewer",
-                [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/library_research.md")
-                and has_file("docs/commercial_plugin_operating_model.md")
-                else "blocked",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
                 "Single repository and one deployable product remain the current decision.",
                 "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
             ),
@@ -8973,12 +8079,7 @@ class TaskOrchestrator:
                 "production_handoff_readiness",
                 "Production handoff readiness",
                 "Customer operations reviewer",
-                [
-                    "production SLO",
-                    "incident drill",
-                    "support rota",
-                    "deployment history",
-                ],
+                ["production SLO", "incident drill", "support rota", "deployment history"],
                 "proposed_until_production",
                 "warning",
                 "Production SLO, incident, deployment, and support evidence require a live customer environment.",
@@ -8988,12 +8089,7 @@ class TaskOrchestrator:
                 "buyer_specific_commercial_close",
                 "Buyer-specific commercial close",
                 "Economic buyer and legal reviewer",
-                [
-                    "ROI model",
-                    "legal questionnaire",
-                    "data-processing terms",
-                    "support plan",
-                ],
+                ["ROI model", "legal questionnaire", "data-processing terms", "support plan"],
                 "proposed_until_buyer_specific",
                 "warning",
                 "ROI, legal, procurement, and deployment commitments require a named buyer.",
@@ -9146,9 +8242,7 @@ class TaskOrchestrator:
                 },
                 {
                     "basis_name": "buyer_evidence_manifest",
-                    "status": handoff["related_runtime_reports"][
-                        "buyer_manifest_status"
-                    ],
+                    "status": handoff["related_runtime_reports"]["buyer_manifest_status"],
                     "source": "/api/v1/commercial_evidence_manifests/latest",
                 },
                 {
@@ -9158,9 +8252,7 @@ class TaskOrchestrator:
                 },
                 {
                     "basis_name": "sales_readiness",
-                    "status": handoff["related_runtime_reports"][
-                        "sales_readiness_status"
-                    ],
+                    "status": handoff["related_runtime_reports"]["sales_readiness_status"],
                     "source": "/api/v1/sales_readiness/latest",
                 },
             ],
@@ -9214,20 +8306,13 @@ class TaskOrchestrator:
             }
             for item in saleability["warning_conditions"]
         ]
-        saleability_state = (
-            "blocked"
-            if saleability["saleability_status"] == "saleability_blocked"
-            else "ready"
-        )
+        saleability_state = "blocked" if saleability["saleability_status"] == "saleability_blocked" else "ready"
         export_sections = [
             self._buyer_evidence_item(
                 "saleability_decision",
                 "Saleability decision",
                 "Deal owner",
-                [
-                    "/api/v1/saleability_decisions/latest",
-                    "docs/commercial_saleability_decision.md",
-                ],
+                ["/api/v1/saleability_decisions/latest", "docs/commercial_saleability_decision.md"],
                 "measured_local",
                 saleability_state,
                 f"saleability_status={saleability['saleability_status']}",
@@ -9286,12 +8371,7 @@ class TaskOrchestrator:
                 "figma_stakeholder_artifacts",
                 "Figma stakeholder artifacts",
                 "Stakeholder reviewer",
-                [
-                    "docs/figma_artifacts.md",
-                    "Figma design file",
-                    "FigJam board",
-                    "Figma Slides deck",
-                ],
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
                 "figma_artifact",
                 "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "Editable stakeholder artifacts are recorded and Code Connect is excluded.",
@@ -9327,10 +8407,7 @@ class TaskOrchestrator:
                 "review_process_policy",
                 "Review process policy",
                 "Deal owner",
-                [
-                    "docs/commercial_saleability_decision.md",
-                    "/api/v1/saleability_decisions/latest",
-                ],
+                ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
                 "repository_artifact",
                 "ready",
                 "Reviewer delay, review bot delay, and queued model review are not concrete blockers.",
@@ -9340,23 +8417,15 @@ class TaskOrchestrator:
                 "packaging_decision",
                 "Packaging decision",
                 "Procurement and security reviewer",
-                [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/library_research.md")
-                and has_file("docs/commercial_plugin_operating_model.md")
-                else "blocked",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
                 saleability["library_split_decision"]["reason"],
                 "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
             ),
         ]
         export_section_summary = self._buyer_manifest_summary(export_sections)
-        blocked_count = export_section_summary["by_completion_state"]["blocked"] + len(
-            concrete_blockers
-        )
+        blocked_count = export_section_summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = len(required_external_evidence)
         if blocked_count:
             export_status = "commercial_export_blocked"
@@ -9380,9 +8449,7 @@ class TaskOrchestrator:
                 "section_count": len(export_sections),
                 "blocked_count": blocked_count,
                 "warning_count": warning_count,
-                "review_process_is_blocker": saleability["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": saleability["review_process_policy"]["is_blocker"],
             },
             "export_sections": export_sections,
             "required_external_evidence": required_external_evidence,
@@ -9476,11 +8543,7 @@ class TaskOrchestrator:
                 "admin_operator_surface",
                 "Admin operator surface",
                 "Platform operator",
-                [
-                    "/admin",
-                    "contextual_orchestrator/admin.py",
-                    "/api/v1/commercial_acceptance_checks/latest",
-                ],
+                ["/admin", "contextual_orchestrator/admin.py", "/api/v1/commercial_acceptance_checks/latest"],
                 "repository_artifact",
                 "ready" if has_file("contextual_orchestrator/admin.py") else "blocked",
                 "Admin observability surface exposes the commercial acceptance check status with bilingual labels.",
@@ -9518,12 +8581,7 @@ class TaskOrchestrator:
                 "figma_stakeholder_artifacts",
                 "Figma stakeholder artifacts",
                 "Stakeholder reviewer",
-                [
-                    "docs/figma_artifacts.md",
-                    "Figma design file",
-                    "FigJam board",
-                    "Figma Slides deck",
-                ],
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
                 "figma_artifact",
                 "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "Editable stakeholder artifacts are recorded and Code Connect is excluded.",
@@ -9533,10 +8591,7 @@ class TaskOrchestrator:
                 "review_process_policy",
                 "Review process policy",
                 "Deal owner",
-                [
-                    "docs/commercial_saleability_decision.md",
-                    "/api/v1/saleability_decisions/latest",
-                ],
+                ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
                 "repository_artifact",
                 "ready",
                 "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
@@ -9546,15 +8601,9 @@ class TaskOrchestrator:
                 "packaging_decision",
                 "Packaging decision",
                 "Procurement and security reviewer",
-                [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/library_research.md")
-                and has_file("docs/commercial_plugin_operating_model.md")
-                else "blocked",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
                 evidence_export["library_split_decision"]["reason"],
                 "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
             ),
@@ -9574,9 +8623,7 @@ class TaskOrchestrator:
         ]
         all_items = acceptance_items + follow_up_items
         summary = self._buyer_manifest_summary(all_items)
-        blocked_count = summary["by_completion_state"]["blocked"] + len(
-            concrete_blockers
-        )
+        blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
         if blocked_count:
             acceptance_status = "commercial_acceptance_blocked"
@@ -9600,9 +8647,7 @@ class TaskOrchestrator:
                 "item_count": len(all_items),
                 "blocked_count": blocked_count,
                 "warning_count": warning_count,
-                "review_process_is_blocker": evidence_export["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": evidence_export["review_process_policy"]["is_blocker"],
             },
             "acceptance_items": acceptance_items,
             "follow_up_items": follow_up_items,
@@ -9656,22 +8701,15 @@ class TaskOrchestrator:
             return (root / path).is_file()
 
         concrete_blockers = acceptance["concrete_blockers"]
-        acceptance_blocked = (
-            acceptance["acceptance_status"] == "commercial_acceptance_blocked"
-        )
-        runtime_state = (
-            "blocked" if acceptance_blocked or concrete_blockers else "ready"
-        )
+        acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
+        runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
         release_authorization = evaluate_release_authorization(release_authority)
         release_artifacts = [
             self._buyer_evidence_item(
                 "commercial_acceptance_check",
                 "Commercial acceptance check",
                 "Deal owner",
-                [
-                    "/api/v1/commercial_acceptance_checks/latest",
-                    "docs/commercial_acceptance_check.md",
-                ],
+                ["/api/v1/commercial_acceptance_checks/latest", "docs/commercial_acceptance_check.md"],
                 "measured_local",
                 runtime_state,
                 f"acceptance_status={acceptance['acceptance_status']}",
@@ -9768,11 +8806,7 @@ class TaskOrchestrator:
                 "admin_operator_surface",
                 "Admin operator surface",
                 "Platform operator",
-                [
-                    "/admin",
-                    "contextual_orchestrator/admin.py",
-                    "/api/v1/commercial_release_candidates/latest",
-                ],
+                ["/admin", "contextual_orchestrator/admin.py", "/api/v1/commercial_release_candidates/latest"],
                 "repository_artifact",
                 "ready" if has_file("contextual_orchestrator/admin.py") else "blocked",
                 "Admin observability surface exposes the release-candidate status with bilingual labels.",
@@ -9812,12 +8846,7 @@ class TaskOrchestrator:
                 "figma_stakeholder_artifacts",
                 "Figma stakeholder artifacts",
                 "Stakeholder reviewer",
-                [
-                    "docs/figma_artifacts.md",
-                    "Figma design file",
-                    "FigJam board",
-                    "Figma Slides deck",
-                ],
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
                 "figma_artifact",
                 "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "Editable stakeholder artifacts are recorded and Code Connect is excluded.",
@@ -9827,10 +8856,7 @@ class TaskOrchestrator:
                 "review_process_policy",
                 "Review process policy",
                 "Deal owner",
-                [
-                    "docs/commercial_saleability_decision.md",
-                    "docs/commercial_release_candidate.md",
-                ],
+                ["docs/commercial_saleability_decision.md", "docs/commercial_release_candidate.md"],
                 "repository_artifact",
                 "ready",
                 "Product evidence remains inspectable while protected release authority is evaluated separately.",
@@ -9840,14 +8866,9 @@ class TaskOrchestrator:
                 "release_authority_collector",
                 "Protected-head authority collector",
                 "Release owner",
-                [
-                    "scripts/ci/release_authority_snapshot.py",
-                    "docs/doctoring/release-authorization.md",
-                ],
+                ["scripts/ci/release_authority_snapshot.py", "docs/doctoring/release-authorization.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("scripts/ci/release_authority_snapshot.py")
-                else "blocked",
+                "ready" if has_file("scripts/ci/release_authority_snapshot.py") else "blocked",
                 "Read-only gh API collector binds checks and reviews to the exact pull-request head without emitting secrets.",
                 "Run the collector with the exact candidate SHA and attach its JSON snapshot to release review.",
             ),
@@ -9855,15 +8876,9 @@ class TaskOrchestrator:
                 "packaging_decision",
                 "Packaging decision",
                 "Procurement and security reviewer",
-                [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "repository_artifact",
-                "ready"
-                if has_file("docs/library_research.md")
-                and has_file("docs/commercial_plugin_operating_model.md")
-                else "blocked",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
                 acceptance["library_split_decision"]["reason"],
                 "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
             ),
@@ -9881,12 +8896,8 @@ class TaskOrchestrator:
             )
             for item in acceptance["follow_up_items"]
         ]
-        summary = self._buyer_manifest_summary(
-            release_artifacts + external_release_gaps
-        )
-        product_blocked_count = summary["by_completion_state"]["blocked"] + len(
-            concrete_blockers
-        )
+        summary = self._buyer_manifest_summary(release_artifacts + external_release_gaps)
+        product_blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
         product_evidence_status = (
             "commercial_release_blocked"
@@ -9895,9 +8906,7 @@ class TaskOrchestrator:
             if acceptance["follow_up_items"]
             else "commercial_release_ready"
         )
-        release_blocked_count = product_blocked_count + len(
-            release_authorization["blockers"]
-        )
+        release_blocked_count = product_blocked_count + len(release_authorization["blockers"])
         if release_blocked_count:
             release_status = "commercial_release_blocked"
         elif warning_count:
@@ -9924,9 +8933,7 @@ class TaskOrchestrator:
                 "blocked_count": release_blocked_count,
                 "product_blocked_count": product_blocked_count,
                 "warning_count": warning_count,
-                "release_authority_blocker_count": len(
-                    release_authorization["blockers"]
-                ),
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "release_artifacts": release_artifacts,
             "external_release_gaps": external_release_gaps,
@@ -9987,21 +8994,19 @@ class TaskOrchestrator:
                 gap_status = "buyer_input_required"
                 gap_type = "buyer_specific_gap"
                 owner = "Buyer and deal owner"
-            gap_items.append(
-                {
-                    "gap_name": item["item_name"],
-                    "label": item["label"],
-                    "gap_type": gap_type,
-                    "gap_status": gap_status,
-                    "owner": owner,
-                    "reviewer": item["reviewer"],
-                    "sources": item["sources"],
-                    "source_evidence_type": source_type,
-                    "current_evidence": item["evidence"],
-                    "required_input": item["next_action"],
-                    "is_blocker": False,
-                }
-            )
+            gap_items.append({
+                "gap_name": item["item_name"],
+                "label": item["label"],
+                "gap_type": gap_type,
+                "gap_status": gap_status,
+                "owner": owner,
+                "reviewer": item["reviewer"],
+                "sources": item["sources"],
+                "source_evidence_type": source_type,
+                "current_evidence": item["evidence"],
+                "required_input": item["next_action"],
+                "is_blocker": False,
+            })
 
         release_authority_blockers = release["release_authorization"]["blockers"]
         product_blocked_count = release["release_summary"]["product_blocked_count"]
@@ -10017,12 +9022,8 @@ class TaskOrchestrator:
         else:  # pragma: no cover - unreachable while this report carries literal buyer-specific warning sections
             gap_register_status = "commercial_gap_register_clear"  # pragma: no cover
 
-        production_gap_count = sum(
-            1 for item in gap_items if item["gap_type"] == "production_evidence_gap"
-        )
-        buyer_specific_gap_count = sum(
-            1 for item in gap_items if item["gap_type"] == "buyer_specific_gap"
-        )
+        production_gap_count = sum(1 for item in gap_items if item["gap_type"] == "production_evidence_gap")
+        buyer_specific_gap_count = sum(1 for item in gap_items if item["gap_type"] == "buyer_specific_gap")
         return {
             "gap_register_status": gap_register_status,
             "target_contract_value_krw": target_contract_value_krw,
@@ -10060,9 +9061,7 @@ class TaskOrchestrator:
             "review_process_policy": release["review_process_policy"],
             "related_runtime_reports": {
                 "commercial_release_status": release["release_status"],
-                "release_authorization_status": release["release_authorization"][
-                    "status"
-                ],
+                "release_authorization_status": release["release_authorization"]["status"],
                 **release["related_runtime_reports"],
             },
             "library_split_decision": release["library_split_decision"],
@@ -10107,9 +9106,7 @@ class TaskOrchestrator:
                 "owner": "Procurement reviewer",
                 "sources": ["LICENSE", "pyproject.toml"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready"
-                if has_file("LICENSE") and has_file("pyproject.toml")
-                else "blocked",
+                "completion_state": "ready" if has_file("LICENSE") and has_file("pyproject.toml") else "blocked",
                 "evidence": "MIT license and package metadata are present for buyer rights review.",
                 "required_input": "Restore license or package metadata before procurement review.",
             },
@@ -10168,66 +9165,39 @@ class TaskOrchestrator:
                 "item_name": "admin_evidence_surface",
                 "label": "Admin evidence surface",
                 "owner": "Platform operator",
-                "sources": [
-                    "/admin",
-                    "contextual_orchestrator/admin.py",
-                    "/api/v1/commercial_procurement_readiness/latest",
-                ],
+                "sources": ["/admin", "contextual_orchestrator/admin.py", "/api/v1/commercial_procurement_readiness/latest"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready"
-                if has_file("contextual_orchestrator/admin.py")
-                else "blocked",
+                "completion_state": "ready" if has_file("contextual_orchestrator/admin.py") else "blocked",
                 "evidence": "Admin observability surface exposes procurement readiness with bilingual labels.",
                 "required_input": "Expose procurement readiness in admin observability before buyer review.",
             },
             {
                 "item_name": "production_support_slo_input",
                 "label": "Production support and SLO input",
-                "owner": production_gap["owner"]
-                if production_gap
-                else "Operations and support owner",
-                "sources": production_gap["sources"]
-                if production_gap
-                else ["docs/commercial_gap_register.md"],
+                "owner": production_gap["owner"] if production_gap else "Operations and support owner",
+                "sources": production_gap["sources"] if production_gap else ["docs/commercial_gap_register.md"],
                 "evidence_type": "proposed_until_production",
                 "completion_state": "warning" if production_gap else "ready",
-                "source_gap_status": production_gap["gap_status"]
-                if production_gap
-                else "resolved",
-                "evidence": production_gap["current_evidence"]
-                if production_gap
-                else "No production evidence gap is open.",
-                "required_input": production_gap["required_input"]
-                if production_gap
-                else "No production input required.",
+                "source_gap_status": production_gap["gap_status"] if production_gap else "resolved",
+                "evidence": production_gap["current_evidence"] if production_gap else "No production evidence gap is open.",
+                "required_input": production_gap["required_input"] if production_gap else "No production input required.",
             },
             {
                 "item_name": "buyer_legal_roi_procurement_input",
                 "label": "Buyer legal, ROI, and procurement input",
                 "owner": buyer_gap["owner"] if buyer_gap else "Buyer and deal owner",
-                "sources": buyer_gap["sources"]
-                if buyer_gap
-                else ["docs/commercial_gap_register.md"],
+                "sources": buyer_gap["sources"] if buyer_gap else ["docs/commercial_gap_register.md"],
                 "evidence_type": "proposed_until_buyer_specific",
                 "completion_state": "warning" if buyer_gap else "ready",
-                "source_gap_status": buyer_gap["gap_status"]
-                if buyer_gap
-                else "resolved",
-                "evidence": buyer_gap["current_evidence"]
-                if buyer_gap
-                else "No buyer-specific evidence gap is open.",
-                "required_input": buyer_gap["required_input"]
-                if buyer_gap
-                else "No buyer input required.",
+                "source_gap_status": buyer_gap["gap_status"] if buyer_gap else "resolved",
+                "evidence": buyer_gap["current_evidence"] if buyer_gap else "No buyer-specific evidence gap is open.",
+                "required_input": buyer_gap["required_input"] if buyer_gap else "No buyer input required.",
             },
             {
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_saleability_decision.md",
-                    "docs/commercial_procurement_readiness.md",
-                ],
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_procurement_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
@@ -10237,15 +9207,9 @@ class TaskOrchestrator:
                 "item_name": "packaging_decision",
                 "label": "Packaging decision",
                 "owner": "Procurement and security reviewer",
-                "sources": [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready"
-                if has_file("docs/library_research.md")
-                and has_file("docs/commercial_plugin_operating_model.md")
-                else "blocked",
+                "completion_state": "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
                 "evidence": gap_register["library_split_decision"]["reason"],
                 "required_input": "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
             },
@@ -10279,9 +9243,7 @@ class TaskOrchestrator:
                 "blocked_count": blocked_count,
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
-                "review_process_is_blocker": gap_register["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": gap_register["review_process_policy"]["is_blocker"],
                 "release_authority_blocker_count": len(release_authority_blockers),
             },
             "procurement_items": procurement_items,
@@ -10335,9 +9297,7 @@ class TaskOrchestrator:
         def has_file(path: str) -> bool:
             return (root / path).is_file()
 
-        procurement_by_name = {
-            item["item_name"]: item for item in procurement["procurement_items"]
-        }
+        procurement_by_name = {item["item_name"]: item for item in procurement["procurement_items"]}
         license_item = procurement_by_name["license_and_rights"]
         security_item = procurement_by_name["security_package_metadata"]
         support_item = procurement_by_name["production_support_slo_input"]
@@ -10346,12 +9306,8 @@ class TaskOrchestrator:
         concrete_blockers = procurement["concrete_blockers"]
         release_authorization = procurement["release_authorization"]
         release_authority_blockers = release_authorization["blockers"]
-        support_slo_gap_count = (
-            1 if support_item["completion_state"] == "warning" else 0
-        )
-        buyer_order_form_gap_count = (
-            1 if buyer_item["completion_state"] == "warning" else 0
-        )
+        support_slo_gap_count = 1 if support_item["completion_state"] == "warning" else 0
+        buyer_order_form_gap_count = 1 if buyer_item["completion_state"] == "warning" else 0
         contract_items = [
             {
                 "item_name": "license_commercial_rights",
@@ -10367,10 +9323,7 @@ class TaskOrchestrator:
                 "item_name": "security_privacy_terms",
                 "label": "Security and privacy terms",
                 "owner": "Security and legal reviewer",
-                "sources": [
-                    *security_item["sources"],
-                    "docs/commercial_procurement_readiness.md",
-                ],
+                "sources": [*security_item["sources"], "docs/commercial_procurement_readiness.md"],
                 "evidence_type": security_item["evidence_type"],
                 "completion_state": security_item["completion_state"],
                 "evidence": (
@@ -10454,10 +9407,7 @@ class TaskOrchestrator:
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_saleability_decision.md",
-                    "docs/commercial_contract_readiness.md",
-                ],
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_contract_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Review process delay is not a contract blocker unless a concrete failure is produced.",
@@ -10502,9 +9452,7 @@ class TaskOrchestrator:
                 "blocked_count": blocked_count,
                 "support_slo_gap_count": support_slo_gap_count,
                 "buyer_order_form_gap_count": buyer_order_form_gap_count,
-                "review_process_is_blocker": procurement["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": procurement["review_process_policy"]["is_blocker"],
                 "release_authority_blocker_count": len(release_authority_blockers),
             },
             "contract_items": contract_items,
@@ -10558,20 +9506,14 @@ class TaskOrchestrator:
         def has_file(path: str) -> bool:
             return (root / path).is_file()
 
-        contract_by_name = {
-            item["item_name"]: item for item in contract["contract_items"]
-        }
+        contract_by_name = {item["item_name"]: item for item in contract["contract_items"]}
         support_item = contract_by_name["support_slo_terms"]
         buyer_item = contract_by_name["buyer_order_form_input"]
         packaging_item = contract_by_name["packaging_decision"]
         concrete_blockers = contract["concrete_blockers"]
         release_authorization = contract["release_authorization"]
-        support_slo_action_count = (
-            1 if support_item["completion_state"] == "warning" else 0
-        )
-        buyer_input_action_count = (
-            1 if buyer_item["completion_state"] == "warning" else 0
-        )
+        support_slo_action_count = 1 if support_item["completion_state"] == "warning" else 0
+        buyer_input_action_count = 1 if buyer_item["completion_state"] == "warning" else 0
         onboarding_items = [
             {
                 "item_name": "buyer_kickoff_packet",
@@ -10625,14 +9567,9 @@ class TaskOrchestrator:
                 "item_name": "telemetry_capture_plan",
                 "label": "Telemetry capture plan",
                 "owner": "Data analytics owner",
-                "sources": [
-                    "/api/v1/analytics_snapshots/latest",
-                    "docs/analytics_spec.md",
-                ],
+                "sources": ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
                 "evidence_type": "repository_artifact",
-                "completion_state": "ready"
-                if has_file("docs/analytics_spec.md")
-                else "blocked",
+                "completion_state": "ready" if has_file("docs/analytics_spec.md") else "blocked",
                 "evidence": "Analytics spec separates measured local evidence from proposed production metrics.",
                 "action": "Capture production onboarding telemetry without mixing it with local prototype metrics.",
                 "exit_criteria": "First buyer environment records adoption, latency, verification, trace completeness, and support events.",
@@ -10662,8 +9599,7 @@ class TaskOrchestrator:
                 "sources": ["SECURITY.md", "docs/commercial_contract_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
-                if has_file("SECURITY.md")
-                and has_file("docs/commercial_contract_readiness.md")
+                if has_file("SECURITY.md") and has_file("docs/commercial_contract_readiness.md")
                 else "blocked",
                 "evidence": "Security policy and contract readiness packet are available for buyer handoff.",
                 "action": "Attach security policy, dependency lock, and contract readiness rows to buyer diligence.",
@@ -10673,10 +9609,7 @@ class TaskOrchestrator:
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_saleability_decision.md",
-                    "docs/commercial_onboarding_readiness.md",
-                ],
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_onboarding_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Review delay is not an onboarding blocker unless a concrete failure is produced.",
@@ -10722,12 +9655,8 @@ class TaskOrchestrator:
                 "blocked_count": blocked_count,
                 "support_slo_action_count": support_slo_action_count,
                 "buyer_input_action_count": buyer_input_action_count,
-                "review_process_is_blocker": contract["review_process_policy"][
-                    "is_blocker"
-                ],
-                "release_authority_blocker_count": len(
-                    release_authorization["blockers"]
-                ),
+                "review_process_is_blocker": contract["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "onboarding_items": onboarding_items,
             "concrete_blockers": concrete_blockers,
@@ -10780,9 +9709,7 @@ class TaskOrchestrator:
         def has_file(path: str) -> bool:
             return (root / path).is_file()
 
-        onboarding_by_name = {
-            item["item_name"]: item for item in onboarding["onboarding_items"]
-        }
+        onboarding_by_name = {item["item_name"]: item for item in onboarding["onboarding_items"]}
         support_item = onboarding_by_name["support_slo_kickoff"]
         telemetry_item = onboarding_by_name["telemetry_capture_plan"]
         acceptance_item = onboarding_by_name["acceptance_exit_criteria"]
@@ -10832,10 +9759,7 @@ class TaskOrchestrator:
                 "item_name": "incident_rollback_plan",
                 "label": "Incident and rollback plan",
                 "owner": "Operations and support owner",
-                "sources": [
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_buyer_acceptance_runbook.md",
-                ],
+                "sources": ["docs/commercial_onboarding_readiness.md", "docs/commercial_buyer_acceptance_runbook.md"],
                 "evidence_type": "proposed_until_production",
                 "completion_state": "warning",
                 "source_gap_status": "production_input_required",
@@ -10847,10 +9771,7 @@ class TaskOrchestrator:
                 "item_name": "backup_recovery_plan",
                 "label": "Backup and recovery evidence",
                 "owner": "Operations and data owner",
-                "sources": [
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_buyer_diligence_packet.md",
-                ],
+                "sources": ["docs/commercial_onboarding_readiness.md", "docs/commercial_buyer_diligence_packet.md"],
                 "evidence_type": "proposed_until_production",
                 "completion_state": "warning",
                 "source_gap_status": "production_input_required",
@@ -10896,10 +9817,7 @@ class TaskOrchestrator:
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_saleability_decision.md",
-                    "docs/commercial_operations_readiness.md",
-                ],
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_operations_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Review delay is not an operations blocker unless a concrete failure is produced.",
@@ -10922,9 +9840,7 @@ class TaskOrchestrator:
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
         production_evidence_action_count = sum(
-            1
-            for item in operations_items
-            if item.get("source_gap_status") == "production_input_required"
+            1 for item in operations_items if item.get("source_gap_status") == "production_input_required"
         )
         if blocked_count:
             operations_status = "commercial_operations_blocked"
@@ -10949,9 +9865,7 @@ class TaskOrchestrator:
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
                 "production_evidence_action_count": production_evidence_action_count,
-                "review_process_is_blocker": onboarding["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": onboarding["review_process_policy"]["is_blocker"],
             },
             "operations_items": operations_items,
             "concrete_blockers": concrete_blockers,
@@ -11003,9 +9917,7 @@ class TaskOrchestrator:
         def has_file(path: str) -> bool:
             return (root / path).is_file()
 
-        operations_by_name = {
-            item["item_name"]: item for item in operations["operations_items"]
-        }
+        operations_by_name = {item["item_name"]: item for item in operations["operations_items"]}
         runtime_profile = security_profile or {}
         concrete_blockers = operations["concrete_blockers"]
         security_attestation_items = [
@@ -11060,10 +9972,7 @@ class TaskOrchestrator:
                 "item_name": "runtime_access_control_profile",
                 "label": "Runtime access-control profile",
                 "owner": "Platform operator",
-                "sources": [
-                    "contextual_orchestrator/server.py",
-                    "/api/v1/commercial_operations_readiness/latest",
-                ],
+                "sources": ["contextual_orchestrator/server.py", "/api/v1/commercial_operations_readiness/latest"],
                 "evidence_type": "runtime_configuration",
                 "completion_state": "ready",
                 "evidence": (
@@ -11126,11 +10035,7 @@ class TaskOrchestrator:
                 "item_name": "buyer_privacy_dpa_questionnaire",
                 "label": "Buyer privacy, DPA, and questionnaire input",
                 "owner": "Deal owner",
-                "sources": [
-                    "buyer DPA",
-                    "buyer privacy questionnaire",
-                    "buyer order form",
-                ],
+                "sources": ["buyer DPA", "buyer privacy questionnaire", "buyer order form"],
                 "evidence_type": "buyer_input_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_input_required",
@@ -11143,61 +10048,39 @@ class TaskOrchestrator:
                 "label": "Review process policy",
                 "owner": "Deal owner",
                 "sources": operations_by_name["review_process_policy"]["sources"],
-                "evidence_type": operations_by_name["review_process_policy"][
-                    "evidence_type"
-                ],
-                "completion_state": operations_by_name["review_process_policy"][
-                    "completion_state"
-                ],
+                "evidence_type": operations_by_name["review_process_policy"]["evidence_type"],
+                "completion_state": operations_by_name["review_process_policy"]["completion_state"],
                 "evidence": operations_by_name["review_process_policy"]["evidence"],
                 "action": operations_by_name["review_process_policy"]["action"],
-                "exit_criteria": operations_by_name["review_process_policy"][
-                    "exit_criteria"
-                ],
+                "exit_criteria": operations_by_name["review_process_policy"]["exit_criteria"],
             },
             {
                 "item_name": "packaging_decision",
                 "label": "Packaging decision",
                 "owner": operations_by_name["packaging_decision"]["owner"],
                 "sources": operations_by_name["packaging_decision"]["sources"],
-                "evidence_type": operations_by_name["packaging_decision"][
-                    "evidence_type"
-                ],
-                "completion_state": operations_by_name["packaging_decision"][
-                    "completion_state"
-                ],
+                "evidence_type": operations_by_name["packaging_decision"]["evidence_type"],
+                "completion_state": operations_by_name["packaging_decision"]["completion_state"],
                 "evidence": operations_by_name["packaging_decision"]["evidence"],
                 "action": operations_by_name["packaging_decision"]["action"],
-                "exit_criteria": operations_by_name["packaging_decision"][
-                    "exit_criteria"
-                ],
+                "exit_criteria": operations_by_name["packaging_decision"]["exit_criteria"],
             },
         ]
-        state_counts = Counter(
-            item["completion_state"] for item in security_attestation_items
-        )
+        state_counts = Counter(item["completion_state"] for item in security_attestation_items)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
         external_attestation_gap_count = sum(
-            1
-            for item in security_attestation_items
-            if item.get("source_gap_status") == "external_attestation_required"
+            1 for item in security_attestation_items if item.get("source_gap_status") == "external_attestation_required"
         )
         buyer_privacy_gap_count = sum(
-            1
-            for item in security_attestation_items
-            if item.get("source_gap_status") == "buyer_input_required"
+            1 for item in security_attestation_items if item.get("source_gap_status") == "buyer_input_required"
         )
         if blocked_count:
             security_attestation_status = "commercial_security_attestation_blocked"
         elif warning_count:
-            security_attestation_status = (
-                "commercial_security_attestation_ready_with_warnings"
-            )
+            security_attestation_status = "commercial_security_attestation_ready_with_warnings"
         else:  # pragma: no cover - unreachable while this report carries literal buyer-specific warning sections
-            security_attestation_status = (
-                "commercial_security_attestation_ready"  # pragma: no cover
-            )
+            security_attestation_status = "commercial_security_attestation_ready"  # pragma: no cover
 
         return {
             "security_attestation_status": security_attestation_status,
@@ -11216,9 +10099,7 @@ class TaskOrchestrator:
                 "blocked_count": blocked_count,
                 "external_attestation_gap_count": external_attestation_gap_count,
                 "buyer_privacy_gap_count": buyer_privacy_gap_count,
-                "review_process_is_blocker": operations["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": operations["review_process_policy"]["is_blocker"],
             },
             "security_attestation_items": security_attestation_items,
             "concrete_blockers": concrete_blockers,
@@ -11285,22 +10166,15 @@ class TaskOrchestrator:
         value_case = criteria_by_name["commercial_value_case"]
         kpis = self._metrics_by_name(analytics["kpis"])
         guardrails = self._metrics_by_name(analytics["guardrails"])
-        security_items = {
-            item["item_name"]: item for item in security["security_attestation_items"]
-        }
+        security_items = {item["item_name"]: item for item in security["security_attestation_items"]}
         value_items = [
             {
                 "item_name": "commercial_value_case_basis",
                 "label": "Commercial value-case basis",
                 "owner": "Deal owner",
-                "sources": [
-                    "/api/v1/commercial_readiness/latest",
-                    "docs/commercial_readiness.md",
-                ],
+                "sources": ["/api/v1/commercial_readiness/latest", "docs/commercial_readiness.md"],
                 "evidence_type": "local_due_diligence_snapshot",
-                "completion_state": "ready"
-                if value_case["status"] == "pass"
-                else "warning",
+                "completion_state": "ready" if value_case["status"] == "pass" else "warning",
                 "evidence": value_case["evidence"],
                 "action": "Use commercial readiness as the value-case baseline without presenting it as a valuation guarantee.",
                 "exit_criteria": "Buyer sees the KRW target as a review anchor, not as a guaranteed valuation.",
@@ -11309,10 +10183,7 @@ class TaskOrchestrator:
                 "item_name": "local_analytics_evidence",
                 "label": "Local analytics evidence",
                 "owner": "Product analytics owner",
-                "sources": [
-                    "/api/v1/analytics_snapshots/latest",
-                    "docs/analytics_spec.md",
-                ],
+                "sources": ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
                 "evidence_type": "measured_local",
                 "completion_state": "ready",
                 "evidence": (
@@ -11334,9 +10205,7 @@ class TaskOrchestrator:
                     "docs/commercial_evidence_export.md",
                 ],
                 "evidence_type": "repository_and_runtime_artifact",
-                "completion_state": "ready"
-                if has_file("docs/commercial_evidence_export.md")
-                else "blocked",
+                "completion_state": "ready" if has_file("docs/commercial_evidence_export.md") else "blocked",
                 "evidence": (
                     f"commercial_export_status={export['export_status']}; "
                     f"security_attestation_status={security['security_attestation_status']}"
@@ -11373,11 +10242,7 @@ class TaskOrchestrator:
                 "item_name": "roi_model_inputs",
                 "label": "ROI model inputs",
                 "owner": "Buyer sponsor and deal owner",
-                "sources": [
-                    "buyer ROI model",
-                    "customer discovery",
-                    "procurement value case",
-                ],
+                "sources": ["buyer ROI model", "customer discovery", "procurement value case"],
                 "evidence_type": "buyer_input_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_financial_input_required",
@@ -11401,11 +10266,7 @@ class TaskOrchestrator:
                 "item_name": "procurement_budget_owner",
                 "label": "Procurement budget owner",
                 "owner": "Buyer sponsor and procurement owner",
-                "sources": [
-                    "buyer order form",
-                    "procurement process",
-                    "budget approval",
-                ],
+                "sources": ["buyer order form", "procurement process", "budget approval"],
                 "evidence_type": "buyer_input_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_financial_input_required",
@@ -11417,11 +10278,7 @@ class TaskOrchestrator:
                 "item_name": "implementation_payback_assumption",
                 "label": "Implementation payback assumption",
                 "owner": "Buyer sponsor and onboarding owner",
-                "sources": [
-                    "buyer onboarding plan",
-                    "implementation estimate",
-                    "operations handoff",
-                ],
+                "sources": ["buyer onboarding plan", "implementation estimate", "operations handoff"],
                 "evidence_type": "buyer_input_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_financial_input_required",
@@ -11434,17 +10291,11 @@ class TaskOrchestrator:
                 "label": "Review process policy",
                 "owner": "Deal owner",
                 "sources": security_items["review_process_policy"]["sources"],
-                "evidence_type": security_items["review_process_policy"][
-                    "evidence_type"
-                ],
-                "completion_state": security_items["review_process_policy"][
-                    "completion_state"
-                ],
+                "evidence_type": security_items["review_process_policy"]["evidence_type"],
+                "completion_state": security_items["review_process_policy"]["completion_state"],
                 "evidence": security_items["review_process_policy"]["evidence"],
                 "action": security_items["review_process_policy"]["action"],
-                "exit_criteria": security_items["review_process_policy"][
-                    "exit_criteria"
-                ],
+                "exit_criteria": security_items["review_process_policy"]["exit_criteria"],
             },
             {
                 "item_name": "packaging_decision",
@@ -11452,9 +10303,7 @@ class TaskOrchestrator:
                 "owner": security_items["packaging_decision"]["owner"],
                 "sources": security_items["packaging_decision"]["sources"],
                 "evidence_type": security_items["packaging_decision"]["evidence_type"],
-                "completion_state": security_items["packaging_decision"][
-                    "completion_state"
-                ],
+                "completion_state": security_items["packaging_decision"]["completion_state"],
                 "evidence": security_items["packaging_decision"]["evidence"],
                 "action": security_items["packaging_decision"]["action"],
                 "exit_criteria": security_items["packaging_decision"]["exit_criteria"],
@@ -11467,13 +10316,10 @@ class TaskOrchestrator:
         buyer_financial_gap_count = sum(
             1
             for item in value_items
-            if item.get("source_gap_status")
-            in {"buyer_financial_input_required", "external_value_proof_required"}
+            if item.get("source_gap_status") in {"buyer_financial_input_required", "external_value_proof_required"}
         )
         external_value_proof_gap_count = sum(
-            1
-            for item in value_items
-            if item.get("source_gap_status") == "external_value_proof_required"
+            1 for item in value_items if item.get("source_gap_status") == "external_value_proof_required"
         )
         if blocked_count:
             value_status = "commercial_value_blocked"
@@ -11499,9 +10345,7 @@ class TaskOrchestrator:
                 "blocked_count": blocked_count,
                 "buyer_financial_gap_count": buyer_financial_gap_count,
                 "external_value_proof_gap_count": external_value_proof_gap_count,
-                "review_process_is_blocker": security["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": security["review_process_policy"]["is_blocker"],
             },
             "value_items": value_items,
             "concrete_blockers": concrete_blockers,
@@ -11521,9 +10365,7 @@ class TaskOrchestrator:
             ],
             "review_process_policy": security["review_process_policy"],
             "related_runtime_reports": {
-                "commercial_security_attestation_status": security[
-                    "security_attestation_status"
-                ],
+                "commercial_security_attestation_status": security["security_attestation_status"],
                 "commercial_export_status": export["export_status"],
                 "commercial_status": commercial["commercial_status"],
                 **security["related_runtime_reports"],
@@ -11611,8 +10453,7 @@ class TaskOrchestrator:
                 "evidence_type": "repository_and_runtime_artifact",
                 "completion_state": "ready"
                 if value["value_status"] != "commercial_value_blocked"
-                and security["security_attestation_status"]
-                != "commercial_security_attestation_blocked"
+                and security["security_attestation_status"] != "commercial_security_attestation_blocked"
                 and export["export_status"] != "commercial_export_blocked"
                 and has_file("docs/commercial_value_readiness.md")
                 and has_file("docs/commercial_security_attestation.md")
@@ -11703,11 +10544,7 @@ class TaskOrchestrator:
                 "item_name": "dpa_security_acceptance",
                 "label": "DPA and security acceptance",
                 "owner": "Buyer security, privacy, and legal owner",
-                "sources": [
-                    "buyer DPA",
-                    "security review acceptance",
-                    "privacy questionnaire",
-                ],
+                "sources": ["buyer DPA", "security review acceptance", "privacy questionnaire"],
                 "evidence_type": "buyer_signature_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_signature_required",
@@ -11731,11 +10568,7 @@ class TaskOrchestrator:
                 "item_name": "go_live_authorization",
                 "label": "Go-live authorization",
                 "owner": "Buyer business sponsor and implementation owner",
-                "sources": [
-                    "go-live approval",
-                    "implementation authorization",
-                    "acceptance signoff",
-                ],
+                "sources": ["go-live approval", "implementation authorization", "acceptance signoff"],
                 "evidence_type": "buyer_signature_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_signature_required",
@@ -11747,10 +10580,7 @@ class TaskOrchestrator:
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_saleability_decision.md",
-                    "docs/commercial_close_readiness.md",
-                ],
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_close_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Review process delay is not a close blocker unless a concrete product, security, API-contract, or document failure is produced.",
@@ -11761,10 +10591,7 @@ class TaskOrchestrator:
                 "item_name": "packaging_decision",
                 "label": "Packaging decision",
                 "owner": "Procurement and security reviewer",
-                "sources": [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
                 if value["library_split_decision"]["decision"] == "keep_single_product"
@@ -11778,9 +10605,7 @@ class TaskOrchestrator:
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
         buyer_signature_gap_count = sum(
-            1
-            for item in close_items
-            if item.get("source_gap_status") == "buyer_signature_required"
+            1 for item in close_items if item.get("source_gap_status") == "buyer_signature_required"
         )
         if blocked_count:
             close_status = "commercial_close_blocked"
@@ -11806,9 +10631,7 @@ class TaskOrchestrator:
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
                 "buyer_signature_gap_count": buyer_signature_gap_count,
-                "review_process_is_blocker": value["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": value["review_process_policy"]["is_blocker"],
             },
             "close_items": close_items,
             "concrete_blockers": concrete_blockers,
@@ -11829,9 +10652,7 @@ class TaskOrchestrator:
             "review_process_policy": value["review_process_policy"],
             "related_runtime_reports": {
                 "commercial_value_status": value["value_status"],
-                "commercial_security_attestation_status": security[
-                    "security_attestation_status"
-                ],
+                "commercial_security_attestation_status": security["security_attestation_status"],
                 "commercial_contract_status": contract["contract_status"],
                 "commercial_onboarding_status": onboarding["onboarding_status"],
                 "commercial_operations_status": operations["operations_status"],
@@ -11908,10 +10729,7 @@ class TaskOrchestrator:
                 "item_name": "commercial_close_packet",
                 "label": "Commercial close packet",
                 "owner": "Deal owner",
-                "sources": [
-                    "/api/v1/commercial_close_readiness/latest",
-                    "docs/commercial_close_readiness.md",
-                ],
+                "sources": ["/api/v1/commercial_close_readiness/latest", "docs/commercial_close_readiness.md"],
                 "evidence_type": "repository_and_runtime_artifact",
                 "completion_state": "ready"
                 if close["close_status"] != "commercial_close_blocked"
@@ -11955,8 +10773,7 @@ class TaskOrchestrator:
                 ],
                 "evidence_type": "repository_and_runtime_artifact",
                 "completion_state": "ready"
-                if security["security_attestation_status"]
-                != "commercial_security_attestation_blocked"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
                 and has_file("docs/commercial_security_attestation.md")
                 and has_file("SECURITY.md")
                 else "blocked",
@@ -11989,10 +10806,7 @@ class TaskOrchestrator:
                 "item_name": "saleability_decision_packet",
                 "label": "Saleability decision packet",
                 "owner": "Deal owner",
-                "sources": [
-                    "/api/v1/saleability_decisions/latest",
-                    "docs/commercial_saleability_decision.md",
-                ],
+                "sources": ["/api/v1/saleability_decisions/latest", "docs/commercial_saleability_decision.md"],
                 "evidence_type": "repository_and_runtime_artifact",
                 "completion_state": "ready"
                 if saleability["saleability_status"] != "saleability_blocked"
@@ -12006,15 +10820,10 @@ class TaskOrchestrator:
                 "item_name": "admin_operator_evidence",
                 "label": "Admin operator evidence",
                 "owner": "Product design owner",
-                "sources": [
-                    "/admin",
-                    "contextual_orchestrator/admin.py",
-                    "docs/screen_design.md",
-                ],
+                "sources": ["/admin", "contextual_orchestrator/admin.py", "docs/screen_design.md"],
                 "evidence_type": "repository_and_runtime_artifact",
                 "completion_state": "ready"
-                if has_file("contextual_orchestrator/admin.py")
-                and has_file("docs/screen_design.md")
+                if has_file("contextual_orchestrator/admin.py") and has_file("docs/screen_design.md")
                 else "blocked",
                 "evidence": "Admin surface exposes readiness status, source notes, measurement status, and warning/blocker summaries.",
                 "action": "Use the existing admin observability surface instead of creating a separate sales dashboard.",
@@ -12024,14 +10833,9 @@ class TaskOrchestrator:
                 "item_name": "analytics_truthfulness_packet",
                 "label": "Analytics truthfulness packet",
                 "owner": "Data analytics owner",
-                "sources": [
-                    "docs/analytics_spec.md",
-                    "/api/v1/analytics_snapshots/latest",
-                ],
+                "sources": ["docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
                 "evidence_type": "repository_and_runtime_artifact",
-                "completion_state": "ready"
-                if has_file("docs/analytics_spec.md")
-                else "blocked",
+                "completion_state": "ready" if has_file("docs/analytics_spec.md") else "blocked",
                 "evidence": "Analytics spec separates measured local evidence from proposed production or buyer-specific inputs.",
                 "action": "Keep GTM metrics from claiming production revenue, signed buyer proof, or unmeasured telemetry.",
                 "exit_criteria": "Stakeholders can see which KPI fields are measured and which are proposed inputs.",
@@ -12046,9 +10850,7 @@ class TaskOrchestrator:
                     "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
                 ],
                 "evidence_type": "figma_artifact",
-                "completion_state": "ready"
-                if has_file("docs/figma_artifacts.md")
-                else "blocked",
+                "completion_state": "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "evidence": "Editable Figma/FigJam stakeholder artifacts are recorded and Figma Code Connect is excluded.",
                 "action": "Use editable stakeholder artifacts for GTM review instead of screenshot-only evidence.",
                 "exit_criteria": "Stakeholders can open the design file and FigJam board for GTM review.",
@@ -12057,14 +10859,7 @@ class TaskOrchestrator:
                 "item_name": "buyer_signature_budget_follow_up",
                 "label": "Buyer signature and budget follow-up",
                 "owner": "Buyer sponsor, procurement owner, and deal owner",
-                "sources": [
-                    "buyer order form",
-                    "MSA",
-                    "DPA",
-                    "security acceptance",
-                    "purchase order",
-                    "go-live approval",
-                ],
+                "sources": ["buyer order form", "MSA", "DPA", "security acceptance", "purchase order", "go-live approval"],
                 "evidence_type": "buyer_input_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_signature_required",
@@ -12079,12 +10874,7 @@ class TaskOrchestrator:
                 "item_name": "production_external_proof_follow_up",
                 "label": "Production and external proof follow-up",
                 "owner": "Security, operations, and deal owner",
-                "sources": [
-                    "hosted scan output",
-                    "third-party attestation",
-                    "reference proof",
-                    "production telemetry",
-                ],
+                "sources": ["hosted scan output", "third-party attestation", "reference proof", "production telemetry"],
                 "evidence_type": "external_or_production_input_required",
                 "completion_state": "warning",
                 "source_gap_status": "external_or_production_input_required",
@@ -12100,10 +10890,7 @@ class TaskOrchestrator:
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_go_to_market_readiness.md",
-                    "docs/commercial_saleability_decision.md",
-                ],
+                "sources": ["docs/commercial_go_to_market_readiness.md", "docs/commercial_saleability_decision.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Review process delay is not a GTM blocker unless a concrete failure is produced.",
@@ -12114,10 +10901,7 @@ class TaskOrchestrator:
                 "item_name": "packaging_decision",
                 "label": "Packaging decision",
                 "owner": "Procurement and security reviewer",
-                "sources": [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
                 if close["library_split_decision"]["decision"] == "keep_single_product"
@@ -12161,9 +10945,7 @@ class TaskOrchestrator:
                 "blocked_count": blocked_count,
                 "buyer_signature_gap_count": buyer_signature_gap_count,
                 "external_or_production_gap_count": external_or_production_gap_count,
-                "review_process_is_blocker": close["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": close["review_process_policy"]["is_blocker"],
             },
             "go_to_market_items": gtm_items,
             "concrete_blockers": concrete_blockers,
@@ -12185,9 +10967,7 @@ class TaskOrchestrator:
             "related_runtime_reports": {
                 "commercial_close_status": close["close_status"],
                 "commercial_value_status": value["value_status"],
-                "commercial_security_attestation_status": security[
-                    "security_attestation_status"
-                ],
+                "commercial_security_attestation_status": security["security_attestation_status"],
                 "commercial_export_status": export["export_status"],
                 "buyer_handoff_status": handoff["bundle_status"],
                 "saleability_status": saleability["saleability_status"],
@@ -12349,17 +11129,10 @@ class TaskOrchestrator:
                 "item_name": "admin_observability_packet",
                 "label": "Admin observability packet",
                 "owner": "Product design owner",
-                "sources": [
-                    "/admin",
-                    "/admin/state",
-                    "contextual_orchestrator/admin.py",
-                    "docs/screen_design.md",
-                ],
+                "sources": ["/admin", "/admin/state", "contextual_orchestrator/admin.py", "docs/screen_design.md"],
                 "evidence_type": "repository_and_runtime_artifact",
                 "completion_state": "ready"
-                if admin_state["agents"]
-                and has_file("contextual_orchestrator/admin.py")
-                and has_file("docs/screen_design.md")
+                if admin_state["agents"] and has_file("contextual_orchestrator/admin.py") and has_file("docs/screen_design.md")
                 else "blocked",
                 "evidence": (
                     f"agent_count={len(admin_state['agents'])}; "
@@ -12372,12 +11145,7 @@ class TaskOrchestrator:
                 "item_name": "buyer_environment_inputs",
                 "label": "Buyer environment inputs",
                 "owner": "Buyer implementation owner and platform operator",
-                "sources": [
-                    "buyer environment URL",
-                    "deployment topology",
-                    "admin token handoff",
-                    "data retention decision",
-                ],
+                "sources": ["buyer environment URL", "deployment topology", "admin token handoff", "data retention decision"],
                 "evidence_type": "buyer_environment_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_environment_required",
@@ -12411,12 +11179,7 @@ class TaskOrchestrator:
                 "item_name": "commercial_signature_inputs",
                 "label": "Commercial signature inputs",
                 "owner": "Buyer sponsor, procurement owner, and deal owner",
-                "sources": [
-                    "signed order/MSA",
-                    "DPA/security acceptance",
-                    "purchase order",
-                    "go-live authorization",
-                ],
+                "sources": ["signed order/MSA", "DPA/security acceptance", "purchase order", "go-live authorization"],
                 "evidence_type": "buyer_signature_required",
                 "completion_state": "warning",
                 "source_gap_status": "buyer_signature_required",
@@ -12431,10 +11194,7 @@ class TaskOrchestrator:
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_launch_readiness.md",
-                    "docs/commercial_go_to_market_readiness.md",
-                ],
+                "sources": ["docs/commercial_launch_readiness.md", "docs/commercial_go_to_market_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Review process delay is not a launch blocker unless a concrete failure is produced.",
@@ -12445,10 +11205,7 @@ class TaskOrchestrator:
                 "item_name": "packaging_decision",
                 "label": "Packaging decision",
                 "owner": "Procurement and security reviewer",
-                "sources": [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
                 if gtm["library_split_decision"]["decision"] == "keep_single_product"
@@ -12462,24 +11219,16 @@ class TaskOrchestrator:
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
         buyer_environment_gap_count = sum(
-            1
-            for item in launch_items
-            if item.get("source_gap_status") == "buyer_environment_required"
+            1 for item in launch_items if item.get("source_gap_status") == "buyer_environment_required"
         )
         production_telemetry_gap_count = sum(
-            1
-            for item in launch_items
-            if item.get("source_gap_status") == "production_input_required"
+            1 for item in launch_items if item.get("source_gap_status") == "production_input_required"
         )
         commercial_signature_gap_count = sum(
-            1
-            for item in launch_items
-            if item.get("source_gap_status") == "buyer_signature_required"
+            1 for item in launch_items if item.get("source_gap_status") == "buyer_signature_required"
         )
         external_input_group_count = (
-            buyer_environment_gap_count
-            + production_telemetry_gap_count
-            + commercial_signature_gap_count
+            buyer_environment_gap_count + production_telemetry_gap_count + commercial_signature_gap_count
         )
         if blocked_count:
             launch_status = "commercial_launch_blocked"
@@ -12621,9 +11370,7 @@ class TaskOrchestrator:
                     "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
                 ],
                 "evidence_type": "figma_artifact",
-                "completion_state": "ready"
-                if has_file("docs/figma_artifacts.md")
-                else "blocked",
+                "completion_state": "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "evidence": "Editable design, FigJam diagrams, and stakeholder artifact records exist without Code Connect.",
                 "action": "Use Figma/FigJam artifacts for stakeholder review without generating Code Connect metadata.",
                 "exit_criteria": "Figma artifacts are recorded and Code Connect remains unused.",
@@ -12639,9 +11386,7 @@ class TaskOrchestrator:
                 ],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
-                if has_file(
-                    "docs/superpowers/plans/2026-07-02-commercial-completion-scorecard-runtime.md"
-                )
+                if has_file("docs/superpowers/plans/2026-07-02-commercial-completion-scorecard-runtime.md")
                 and has_file("tests/test_commercial_completion_scorecard.py")
                 else "blocked",
                 "evidence": "Dated plans and focused tests define files, expected failures, implementation, and verification commands.",
@@ -12652,10 +11397,7 @@ class TaskOrchestrator:
                 "item_name": "ponytail_packaging_decision",
                 "label": "Ponytail packaging decision",
                 "owner": "Procurement and security reviewer",
-                "sources": [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
                 if launch["library_split_decision"]["decision"] == "keep_single_product"
@@ -12675,8 +11417,7 @@ class TaskOrchestrator:
                 ],
                 "evidence_type": "measured_local",
                 "completion_state": "ready"
-                if has_file("docs/analytics_spec.md")
-                and analytics["measurement_status"] == "local_runtime_snapshot"
+                if has_file("docs/analytics_spec.md") and analytics["measurement_status"] == "local_runtime_snapshot"
                 else "blocked",
                 "evidence": "Measured local evidence and proposed production or buyer-specific inputs are separated.",
                 "action": "Do not present proposed buyer or production inputs as measured product results.",
@@ -12737,10 +11478,7 @@ class TaskOrchestrator:
                 "item_name": "review_process_policy",
                 "label": "Review process policy",
                 "owner": "Deal owner",
-                "sources": [
-                    "docs/commercial_completion_scorecard.md",
-                    "docs/commercial_launch_readiness.md",
-                ],
+                "sources": ["docs/commercial_completion_scorecard.md", "docs/commercial_launch_readiness.md"],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready",
                 "evidence": "Review delay, model-review delay, and queued review automation are not product blockers.",
@@ -12794,12 +11532,8 @@ class TaskOrchestrator:
                 "ready_count": state_counts.get("ready", 0),
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
-                "external_input_group_count": launch["launch_summary"][
-                    "external_input_group_count"
-                ],
-                "review_process_is_blocker": launch["review_process_policy"][
-                    "is_blocker"
-                ],
+                "external_input_group_count": launch["launch_summary"]["external_input_group_count"],
+                "review_process_is_blocker": launch["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
             },
             "completion_items": scorecard_items,
@@ -12878,14 +11612,8 @@ class TaskOrchestrator:
             next_action: str,
         ) -> dict[str, Any]:
             require_object_name(step_name, "buyer_acceptance_workflow.step_name")
-            if completion_state not in {
-                "ready",
-                "warning",
-                "blocked",
-            }:  # pragma: no cover
-                raise ValueError(
-                    "buyer acceptance workflow state must be ready, warning, or blocked"
-                )
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("buyer acceptance workflow state must be ready, warning, or blocked")
             return {
                 "step_name": step_name,
                 "label": label,
@@ -12898,40 +11626,18 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(
-            dict.fromkeys(
-                acceptance["concrete_blockers"] + completion["concrete_blockers"]
-            )
-        )
-        acceptance_blocked = (
-            acceptance["acceptance_status"] == "commercial_acceptance_blocked"
-        )
-        completion_blocked = (
-            completion["completion_status"] == "commercial_completion_blocked"
-        )
-        local_runtime_state = (
-            "blocked"
-            if acceptance_blocked or completion_blocked or concrete_blockers
-            else "ready"
-        )
+        concrete_blockers = list(dict.fromkeys(acceptance["concrete_blockers"] + completion["concrete_blockers"]))
+        acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
+        completion_blocked = completion["completion_status"] == "commercial_completion_blocked"
+        local_runtime_state = "blocked" if acceptance_blocked or completion_blocked or concrete_blockers else "ready"
         workflow_steps = [
             step(
                 "confirm_product_scope",
                 "Confirm product scope",
                 "Product owner",
-                [
-                    "README.md",
-                    "docs/product_planning.md",
-                    "docs/commercial_readiness.md",
-                ],
+                ["README.md", "docs/product_planning.md", "docs/commercial_readiness.md"],
                 "repository_artifact",
-                "ready"
-                if all_files(
-                    "README.md",
-                    "docs/product_planning.md",
-                    "docs/commercial_readiness.md",
-                )
-                else "blocked",
+                "ready" if all_files("README.md", "docs/product_planning.md", "docs/commercial_readiness.md") else "blocked",
                 "Product remains one enterprise orchestration control plane.",
                 "Proceed when the buyer reviews one compatible API plus one admin evidence surface.",
                 "Restore product scope docs before buyer acceptance.",
@@ -12940,15 +11646,9 @@ class TaskOrchestrator:
                 "confirm_integration_surface",
                 "Confirm integration surface",
                 "Platform reviewer",
-                [
-                    "/v1/chat/completions",
-                    "docs/rest_api_design.md",
-                    "tests/test_api_contract.py",
-                ],
+                ["/v1/chat/completions", "docs/rest_api_design.md", "tests/test_api_contract.py"],
                 "repository_artifact",
-                "ready"
-                if all_files("docs/rest_api_design.md", "tests/test_api_contract.py")
-                else "blocked",
+                "ready" if all_files("docs/rest_api_design.md", "tests/test_api_contract.py") else "blocked",
                 "OpenAI-compatible API and API contract tests are present.",
                 "Proceed when API compatibility evidence is present and tests pass.",
                 "Restore REST docs or API contract tests before buyer acceptance.",
@@ -12957,18 +11657,9 @@ class TaskOrchestrator:
                 "confirm_operator_evidence",
                 "Confirm operator evidence",
                 "Platform operator",
-                [
-                    "/admin",
-                    "/admin/state",
-                    "docs/screen_design.md",
-                    "contextual_orchestrator/admin.py",
-                ],
+                ["/admin", "/admin/state", "docs/screen_design.md", "contextual_orchestrator/admin.py"],
                 "repository_artifact",
-                "ready"
-                if all_files(
-                    "docs/screen_design.md", "contextual_orchestrator/admin.py"
-                )
-                else "blocked",
+                "ready" if all_files("docs/screen_design.md", "contextual_orchestrator/admin.py") else "blocked",
                 "Admin console exposes operator evidence for pool, policy, trace, access, replay, analytics, and readiness.",
                 "Proceed when operator state and commercial readiness surfaces are visible.",
                 "Restore admin evidence docs or implementation before buyer acceptance.",
@@ -12996,19 +11687,9 @@ class TaskOrchestrator:
                 "confirm_security_posture",
                 "Confirm security posture",
                 "Security reviewer",
-                [
-                    "SECURITY.md",
-                    "tests/test_security_hardening.py",
-                    ".github/workflows/security.yml",
-                ],
+                ["SECURITY.md", "tests/test_security_hardening.py", ".github/workflows/security.yml"],
                 "repository_artifact",
-                "ready"
-                if all_files(
-                    "SECURITY.md",
-                    "tests/test_security_hardening.py",
-                    ".github/workflows/security.yml",
-                )
-                else "blocked",
+                "ready" if all_files("SECURITY.md", "tests/test_security_hardening.py", ".github/workflows/security.yml") else "blocked",
                 "Security policy, hardening tests, and hosted security workflow metadata are present.",
                 "Proceed when concrete security failures are absent.",
                 "Fix concrete security failures; queued security checks alone are not blockers.",
@@ -13019,10 +11700,7 @@ class TaskOrchestrator:
                 "Analytics reviewer",
                 ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
                 "measured_local",
-                "ready"
-                if has_file("docs/analytics_spec.md")
-                and analytics["measurement_status"] == "local_runtime_snapshot"
-                else "blocked",
+                "ready" if has_file("docs/analytics_spec.md") and analytics["measurement_status"] == "local_runtime_snapshot" else "blocked",
                 "Analytics spec and local snapshot separate measured local evidence from proposed production or buyer inputs.",
                 "Proceed when measured and proposed claims are not mixed.",
                 "Restore analytics source labels before buyer acceptance.",
@@ -13031,12 +11709,7 @@ class TaskOrchestrator:
                 "confirm_visual_review_path",
                 "Confirm visual review path",
                 "Stakeholder reviewer",
-                [
-                    "docs/figma_artifacts.md",
-                    "Figma design file",
-                    "FigJam board",
-                    "Figma Slides deck",
-                ],
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
                 "figma_artifact",
                 "ready" if has_file("docs/figma_artifacts.md") else "blocked",
                 "Editable design, FigJam, and stakeholder artifacts are recorded without Code Connect.",
@@ -13047,15 +11720,9 @@ class TaskOrchestrator:
                 "confirm_packaging_decision",
                 "Confirm packaging decision",
                 "Procurement reviewer",
-                [
-                    "docs/library_research.md",
-                    "docs/commercial_plugin_operating_model.md",
-                ],
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
                 "repository_artifact",
-                "ready"
-                if completion["library_split_decision"]["decision"]
-                == "keep_single_product"
-                else "warning",
+                "ready" if completion["library_split_decision"]["decision"] == "keep_single_product" else "warning",
                 completion["library_split_decision"]["reason"],
                 "Proceed with one repository and one deployable product.",
                 "Extract only after a second product, independent release cadence, or provenance trigger exists.",
@@ -13064,12 +11731,7 @@ class TaskOrchestrator:
                 "confirm_production_inputs",
                 "Confirm production inputs",
                 "Operations owner",
-                [
-                    "production telemetry",
-                    "support plan",
-                    "SLO evidence",
-                    "incident drill",
-                ],
+                ["production telemetry", "support plan", "SLO evidence", "incident drill"],
                 "proposed_until_production",
                 "warning",
                 "Production telemetry, support, SLO, and incident evidence require a deployment or paid onboarding environment.",
@@ -13080,12 +11742,7 @@ class TaskOrchestrator:
                 "confirm_buyer_specific_inputs",
                 "Confirm buyer-specific inputs",
                 "Buyer and account team",
-                [
-                    "ROI model",
-                    "security questionnaire",
-                    "legal review",
-                    "deployment target",
-                ],
+                ["ROI model", "security questionnaire", "legal review", "deployment target"],
                 "proposed_until_buyer_specific",
                 "warning",
                 "ROI, legal, procurement, and deployment inputs require a named buyer.",
@@ -13121,18 +11778,12 @@ class TaskOrchestrator:
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
                 "production_follow_up_count": sum(
-                    1
-                    for item in workflow_steps
-                    if item["evidence_type"] == "proposed_until_production"
+                    1 for item in workflow_steps if item["evidence_type"] == "proposed_until_production"
                 ),
                 "buyer_specific_follow_up_count": sum(
-                    1
-                    for item in workflow_steps
-                    if item["evidence_type"] == "proposed_until_buyer_specific"
+                    1 for item in workflow_steps if item["evidence_type"] == "proposed_until_buyer_specific"
                 ),
-                "review_process_is_blocker": acceptance["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": acceptance["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
             },
             "acceptance_steps": workflow_steps,
@@ -13208,14 +11859,8 @@ class TaskOrchestrator:
             expected_evidence: str,
         ) -> dict[str, Any]:
             require_object_name(step_name, "commercial_demo.step_name")
-            if completion_state not in {
-                "ready",
-                "warning",
-                "blocked",
-            }:  # pragma: no cover
-                raise ValueError(
-                    "commercial demo step state must be ready, warning, or blocked"
-                )
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial demo step state must be ready, warning, or blocked")
             return {
                 "step_name": step_name,
                 "label": label,
@@ -13230,9 +11875,7 @@ class TaskOrchestrator:
             }
 
         concrete_blockers = list(
-            dict.fromkeys(
-                completion["concrete_blockers"] + buyer_workflow["concrete_blockers"]
-            )
+            dict.fromkeys(completion["concrete_blockers"] + buyer_workflow["concrete_blockers"])
         )
         local_runtime_state = (
             "blocked"
@@ -13266,9 +11909,7 @@ class TaskOrchestrator:
                 ["/admin", "/api/v1/workflow_runs", "docs/screen_design.md"],
                 ["/admin", "/api/v1/workflow_runs"],
                 "measured_local",
-                "ready"
-                if recent_runs and has_file("docs/screen_design.md")
-                else "blocked",
+                "ready" if recent_runs and has_file("docs/screen_design.md") else "blocked",
                 f"recent_workflow_run_count={len(recent_runs)}",
                 "Open the admin trace view for a conducted workflow run.",
                 "The operator can inspect mode, policy mode, selected agents, and run trace evidence.",
@@ -13277,11 +11918,7 @@ class TaskOrchestrator:
                 "access_list_inspection",
                 "Access-list inspection",
                 "Compliance reviewer",
-                [
-                    "docs/product_planning.md",
-                    "/api/v1/access_reports/{workflow_run_id}",
-                    "/admin",
-                ],
+                ["docs/product_planning.md", "/api/v1/access_reports/{workflow_run_id}", "/admin"],
                 ["/api/v1/access_reports/{workflow_run_id}", "/admin"],
                 "repository_and_runtime_artifact",
                 "ready" if has_file("docs/product_planning.md") else "blocked",
@@ -13296,9 +11933,7 @@ class TaskOrchestrator:
                 ["docs/screen_design.md", "/api/v1/evaluation_runs", "/admin"],
                 ["/api/v1/evaluation_runs", "/admin"],
                 "measured_local",
-                "ready"
-                if event_counts.get("evaluation_run_created", 0) > 0
-                else "blocked",
+                "ready" if event_counts.get("evaluation_run_created", 0) > 0 else "blocked",
                 f"evaluation_run_created_events={event_counts.get('evaluation_run_created', 0)}",
                 "Replay the buyer prompt through the evaluation endpoint.",
                 "The reviewer sees replay status and trace-backed verification evidence.",
@@ -13336,8 +11971,7 @@ class TaskOrchestrator:
                 ["/api/v1/analytics_snapshots/latest"],
                 "measured_local",
                 "ready"
-                if has_file("docs/analytics_spec.md")
-                and analytics["measurement_status"] == "local_runtime_snapshot"
+                if has_file("docs/analytics_spec.md") and analytics["measurement_status"] == "local_runtime_snapshot"
                 else "blocked",
                 "measured local metrics remain separate from proposed production and buyer-specific metrics",
                 "Review the analytics spec and local analytics endpoint.",
@@ -13378,12 +12012,7 @@ class TaskOrchestrator:
                 "production_buyer_followups",
                 "Production and buyer follow-ups",
                 "Economic buyer",
-                [
-                    "production telemetry",
-                    "ROI model",
-                    "security questionnaire",
-                    "support plan",
-                ],
+                ["production telemetry", "ROI model", "security questionnaire", "support plan"],
                 [],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -13442,9 +12071,7 @@ class TaskOrchestrator:
                 "blocked_count": blocked_count,
                 "persona_count": len({item["persona"] for item in demo_steps}),
                 "endpoint_count": len(required_runtime_endpoints),
-                "review_process_is_blocker": completion["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": completion["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
             },
             "demo_steps": demo_steps,
@@ -13550,14 +12177,8 @@ class TaskOrchestrator:
             next_action: str,
         ) -> dict[str, Any]:
             require_object_name(section_name, "commercial_proposal.section_name")
-            if completion_state not in {
-                "ready",
-                "warning",
-                "blocked",
-            }:  # pragma: no cover
-                raise ValueError(
-                    "commercial proposal section state must be ready, warning, or blocked"
-                )
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial proposal section state must be ready, warning, or blocked")
             return {
                 "section_name": section_name,
                 "label": label,
@@ -13591,16 +12212,10 @@ class TaskOrchestrator:
                 "executive_summary",
                 "Executive summary",
                 "Deal owner",
-                [
-                    "README.md",
-                    "docs/commercial_completion_scorecard.md",
-                    "/api/v1/commercial_completion_scorecards/latest",
-                ],
+                ["README.md", "docs/commercial_completion_scorecard.md", "/api/v1/commercial_completion_scorecards/latest"],
                 ["/api/v1/commercial_completion_scorecards/latest"],
                 "repository_and_runtime_artifact",
-                local_runtime_state
-                if all_files("README.md", "docs/commercial_completion_scorecard.md")
-                else "blocked",
+                local_runtime_state if all_files("README.md", "docs/commercial_completion_scorecard.md") else "blocked",
                 f"commercial_completion_status={completion['completion_status']}",
                 "One enterprise orchestration control plane is ready for a KRW 2B buyer review with explicit caveats.",
                 "Use the completion scorecard as the proposal cover evidence.",
@@ -13609,21 +12224,12 @@ class TaskOrchestrator:
                 "product_scope",
                 "Product scope",
                 "Product owner",
-                [
-                    "docs/product_planning.md",
-                    "docs/commercial_plugin_operating_model.md",
-                    "docs/library_research.md",
-                ],
+                ["docs/product_planning.md", "docs/commercial_plugin_operating_model.md", "docs/library_research.md"],
                 [],
                 "repository_artifact",
                 "ready"
-                if all_files(
-                    "docs/product_planning.md",
-                    "docs/commercial_plugin_operating_model.md",
-                    "docs/library_research.md",
-                )
-                and completion["library_split_decision"]["decision"]
-                == "keep_single_product"
+                if all_files("docs/product_planning.md", "docs/commercial_plugin_operating_model.md", "docs/library_research.md")
+                and completion["library_split_decision"]["decision"] == "keep_single_product"
                 else "blocked",
                 completion["library_split_decision"]["reason"],
                 "The offer is one compatible API plus one admin evidence surface, not a split product suite.",
@@ -13633,15 +12239,8 @@ class TaskOrchestrator:
                 "buyer_value_case",
                 "Buyer value case",
                 "Economic buyer",
-                [
-                    "docs/commercial_value_readiness.md",
-                    "docs/analytics_spec.md",
-                    "/api/v1/commercial_value_readiness/latest",
-                ],
-                [
-                    "/api/v1/commercial_value_readiness/latest",
-                    "/api/v1/analytics_snapshots/latest",
-                ],
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/commercial_value_readiness/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if value["value_status"] != "commercial_value_blocked"
@@ -13662,16 +12261,10 @@ class TaskOrchestrator:
                     "/api/v1/commercial_demo_scenarios/latest",
                     "/api/v1/commercial_buyer_acceptance_workflows/latest",
                 ],
-                [
-                    "/api/v1/commercial_demo_scenarios/latest",
-                    "/api/v1/commercial_buyer_acceptance_workflows/latest",
-                ],
+                ["/api/v1/commercial_demo_scenarios/latest", "/api/v1/commercial_buyer_acceptance_workflows/latest"],
                 "repository_and_runtime_artifact",
                 local_runtime_state
-                if all_files(
-                    "docs/commercial_demo_scenarios.md",
-                    "docs/commercial_buyer_acceptance_runbook.md",
-                )
+                if all_files("docs/commercial_demo_scenarios.md", "docs/commercial_buyer_acceptance_runbook.md")
                 else "blocked",
                 f"commercial_demo_status={demo['demo_status']}; buyer_acceptance_workflow_status={buyer_workflow['workflow_status']}",
                 "Buyer review can move from demo script to Go/Warning/No-Go acceptance without leaving the control plane.",
@@ -13681,25 +12274,11 @@ class TaskOrchestrator:
                 "technical_evidence",
                 "Technical evidence",
                 "Platform reviewer",
-                [
-                    "docs/rest_api_design.md",
-                    "docs/screen_design.md",
-                    "contextual_orchestrator/api_contract.py",
-                    "/admin",
-                ],
-                [
-                    "/v1/chat/completions",
-                    "/admin",
-                    "/api/v1/workflow_runs",
-                    "/api/v1/access_reports/{workflow_run_id}",
-                ],
+                ["docs/rest_api_design.md", "docs/screen_design.md", "contextual_orchestrator/api_contract.py", "/admin"],
+                ["/v1/chat/completions", "/admin", "/api/v1/workflow_runs", "/api/v1/access_reports/{workflow_run_id}"],
                 "repository_and_runtime_artifact",
                 "ready"
-                if all_files(
-                    "docs/rest_api_design.md",
-                    "docs/screen_design.md",
-                    "contextual_orchestrator/api_contract.py",
-                )
+                if all_files("docs/rest_api_design.md", "docs/screen_design.md", "contextual_orchestrator/api_contract.py")
                 and admin_state["agents"]
                 else "blocked",
                 f"agent_count={len(admin_state['agents'])}; recent_workflow_run_count={len(admin_state['recent_workflow_runs'])}",
@@ -13710,16 +12289,11 @@ class TaskOrchestrator:
                 "security_and_compliance",
                 "Security and compliance",
                 "Security reviewer",
-                [
-                    "SECURITY.md",
-                    "docs/commercial_security_attestation.md",
-                    "/api/v1/commercial_security_attestations/latest",
-                ],
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
                 ["/api/v1/commercial_security_attestations/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
-                if security["security_attestation_status"]
-                != "commercial_security_attestation_blocked"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
                 and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
                 else "blocked",
                 f"security_attestation_status={security['security_attestation_status']}",
@@ -13736,18 +12310,12 @@ class TaskOrchestrator:
                     "/api/v1/commercial_onboarding_readiness/latest",
                     "/api/v1/commercial_operations_readiness/latest",
                 ],
-                [
-                    "/api/v1/commercial_onboarding_readiness/latest",
-                    "/api/v1/commercial_operations_readiness/latest",
-                ],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
                 and operations["operations_status"] != "commercial_operations_blocked"
-                and all_files(
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_operations_readiness.md",
-                )
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
                 else "blocked",
                 f"onboarding_status={onboarding['onboarding_status']}; operations_status={operations['operations_status']}",
                 "Implementation and operations evidence is proposal-ready with production environment follow-ups separated.",
@@ -13779,12 +12347,7 @@ class TaskOrchestrator:
                 "commercial_terms_followups",
                 "Commercial terms follow-ups",
                 "Deal owner",
-                [
-                    "docs/commercial_contract_readiness.md",
-                    "buyer order form",
-                    "legal review",
-                    "pricing approval",
-                ],
+                ["docs/commercial_contract_readiness.md", "buyer order form", "legal review", "pricing approval"],
                 ["/api/v1/commercial_contract_readiness/latest"],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -13796,12 +12359,7 @@ class TaskOrchestrator:
                 "production_buyer_inputs",
                 "Production and buyer inputs",
                 "Buyer sponsor",
-                [
-                    "production telemetry",
-                    "buyer ROI model",
-                    "support plan",
-                    "security questionnaire",
-                ],
+                ["production telemetry", "buyer ROI model", "support plan", "security questionnaire"],
                 [],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -13860,9 +12418,7 @@ class TaskOrchestrator:
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
                 "endpoint_count": len(required_runtime_endpoints),
-                "review_process_is_blocker": completion["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": completion["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
             },
             "proposal_sections": proposal_sections,
@@ -13888,9 +12444,7 @@ class TaskOrchestrator:
                 "commercial_demo_status": demo["demo_status"],
                 "buyer_acceptance_workflow_status": buyer_workflow["workflow_status"],
                 "commercial_value_status": value["value_status"],
-                "commercial_security_attestation_status": security[
-                    "security_attestation_status"
-                ],
+                "commercial_security_attestation_status": security["security_attestation_status"],
                 "commercial_contract_status": contract["contract_status"],
                 "commercial_onboarding_status": onboarding["onboarding_status"],
                 "commercial_operations_status": operations["operations_status"],
@@ -13976,14 +12530,8 @@ class TaskOrchestrator:
             next_action: str,
         ) -> dict[str, Any]:
             require_object_name(gate_name, "commercial_purchase_approval.gate_name")
-            if completion_state not in {
-                "ready",
-                "warning",
-                "blocked",
-            }:  # pragma: no cover
-                raise ValueError(
-                    "commercial purchase approval gate state must be ready, warning, or blocked"
-                )
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial purchase approval gate state must be ready, warning, or blocked")
             return {
                 "gate_name": gate_name,
                 "label": label,
@@ -13997,9 +12545,7 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(
-            dict.fromkeys(proposal["concrete_blockers"] + close["concrete_blockers"])
-        )
+        concrete_blockers = list(dict.fromkeys(proposal["concrete_blockers"] + close["concrete_blockers"]))
         local_runtime_state = (
             "blocked"
             if proposal["proposal_status"] == "commercial_proposal_blocked"
@@ -14012,15 +12558,10 @@ class TaskOrchestrator:
                 "proposal_packet_ready",
                 "Proposal packet ready",
                 "Deal owner",
-                [
-                    "docs/commercial_proposal_packet.md",
-                    "/api/v1/commercial_proposal_packets/latest",
-                ],
+                ["docs/commercial_proposal_packet.md", "/api/v1/commercial_proposal_packets/latest"],
                 ["/api/v1/commercial_proposal_packets/latest"],
                 "repository_and_runtime_artifact",
-                local_runtime_state
-                if has_file("docs/commercial_proposal_packet.md")
-                else "blocked",
+                local_runtime_state if has_file("docs/commercial_proposal_packet.md") else "blocked",
                 f"commercial_proposal_status={proposal['proposal_status']}",
                 "Can the buyer review one coherent proposal packet?",
                 "Use the proposal packet as the approval cover artifact.",
@@ -14029,10 +12570,7 @@ class TaskOrchestrator:
                 "procurement_path_ready",
                 "Procurement path ready",
                 "Procurement owner",
-                [
-                    "docs/commercial_procurement_readiness.md",
-                    "/api/v1/commercial_procurement_readiness/latest",
-                ],
+                ["docs/commercial_procurement_readiness.md", "/api/v1/commercial_procurement_readiness/latest"],
                 ["/api/v1/commercial_procurement_readiness/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
@@ -14047,10 +12585,7 @@ class TaskOrchestrator:
                 "contract_legal_packet_ready",
                 "Contract and legal packet ready",
                 "Legal owner",
-                [
-                    "docs/commercial_contract_readiness.md",
-                    "/api/v1/commercial_contract_readiness/latest",
-                ],
+                ["docs/commercial_contract_readiness.md", "/api/v1/commercial_contract_readiness/latest"],
                 ["/api/v1/commercial_contract_readiness/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
@@ -14065,21 +12600,12 @@ class TaskOrchestrator:
                 "financial_value_case_ready",
                 "Financial value case ready",
                 "Economic buyer",
-                [
-                    "docs/commercial_value_readiness.md",
-                    "docs/analytics_spec.md",
-                    "/api/v1/commercial_value_readiness/latest",
-                ],
-                [
-                    "/api/v1/commercial_value_readiness/latest",
-                    "/api/v1/analytics_snapshots/latest",
-                ],
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/commercial_value_readiness/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if value["value_status"] != "commercial_value_blocked"
-                and all_files(
-                    "docs/commercial_value_readiness.md", "docs/analytics_spec.md"
-                )
+                and all_files("docs/commercial_value_readiness.md", "docs/analytics_spec.md")
                 and analytics["measurement_status"] == "local_runtime_snapshot"
                 else "blocked",
                 f"commercial_value_status={value['value_status']}; analytics_measurement_status={analytics['measurement_status']}",
@@ -14090,16 +12616,11 @@ class TaskOrchestrator:
                 "security_acceptance_ready",
                 "Security acceptance ready",
                 "Security owner",
-                [
-                    "SECURITY.md",
-                    "docs/commercial_security_attestation.md",
-                    "/api/v1/commercial_security_attestations/latest",
-                ],
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
                 ["/api/v1/commercial_security_attestations/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
-                if security["security_attestation_status"]
-                != "commercial_security_attestation_blocked"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
                 and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
                 else "blocked",
                 f"commercial_security_attestation_status={security['security_attestation_status']}",
@@ -14116,18 +12637,12 @@ class TaskOrchestrator:
                     "/api/v1/commercial_onboarding_readiness/latest",
                     "/api/v1/commercial_operations_readiness/latest",
                 ],
-                [
-                    "/api/v1/commercial_onboarding_readiness/latest",
-                    "/api/v1/commercial_operations_readiness/latest",
-                ],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
                 and operations["operations_status"] != "commercial_operations_blocked"
-                and all_files(
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_operations_readiness.md",
-                )
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
                 else "blocked",
                 f"commercial_onboarding_status={onboarding['onboarding_status']}; commercial_operations_status={operations['operations_status']}",
                 "Can implementation owners see onboarding and operations evidence before purchase approval?",
@@ -14137,10 +12652,7 @@ class TaskOrchestrator:
                 "close_readiness_ready",
                 "Close readiness ready",
                 "Deal owner",
-                [
-                    "docs/commercial_close_readiness.md",
-                    "/api/v1/commercial_close_readiness/latest",
-                ],
+                ["docs/commercial_close_readiness.md", "/api/v1/commercial_close_readiness/latest"],
                 ["/api/v1/commercial_close_readiness/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
@@ -14190,12 +12702,7 @@ class TaskOrchestrator:
                 "buyer_budget_po_authority",
                 "Buyer budget and PO authority",
                 "Finance and procurement owner",
-                [
-                    "budget approval",
-                    "purchase order",
-                    "finance authority",
-                    "go-live authorization",
-                ],
+                ["budget approval", "purchase order", "finance authority", "go-live authorization"],
                 [],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -14210,13 +12717,9 @@ class TaskOrchestrator:
         if blocked_count:
             purchase_approval_status = "commercial_purchase_approval_blocked"
         elif warning_count:
-            purchase_approval_status = (
-                "commercial_purchase_approval_ready_with_warnings"
-            )
+            purchase_approval_status = "commercial_purchase_approval_ready_with_warnings"
         else:  # pragma: no cover - unreachable while this report carries literal buyer-specific warning sections
-            purchase_approval_status = (
-                "commercial_purchase_approval_ready"  # pragma: no cover
-            )
+            purchase_approval_status = "commercial_purchase_approval_ready"  # pragma: no cover
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -14259,9 +12762,7 @@ class TaskOrchestrator:
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
                 "endpoint_count": len(required_runtime_endpoints),
-                "review_process_is_blocker": proposal["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": proposal["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
             },
             "approval_gates": approval_gates,
@@ -14288,9 +12789,7 @@ class TaskOrchestrator:
                 "commercial_procurement_status": procurement["procurement_status"],
                 "commercial_contract_status": contract["contract_status"],
                 "commercial_value_status": value["value_status"],
-                "commercial_security_attestation_status": security[
-                    "security_attestation_status"
-                ],
+                "commercial_security_attestation_status": security["security_attestation_status"],
                 "commercial_onboarding_status": onboarding["onboarding_status"],
                 "commercial_operations_status": operations["operations_status"],
                 "analytics_measurement_status": analytics["measurement_status"],
@@ -14395,14 +12894,8 @@ class TaskOrchestrator:
             next_action: str,
         ) -> dict[str, Any]:
             require_object_name(section_name, "commercial_due_diligence.section_name")
-            if completion_state not in {
-                "ready",
-                "warning",
-                "blocked",
-            }:  # pragma: no cover
-                raise ValueError(
-                    "commercial due diligence section state must be ready, warning, or blocked"
-                )
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial due diligence section state must be ready, warning, or blocked")
             return {
                 "section_name": section_name,
                 "label": label,
@@ -14427,8 +12920,7 @@ class TaskOrchestrator:
         )
         local_runtime_state = (
             "blocked"
-            if purchase["purchase_approval_status"]
-            == "commercial_purchase_approval_blocked"
+            if purchase["purchase_approval_status"] == "commercial_purchase_approval_blocked"
             or proposal["proposal_status"] == "commercial_proposal_blocked"
             or completion["completion_status"] == "commercial_completion_blocked"
             or demo["demo_status"] == "commercial_demo_blocked"
@@ -14441,18 +12933,10 @@ class TaskOrchestrator:
                 "purchase_approval_packet",
                 "Purchase approval packet",
                 "Purchase committee",
-                [
-                    "docs/commercial_purchase_approval_packet.md",
-                    "/api/v1/commercial_purchase_approval_packets/latest",
-                ],
-                [
-                    "/api/v1/commercial_purchase_approval_packets/latest",
-                    "/api/v1/commercial_proposal_packets/latest",
-                ],
+                ["docs/commercial_purchase_approval_packet.md", "/api/v1/commercial_purchase_approval_packets/latest"],
+                ["/api/v1/commercial_purchase_approval_packets/latest", "/api/v1/commercial_proposal_packets/latest"],
                 "repository_and_runtime_artifact",
-                local_runtime_state
-                if has_file("docs/commercial_purchase_approval_packet.md")
-                else "blocked",
+                local_runtime_state if has_file("docs/commercial_purchase_approval_packet.md") else "blocked",
                 f"commercial_purchase_approval_status={purchase['purchase_approval_status']}",
                 "Can the buyer review one approval packet before diligence sign-off?",
                 "Use the approval packet as the diligence room cover index.",
@@ -14476,11 +12960,7 @@ class TaskOrchestrator:
                 "repository_and_runtime_artifact",
                 "ready"
                 if local_runtime_state == "ready"
-                and all_files(
-                    "docs/rest_api_design.md",
-                    "contextual_orchestrator/api_contract.py",
-                    "README.md",
-                )
+                and all_files("docs/rest_api_design.md", "contextual_orchestrator/api_contract.py", "README.md")
                 and admin_state["agents"]
                 else "blocked",
                 f"agent_count={len(admin_state['agents'])}; api_contract_present={has_file('contextual_orchestrator/api_contract.py')}",
@@ -14491,24 +12971,11 @@ class TaskOrchestrator:
                 "admin_trace_evidence",
                 "Admin trace evidence",
                 "Operator reviewer",
-                [
-                    "docs/screen_design.md",
-                    "/admin",
-                    "/admin/state",
-                    "workflow trace",
-                    "access report",
-                ],
-                [
-                    "/admin",
-                    "/admin/state",
-                    "/api/v1/workflow_runs",
-                    "/api/v1/access_reports/{workflow_run_id}",
-                ],
+                ["docs/screen_design.md", "/admin", "/admin/state", "workflow trace", "access report"],
+                ["/admin", "/admin/state", "/api/v1/workflow_runs", "/api/v1/access_reports/{workflow_run_id}"],
                 "repository_and_runtime_artifact",
                 "ready"
-                if all_files(
-                    "docs/screen_design.md", "contextual_orchestrator/admin.py"
-                )
+                if all_files("docs/screen_design.md", "contextual_orchestrator/admin.py")
                 and admin_state["agents"]
                 and admin_state["recent_workflow_runs"]
                 else "blocked",
@@ -14520,16 +12987,11 @@ class TaskOrchestrator:
                 "security_and_compliance",
                 "Security and compliance",
                 "Security reviewer",
-                [
-                    "SECURITY.md",
-                    "docs/commercial_security_attestation.md",
-                    "/api/v1/commercial_security_attestations/latest",
-                ],
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
                 ["/api/v1/commercial_security_attestations/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
-                if security["security_attestation_status"]
-                != "commercial_security_attestation_blocked"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
                 and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
                 else "blocked",
                 f"commercial_security_attestation_status={security['security_attestation_status']}",
@@ -14553,8 +13015,7 @@ class TaskOrchestrator:
                 "repository_and_runtime_artifact",
                 "ready"
                 if contract["contract_status"] != "commercial_contract_blocked"
-                and procurement["procurement_status"]
-                != "commercial_procurement_blocked"
+                and procurement["procurement_status"] != "commercial_procurement_blocked"
                 and close["close_status"] != "commercial_close_blocked"
                 and all_files(
                     "docs/commercial_contract_readiness.md",
@@ -14574,22 +13035,13 @@ class TaskOrchestrator:
                 "value_and_analytics",
                 "Value and analytics",
                 "Economic reviewer",
-                [
-                    "docs/commercial_value_readiness.md",
-                    "docs/analytics_spec.md",
-                    "/api/v1/analytics_snapshots/latest",
-                ],
-                [
-                    "/api/v1/commercial_value_readiness/latest",
-                    "/api/v1/analytics_snapshots/latest",
-                ],
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if value["value_status"] != "commercial_value_blocked"
                 and analytics["measurement_status"] == "local_runtime_snapshot"
-                and all_files(
-                    "docs/commercial_value_readiness.md", "docs/analytics_spec.md"
-                )
+                and all_files("docs/commercial_value_readiness.md", "docs/analytics_spec.md")
                 else "blocked",
                 f"commercial_value_status={value['value_status']}; analytics_measurement_status={analytics['measurement_status']}",
                 "Can finance tell measured local evidence apart from buyer ROI assumptions?",
@@ -14599,22 +13051,13 @@ class TaskOrchestrator:
                 "implementation_readiness",
                 "Implementation readiness",
                 "Implementation and operations reviewers",
-                [
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_operations_readiness.md",
-                ],
-                [
-                    "/api/v1/commercial_onboarding_readiness/latest",
-                    "/api/v1/commercial_operations_readiness/latest",
-                ],
+                ["docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md"],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
                 and operations["operations_status"] != "commercial_operations_blocked"
-                and all_files(
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_operations_readiness.md",
-                )
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
                 else "blocked",
                 f"commercial_onboarding_status={onboarding['onboarding_status']}; commercial_operations_status={operations['operations_status']}",
                 "Can implementation owners see onboarding, operations, incident, and handoff evidence?",
@@ -14646,11 +13089,7 @@ class TaskOrchestrator:
                 "buyer_authority_documents",
                 "Buyer authority documents",
                 "Buyer sponsor",
-                [
-                    "named buyer signer",
-                    "budget owner and purchase order",
-                    "buyer DPA or privacy acceptance",
-                ],
+                ["named buyer signer", "budget owner and purchase order", "buyer DPA or privacy acceptance"],
                 [],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -14662,11 +13101,7 @@ class TaskOrchestrator:
                 "production_external_attestations",
                 "Production and external attestations",
                 "Production and security owners",
-                [
-                    "production telemetry",
-                    "third-party security attestation",
-                    "hosted scan evidence",
-                ],
+                ["production telemetry", "third-party security attestation", "hosted scan evidence"],
                 [],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -14728,9 +13163,7 @@ class TaskOrchestrator:
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
                 "endpoint_count": len(required_runtime_endpoints),
-                "review_process_is_blocker": purchase["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": purchase["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
             },
             "diligence_sections": diligence_sections,
@@ -14759,9 +13192,7 @@ class TaskOrchestrator:
             ],
             "review_process_policy": purchase["review_process_policy"],
             "related_runtime_reports": {
-                "commercial_purchase_approval_status": purchase[
-                    "purchase_approval_status"
-                ],
+                "commercial_purchase_approval_status": purchase["purchase_approval_status"],
                 "commercial_proposal_status": proposal["proposal_status"],
                 "commercial_completion_status": completion["completion_status"],
                 "commercial_demo_status": demo["demo_status"],
@@ -14770,9 +13201,7 @@ class TaskOrchestrator:
                 "commercial_procurement_status": procurement["procurement_status"],
                 "commercial_contract_status": contract["contract_status"],
                 "commercial_value_status": value["value_status"],
-                "commercial_security_attestation_status": security[
-                    "security_attestation_status"
-                ],
+                "commercial_security_attestation_status": security["security_attestation_status"],
                 "commercial_onboarding_status": onboarding["onboarding_status"],
                 "commercial_operations_status": operations["operations_status"],
                 "analytics_measurement_status": analytics["measurement_status"],
@@ -14881,17 +13310,9 @@ class TaskOrchestrator:
             committee_question: str,
             next_action: str,
         ) -> dict[str, Any]:
-            require_object_name(
-                section_name, "commercial_investment_committee.section_name"
-            )
-            if completion_state not in {
-                "ready",
-                "warning",
-                "blocked",
-            }:  # pragma: no cover
-                raise ValueError(
-                    "commercial investment committee section state must be ready, warning, or blocked"
-                )
+            require_object_name(section_name, "commercial_investment_committee.section_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial investment committee section state must be ready, warning, or blocked")
             return {
                 "section_name": section_name,
                 "label": label,
@@ -14917,10 +13338,8 @@ class TaskOrchestrator:
         )
         local_runtime_state = (
             "blocked"
-            if due_diligence["due_diligence_status"]
-            == "commercial_due_diligence_blocked"
-            or purchase["purchase_approval_status"]
-            == "commercial_purchase_approval_blocked"
+            if due_diligence["due_diligence_status"] == "commercial_due_diligence_blocked"
+            or purchase["purchase_approval_status"] == "commercial_purchase_approval_blocked"
             or proposal["proposal_status"] == "commercial_proposal_blocked"
             or completion["completion_status"] == "commercial_completion_blocked"
             or demo["demo_status"] == "commercial_demo_blocked"
@@ -14955,15 +13374,10 @@ class TaskOrchestrator:
                 "diligence_room_ready",
                 "Due diligence room ready",
                 "Diligence owner",
-                [
-                    "docs/commercial_due_diligence_room.md",
-                    "/api/v1/commercial_due_diligence_rooms/latest",
-                ],
+                ["docs/commercial_due_diligence_room.md", "/api/v1/commercial_due_diligence_rooms/latest"],
                 ["/api/v1/commercial_due_diligence_rooms/latest"],
                 "repository_and_runtime_artifact",
-                local_runtime_state
-                if has_file("docs/commercial_due_diligence_room.md")
-                else "blocked",
+                local_runtime_state if has_file("docs/commercial_due_diligence_room.md") else "blocked",
                 f"commercial_due_diligence_status={due_diligence['due_diligence_status']}",
                 "Can the memo point to a complete diligence room?",
                 "Reference due diligence room sections instead of duplicating evidence.",
@@ -14972,15 +13386,10 @@ class TaskOrchestrator:
                 "purchase_approval_ready",
                 "Purchase approval ready",
                 "Purchase sponsor",
-                [
-                    "docs/commercial_purchase_approval_packet.md",
-                    "/api/v1/commercial_purchase_approval_packets/latest",
-                ],
+                ["docs/commercial_purchase_approval_packet.md", "/api/v1/commercial_purchase_approval_packets/latest"],
                 ["/api/v1/commercial_purchase_approval_packets/latest"],
                 "repository_and_runtime_artifact",
-                local_runtime_state
-                if has_file("docs/commercial_purchase_approval_packet.md")
-                else "blocked",
+                local_runtime_state if has_file("docs/commercial_purchase_approval_packet.md") else "blocked",
                 f"commercial_purchase_approval_status={purchase['purchase_approval_status']}",
                 "Can the committee see finance, procurement, legal, security, and implementation gates?",
                 "Use the purchase approval packet as committee appendix A.",
@@ -14989,22 +13398,13 @@ class TaskOrchestrator:
                 "financial_case",
                 "Financial case",
                 "Economic buyer",
-                [
-                    "docs/commercial_value_readiness.md",
-                    "docs/analytics_spec.md",
-                    "/api/v1/analytics_snapshots/latest",
-                ],
-                [
-                    "/api/v1/commercial_value_readiness/latest",
-                    "/api/v1/analytics_snapshots/latest",
-                ],
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if value["value_status"] != "commercial_value_blocked"
                 and analytics["measurement_status"] == "local_runtime_snapshot"
-                and all_files(
-                    "docs/commercial_value_readiness.md", "docs/analytics_spec.md"
-                )
+                and all_files("docs/commercial_value_readiness.md", "docs/analytics_spec.md")
                 else "blocked",
                 f"commercial_value_status={value['value_status']}; analytics_measurement_status={analytics['measurement_status']}",
                 "Does the memo separate measured local evidence from buyer ROI assumptions?",
@@ -15014,16 +13414,11 @@ class TaskOrchestrator:
                 "risk_and_security_summary",
                 "Risk and security summary",
                 "Security reviewer",
-                [
-                    "SECURITY.md",
-                    "docs/commercial_security_attestation.md",
-                    "/api/v1/commercial_security_attestations/latest",
-                ],
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
                 ["/api/v1/commercial_security_attestations/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
-                if security["security_attestation_status"]
-                != "commercial_security_attestation_blocked"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
                 and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
                 else "blocked",
                 f"commercial_security_attestation_status={security['security_attestation_status']}",
@@ -15047,8 +13442,7 @@ class TaskOrchestrator:
                 "repository_and_runtime_artifact",
                 "ready"
                 if contract["contract_status"] != "commercial_contract_blocked"
-                and procurement["procurement_status"]
-                != "commercial_procurement_blocked"
+                and procurement["procurement_status"] != "commercial_procurement_blocked"
                 and close["close_status"] != "commercial_close_blocked"
                 and all_files(
                     "docs/commercial_contract_readiness.md",
@@ -15068,22 +13462,13 @@ class TaskOrchestrator:
                 "implementation_readiness_summary",
                 "Implementation readiness summary",
                 "Implementation owner",
-                [
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_operations_readiness.md",
-                ],
-                [
-                    "/api/v1/commercial_onboarding_readiness/latest",
-                    "/api/v1/commercial_operations_readiness/latest",
-                ],
+                ["docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md"],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
                 "repository_and_runtime_artifact",
                 "ready"
                 if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
                 and operations["operations_status"] != "commercial_operations_blocked"
-                and all_files(
-                    "docs/commercial_onboarding_readiness.md",
-                    "docs/commercial_operations_readiness.md",
-                )
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
                 else "blocked",
                 f"commercial_onboarding_status={onboarding['onboarding_status']}; commercial_operations_status={operations['operations_status']}",
                 "Can implementation start after buyer environment details are supplied?",
@@ -15093,18 +13478,10 @@ class TaskOrchestrator:
                 "design_and_figma_review",
                 "Design and Figma review",
                 "Product design reviewer",
-                [
-                    "docs/figma_artifacts.md",
-                    "docs/commercial_investment_committee_memo.md",
-                ],
+                ["docs/figma_artifacts.md", "docs/commercial_investment_committee_memo.md"],
                 ["/api/v1/commercial_investment_committee_memos/latest"],
                 "repository_and_runtime_artifact",
-                "ready"
-                if all_files(
-                    "docs/figma_artifacts.md",
-                    "docs/commercial_investment_committee_memo.md",
-                )
-                else "blocked",
+                "ready" if all_files("docs/figma_artifacts.md", "docs/commercial_investment_committee_memo.md") else "blocked",
                 "FigJam memo flow and Product Design scope are recorded without Code Connect.",
                 "Can stakeholders inspect the memo flow in FigJam and runtime JSON?",
                 "Keep Figma Code Connect out of the committee workflow.",
@@ -15113,12 +13490,7 @@ class TaskOrchestrator:
                 "buyer_final_authority",
                 "Buyer final authority",
                 "Buyer sponsor",
-                [
-                    "executive sponsor approval",
-                    "named signer",
-                    "budget owner",
-                    "purchase order",
-                ],
+                ["executive sponsor approval", "named signer", "budget owner", "purchase order"],
                 [],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -15130,11 +13502,7 @@ class TaskOrchestrator:
                 "production_external_evidence",
                 "Production and external evidence",
                 "Production and security owners",
-                [
-                    "production telemetry",
-                    "third-party security attestation",
-                    "hosted scan evidence",
-                ],
+                ["production telemetry", "third-party security attestation", "hosted scan evidence"],
                 [],
                 "proposed_until_buyer_specific",
                 "warning",
@@ -15150,14 +13518,10 @@ class TaskOrchestrator:
             investment_committee_status = "commercial_investment_committee_blocked"
             recommendation_status = "do_not_recommend_until_blockers_cleared"
         elif warning_count:
-            investment_committee_status = (
-                "commercial_investment_committee_ready_with_warnings"
-            )
+            investment_committee_status = "commercial_investment_committee_ready_with_warnings"
             recommendation_status = "recommend_with_buyer_conditions"
         else:  # pragma: no cover - unreachable while external-evidence warning sections remain literal
-            investment_committee_status = (
-                "commercial_investment_committee_ready"  # pragma: no cover
-            )
+            investment_committee_status = "commercial_investment_committee_ready"  # pragma: no cover
             recommendation_status = "recommend"  # pragma: no cover
         required_runtime_endpoints = list(
             dict.fromkeys(
@@ -15188,8 +13552,7 @@ class TaskOrchestrator:
                     "attestation conditions tracked separately from measured local product evidence."
                     if recommendation_status == "recommend_with_buyer_conditions"
                     else "Do not recommend until concrete blockers are cleared."
-                    if recommendation_status
-                    == "do_not_recommend_until_blockers_cleared"
+                    if recommendation_status == "do_not_recommend_until_blockers_cleared"
                     else "Recommend committee approval with no open local or buyer-specific conditions."
                 ),
                 "audience": [
@@ -15208,9 +13571,7 @@ class TaskOrchestrator:
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
                 "endpoint_count": len(required_runtime_endpoints),
-                "review_process_is_blocker": due_diligence["review_process_policy"][
-                    "is_blocker"
-                ],
+                "review_process_is_blocker": due_diligence["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
             },
             "memo_sections": memo_sections,
@@ -15240,12 +13601,8 @@ class TaskOrchestrator:
             ],
             "review_process_policy": due_diligence["review_process_policy"],
             "related_runtime_reports": {
-                "commercial_due_diligence_status": due_diligence[
-                    "due_diligence_status"
-                ],
-                "commercial_purchase_approval_status": purchase[
-                    "purchase_approval_status"
-                ],
+                "commercial_due_diligence_status": due_diligence["due_diligence_status"],
+                "commercial_purchase_approval_status": purchase["purchase_approval_status"],
                 "commercial_proposal_status": proposal["proposal_status"],
                 "commercial_completion_status": completion["completion_status"],
                 "commercial_demo_status": demo["demo_status"],
@@ -15254,9 +13611,7 @@ class TaskOrchestrator:
                 "commercial_procurement_status": procurement["procurement_status"],
                 "commercial_contract_status": contract["contract_status"],
                 "commercial_value_status": value["value_status"],
-                "commercial_security_attestation_status": security[
-                    "security_attestation_status"
-                ],
+                "commercial_security_attestation_status": security["security_attestation_status"],
                 "commercial_onboarding_status": onboarding["onboarding_status"],
                 "commercial_operations_status": operations["operations_status"],
                 "analytics_measurement_status": analytics["measurement_status"],
@@ -15297,9 +13652,7 @@ class TaskOrchestrator:
                     page_size=max(1, len(self._run_order)), owner_id=owner_id
                 )
             ],
-            "recent_audit_events": self.list_recent_audit_events(
-                role=role, purpose=purpose
-            ),
+            "recent_audit_events": self.list_recent_audit_events(role=role, purpose=purpose),
             "recent_authorization_decisions": self.list_recent_authorization_decisions(),
             "spend": self.spend_analytics(),
         }
@@ -15317,26 +13670,15 @@ class TaskOrchestrator:
         if not trace:
             return False
         for step in trace:
-            if not all(
-                key in step
-                for key in ("id", "role", "agent_id", "subtask", "access", "output")
-            ):
+            if not all(key in step for key in ("id", "role", "agent_id", "subtask", "access", "output")):
                 return False
             if not isinstance(step["access"], list) or step["output"] is None:
                 return False
         verification = run.get("verification") or {}
-        return bool(
-            run.get("answer")
-            and "accepted" in verification
-            and "reason" in verification
-        )
+        return bool(run.get("answer") and "accepted" in verification and "reason" in verification)
 
     def _is_policy_safe_run(self, run: dict[str, Any]) -> bool:
-        if (
-            run["mode"] == "conduct"
-            and run["policy_snapshot"].get("verifier_required")
-            and not run.get("verification")
-        ):
+        if run["mode"] == "conduct" and run["policy_snapshot"].get("verifier_required") and not run.get("verification"):
             return False
         return self._provider_exclusion_miss_count(run) == 0
 
@@ -15352,9 +13694,7 @@ class TaskOrchestrator:
                 misses += 1
         return misses
 
-    def _locale_key_parity(
-        self, locale_bundles: dict[str, dict[str, str]]
-    ) -> dict[str, Any]:
+    def _locale_key_parity(self, locale_bundles: dict[str, dict[str, str]]) -> dict[str, Any]:
         english = locale_bundles.get("en", {})
         other_locale_codes = sorted(code for code in locale_bundles if code != "en")
         denominator = len(english) * len(other_locale_codes)
@@ -15417,9 +13757,7 @@ class TaskOrchestrator:
         }:  # pragma: no cover
             raise ValueError("buyer evidence type is invalid")
         if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
-            raise ValueError(
-                "buyer evidence completion state must be ready, warning, or blocked"
-            )
+            raise ValueError("buyer evidence completion state must be ready, warning, or blocked")
         return {
             "item_name": item_name,
             "label": label,
@@ -15445,27 +13783,19 @@ class TaskOrchestrator:
                 "measured_local": evidence_counts.get("measured_local", 0),
                 "repository_artifact": evidence_counts.get("repository_artifact", 0),
                 "figma_artifact": evidence_counts.get("figma_artifact", 0),
-                "proposed_until_production": evidence_counts.get(
-                    "proposed_until_production", 0
-                ),
-                "proposed_until_buyer_specific": evidence_counts.get(
-                    "proposed_until_buyer_specific", 0
-                ),
+                "proposed_until_production": evidence_counts.get("proposed_until_production", 0),
+                "proposed_until_buyer_specific": evidence_counts.get("proposed_until_buyer_specific", 0),
             },
         }
 
-    def _security_posture_criterion(
-        self, security_profile: dict[str, Any]
-    ) -> dict[str, str]:
+    def _security_posture_criterion(self, security_profile: dict[str, Any]) -> dict[str, str]:
         auth_mode = security_profile.get("auth_mode", "loopback_no_auth")
         issues: list[str] = []
         warnings: list[str] = []
         if auth_mode == "single_token":
             warnings.append("single bearer token shared by admin and inference scopes")
         elif auth_mode not in {"split_token", "external_bearer_verifier"}:
-            issues.append(
-                "no bearer token configured outside loopback-only development"
-            )
+            issues.append("no bearer token configured outside loopback-only development")
         if security_profile.get("allow_public_bind"):
             issues.append("public bind is enabled")
         if security_profile.get("expose_trace_by_default"):
@@ -15493,15 +13823,11 @@ class TaskOrchestrator:
             evidence = f"{auth_evidence}, private bind default, hidden traces, rate limits, and run limits are configured"
             remediation = "Keep these controls enabled for customer-facing pilots."
 
-        return self._criterion(
-            "security_posture", "Security posture", status, evidence, remediation
-        )
+        return self._criterion("security_posture", "Security posture", status, evidence, remediation)
 
     def _locale_readiness_criterion(self, analytics: dict[str, Any]) -> dict[str, str]:
         locale_metric = next(
-            metric
-            for metric in analytics["guardrails"]
-            if metric["metric_name"] == "locale_key_parity"
+            metric for metric in analytics["guardrails"] if metric["metric_name"] == "locale_key_parity"
         )
         missing = locale_metric.get("missing_keys", [])
         parity = locale_metric.get("value_percent")
@@ -15513,9 +13839,7 @@ class TaskOrchestrator:
             status = "warn" if missing else "fail"
             evidence = f"{parity}% locale key parity; missing keys: {', '.join(missing) or 'locale bundles absent'}"
             remediation = "Fill missing Korean and English operator labels before customer review."
-        return self._criterion(
-            "locale_readiness", "Locale readiness", status, evidence, remediation
-        )
+        return self._criterion("locale_readiness", "Locale readiness", status, evidence, remediation)
 
     def _provider_egress_criterion(self) -> dict[str, str]:
         unsafe = []
@@ -15531,9 +13855,7 @@ class TaskOrchestrator:
                 unsafe.append(agent.id)
         if unsafe:
             status = "fail"
-            evidence = (
-                f"unsafe provider egress config for agents: {', '.join(sorted(unsafe))}"
-            )
+            evidence = f"unsafe provider egress config for agents: {', '.join(sorted(unsafe))}"
             remediation = "Use https provider endpoints with a named KV credential before enabling remote egress."
         else:
             status = "pass"
@@ -15542,25 +13864,13 @@ class TaskOrchestrator:
                 if not remote
                 else f"{len(remote)} remote providers use https and a named KV credential"
             )
-            remediation = (
-                "Keep provider allow-list enforcement enabled for non-mock providers."
-            )
-        return self._criterion(
-            "provider_egress_safety",
-            "Provider egress safety",
-            status,
-            evidence,
-            remediation,
-        )
+            remediation = "Keep provider allow-list enforcement enabled for non-mock providers."
+        return self._criterion("provider_egress_safety", "Provider egress safety", status, evidence, remediation)
 
-    def _criteria_by_name(
-        self, criteria: list[dict[str, str]]
-    ) -> dict[str, dict[str, str]]:
+    def _criteria_by_name(self, criteria: list[dict[str, str]]) -> dict[str, dict[str, str]]:
         return {row["criterion_name"]: row for row in criteria}
 
-    def _metrics_by_name(
-        self, metrics: list[dict[str, Any]]
-    ) -> dict[str, dict[str, Any]]:
+    def _metrics_by_name(self, metrics: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         return {row["metric_name"]: row for row in metrics}
 
     def _commercial_documentation_profile(self) -> dict[str, Any]:
@@ -15616,12 +13926,7 @@ def _commercial_report_cached(method: Any) -> Any:
             key = (
                 method.__name__,
                 _report_cache_token(args),
-                tuple(
-                    sorted(
-                        (name, _report_cache_token(value))
-                        for name, value in kwargs.items()
-                    )
-                ),
+                tuple(sorted((name, _report_cache_token(value)) for name, value in kwargs.items())),
             )
             if key not in local.cache:
                 local.cache[key] = method(self, *args, **kwargs)
@@ -15636,9 +13941,7 @@ def _commercial_report_cached(method: Any) -> Any:
 
 for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
     if _report_name.startswith("commercial_") and _report_name.endswith("_report"):
-        setattr(
-            TaskOrchestrator, _report_name, _commercial_report_cached(_report_method)
-        )
+        setattr(TaskOrchestrator, _report_name, _commercial_report_cached(_report_method))
 
 
 def redact_text(text: str) -> str:
@@ -15652,13 +13955,9 @@ def redact_text(text: str) -> str:
     redacted = text
     for pattern in SECRET_PATTERNS:
         if pattern.pattern.lower().startswith("(?i)(api"):
-            redacted = pattern.sub(
-                lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted
-            )
+            redacted = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted)
         else:
-            redacted = pattern.sub(
-                lambda match: f"{match.group(1)}[REDACTED]", redacted
-            )
+            redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
     return redacted
 
 
@@ -15671,7 +13970,6 @@ def redact_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: redact_value(item) for key, item in value.items()}
     return value
-
 
 def _freeze_report_cache_value(value: Any) -> Any:
     if isinstance(value, dict):
@@ -15716,9 +14014,7 @@ def _cached_commercial_report(method: Any) -> Any:
     return wrapper
 
 
-for _commercial_report_name, _commercial_report_method in list(
-    TaskOrchestrator.__dict__.items()
-):
+for _commercial_report_name, _commercial_report_method in list(TaskOrchestrator.__dict__.items()):
     if (
         _commercial_report_name.startswith("commercial_")
         and _commercial_report_name.endswith("_report")
@@ -15747,9 +14043,7 @@ def _pareto_front(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return front
 
 
-def _recommend_config(
-    results: list[dict[str, Any]], cost_budget_usd: float | None
-) -> dict[str, Any] | None:
+def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | None) -> dict[str, Any] | None:
     if not results:
         return None
     if cost_budget_usd is not None:
@@ -15765,38 +14059,17 @@ def _recommend_config(
         # best-quality configs) — the honest reading of "max quality while min cost".
         best = max(results, key=lambda r: (r["quality"], -r["cost_usd"]))
         reason = "highest quality; cheapest among equal-quality configs"
-    return {
-        "name": best["name"],
-        "quality": best["quality"],
-        "cost_usd": best["cost_usd"],
-        "reason": reason,
-    }
+    return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
 
 
-def _score_config(
-    orchestrator: Any,
-    tasks: list[dict[str, Any]],
-    quality_fn: Any,
-    mode: str,
-    use_batch: bool,
-) -> float:
+def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool) -> float:
     """Mean quality of one config over the task set; route configs may evaluate via Batch."""
     if use_batch and mode == "route":
         records = orchestrator.batch_route([task["prompt"] for task in tasks])
-        scores = [
-            float(quality_fn(task, record["answer"] or ""))
-            for task, record in zip(tasks, records)
-        ]
+        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
     else:
         scores = [
-            float(
-                quality_fn(
-                    task,
-                    orchestrator.run(
-                        [{"role": "user", "content": task["prompt"]}], mode=mode
-                    )["answer"],
-                )
-            )
+            float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
             for task in tasks
         ]
     return sum(scores) / len(scores) if scores else 0.0
@@ -15828,16 +14101,14 @@ def optimize_orchestration(
         mode = candidate.get("mode", "auto")
         quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
         cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
-        results.append(
-            {
-                "name": candidate["name"],
-                "mode": mode,
-                "quality": round(quality, 4),
-                "cost_usd": round(cost, 6),
-                "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
-                "task_count": len(tasks),
-            }
-        )
+        results.append({
+            "name": candidate["name"],
+            "mode": mode,
+            "quality": round(quality, 4),
+            "cost_usd": round(cost, 6),
+            "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
+            "task_count": len(tasks),
+        })
 
     return {
         "objective": "maximize quality, minimize cost",
@@ -15879,16 +14150,12 @@ def evolve_orchestration(
     def mutate(config: dict[str, Any]) -> dict[str, Any]:
         child = dict(config)
         gene = rng.choice(params)
-        choices = [v for v in search_space[gene] if v != config[gene]] or search_space[
-            gene
-        ]
+        choices = [v for v in search_space[gene] if v != config[gene]] or search_space[gene]
         child[gene] = rng.choice(choices)
         return child
 
     def key(config: dict[str, Any]) -> str:
-        return json.dumps(
-            {p: config[p] for p in params}, sort_keys=True, ensure_ascii=False
-        )
+        return json.dumps({p: config[p] for p in params}, sort_keys=True, ensure_ascii=False)
 
     evaluated: dict[str, dict[str, Any]] = {}
 
@@ -15912,17 +14179,13 @@ def evolve_orchestration(
         return result
 
     def fitness(row: dict[str, Any]) -> tuple[int, float, float]:
-        affordable = (
-            1 if cost_budget_usd is None or row["cost_usd"] <= cost_budget_usd else 0
-        )
+        affordable = 1 if cost_budget_usd is None or row["cost_usd"] <= cost_budget_usd else 0
         return (affordable, row["quality"], -row["cost_usd"])
 
     # Seed population (dedup keys so a tiny space doesn't waste evaluations).
     pool: list[dict[str, Any]] = []
     seen: set[str] = set()
-    while len(pool) < population and len(seen) < min(
-        population * 4, _space_size(search_space)
-    ):
+    while len(pool) < population and len(seen) < min(population * 4, _space_size(search_space)):
         config = random_config()
         if key(config) not in seen:
             seen.add(key(config))
@@ -15933,17 +14196,11 @@ def evolve_orchestration(
         rows = [evaluate(config) for config in pool]
         rows.sort(key=fitness, reverse=True)
         survivors = rows[: max(1, len(rows) // 2)]
-        history.append(
-            {
-                "generation": generation,
-                "best": {
-                    "config": survivors[0]["config"],
-                    "quality": survivors[0]["quality"],
-                    "cost_usd": survivors[0]["cost_usd"],
-                },
-                "evaluated_total": len(evaluated),
-            }
-        )
+        history.append({
+            "generation": generation,
+            "best": {"config": survivors[0]["config"], "quality": survivors[0]["quality"], "cost_usd": survivors[0]["cost_usd"]},
+            "evaluated_total": len(evaluated),
+        })
         pool = [dict(row["config"]) for row in survivors]
         while len(pool) < population:
             pool.append(mutate(rng.choice(survivors)["config"]))
@@ -16003,11 +14260,8 @@ def chat_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": usage
-        or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        "orchestration": {
-            key: value for key, value in orchestration.items() if value is not None
-        },
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
 
 
@@ -16030,8 +14284,7 @@ def text_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": usage
-        or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
 
