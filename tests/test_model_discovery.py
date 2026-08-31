@@ -42,6 +42,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
+    general_free_serving_candidates,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -716,6 +717,291 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
     assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
+
+
+def _nim_vision_model() -> DiscoveredModel:
+    """NVIDIA NIM's incident model: free, chat-capable, declares text + image."""
+    return DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.2-90b-vision-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+
+def test_general_free_serving_candidates_excludes_a_free_vision_only_input_model() -> None:
+    """The general-purpose free pool must exclude a zero-priced vision-input model.
+
+    Relocated from ``free_discovered_models`` (ContextualWisdomLab/.github PR
+    #1198's original fix) onto the dedicated serving-eligibility selector once
+    Devin's review on PR #933 found that ``free_discovered_models`` itself must
+    stay a pure price-based inventory (see
+    ``test_free_discovered_models_still_counts_a_free_vision_only_input_model``
+    below) -- the intent of the original regression test is unchanged.
+
+    Reproduces ``ContextualWisdomLab/.github`` PR #1198's required Strix Security
+    Scan failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passes every existing chat-capability
+    check (Models.dev reports its cost as 0/0, its output modality is "text",
+    and its model id carries no disqualifying token), yet NIM's live deployment
+    rejected Strix's tool-calling request against it with a definitive HTTP 400
+    (``invalid_request_error``) three independent times in a row -- because the
+    orchestrator/free pool has no other candidate to fail over to, this one
+    vision-input model alone exhausts the whole "free" tool-calling pool.
+    Models.dev's own ``tool_call`` field claims ``true`` for this exact model
+    (verified live), so that field cannot be the fix; its declared *input*
+    modality (``image``, alongside ``text``) is the only honest catalog
+    evidence distinguishing it from an ordinary text-only free worker. A
+    model requiring non-text input is a specialized multimodal deployment, not
+    a general-purpose worker a caller can route arbitrary (including
+    tool-calling) requests to without knowing in advance that it needs an
+    image -- so it must not enter the general free pool, while a text-only
+    free model of identical price remains fully eligible.
+    """
+    vision_model = _nim_vision_model()
+    text_only_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.1-8b-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    no_modality_evidence_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="mistralai/mistral-small",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        is_free=True,
+    )
+
+    serving_candidates = general_free_serving_candidates(
+        [vision_model, text_only_model, no_modality_evidence_model]
+    )
+
+    assert [model.model_id for model in serving_candidates] == [
+        "meta/llama-3.1-8b-instruct",
+        "mistralai/mistral-small",
+    ]
+
+
+def test_free_discovered_models_still_counts_a_free_vision_only_input_model() -> None:
+    """Price-based free inventory must not lose a model excluded from serving.
+
+    Finding 3 of Devin's review on PR #933: by filtering inside
+    ``free_discovered_models()`` itself, the original PR #1198 fix silently
+    undercounted a genuinely free model in every consumer of that function
+    that wants raw price inventory rather than serving-pool eligibility --
+    ``--free-only`` CLI output, ``free_tier_count``, and the free-tier
+    data-privacy totals. This model is priced at zero and must be counted
+    here even though :func:`general_free_serving_candidates` correctly
+    excludes it from blind serving.
+    """
+    vision_model = _nim_vision_model()
+
+    assert free_discovered_models([vision_model]) == [vision_model]
+    assert general_free_serving_candidates([vision_model]) == []
+
+
+def test_general_free_serving_candidates_excludes_unroutable_free_models() -> None:
+    """Non-text price/modality evidence alone does not certify servability.
+
+    Devin's review pass on PR #933 after ``efd44f6`` found that
+    ``general_free_serving_candidates`` admits any zero-priced, text-input
+    row regardless of whether it could ever actually become a serving agent:
+    an ``evidence_only`` catalog row (``agent_from_discovered`` refuses to
+    build an agent from one at all) and a free non-chat-capable model (e.g.
+    an embedding-only deployment) both pass the price and modality checks
+    while being fundamentally unroutable. ``general_free_serving_count``
+    therefore overcounted models the general chat pool could never actually
+    serve. ``is_routable_discovered_model`` -- the same predicate
+    ``_auto_discover_runtime_agents`` and ``provider_bootstrap`` already use
+    to decide whether a discovered row may become an ordinary chat agent at
+    all -- is the missing check.
+    """
+    evidence_only_free_text_model = replace(
+        DiscoveredModel(
+            provider_name="nvidia_nim",
+            model_id="evidence-only-free-model",
+            credential_name="NVIDIA_NIM_API_KEY",
+            chat_base_url="https://integrate.api.nvidia.com/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat",),
+            input_modalities=("text",),
+            output_modalities=("text",),
+            is_free=True,
+        ),
+        evidence_only=True,
+    )
+    embedding_only_free_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="embedding-only-free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    routable_free_text_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="routable-free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+    serving_candidates = general_free_serving_candidates([
+        evidence_only_free_text_model,
+        embedding_only_free_model,
+        routable_free_text_model,
+    ])
+
+    assert [model.model_id for model in serving_candidates] == ["routable-free-model"]
+    # Both unroutable rows remain fully counted in the price-based inventory.
+    assert {model.model_id for model in free_discovered_models([
+        evidence_only_free_text_model,
+        embedding_only_free_model,
+        routable_free_text_model,
+    ])} == {
+        "evidence-only-free-model",
+        "embedding-only-free-model",
+        "routable-free-model",
+    }
+
+
+def test_general_free_serving_candidates_modality_shapes() -> None:
+    """Explicit three-way modality contract: text-only, image-only, text+image.
+
+    Finding 2 of Devin's review on PR #933 argued the exclusion should spare a
+    model that "also supports text as a standalone input", so that only a
+    strictly vision-*only* model (no declared text input at all) is excluded.
+    Verified against this repository's own incident evidence and rejected:
+    NVIDIA NIM's real incident model (see ``_nim_vision_model``) declares
+    *both* ``text`` and ``image`` as supported inputs per Models.dev -- i.e.
+    it already satisfies "text is a supported standalone input" by Devin's own
+    proposed test -- yet NIM's live deployment rejected a plain tool-calling
+    request against it three times in a row. Models.dev's ``input_modalities``
+    documents supported inputs, not which ones a given request must supply, so
+    it cannot certify that this exact model would have served a tool-calling
+    request that carried text alone. Narrowing the exclusion to spare
+    "text is also listed" models would therefore silently re-admit the very
+    model this incident is about, so this repository instead keeps excluding
+    any declared non-text input modality from blind serving (see
+    ``general_free_serving_candidates``'s and ``_requires_non_text_input``'s
+    docstrings for the full reasoning) -- while a model with *no* modality
+    evidence at all is not penalized for an absent catalog field.
+    """
+    text_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="text-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    vision_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="vision-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("image",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    text_and_image = _nim_vision_model()
+
+    serving_candidates = general_free_serving_candidates(
+        [text_only, vision_only, text_and_image]
+    )
+
+    assert [model.model_id for model in serving_candidates] == ["text-only-model"]
+    # All three remain fully counted in the price-based inventory regardless.
+    assert {model.model_id for model in free_discovered_models(
+        [text_only, vision_only, text_and_image]
+    )} == {"text-only-model", "vision-only-model", "meta/llama-3.2-90b-vision-instruct"}
+
+
+def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
+    """``general_free_serving_candidates`` and ``_is_general_free_agent`` agree.
+
+    Devin's review on PR #933 (design-consistency note): the discovery-time
+    selector (over ``DiscoveredModel.input_modalities``) and the
+    selection-time predicate (over an agent's persisted ``input:<modality>``
+    tags) must never independently reimplement "what counts as non-text
+    input" -- both now delegate to ``chat_capability.requires_non_text_input``
+    for that classification. This locks the three fixture shapes already
+    established by ``test_general_free_serving_candidates_modality_shapes``
+    (text-only, vision-only-input, text+image) so the two call sites cannot
+    silently diverge again.
+    """
+    text_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="text-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    vision_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="vision-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("image",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    text_and_image = _nim_vision_model()
+    discovered = [text_only, vision_only, text_and_image]
+    serving_model_ids = {model.model_id for model in general_free_serving_candidates(discovered)}
+
+    # ModelAgent.id must be two-or-more-word snake_case; provider model ids
+    # (e.g. "meta/llama-3.2-90b-vision-instruct") are not, so derive a
+    # compliant id distinct from the ``model`` field under test.
+    agent_id_translation = str.maketrans("/.-", "___")
+    agents = {
+        model.model_id: ModelAgent(
+            model.model_id.casefold().translate(agent_id_translation),
+            model.model_id,
+            tags=("cost:free", *(f"input:{value}" for value in model.input_modalities)),
+        )
+        for model in discovered
+    }
+    orchestrator = TaskOrchestrator(list(agents.values()))
+
+    for model in discovered:
+        agent = agents[model.model_id]
+        assert orchestrator._is_general_free_agent(agent) == (
+            model.model_id in serving_model_ids
+        ), model.model_id
+        # Every one of these stays reachable through its own capability route.
+        assert orchestrator._is_free_agent(agent) is True
 
 
 def test_discovery_does_not_mark_multimodal_input_rows_free_without_unit_prices() -> None:

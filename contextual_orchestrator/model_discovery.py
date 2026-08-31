@@ -27,7 +27,11 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
+from .chat_capability import (
+    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
+    requires_non_text_input,
+)
 from .credentials import get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
@@ -1369,9 +1373,114 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     )
 
 
+def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog evidence shows this model needs non-text input.
+
+    A model whose provider/catalog architecture evidence declares an input
+    modality other than ``"text"`` (e.g. ``image``, ``audio``, ``video``) is a
+    specialized multimodal deployment: a caller cannot use it for an arbitrary
+    request without knowing in advance that the request must carry that extra
+    modality. Absence of modality evidence is not evidence of a multimodal
+    requirement, so an empty ``input_modalities`` tuple never triggers this.
+
+    This is a deliberately conservative reading: catalog fields such as
+    Models.dev's ``modalities.input`` document *supported* inputs, not which
+    ones a given request must supply, so a model that lists ``text`` next to
+    ``image`` still trips this check. ContextualWisdomLab/.github#1198's
+    incident model (NVIDIA NIM's ``meta/llama-3.2-90b-vision-instruct``) is
+    exactly that shape -- Models.dev reports its inputs as ``text`` *and*
+    ``image`` -- yet NIM's live deployment rejected a plain tool-calling
+    request against it three times in a row. With no reliable per-deployment
+    tool-calling signal available (see :func:`general_free_serving_candidates`
+    for the incident writeup), treating "declares any non-text input" as
+    disqualifying for *blind* serving is the only evidence-based reading that
+    actually keeps that incident fixed; a model believed to also serve plain
+    text requests just fine can still be reached through a pool that is not
+    modality-blind (see :func:`general_free_serving_candidates`'s docstring).
+
+    Delegates the actual classification to
+    ``chat_capability.requires_non_text_input``, the single evidence-based
+    rule shared with ``orchestrator.TaskOrchestrator._agent_requires_non_text_input``
+    (which reads an agent's persisted ``input:<modality>`` tags instead of
+    ``DiscoveredModel`` directly) so the two representations of the same
+    catalog evidence cannot drift on this question independently of each
+    other.
+    """
+    return requires_non_text_input(discovered.input_modalities)
+
+
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
-    """Return models whose provider metadata identifies zero-cost inference."""
+    """Return the complete zero-cost model inventory (price evidence only).
+
+    This is pure price-based inventory: every model whose structured
+    provider/catalog pricing evidence is entirely zero, regardless of input
+    or output modality. Reporting surfaces that answer "is this model free"
+    -- the ``discover-models`` CLI's ``--free-only`` report, ``free_tier_count``,
+    and the free-tier data-privacy totals -- need this complete inventory, not
+    a servable subset.
+
+    Fitness for the general-purpose *blind* serving pool (``orchestrator/free``)
+    is a stricter, separate question: see :func:`general_free_serving_candidates`.
+    An earlier revision of this function conflated the two, which silently
+    undercounted genuinely free models that are simply unsuited to
+    capability-blind serving in every "is this model free" report.
+    """
     return [model for model in discovered if model.is_free]
+
+
+def general_free_serving_candidates(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Return free models fit for the general-purpose blind serving pool.
+
+    A zero price alone does not certify fitness for arbitrary callers: the
+    free pool (``orchestrator/free``) serves every role and request shape --
+    including tool/function-calling requests -- without knowing in advance
+    which capability a given request will need. Provider pricing can be
+    reliably zero on a model that only a caller who already knows to supply
+    an extra input modality (e.g. an image) could ever use meaningfully;
+    :func:`_requires_non_text_input` excludes exactly those rows here, using
+    catalog evidence discovery already records, not a per-model name rule.
+    Such a model remains fully discovered, fully counted in
+    :func:`free_discovered_models`'s price-based inventory, and eligible for
+    a pool that is not modality-blind (e.g. one built for vision/multimodal
+    tasks) -- it is only withheld from *this* general-purpose free selector.
+
+    Reproduces ContextualWisdomLab/.github#1198's required Strix Security Scan
+    failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passed every existing chat-capability
+    check, yet NIM's live deployment rejected Strix's tool-calling request
+    against it with a definitive HTTP 400 three independent times in a row --
+    because the free pool had no other candidate to fail over to, this one
+    vision-input model alone exhausted the whole tool-calling pool.
+
+    This is the selector every runtime pool-construction path must apply
+    before treating a discovered model as eligible for blind free serving
+    (e.g. tagging an agent ``cost:free`` in a context where that tag alone
+    drives general-chat ``orchestrator/free`` routing).
+    ``TaskOrchestrator._is_general_free_agent`` additionally re-checks an
+    agent's persisted ``input:<modality>`` tags at selection time -- but only
+    for the capability-blind general chat pool, never for a capability-scoped
+    free route (``_capability_agents``), where that same tag is the expected
+    shape, not a surprise -- so a durable agent-pool row written by an older
+    build, before this exclusion existed, cannot bypass it either.
+
+    Zero price and text-only input still are not enough on their own: an
+    ``evidence_only`` catalog row can never become a serving agent at all
+    (:func:`agent_from_discovered` refuses to build one), and a free
+    non-chat-capable model (e.g. an embedding-only deployment) is not a
+    general chat candidate either. :func:`is_routable_discovered_model` --
+    the same predicate ``_auto_discover_runtime_agents`` and
+    ``provider_bootstrap`` already require before promoting a discovered row
+    to an ordinary chat agent -- excludes both here too, so this selector's
+    count never overstates how many free models the general chat pool could
+    actually serve.
+    """
+    return [
+        model
+        for model in free_discovered_models(discovered)
+        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+    ]
 
 
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
