@@ -2455,18 +2455,17 @@ server-side enforcement for the request being sent right now, not a
 client-side prediction — strictly stronger than what discovery-time
 filtering could ever guarantee.
 
-**Explicitly out of scope, stated rather than silently gapped**: the
-asynchronous Batch API path (`_batch_run`, JSONL file upload then a separate
-`/batches` job) does not go through any of the three transport functions
-above and does not receive the ZDR pin. This is not the path Noema/Strix/
-OpenCode's synchronous CI review traffic uses; extending pinning there is a
-separate, independently scoped follow-up if a `zdr_only` batch request
-against OpenRouter is ever exercised.
+**The asynchronous Batch API path is pinned too**: `_batch_run` (JSONL file
+upload then a separate `/batches` job) does not go through the three
+transport functions above, but it independently calls `_pin_openrouter_zdr`
+on each request body it serializes into the uploaded JSONL, so a `zdr_only`
+batch request against OpenRouter gets the same `"provider": {"zdr": true}`
+enforcement as the synchronous paths.
 
 Verified: `tests/test_orchestrator_client_boundaries.py` adds direct unit
 coverage of `_pin_openrouter_zdr` (no-op outside `zdr_only`, no-op for
 non-OpenRouter agents, adds/merges the pin correctly) plus wiring-verification
-tests on `_send`/`_stream_send`/`_send_raw` that capture the actual
+tests on `_send`/`_stream_send`/`_send_raw`/`_batch_run` that capture the actual
 outgoing JSON body. `tests/test_model_discovery.py`,
 `tests/test_auto_discovery_server.py`, and `tests/test_review_gateway.py`
 were updated where they asserted the old, now-reversed
