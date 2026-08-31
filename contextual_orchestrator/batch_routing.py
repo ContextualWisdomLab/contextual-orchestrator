@@ -192,6 +192,9 @@ class BatchJob:
     # HTTP callers bind this opaque digest to the authenticated principal;
     # library-only jobs may remain unowned for standalone use.
     owner_id: Optional[str] = None
+    # Prompt-token fallback estimates are safe metadata, stored atomically with
+    # the job handle rather than retaining submitted prompt text.
+    prompt_token_estimates: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

@@ -19,6 +19,7 @@ from contextual_orchestrator.batch_routing import (
     BatchResultItem,
     EmbeddingBatchResultItem,
 )
+from contextual_orchestrator.batch_job_registry import JobRegistryFactory
 from contextual_orchestrator.cost_router import (
     CostRoutingCoordinator as Coordinator,
 )
@@ -171,12 +172,9 @@ def test_provider_confirmed_zero_usage_stays_measured_and_price_known() -> None:
 def test_invalid_batch_usage_estimates_prompt_tokens_from_original_request() -> None:
     """usage_valid=False must estimate from the real submitted prompt.
 
-    CodeRabbit review (PR #956): retrieve_batch's invalid-usage fallback
-    passed a hardcoded empty-content placeholder into the estimation path
-    instead of the request actually submitted, so a large prompt whose
-    provider marked usage invalid was undercounted to near-zero prompt
-    tokens -- understating batch cost. The original request is now looked
-    up by custom_id and used for estimation instead.
+    The fallback count is computed before submission and stored as safe
+    metadata on the durable job record. Raw prompts are never copied into the
+    shared registry, and the accepted job has only one publication write.
     """
     class InvalidUsageBackend:
         name = "invalid-usage"
@@ -199,6 +197,10 @@ def test_invalid_batch_usage_estimates_prompt_tokens_from_original_request() -> 
         BatchRequest(messages=[{"role": "user", "content": large_prompt}], model="mock-a")
     ])
 
+    stored_job = coordinator._batch_jobs[job.job_id]  # noqa: SLF001
+    assert stored_job.prompt_token_estimates == job.prompt_token_estimates
+    assert large_prompt not in repr(stored_job)
+
     item = coordinator.retrieve_batch(job.job_id)["results"][0]
 
     assert item["measurement_status"] == "estimated"
@@ -206,6 +208,28 @@ def test_invalid_batch_usage_estimates_prompt_tokens_from_original_request() -> 
     # regardless of the real prompt's size; the actual submitted prompt must
     # drive the estimate instead.
     assert item["prompt_tokens"] > 100
+
+
+def test_batch_prompt_fallback_has_no_separate_registry_publication() -> None:
+    """Accepted jobs publish their safe fallback metadata in one job record."""
+    class RecordingRegistry(JobRegistryFactory):
+        def __init__(self) -> None:
+            super().__init__()
+            self.names: list[str] = []
+
+        def mapping(self, name, *, decode=None):  # type: ignore[no-untyped-def]
+            self.names.append(name)
+            return super().mapping(name, decode=decode)
+
+    registry = RecordingRegistry()
+    coordinator = _coordinator(job_registry=registry)
+
+    coordinator.submit_batch([
+        BatchRequest(messages=[{"role": "user", "content": "private prompt"}])
+    ])
+
+    assert "batch_jobs" in registry.names
+    assert "batch_requests" not in registry.names
 
 
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
