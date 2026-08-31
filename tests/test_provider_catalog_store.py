@@ -238,6 +238,25 @@ def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
     assert restored[0].supports_zero_data_retention is False
 
 
+def test_last_known_good_restores_tool_call_parallelism_evidence() -> None:
+    source = _source(provider="openai", credential="OPENAI_API_KEY")
+    model = replace(
+        _model(source, "tool-model", 0),
+        supports_parallel_tool_calls=True,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [model],
+        eligible_model_ids={model.model_id},
+        serving_tags={model.model_id: ("discovered", "tool_call:multi")},
+    )
+
+    restored = store.serving_models(source)
+    assert len(restored) == 1
+    assert restored[0].supports_parallel_tool_calls is True
+
+
 def _assessment(
     source: ProviderModelSource,
     *,
@@ -504,6 +523,7 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
             ("model-b", "capability:chat"),
             ("model-b", "cost:free"),
             ("model-b", "input:text"),
+            ("model-b", "tool_call:single"),
         ],
         [("model-b", "https://provider.example/privacy")],
         unit_price_rows=[
@@ -527,6 +547,7 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
             capabilities=("chat",),
             input_modalities=("text",),
             is_free=True,
+            supports_parallel_tool_calls=False,
             privacy_policy_urls=("https://provider.example/privacy",),
             unit_prices=(ModelUnitPrice("output_cost_per_image", 0.04),),
         )

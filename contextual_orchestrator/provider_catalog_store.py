@@ -328,6 +328,7 @@ def normalize_discovered_model(
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
         spend_admitted=bool(model.spend_admitted),
+        supports_parallel_tool_calls=model.supports_parallel_tool_calls,
     )
 
 
@@ -366,6 +367,13 @@ def _restore_model_semantics(
         ),
         privacy_policy_urls=tuple(model.privacy_policy_urls),
         zdr_capable=bool(model.zdr_capable),
+        supports_parallel_tool_calls=(
+            True
+            if "tool_call:multi" in normalized
+            else False
+            if "tool_call:single" in normalized
+            else None
+        ),
     )
 
 

@@ -113,6 +113,35 @@ def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
     return None
 
 
+def _response_contains_parallel_probe_tool_calls(payload: Any) -> bool:
+    """Return whether a probe response clearly contains both requested tool calls."""
+    if not isinstance(payload, dict):
+        return False
+    seen: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("type") == "function":
+                function = value.get("function")
+                if isinstance(function, dict):
+                    name = function.get("name")
+                    if isinstance(name, str) and name in {"probe_a", "probe_b"}:
+                        seen.add(name)
+            if value.get("type") == "function_call":
+                name = value.get("name")
+                if isinstance(name, str) and name in {"probe_a", "probe_b"}:
+                    seen.add(name)
+            for child in value.values():
+                collect(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(payload)
+    return seen == {"probe_a", "probe_b"}
+
+
 def probe_discovered_model_tool_call_capability(
     discovered: DiscoveredModel,
     *,
@@ -122,11 +151,12 @@ def probe_discovered_model_tool_call_capability(
 
     Sends a minimal ``/chat/completions`` request with ``parallel_tool_calls: true``
     and two tool definitions, using the provider credential registered in the KV.
-    A successful response means the model accepted the multi-tool shape
-    (``True``). A 400 whose error text clearly says the model only supports a
-    single tool call means it does not (``False``). Any network, auth, or
-    ambiguous error returns ``None`` so the pool stays open rather than
-    excluding a model on a flaky probe.
+    A successful response counts as positive evidence only when the body
+    demonstrably contains tool calls to both probe functions. A 400 whose error
+    text clearly says the model only supports a single tool call means it does
+    not (``False``). Any network, auth, malformed, or ambiguous response
+    returns ``None`` so the pool stays open rather than excluding a model on a
+    flaky probe.
 
     This is real runtime evidence, not a model-name heuristic. It is deliberately
     separate from :func:`discover_all_models` so callers decide when the extra
@@ -160,7 +190,7 @@ def probe_discovered_model_tool_call_capability(
             },
         ],
         "parallel_tool_calls": True,
-        "max_tokens": 1,
+        "max_tokens": 32,
         "temperature": 0.0,
         "stream": False,
     }
@@ -173,7 +203,7 @@ def probe_discovered_model_tool_call_capability(
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - scoped provider probe
-            response.read()
+            body = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         if exc.code != 400:
             return None
@@ -185,7 +215,11 @@ def probe_discovered_model_tool_call_capability(
         return _tool_call_parallelism_from_error(error_payload)
     except (urllib.error.URLError, OSError, TimeoutError, ValueError):
         return None
-    return True
+    try:
+        response_payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return True if _response_contains_parallel_probe_tool_calls(response_payload) else None
 
 
 _MODELS_DEV_URL = "https://models.dev/api.json"
@@ -638,6 +672,12 @@ def _deduplicate_discovered_models(
             supports_no_training=None,
             supports_no_prompt_retention=None,
             zdr_capable=False,
+            supports_parallel_tool_calls=(
+                chosen.supports_parallel_tool_calls
+                if previous.supports_parallel_tool_calls
+                == model.supports_parallel_tool_calls
+                else None
+            ),
         )
     return list(unique.values())
 
@@ -810,9 +850,11 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             "privacy_policy_urls",
         ):
             row.pop(key, None)
+        row.pop("supported_parameters", None)
         model_details = by_name.get(row["id"], [])
         deployment_outputs: list[tuple[str, ...]] = []
         deployment_inputs: list[tuple[str, ...]] = []
+        deployment_supported_parameters: list[tuple[str, ...]] = []
         prices: set[tuple[object, object]] = set()
         pricing_complete = bool(model_details)
         unit_price_maps: list[tuple[tuple[str, object], ...]] = []
@@ -869,6 +911,23 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             if info.get("supports_vision") is True and "image" not in inputs:
                 inputs = (*inputs, "image")
             deployment_inputs.append(inputs)
+            supported_parameters = info.get(
+                "supported_openai_params",
+                info.get("supported_parameters", detail.get("supported_parameters")),
+            )
+            if isinstance(params.get("supported_openai_params"), list):
+                supported_parameters = params["supported_openai_params"]
+            elif isinstance(params.get("supported_parameters"), list):
+                supported_parameters = params["supported_parameters"]
+            deployment_supported_parameters.append(
+                tuple(
+                    value.strip()
+                    for value in supported_parameters
+                    if isinstance(value, str) and value.strip()
+                )
+                if isinstance(supported_parameters, list)
+                else ()
+            )
             prompt = info.get("input_cost_per_token", params.get("input_cost_per_token"))
             completion = info.get(
                 "output_cost_per_token", params.get("output_cost_per_token")
@@ -904,6 +963,10 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                 "input_modalities": list(deployment_inputs[0]),
                 "output_modalities": list(deployment_outputs[0]),
             }
+        if deployment_supported_parameters and all(
+            deployment_supported_parameters
+        ) and len(set(deployment_supported_parameters)) == 1:
+            row["supported_parameters"] = list(deployment_supported_parameters[0])
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:

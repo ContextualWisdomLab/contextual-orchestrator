@@ -39,6 +39,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_openrouter_zdr_metadata,
     _parallel_tool_call_evidence,
     _price_per_1k,
+    _response_contains_parallel_probe_tool_calls,
     _parse_openai_compatible,
     _tool_call_parallelism_from_error,
     agent_from_discovered,
@@ -199,6 +200,45 @@ def test_configured_gateway_preserves_consensus_privacy_evidence() -> None:
     ]
 
 
+def test_configured_gateway_preserves_consensus_supported_parameters() -> None:
+    payload = {"data": [{"id": "tool-model"}]}
+    detail = {
+        "model_name": "tool-model",
+        "model_info": {
+            "mode": "chat",
+            "supported_parameters": ["parallel_tool_calls", "tools"],
+        },
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, {"data": [detail, detail]})
+
+    assert merged["data"][0]["supported_parameters"] == [
+        "parallel_tool_calls",
+        "tools",
+    ]
+
+
+def test_configured_gateway_withholds_conflicting_supported_parameters() -> None:
+    payload = {"data": [{"id": "tool-model"}]}
+    merged = _merge_configured_gateway_metadata(
+        payload,
+        {
+            "data": [
+                {
+                    "model_name": "tool-model",
+                    "model_info": {"supported_parameters": ["parallel_tool_calls"]},
+                },
+                {
+                    "model_name": "tool-model",
+                    "model_info": {"supported_parameters": ["tools"]},
+                },
+            ]
+        },
+    )
+
+    assert "supported_parameters" not in merged["data"][0]
+
+
 def test_configured_gateway_keeps_ambiguous_privacy_strings_unknown() -> None:
     """Only explicit boolean strings can become provider privacy evidence."""
     payload = {"data": [{"id": "chat-model"}]}
@@ -319,6 +359,39 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
 
     assert len(discovered) == 1
     assert discovered[0].zdr_capable is False
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "expected"),
+    [
+        (True, False, None),
+        (True, None, None),
+        (False, None, None),
+        (True, True, True),
+        (False, False, False),
+        (None, None, None),
+    ],
+)
+def test_duplicate_discovery_parallel_tool_call_evidence_is_order_invariant(
+    left: bool | None,
+    right: bool | None,
+    expected: bool | None,
+) -> None:
+    first = DiscoveredModel(
+        provider_name="gateway",
+        model_id="shared-model",
+        credential_name="KEY_A",
+        chat_base_url="https://gateway.example/v1",
+        auth_scheme="Bearer",
+        supports_parallel_tool_calls=left,
+    )
+    second = replace(first, supports_parallel_tool_calls=right)
+
+    forward = _deduplicate_discovered_models([first, second])[0]
+    reverse = _deduplicate_discovered_models([second, first])[0]
+
+    assert forward.supports_parallel_tool_calls is expected
+    assert reverse.supports_parallel_tool_calls is expected
 
 
 def test_same_provider_model_under_different_credentials_remains_independent() -> None:
@@ -2416,10 +2489,31 @@ def test_tool_call_parallelism_from_error_recognizes_single_tool_rejection() -> 
 
 
 def test_probe_discovered_model_tool_call_capability_success_returns_true() -> None:
-    """A 200 response to a multi-tool probe means the model accepted the shape."""
+    """A 200 probe counts only when the response actually contains both tool calls."""
     discovered = _single_tool_discovered_model()
     response = urllib.request.addinfourl(
-        BytesIO(b'{"id":"chatcmpl"}'),
+        BytesIO(
+            json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "type": "function",
+                                        "function": {"name": "probe_a", "arguments": "{}"},
+                                    },
+                                    {
+                                        "type": "function",
+                                        "function": {"name": "probe_b", "arguments": "{}"},
+                                    },
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+        ),
         {"content-type": "application/json"},
         "",
     )
@@ -2434,7 +2528,62 @@ def test_probe_discovered_model_tool_call_capability_success_returns_true() -> N
     assert request.method == "POST"
     payload = json.loads(request.data)
     assert payload["parallel_tool_calls"] is True
+    assert payload["max_tokens"] == 32
     assert len(payload["tools"]) == 2
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"choices": [{"message": {"content": "no tool calls"}}]},
+        {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {"name": "probe_a", "arguments": "{}"},
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {},
+    ],
+)
+def test_probe_discovered_model_tool_call_capability_success_without_two_calls_returns_none(
+    body: dict[str, object]
+) -> None:
+    discovered = _single_tool_discovered_model()
+    response = urllib.request.addinfourl(
+        BytesIO(json.dumps(body).encode()),
+        {"content-type": "application/json"},
+        "",
+    )
+    response.code = 200
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "urllib.request.urlopen", return_value=response
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_response_contains_parallel_probe_tool_calls_recognizes_responses_api_shape() -> None:
+    assert _response_contains_parallel_probe_tool_calls(
+        {
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "probe_a",
+                },
+                {
+                    "type": "function_call",
+                    "name": "probe_b",
+                },
+            ]
+        }
+    )
 
 
 def test_probe_discovered_model_tool_call_capability_single_tool_400_returns_false() -> None:

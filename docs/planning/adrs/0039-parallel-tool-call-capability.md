@@ -11,6 +11,10 @@ affected_components:
   - "contextual_orchestrator/chat_capability.py"
   - "contextual_orchestrator/orchestrator.py"
   - "contextual_orchestrator/provider_bootstrap.py"
+consulted:
+  - "docs/papers/frugalgpt-cost-2305.05176.pdf"
+  - "docs/papers/hybrid-llm-query-routing-2404.14618.pdf"
+  - "docs/papers/routellm-routing-2406.18665.pdf"
 related:
   - path: "docs/planning/adrs/0035-structured-provider-orchestration.md"
     relation: extends
@@ -91,3 +95,19 @@ than excluding a model on a flaky probe.
 - The `.github` sidecar must still be updated to consume `general_free_serving_candidates`
   and preserve `input:` and `tool_call:` tags when it builds its own CI review catalog;
   that is a follow-up change in `ContextualWisdomLab/.github`.
+
+## Research grounding
+
+This decision is a capability-constrained routing safeguard, not a learned quality claim.
+It reuses the repository's existing vendored routing literature:
+
+- Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language models while reducing cost and improving performance*. arXiv. https://arxiv.org/abs/2305.05176
+- Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Rühle, V., Lakshmanan, L. V. S., & Awadallah, A. H. (2024). *Hybrid LLM: Cost-efficient and quality-aware query routing*. International Conference on Learning Representations. https://arxiv.org/abs/2404.14618
+- Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference data*. arXiv. https://arxiv.org/abs/2406.18665
+
+These papers justify preserving explicit capability evidence at the routing boundary.
+They do not justify inferring multi-tool support from model names or from a bare 200
+response, so this ADR keeps the field fail-closed on ambiguity.
+
+The cited PDFs are already vendored in `docs/papers/`; no additional restricted paper is
+copied in this run.
