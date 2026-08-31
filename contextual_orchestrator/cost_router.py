@@ -393,18 +393,25 @@ class CostRoutingCoordinator:
             provider_response["usage_record_ids"] = [
                 record.usage_record_id for record in records
             ]
+            # "unavailable" (a billable race-loser call whose usage payload
+            # could not be parsed, see _record_race_endpoint_usage) outranks
+            # "estimated": a completion combining a measured winner with an
+            # unavailable loser must not present a confident-looking summed
+            # total, the same honesty precedence record_stream_usage uses.
+            statuses = {record.measurement_status for record in records}
+            aggregate_measurement_status = (
+                "unavailable" if "unavailable" in statuses
+                else "estimated" if "estimated" in statuses
+                else "measured"
+            )
             provider_response["cost"] = {
                 "cost_amount": (
                     round(sum(record.cost_amount for record in records), 6)
-                    if len(currencies) == 1
+                    if len(currencies) == 1 and aggregate_measurement_status != "unavailable"
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
-                "measurement_status": (
-                    "estimated"
-                    if any(record.measurement_status == "estimated" for record in records)
-                    else "measured"
-                ),
+                "measurement_status": aggregate_measurement_status,
             }
             if len(currencies) > 1:
                 provider_response["cost"]["currency_components"] = [
@@ -525,18 +532,23 @@ class CostRoutingCoordinator:
             "total_tokens": sum(item.total_tokens for item in client_usage_records),
         }
         currencies = {item.currency_code for item in records}
+        # Same honesty precedence as the provider_request path above and
+        # record_stream_usage: a billable race-loser call recorded
+        # "unavailable" must not be summed into a confident-looking total.
+        statuses = {item.measurement_status for item in records}
+        aggregate_measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
         result["cost"] = {
             "cost_amount": (
                 round(sum(item.cost_amount for item in records), 6)
-                if len(currencies) == 1
+                if len(currencies) == 1 and aggregate_measurement_status != "unavailable"
                 else None
             ),
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
-            "measurement_status": (
-                "estimated"
-                if any(item.measurement_status == "estimated" for item in records)
-                else "measured"
-            ),
+            "measurement_status": aggregate_measurement_status,
         }
         if len(currencies) > 1:
             result["cost"]["currency_components"] = [

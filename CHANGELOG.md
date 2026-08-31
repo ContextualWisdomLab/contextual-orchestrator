@@ -12,6 +12,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `CostRoutingCoordinator._record_race_endpoint_usage()` no longer silently
+  drops a completed, billable race-loser call's spend when its usage payload
+  can't be parsed. It now writes a `measurement_status="unavailable"` ledger
+  row (0 tokens) instead of returning without any row at all, mirroring
+  `record_stream_usage()`'s existing "call happened, can't measure it"
+  fallback. (Devin review on #955) Both of `complete()`'s cost-aggregation
+  paths (the `provider_request`/race-proxy path and the ordinary
+  `orchestrator.run()` sync path) previously only checked for
+  `measurement_status="estimated"` when rolling records up into one
+  response `cost` block, so a measured winner plus this new "unavailable"
+  loser row still reported the whole completion as confidently `"measured"`
+  and silently summed the loser's unknown cost as `0`. Both paths now use
+  the same unavailable-outranks-estimated-outranks-measured precedence as
+  `record_stream_usage()`, and `cost_amount` becomes `None` rather than a
+  partial sum whenever any contributing record is unavailable.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

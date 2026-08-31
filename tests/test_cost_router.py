@@ -306,6 +306,44 @@ def test_race_loser_cost_does_not_inflate_openai_completion_usage() -> None:
     assert result["cost"]["cost_amount"] == 0.022
 
 
+def test_sync_cost_reports_unavailable_when_a_race_loser_cannot_be_measured() -> None:
+    """Devin review (#955): the plain orchestrator.run() sync path's own cost
+    aggregation needs the same unavailable-outranks-estimated precedence as
+    the provider_request path -- a measured winner plus an unavailable race
+    loser must not report a confident "measured" total or sum a real cost
+    over an unknown one.
+    """
+    coordinator = _coordinator()
+
+    def run(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),  # unparseable usage
+        )
+        return {
+            "workflow_run_id": "run_race_unavailable",
+            "mode": "route",
+            "answer": "winner",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "output": "winner",
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+                }
+            ],
+        }
+
+    coordinator.orchestrator.run = run  # type: ignore[method-assign]
+    result = coordinator.complete([{"role": "user", "content": "race"}], mode="route")
+
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert result["cost"]["cost_amount"] is None
+    assert {record["measurement_status"] for record in coordinator.ledger.records()} == {
+        "measured",
+        "unavailable",
+    }
+
+
 def test_ready_race_usage_without_workflow_id_is_not_discarded() -> None:
     coordinator = _coordinator()
     context = {
@@ -436,6 +474,47 @@ def test_structured_empty_trace_records_winner_even_after_race_loser() -> None:
         (7, 3),
     }
     assert len(result["usage_record_ids"]) == 2
+
+
+def test_structured_cost_reports_unavailable_when_a_race_loser_cannot_be_measured() -> None:
+    """Devin review (#955): a measured winner plus an unavailable race loser
+    must not roll up into a confident "measured" total -- the aggregate cost
+    status and amount need the same honesty precedence record_stream_usage
+    already applies, not just the raw per-record ledger label.
+    """
+    coordinator = _coordinator()
+
+    def proxy_completion(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),  # unparseable usage
+        )
+        return {
+            "model": "mock-a",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+            "orchestration": {"workflow_run_id": "run_unavailable_loser"},
+        }
+
+    coordinator.orchestrator.proxy_completion = proxy_completion  # type: ignore[method-assign]
+    coordinator.orchestrator.get_workflow_run = lambda _run_id: {  # type: ignore[method-assign]
+        "workflow_run_id": "run_unavailable_loser",
+        "mode": "route",
+        "answer": "winner",
+        "trace": None,
+    }
+    result = coordinator.complete(
+        [{"role": "user", "content": "race unavailable"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "race unavailable"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert result["cost"]["cost_amount"] is None
+    records = coordinator.ledger.records()
+    assert {record["measurement_status"] for record in records} == {"measured", "unavailable"}
 
 
 def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
