@@ -193,6 +193,19 @@ def test_observation_schema_is_exact_and_status_is_bounded() -> None:
         "invalid_uncertainty"
     )
 
+    for invalid_value in ([], {}):
+        invalid_status = _observed()
+        invalid_status["status"] = invalid_value
+        assert _error_code(lambda: CriterionObservation.from_mapping(invalid_status)) == (
+            "invalid_status"
+        )
+
+        invalid_uncertainty = _observed()
+        invalid_uncertainty["uncertainty"] = invalid_value
+        assert _error_code(
+            lambda: CriterionObservation.from_mapping(invalid_uncertainty)
+        ) == "invalid_uncertainty"
+
     assert _error_code(lambda: CriterionObservation.from_mapping([])) == "invalid_object"
 
 

@@ -201,11 +201,15 @@ class CriterionObservation:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "criterion_ref", _reference(self.criterion_ref, "criterion_ref"))
-        if self.status not in {"observed", "abstained"}:
+        if type(self.status) is not str or self.status not in {"observed", "abstained"}:
             raise RaterObservationError(
                 "invalid_status", "status must be observed or abstained"
             )
-        if self.uncertainty not in {"low", "medium", "high"}:
+        if type(self.uncertainty) is not str or self.uncertainty not in {
+            "low",
+            "medium",
+            "high",
+        }:
             raise RaterObservationError(
                 "invalid_uncertainty", "uncertainty must be low, medium, or high"
             )
