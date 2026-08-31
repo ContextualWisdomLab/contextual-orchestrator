@@ -1429,5 +1429,38 @@ except TimeoutError:
     subprocess.run([sys.executable, "-c", script], check=True, timeout=2)
 
 
+def test_dns_thread_start_failure_does_not_leak_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ModelClient(timeout=1)
+    real_start = threading.Thread.start
+    failures = 0
+
+    def start(thread: threading.Thread) -> None:
+        nonlocal failures
+        if failures < 4:
+            failures += 1
+            raise RuntimeError("thread unavailable")
+        real_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", start)
+    monkeypatch.setattr(
+        orchestrator_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 443))
+        ],
+    )
+    for _ in range(4):
+        with client.request_settings(deadline=time.monotonic() + 0.1):
+            with pytest.raises(RuntimeError, match="thread unavailable"):
+                client._resolve_addresses("provider.example", 443)
+
+    with client.request_settings(deadline=time.monotonic() + 0.1):
+        assert client._resolve_addresses("provider.example", 443) == [
+            (socket.AF_INET, ("192.0.2.1", 443))
+        ]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

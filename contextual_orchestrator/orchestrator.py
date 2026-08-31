@@ -1826,11 +1826,16 @@ class ModelClient:
                         _DNS_RESOLVER_CAPACITY.release()
                         completed.set()
 
-                threading.Thread(
+                worker = threading.Thread(
                     target=resolve,
                     name="provider_dns",
                     daemon=True,
-                ).start()
+                )
+                try:
+                    worker.start()
+                except BaseException:  # thread never took ownership of the slot
+                    _DNS_RESOLVER_CAPACITY.release()
+                    raise
                 if not completed.wait(timeout=max(0.0, deadline - time.monotonic())):
                     raise TimeoutError("provider DNS resolution deadline exceeded")
                 if error := outcome.get("error"):
