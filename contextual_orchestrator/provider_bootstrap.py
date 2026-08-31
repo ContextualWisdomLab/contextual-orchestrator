@@ -277,6 +277,16 @@ def _synchronize_durable_agent_pool(
     try:
         selected_ids = {agent.id for agent in agents}
         bootstrap.sync_discovered_agents(agents)
+        selected_ids = {
+            candidate.id
+            for candidate in bootstrap.candidates
+            if any(
+                candidate.provider_name == agent.provider_name
+                and candidate.credential_name == agent.credential_name
+                and candidate.model == agent.model
+                for agent in agents
+            )
+        }
 
         for candidate in list(bootstrap.candidates):
             if candidate.id in selected_ids:
@@ -285,8 +295,8 @@ def _synchronize_durable_agent_pool(
                 if not candidate.disabled:
                     bootstrap.remove_agent("default", candidate.id)
 
-        for agent in agents:
-            bootstrap.patch_agent("default", agent.id, {"status": "active"})
+        for agent_id in selected_ids:
+            bootstrap.patch_agent("default", agent_id, {"status": "active"})
 
         # The patch loop above raises KeyError if any selected agent is missing from
         # the pool, so the enabled set equals selected_ids by construction here.

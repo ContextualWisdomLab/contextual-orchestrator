@@ -1410,7 +1410,8 @@ def _slug(value: str) -> str:
 
 def agent_id_for(discovered: DiscoveredModel) -> str:
     """Two-or-more-word snake_case id, matching this repo's naming convention."""
-    return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
+    fingerprint = hashlib.sha256(discovered.model_id.encode("utf-8")).hexdigest()[:10]
+    return f"{discovered.provider_name}_{_slug(discovered.model_id)}_{fingerprint}"
 
 
 def model_group_name_for(discovered: DiscoveredModel) -> str:

@@ -2143,7 +2143,7 @@ def test_agent_id_for_is_two_word_snake_case() -> None:
         chat_base_url="https://openrouter.ai/api/v1",
         auth_scheme="Bearer",
     )
-    assert agent_id_for(discovered) == "openrouter_meta_llama_3_3_70b"
+    assert agent_id_for(discovered).startswith("openrouter_meta_llama_3_3_70b_")
 
 
 def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None:
@@ -2155,7 +2155,7 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
         auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     agent = agent_from_discovered(discovered, priority=3)
-    assert agent.id == "bytez_0_hero_matter_0_1_slim_7b_c"
+    assert agent.id.startswith("bytez_0_hero_matter_0_1_slim_7b_c_")
     assert agent.disabled is True
     assert agent.auth_scheme == AUTH_SCHEME_RAW_TOKEN
     assert agent.credential_key == "BYTEZ_API_KEY"
@@ -2352,22 +2352,22 @@ def test_sync_discovered_agents_adds_and_updates_idempotently() -> None:
     agent_v1 = agent_from_discovered(discovered, priority=0)
 
     result = orchestrator.sync_discovered_agents([agent_v1])
-    assert result == {"added": ["openrouter_meta_llama_3_3"], "updated": []}
-    assert {a.id for a in orchestrator.candidates} == {"seed_agent", "openrouter_meta_llama_3_3"}
+    assert result == {"added": [agent_v1.id], "updated": []}
+    assert {a.id for a in orchestrator.candidates} == {"seed_agent", agent_v1.id}
 
     agent_v2 = agent_from_discovered(discovered, priority=7)
     result = orchestrator.sync_discovered_agents([agent_v2])
-    assert result == {"added": [], "updated": ["openrouter_meta_llama_3_3"]}
-    stored = next(a for a in orchestrator.candidates if a.id == "openrouter_meta_llama_3_3")
+    assert result == {"added": [], "updated": [agent_v1.id]}
+    stored = next(a for a in orchestrator.candidates if a.id == agent_v1.id)
     assert stored.priority == 7
     # No duplicate rows were appended on the update pass.
     assert len(orchestrator.candidates) == 2
 
     orchestrator.set_model_group(
-        "shared_reasoning_model", ["openrouter_meta_llama_3_3"]
+        "shared_reasoning_model", [agent_v1.id]
     )
     orchestrator.sync_discovered_agents([agent_v1])
-    stored = next(a for a in orchestrator.candidates if a.id == "openrouter_meta_llama_3_3")
+    stored = next(a for a in orchestrator.candidates if a.id == agent_v1.id)
     assert stored.group_name == "shared_reasoning_model"
 
 
@@ -2386,4 +2386,51 @@ def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None
     first.sync_discovered_agents([agent])
 
     second = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
-    assert any(a.id == "openai_gpt_5_5" for a in second.candidates)
+    assert any(a.id == agent.id for a in second.candidates)
+
+
+def test_durable_legacy_discovered_agent_adopts_generated_group_and_id(tmp_path) -> None:
+    db_path = str(tmp_path / "legacy-pool.db")
+    discovered = DiscoveredModel(
+        "openrouter", "Vendor/Model", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    incoming = agent_from_discovered(discovered)
+    legacy = replace(incoming, id="openrouter_vendor_model", group_name="")
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    seeded.sync_discovered_agents([legacy])
+    seeded.close()
+
+    restarted = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    result = restarted.sync_discovered_agents([incoming])
+    stored = next(agent for agent in restarted.candidates if agent.id == legacy.id)
+
+    assert result == {"added": [], "updated": [legacy.id]}
+    assert stored.group_name == incoming.group_name
+    assert all(agent.id != incoming.id for agent in restarted.candidates)
+    restarted.close()
+
+
+def test_exact_model_id_collisions_persist_as_distinct_discovered_agents(tmp_path) -> None:
+    base = DiscoveredModel(
+        "openrouter", "vendor/model-a", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    models = [
+        base,
+        replace(base, model_id="vendor/model_a"),
+        replace(base, model_id="Vendor/Model"),
+        replace(base, model_id="vendor/model"),
+    ]
+    agents = [agent_from_discovered(model) for model in models]
+    orchestrator = TaskOrchestrator(
+        [], agents_db=str(tmp_path / "collisions.db"), allow_empty_agents=True
+    )
+
+    orchestrator.sync_discovered_agents(agents)
+
+    assert len({agent.id for agent in orchestrator.candidates}) == len(models)
+    assert {agent.model for agent in orchestrator.candidates} == {
+        model.model_id for model in models
+    }
+    orchestrator.close()

@@ -127,6 +127,21 @@ def race_first_valid(
     }
     pending = set(futures)
     last_error: BaseException | None = None
+
+    def cancel_loser(future: Future[T], attempt: EndpointAttempt[T]) -> str:
+        if future.done():
+            return "completed"
+        if future.cancel():
+            return "queued_cancelled"
+        if (
+            contract.cancellation_supported
+            and attempt.cancellation_supported
+            and attempt.cancel is not None
+        ):
+            attempt.cancel()
+            return "cancellation_requested"
+        return "safe_drain"
+
     try:
         while pending:
             remaining = (
@@ -150,11 +165,7 @@ def race_first_valid(
                 for loser_future, (_, loser) in futures.items():
                     if loser_future is future:
                         continue
-                    cancelled = loser_future.cancel()
-                    if not cancelled and loser.cancel is not None:
-                        loser.cancel()
-                        cancelled = True
-                    outcome = "cancelled" if cancelled else "safe_drain"
+                    outcome = cancel_loser(loser_future, loser)
                     cancellations.append((loser.endpoint_id, outcome))
                 pool.shutdown(wait=False, cancel_futures=True)
                 return RaceOutcome(
@@ -166,9 +177,6 @@ def race_first_valid(
                 )
     finally:
         for future in pending:
-            future.cancel()
-            attempt = futures[future][1]
-            if attempt.cancel is not None:
-                attempt.cancel()
+            cancel_loser(future, futures[future][1])
         pool.shutdown(wait=False, cancel_futures=True)
     raise RuntimeError("all equivalent endpoints failed validation") from last_error

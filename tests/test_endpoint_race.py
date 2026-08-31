@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from concurrent.futures import ALL_COMPLETED, wait as wait_futures
 from contextvars import ContextVar
 
 import pytest
@@ -69,11 +70,11 @@ def test_winner_cancels_and_reaps_running_loser_without_generation_deadline() ->
     outcome = race_first_valid(
         [
             EndpointAttempt(
-                "slow_endpoint", contract(), loser,
+                "slow_endpoint", contract(cancellation_supported=True), loser,
                 cancellation_supported=True, cancel=release.set,
             ),
             EndpointAttempt(
-                "fast_endpoint", contract(),
+                "fast_endpoint", contract(cancellation_supported=True),
                 lambda: loser_started.wait(1) and "complete",
             ),
         ],
@@ -82,11 +83,71 @@ def test_winner_cancels_and_reaps_running_loser_without_generation_deadline() ->
         max_concurrency=2,
     )
 
-    assert outcome.cancellation_outcomes == (("slow_endpoint", "cancelled"),)
+    assert outcome.cancellation_outcomes == (("slow_endpoint", "cancellation_requested"),)
     deadline = time.monotonic() + 1
     while any(thread.name.startswith("equivalent_endpoint_race") for thread in threading.enumerate()):
         assert time.monotonic() < deadline
         time.sleep(0.01)
+
+
+def test_already_completed_loser_is_reported_as_completed(monkeypatch) -> None:
+    second_done = threading.Event()
+
+    def first() -> str:
+        assert second_done.wait(timeout=1)
+        return "first"
+
+    def second() -> str:
+        second_done.set()
+        return "second"
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.endpoint_race.wait",
+        lambda futures, **_kwargs: (wait_futures(futures, return_when=ALL_COMPLETED)[0], set()),
+    )
+    outcome = race_first_valid(
+        [
+            EndpointAttempt("first_endpoint", contract(), first),
+            EndpointAttempt("second_endpoint", contract(), second),
+        ],
+        validate=bool,
+        deadline_seconds=1,
+        max_concurrency=2,
+    )
+
+    assert outcome.winner_endpoint_id == "first_endpoint"
+    assert outcome.cancellation_outcomes == (("second_endpoint", "completed"),)
+
+
+def test_unsupported_cancellation_is_safe_drain_without_callback() -> None:
+    release = threading.Event()
+    started = threading.Event()
+    cancellation_called = threading.Event()
+
+    def slow() -> str:
+        started.set()
+        release.wait(timeout=1)
+        return "slow"
+
+    outcome = race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(cancellation_supported=False), slow,
+                cancellation_supported=True, cancel=cancellation_called.set,
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(cancellation_supported=False),
+                lambda: started.wait(1) and "fast",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+    release.set()
+
+    assert outcome.cancellation_outcomes == (("slow_endpoint", "safe_drain"),)
+    assert not cancellation_called.is_set()
 
 
 def test_fast_invalid_completion_does_not_suppress_valid_result() -> None:

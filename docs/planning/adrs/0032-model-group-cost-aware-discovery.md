@@ -54,9 +54,12 @@ Model inference has no fixed wall-clock timeout. This applies to ordinary
 generation, the initial completion ping, warm-up, readiness probes, retries,
 and repair attempts; a slow model such as DeepSeek is not declared unavailable
 merely because it takes minutes or hours. Operators may cancel work, and a
-superseded request may be cancelled. Bounded DNS/TLS connection establishment,
-health checks, and model-list discovery remain allowed because they do not cap
-model generation time.
+superseded request may be cancelled. Provider TCP/TLS establishment has a
+separate 30-second default bound; after connection, generation remains
+unbounded unless the caller supplies a timeout. Superseded races close registered
+loser sockets only when their reviewed equivalence contract declares cancellation
+support. Health checks and model-list discovery may remain separately bounded
+because they do not cap model generation time.
 
 OpenAI catalog rows also retain OpenAI's official data-controls documentation
 as policy evidence. Because approval and enablement are organization/project

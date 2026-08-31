@@ -301,8 +301,9 @@ def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
     ]
 
     enabled = _synchronize_durable_agent_pool(agents_db, selected_models)
+    expected_ids = tuple(sorted(pb.agent_id_for(model) for model in selected_models))
 
-    assert enabled == ("openai_gpt_current", "openrouter_qwen_current")
+    assert enabled == expected_ids
     restarted = TaskOrchestrator([], agents_db=agents_db)
     ids_by_state = {
         agent.id: ("disabled" if agent.disabled else "enabled")
@@ -312,8 +313,7 @@ def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
     # is neither activated nor deleted.
     assert ids_by_state["manual_operator_agent"] == "enabled"
     assert ids_by_state["openai_retired_model"] == "disabled"
-    assert ids_by_state["openai_gpt_current"] == "enabled"
-    assert ids_by_state["openrouter_qwen_current"] == "enabled"
+    assert all(ids_by_state[agent_id] == "enabled" for agent_id in expected_ids)
 
 
 def test_durable_pool_sync_closes_temporary_orchestrator(
@@ -339,5 +339,5 @@ def test_durable_pool_sync_closes_temporary_orchestrator(
         [_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")],
     )
 
-    assert enabled == ("openrouter_qwen_current",)
+    assert enabled == (pb.agent_id_for(_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")),)
     assert closed == [True]

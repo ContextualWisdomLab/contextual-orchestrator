@@ -18,6 +18,7 @@ from contextual_orchestrator.credentials import (
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
+    agent_id_for,
     agent_from_discovered,
     model_group_name_for,
 )
@@ -379,7 +380,7 @@ def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(
 
     assert report.discovered_model_count == 1
     assert report.eligible_model_count == 1
-    assert report.selected_agent_ids == ("openai_gpt_test",)
+    assert report.selected_agent_ids == (agent_id_for(_model("openai", "OPENAI_API_KEY", "gpt-test", 1.0)),)
     assert report.enabled_agent_ids == ()
     assert report.durable_agent_pool is False
     assert all(
@@ -468,8 +469,9 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
 
     assert report.discovered_model_count == 1
     assert report.eligible_model_count == 1
-    assert report.selected_agent_ids == ("openrouter_qwen_current_coder",)
-    assert report.enabled_agent_ids == ("openrouter_qwen_current_coder",)
+    expected_id = agent_id_for(new_model)
+    assert report.selected_agent_ids == (expected_id,)
+    assert report.enabled_agent_ids == (expected_id,)
     assert report.durable_agent_pool is True
 
     restarted = TaskOrchestrator(
@@ -477,7 +479,7 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
         agents_db=agents_db,
     )
     assert {agent.id for agent in restarted.agents} == {
-        "openrouter_qwen_current_coder"
+        expected_id
     }
     assert restarted.agents[0].tags == (
         "discovered",
@@ -509,7 +511,9 @@ def test_cli_report_never_contains_secret_values(monkeypatch, capsys):
     report = json.loads(output)
     assert "OPENAI_API_KEY" in output
     assert report["eligible_model_count"] == 1
-    assert report["selected_agent_ids"] == ["openai_gpt_test"]
+    assert report["selected_agent_ids"] == [
+        agent_id_for(_model("openai", "OPENAI_API_KEY", "gpt-test", 1.0))
+    ]
     assert report["enabled_agent_ids"] == []
     assert report["durable_agent_pool"] is False
     for value in environment.values():

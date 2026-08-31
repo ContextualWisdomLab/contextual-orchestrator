@@ -5203,11 +5203,23 @@ class TaskOrchestrator:
         (or the cost router) opts it in via ``patch_agent``.
         """
         existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
+        legacy_discovered = {
+            (agent.provider_name, agent.credential_name, agent.model): index
+            for index, agent in enumerate(self.candidates)
+            if "discovered" in agent.tags
+        }
         updated_candidates = list(self.candidates)
+        synchronized_agents: list[ModelAgent] = []
         added: list[str] = []
         updated: list[str] = []
         for agent in discovered_agents:
             index = existing_by_id.get(agent.id)
+            if index is None:
+                index = legacy_discovered.get(
+                    (agent.provider_name, agent.credential_name, agent.model)
+                )
+                if index is not None:
+                    agent = replace(agent, id=updated_candidates[index].id)
             if index is None:
                 existing_by_id[agent.id] = len(updated_candidates)
                 updated_candidates.append(agent)
@@ -5215,16 +5227,17 @@ class TaskOrchestrator:
             else:
                 agent = replace(
                     agent,
-                    group_name=updated_candidates[index].group_name,
+                    group_name=updated_candidates[index].group_name or agent.group_name,
                 )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
             if self._pool_store is not None:
                 self._pool_store.save(agent)
+            synchronized_agents.append(agent)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
-        for agent in discovered_agents:
+        for agent in synchronized_agents:
             self._routers_register_member(agent.id)
         if added or updated:
             self._append_audit_event(
@@ -6465,7 +6478,8 @@ class TaskOrchestrator:
                 provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
                 return EndpointAttempt(
                     agent.id, contract, provider_call,
-                    cancellation_supported=True, cancel=cancel,
+                    cancellation_supported=contract.cancellation_supported,
+                    cancel=cancel if contract.cancellation_supported else None,
                 )
             try:
                 outcome = race_first_valid(
@@ -6606,7 +6620,8 @@ class TaskOrchestrator:
                 provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
                 return EndpointAttempt(
                     agent.id, contract, provider_call,
-                    cancellation_supported=True, cancel=cancel,
+                    cancellation_supported=contract.cancellation_supported,
+                    cancel=cancel if contract.cancellation_supported else None,
                 )
             try:
                 outcome = race_first_valid(
