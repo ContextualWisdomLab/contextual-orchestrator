@@ -1611,8 +1611,8 @@ def test_discover_all_models_blocks_only_paid_openrouter_without_credit(
         ]
     }
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        side_effect=lambda request, timeout=None: _Response(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        side_effect=lambda request, **_kwargs: _Response(
             payload if request.full_url == OPENROUTER_SOURCE.list_url else {"data": []}
         ),
     ), patch(
@@ -1686,7 +1686,7 @@ def test_discover_bytez_marks_zero_meter_price_as_free() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(BYTEZ_SOURCE)
@@ -1708,7 +1708,7 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(BYTEZ_SOURCE)
