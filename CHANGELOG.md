@@ -20,7 +20,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   shipped CLI/server and the catalog's temperature/top_p/seed/reasoning_effort
   injection and replayable `reasoning_effort_snapshot` were unreachable in
   production. Omitting the flag keeps every payload byte-for-byte unchanged;
-  this does not touch the locked route/conduct selection defaults.
+  this does not touch the locked route/conduct selection defaults. Research
+  grounding for `reasoning_effort_profile` (Fugu's latency-versus-quality
+  split, TRINITY roles, Conductor steps/access lists) is already cited in
+  [`docs/architecture.md`](docs/architecture.md#implementation-mapping) next to this
+  module; this CLI on-ramp reuses that existing catalog and cites no new
+  claims of its own.
+- Startup now refuses `--role-effort-catalog default` when no agent in the
+  configured pool proves native `reasoning_effort` support (explicit
+  `"reasoning_effort_supported": true`, or a `mock://` agent). Every role in
+  the default catalog fails closed (`unsupported_provider_fallback="abstain"`,
+  per ADR 0021), and ordinary real-provider agent configs and auto-discovered
+  agents never set `reasoning_effort_supported` — without this guard the flag
+  would construct successfully and then raise `EffortProfileError` on every
+  request. `--agents examples/agents.mock.json` (the CLI default) is
+  unaffected; only a non-mock pool without proven support is now rejected at
+  startup, before any request is attempted.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

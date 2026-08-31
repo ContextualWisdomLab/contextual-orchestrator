@@ -5,6 +5,16 @@ Before this test existed, ``TaskOrchestrator`` accepted ``role_effort_catalog``
 the constructor kwarg was reachable only from direct Python callers, never
 from the shipped CLI/server entrypoint. These tests pin the opt-in flag so a
 regression (the flag silently stops reaching the constructor) fails CI.
+
+They also pin a follow-up finding: ``default_role_effort_catalog()`` fails
+closed (``unsupported_provider_fallback="abstain"``) for every role, while
+ordinary real-provider agent configs and auto-discovered agents never set
+``reasoning_effort_supported``. Wiring the flag straight into
+``TaskOrchestrator`` without a startup check would let it construct
+successfully and then raise ``EffortProfileError`` on every subsequent
+request for any non-mock pool. The startup guard in
+``_require_eligible_role_effort_agents`` rejects that combination up front,
+for both the one-shot CLI prompt and `--serve`.
 """
 
 from __future__ import annotations
@@ -73,3 +83,119 @@ def test_role_effort_catalog_rejects_unknown_value() -> None:
             assert exc.code == 2
         else:  # pragma: no cover
             raise AssertionError("an unknown --role-effort-catalog value must be rejected")
+
+
+def _write_real_provider_agent_config(tmp_path: Path, *, reasoning_effort_supported: bool | None) -> Path:
+    """Write a non-mock (real-provider-shaped) single-agent config for a test.
+
+    Mirrors ``examples/agents.openai.json``: a real ``https://`` ``base_url``,
+    which never auto-passes the mock:// support carve-out in
+    ``agent_proves_reasoning_effort_support``. ``reasoning_effort_supported``
+    is omitted entirely when ``None``, matching every shipped example config
+    and every auto-discovered agent today.
+    """
+    agent: dict[str, object] = {
+        "id": "general_agent",
+        "model": "gpt-5.5",
+        "base_url": "https://api.openai.com/v1",
+        "credential_key": "OPENAI_API_KEY",
+        "tags": ["reasoning", "writing", "planning", "analysis"],
+        "priority": 1,
+    }
+    if reasoning_effort_supported is not None:
+        agent["reasoning_effort_supported"] = reasoning_effort_supported
+    config_path = tmp_path / "agents.json"
+    config_path.write_text(json.dumps({"agents": [agent]}), encoding="utf-8")
+    return config_path
+
+
+def test_role_effort_catalog_default_rejects_unproven_real_provider_pool(tmp_path: Path) -> None:
+    """A non-mock agent with unknown support must fail at startup, not per-request.
+
+    Regression for the finding on PR #958: ``default_role_effort_catalog()``
+    fails closed (``unsupported_provider_fallback="abstain"``) for every role,
+    while an ordinary real-provider agent config never sets
+    ``reasoning_effort_supported``. Before this guard, ``main()`` would
+    construct successfully and only raise ``EffortProfileError`` deep inside
+    the first ``apply_effort_profile`` call -- i.e. it would appear to work
+    and then fail every request. It must instead be rejected here, before any
+    request is attempted.
+    """
+    config_path = _write_real_provider_agent_config(tmp_path, reasoning_effort_supported=None)
+    stderr = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--role-effort-catalog",
+                "default",
+                "--agents",
+                str(config_path),
+                "hi",
+            ],
+        ),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("an unproven real-provider pool must be rejected at startup")
+    message = stderr.getvalue()
+    assert "reasoning_effort_supported" in message
+    assert str(config_path) in message
+
+
+def test_role_effort_catalog_default_rejects_unproven_pool_before_serving() -> None:
+    """The same startup guard covers `--serve`, not just the one-shot CLI prompt."""
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--auth-token",
+                "token",
+                "--role-effort-catalog",
+                "default",
+                "--agents",
+                "examples/agents.openai.json",
+            ],
+        ),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("--serve must not start with an unproven role-effort pool")
+    assert not serve.called
+
+
+def test_role_effort_catalog_default_allows_pool_with_explicit_support(tmp_path: Path) -> None:
+    """A non-mock agent that explicitly declares support is enough to unlock the flag."""
+    config_path = _write_real_provider_agent_config(tmp_path, reasoning_effort_supported=True)
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--auth-token",
+                "token",
+                "--role-effort-catalog",
+                "default",
+                "--agents",
+                str(config_path),
+            ],
+        ),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main()
+    assert serve.called

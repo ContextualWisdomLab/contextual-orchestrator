@@ -563,6 +563,25 @@ class ModelAgent:
         )
 
 
+def agent_proves_reasoning_effort_support(agent: ModelAgent) -> bool:
+    """Return whether ``agent`` has proven native ``reasoning_effort`` support.
+
+    True only when the agent explicitly declares ``reasoning_effort_supported:
+    true``, or when the agent is an in-process ``mock://`` harness agent (used
+    by tests and evaluation, where support is trivially true). Ordinary
+    real-provider agents -- including every shipped example config and every
+    auto-discovered agent, neither of which set ``reasoning_effort_supported``
+    today -- default to unproven (``None``) and are therefore NOT eligible
+    until an operator explicitly marks per-agent support. See ADR 0021
+    (``docs/planning/adrs/0021-reasoning-effort-profiles.md``): "An unknown
+    provider fails closed unless the operator explicitly picks the omit
+    fallback."
+    """
+    return agent.reasoning_effort_supported is True or (
+        agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://")
+    )
+
+
 def _is_general_chat_agent(agent: ModelAgent) -> bool:
     """Apply persisted provider capability tags before model-name fallback."""
     return is_general_chat_candidate(
@@ -1504,10 +1523,7 @@ class ModelClient:
         """Apply an opt-in profile while proving provider support before egress."""
         if api_surface not in {"chat.completions", "responses"}:
             raise ValueError("api_surface must be chat.completions or responses")
-        supports = (
-            agent.reasoning_effort_supported is True
-            or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
-        )
+        supports = agent_proves_reasoning_effort_support(agent)
         applied = apply_request_profile(
             payload,
             profile,
@@ -3743,11 +3759,7 @@ class TaskOrchestrator:
             supported = [
                 candidate
                 for candidate in ranked_candidates
-                if candidate.reasoning_effort_supported is True
-                or (
-                    candidate.reasoning_effort_supported is None
-                    and candidate.base_url.startswith("mock://")
-                )
+                if agent_proves_reasoning_effort_support(candidate)
             ]
             if supported:
                 ranked_candidates = supported

@@ -33,6 +33,7 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     ModelClient,
     TaskOrchestrator,
+    agent_proves_reasoning_effort_support,
     load_agents,
 )
 from .privacy_policy_analysis import (
@@ -69,6 +70,44 @@ def _positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("positive integer required")
     return parsed
+
+
+def _require_eligible_role_effort_agents(
+    orchestrator: TaskOrchestrator,
+    parser: argparse.ArgumentParser,
+    agents_source: str,
+) -> None:
+    """Fail fast when an opted-in role-effort catalog cannot be honored.
+
+    ``default_role_effort_catalog()`` fails closed
+    (``unsupported_provider_fallback="abstain"``) for every role by design
+    (ADR 0021): native ``reasoning_effort`` is sent only to a provider that
+    proves support, and an unproven provider must not silently receive it
+    either. Ordinary real-provider agent configs (e.g.
+    ``examples/agents.openai.json``) and every auto-discovered agent never
+    set ``reasoning_effort_supported``, so without this check
+    ``--role-effort-catalog default`` would construct successfully and then
+    raise ``EffortProfileError`` on every subsequent request. Reject at
+    startup instead, with an actionable fix, rather than after the pool is
+    already live for ``--serve`` or a CLI prompt.
+    """
+    catalog = orchestrator.role_effort_catalog
+    if catalog is None:
+        return
+    if not any(profile.unsupported_provider_fallback != "omit" for profile in catalog.values()):
+        return
+    if any(agent_proves_reasoning_effort_support(agent) for agent in orchestrator.agents):
+        return
+    parser.error(
+        "--role-effort-catalog default requires at least one agent in "
+        f"--agents {agents_source!r} to prove native reasoning-effort support: "
+        'set "reasoning_effort_supported": true on that agent in the config, '
+        "or point --agents at a mock:// pool (e.g. examples/agents.mock.json) "
+        "for evaluation. Every role in the default catalog fails closed "
+        "(unsupported_provider_fallback='abstain') without that proof, so "
+        "every request would otherwise raise EffortProfileError. See ADR 0021 "
+        "(docs/planning/adrs/0021-reasoning-effort-profiles.md)."
+    )
 
 
 def _non_negative_int(value: str) -> int:
@@ -602,12 +641,16 @@ def main(argv: list[str] | None = None) -> None:
         help=(
             "Opt in to the issue #568 per-role reasoning-effort catalog (ADR 0021). "
             "'default' loads default_role_effort_catalog(), applying each workflow "
-            "role's temperature/top_p/seed/max_tokens and (only where a provider "
+            "role's temperature/top_p/seed/max_output_tokens and (only where a provider "
             "proves support) native reasoning_effort, and attaching a replayable "
             "reasoning_effort_snapshot to complete/run/stream_route/batch_route "
             "results. Omit to keep today's payload unchanged -- this does not "
             "change route/conduct selection defaults, which stay locked until "
-            "production_default_change_allowed is true."
+            "production_default_change_allowed is true. Every role in 'default' "
+            "fails closed for a provider that has not proven support, so at "
+            "least one --agents entry needs \"reasoning_effort_supported\": "
+            "true (or a mock:// base_url) -- startup refuses the flag "
+            "otherwise."
         ),
     )
     args = parser.parse_args(arguments)
@@ -636,6 +679,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.auto_discover_model_agents:
         _auto_discover_runtime_agents(orchestrator)
+
+    if args.role_effort_catalog is not None:
+        _require_eligible_role_effort_agents(orchestrator, parser, args.agents)
 
     if args.no_realtime_judge:
         orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
