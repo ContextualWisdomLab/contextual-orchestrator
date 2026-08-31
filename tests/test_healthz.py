@@ -74,6 +74,10 @@ def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:
         assert refreshed["ready_agent_count"] == 1
         assert refreshed["items"][1]["status"] == "disabled"
 
+        status, cached = request(url)
+        assert status == 200
+        assert cached == refreshed
+
         try:
             request(f"{url}?refresh=true", token=None)
         except HTTPError as exc:
@@ -118,6 +122,10 @@ def test_inference_provider_readiness_refresh_uses_inference_scope_only() -> Non
         assert refreshed["probe"] == "refresh"
         assert refreshed["ready_agent_count"] == 1
         assert refreshed["items"][1]["status"] == "disabled"
+
+        status, cached = request(url, "inference_secret")
+        assert status == 200
+        assert cached == refreshed
 
         try:
             request(url, "admin_secret")

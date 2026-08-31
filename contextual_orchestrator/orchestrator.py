@@ -3402,6 +3402,7 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self._circuit_lock = threading.Lock()
         self._provider_readiness_lock = threading.Lock()
+        self._latest_provider_readiness_report: dict[str, Any] | None = None
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -3488,8 +3489,10 @@ class TaskOrchestrator:
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
         probe_timeout = _validate_provider_probe_timeout(timeout)
-        items: list[dict[str, Any]] = []
         with self._provider_readiness_lock:
+            if not refresh and self._latest_provider_readiness_report is not None:
+                return json.loads(json.dumps(self._latest_provider_readiness_report))
+            items: list[dict[str, Any]] = []
             for agent in self.candidates:
                 provider = agent.provider_name or self._infer_provider_name(agent.base_url)
                 if agent.disabled:
@@ -3511,19 +3514,22 @@ class TaskOrchestrator:
                         "provider": provider,
                         "status": "unprobed",
                     })
-        active = [item for item in items if item["status"] != "disabled"]
-        status = "unprobed" if not refresh else (
-            "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
-        )
-        return {
-            "status": status,
-            "probe": "refresh" if refresh else "none",
-            "timeout_seconds": probe_timeout,
-            "checked_at": int(time.time()) if refresh else None,
-            "agent_count": len(active),
-            "ready_agent_count": sum(item["status"] == "ready" for item in active),
-            "items": items,
-        }
+            active = [item for item in items if item["status"] != "disabled"]
+            status = "unprobed" if not refresh else (
+                "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
+            )
+            report = {
+                "status": status,
+                "probe": "refresh" if refresh else "none",
+                "timeout_seconds": probe_timeout,
+                "checked_at": int(time.time()) if refresh else None,
+                "agent_count": len(active),
+                "ready_agent_count": sum(item["status"] == "ready" for item in active),
+                "items": items,
+            }
+            if refresh:
+                self._latest_provider_readiness_report = json.loads(json.dumps(report))
+            return report
 
     def _reload_state(self) -> None:
         for observation in self._store.load("psychometric_observation"):

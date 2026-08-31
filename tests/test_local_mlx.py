@@ -244,6 +244,29 @@ def test_provider_readiness_report_keeps_liveness_unprobed_until_refresh() -> No
     probe.assert_called_once_with(orchestrator.agents[0], timeout=2.0)
 
 
+def test_provider_readiness_report_reuses_latest_refresh_until_next_probe() -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent("disabled_agent", "disabled-model", disabled=True),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        return_value={"status": "ready", "agent_id": "ready_agent", "model": "ready-model"},
+    ) as probe:
+        refreshed = orchestrator.provider_readiness_report(refresh=True, timeout=2.0)
+        cached = orchestrator.provider_readiness_report()
+
+    assert cached == refreshed
+    assert cached is not refreshed
+    cached["items"][0]["status"] = "tampered"
+    cached["items"][1]["status"] = "tampered"
+    assert orchestrator.provider_readiness_report()["items"][0]["status"] == "ready"
+    assert orchestrator.provider_readiness_report()["items"][1]["status"] == "disabled"
+    probe.assert_called_once_with(orchestrator.agents[0], timeout=2.0)
+
+
 def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     import threading
 
