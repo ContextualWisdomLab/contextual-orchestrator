@@ -60,12 +60,16 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert chat_schema["properties"]["include_orchestration_trace"]["type"] == "boolean"
     routing_schema = OPENAPI_SPEC["components"]["schemas"]["CandidateRoutingControls"]
     assert routing_schema["properties"]["candidate_id"]["minLength"] == 1
-    assert routing_schema["properties"]["candidate_id"]["pattern"] == r".*\S.*"
+    assert routing_schema["properties"]["candidate_id"]["pattern"] == r"^\S(?:.*\S)?$"
     assert routing_schema["properties"]["exclude_candidate_ids"] == {
         "type": "array",
         "maxItems": 32,
         "uniqueItems": True,
-        "items": {"type": "string", "minLength": 1, "pattern": r".*\S.*"},
+        "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"^\S(?:.*\S)?$",
+        },
     }
     assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
         "security"

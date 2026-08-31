@@ -3197,7 +3197,11 @@ def _validate_routing(
             cleaned["priority"] = priority.strip().lower()
     candidate_id = routing.get("candidate_id")
     if candidate_id is not None:
-        if not isinstance(candidate_id, str) or not candidate_id.strip():
+        if (
+            not isinstance(candidate_id, str)
+            or not candidate_id.strip()
+            or candidate_id != candidate_id.strip()
+        ):
             raise RequestError(
                 400, "invalid_routing", "routing.candidate_id must be a non-empty string"
             )
@@ -3210,7 +3214,12 @@ def _validate_routing(
                 "invalid_routing",
                 "routing.exclude_candidate_ids must be an array of at most 32 agent IDs",
             )
-        if any(not isinstance(value, str) or not value.strip() for value in excluded):
+        if any(
+            not isinstance(value, str)
+            or not value.strip()
+            or value != value.strip()
+            for value in excluded
+        ):
             raise RequestError(
                 400,
                 "invalid_routing",

@@ -534,6 +534,13 @@ def test_candidate_keys_are_rejected_on_unsupported_routing_surfaces() -> None:
     assert _validate_routing(
         {"exclude_candidate_ids": []}, allow_candidate_controls=True
     ) == {"exclude_candidate_ids": []}
+    for routing in (
+        {"candidate_id": " candidate_b"},
+        {"exclude_candidate_ids": ["candidate_a", " candidate_a"]},
+    ):
+        with pytest.raises(RequestError) as exact_id_error:
+            _validate_routing(routing, allow_candidate_controls=True)
+        assert exact_id_error.value.code == "invalid_routing"
 
 
 def test_attempt_evidence_keeps_failed_candidate_before_success() -> None:

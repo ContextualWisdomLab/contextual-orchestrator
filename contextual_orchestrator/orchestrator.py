@@ -3468,7 +3468,9 @@ class TaskOrchestrator:
         if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}:
             raise ValueError("candidate controls require a virtual gateway model")
         if candidate_id is not None and (
-            not isinstance(candidate_id, str) or not candidate_id.strip()
+            not isinstance(candidate_id, str)
+            or not candidate_id.strip()
+            or candidate_id != candidate_id.strip()
         ):
             raise ValueError("candidate_id must be a non-empty agent ID")
         if not isinstance(excluded, (list, tuple)) or len(excluded) > 32:
@@ -3476,6 +3478,8 @@ class TaskOrchestrator:
         normalized = tuple(value.strip() for value in excluded if isinstance(value, str))
         if len(normalized) != len(excluded) or any(not value for value in normalized):
             raise ValueError("exclude_candidate_ids must contain non-empty agent IDs")
+        if any(value != value.strip() for value in excluded):
+            raise ValueError("exclude_candidate_ids must contain exact agent IDs")
         if len(normalized) != len(set(normalized)):
             raise ValueError("exclude_candidate_ids must contain unique agent IDs")
         candidate_id = candidate_id.strip() if isinstance(candidate_id, str) else None
