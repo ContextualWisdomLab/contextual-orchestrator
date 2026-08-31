@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 # ``__main__.main()``), matching this repo's existing per-module logger
 # convention (``server.py``, ``telemetry.py``, ``video_jobs.py``).
 _LOGGER = logging.getLogger(__name__)
+
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
@@ -1161,6 +1162,7 @@ def discover_provider_models(
             source.provider_name,
         )
         return []
+    started = time.monotonic()
     _LOGGER.debug(
         "model discovery started account=%s",
         source.provider_name,
@@ -1168,8 +1170,6 @@ def discover_provider_models(
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
-    started = time.monotonic()
-    _LOGGER.debug("provider_discovery_started provider=%s", source.provider_name)
     try:
         fetch = (
             _fetch_configured_gateway_json
@@ -1189,7 +1189,7 @@ def discover_provider_models(
         # discovery boundary with provider text attached.
         error_code = _provider_discovery_error_code(exc)
         _LOGGER.debug(
-            "provider_discovery_failed provider=%s error_code=%s elapsed=%.2f",
+            "model discovery failed account=%s error_code=%s elapsed=%.2f",
             source.provider_name,
             error_code,
             time.monotonic() - started,
@@ -1240,7 +1240,7 @@ def discover_provider_models(
         discovered = _parse_openai_compatible(payload, source)
     result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
     _LOGGER.debug(
-        "provider_discovery_finished provider=%s model_count=%d elapsed=%.2f",
+        "model discovery completed account=%s model_count=%d elapsed=%.2f",
         source.provider_name,
         len(result),
         time.monotonic() - started,
