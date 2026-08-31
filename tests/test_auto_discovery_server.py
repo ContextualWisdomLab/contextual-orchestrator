@@ -461,6 +461,17 @@ def test_auto_discovery_refreshes_discovered_limits_across_restart(
     assert (restored.priority, restored.group_name) == (17, "operator_group")
     assert restored.tags == existing.tags
 
+    unavailable_limits = replace(
+        discovered, max_output_tokens=None, context_window=None
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([unavailable_limits], []),
+    )
+    assert _auto_discover_runtime_agents(restarted) == {"added": [], "updated": []}
+    preserved = restarted._agent(existing.id)
+    assert (preserved.max_output_tokens, preserved.context_window) == (8192, 256000)
+
 
 def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_credit(
     monkeypatch,

@@ -430,14 +430,16 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         elif "discovered" not in existing.tags:
             continue
         else:
+            max_output_tokens = model.max_output_tokens or existing.max_output_tokens
+            context_window = model.context_window or existing.context_window
             limits_changed = (
-                existing.max_output_tokens != model.max_output_tokens
-                or existing.context_window != model.context_window
+                existing.max_output_tokens != max_output_tokens
+                or existing.context_window != context_window
             )
             existing = replace(
                 existing,
-                max_output_tokens=model.max_output_tokens,
-                context_window=model.context_window,
+                max_output_tokens=max_output_tokens,
+                context_window=context_window,
             )
         if existing is not None and not routable:
             tags = (*existing.tags, "spend:blocked")
