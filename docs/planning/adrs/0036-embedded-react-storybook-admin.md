@@ -19,8 +19,10 @@ Date: 2026-08-27 (status corrected 2026-08-31 — see Implementation Status)
 
 Proposed. This ADR was originally recorded as "Accepted" on 2026-08-27, the
 same PR (#893) that added the `admin_ui/` directory. It is downgraded to
-Proposed because no part of the Decision below has actually been carried
-out — see [Implementation Status](#implementation-status) — and because it
+Proposed because the substantive parts of the Decision below — items 3 and
+4, the actual UI development and backend wiring — have not been carried out
+(item 2, Corepack package management, has been; see
+[Implementation Status](#implementation-status)) — and because it
 was never reconciled with [ADR 0033](0033-admin-console-ui-tooling-boundary.md),
 an earlier, independently reasoned ADR (accepted 2026-08-23) that
 deliberately keeps the admin console as inline stdlib HTML in `admin.py` and
@@ -40,9 +42,11 @@ Vite `react-ts` + Storybook scaffolding command:
   stock `react.svg` / `vite.svg` assets.
 - `src/stories/` holds only the default Storybook `Button` / `Header` /
   `Page` stories and their bundled sample assets.
-- No file outside `admin_ui/` (other than `pnpm-lock.yaml` and
-  `pnpm-workspace.yaml`, which are package-manager bookkeeping, not build or
-  serve wiring) references `admin_ui` at all.
+- Decision item 2 (Corepack + checked-in lockfile) is executed: root
+  `package.json` declares `"packageManager": "pnpm@11.24.0+..."` and the
+  checked-in `pnpm-lock.yaml` resolves a real `admin_ui` workspace entry.
+  That is package-manager bookkeeping, not build or serve wiring — no file
+  outside `admin_ui/` otherwise references `admin_ui` at all.
 - No workflow under `.github/workflows/` builds, lints, or tests it —
   there is no Corepack/pnpm install step, no `vite build`, no
   `build-storybook` step anywhere in CI.
@@ -53,9 +57,11 @@ Vite `react-ts` + Storybook scaffolding command:
   console) is unchanged and remains the entire `/admin` surface actually
   served in production.
 
-In short: decision item 4 below ("the Python backend will eventually serve
-the compiled static assets of this React app") has zero engineering
-progress behind it. `admin_ui/` is inert scaffolding, not work in flight.
+In short: decision items 3 and 4 below (modular Storybook component
+development, and "the Python backend will eventually serve the compiled
+static assets of this React app") have zero engineering progress behind
+them. Apart from its Corepack package-manager setup (item 2), `admin_ui/`
+is inert scaffolding, not work in flight on the actual UI.
 
 ## Context
 
@@ -71,8 +77,11 @@ We will embed a React + Storybook frontend directly within this repository to se
 3. UI components will be developed modularly via Storybook, emphasizing responsive layouts and accessibility.
 4. The Python backend (e.g., `admin.py`) will eventually serve the compiled static assets of this React app in production, replacing the embedded Vanilla JS string.
 
-None of the above has been executed beyond scaffolding step 1; see
-[Implementation Status](#implementation-status).
+Item 2 (Corepack package-manager pinning with a checked-in lockfile) has
+also been executed: `package.json` declares `"packageManager":
+"pnpm@11.24.0+..."` and `pnpm-lock.yaml` is checked in with a resolved
+`admin_ui` workspace entry. Items 3 and 4 have not been executed beyond the
+initial scaffold; see [Implementation Status](#implementation-status).
 
 ## Path to Acceptance
 
