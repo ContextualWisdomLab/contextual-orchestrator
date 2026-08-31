@@ -2250,3 +2250,153 @@ REMAINING GAP (follow-up loop): re-fit these priors against fast-mlsirm/
 TEPP calibrated quality latents before enabling benchmark priors on any
 revenue-serving route; until then their influence is capped at the same
 budget an unmeasured member already spends.
+
+### GAP RESOLVED (partial) — 2026-08-30 20:57 KST: `stream_options.include_usage` + `tools` gateway rejection
+
+**Symptom**: every Strix scan org-wide against `orchestrator/free` failed closed with
+`400 invalid_stream_options` (evidence: `.github` run `33307905354`, job
+`99247611184`, step 23). Strix's `openai-agents` SDK always sends
+`stream_options.include_usage=true` alongside `tools` on every streamed turn
+(`strix/core/inputs.py::make_model_settings`, no supported opt-out that keeps
+streaming), and `server.py`'s tools/response_format passthrough branch rejected
+that exact combination unconditionally, before any upstream call.
+
+**Root cause was gateway-side, not a real upstream constraint.** No provider
+(OpenAI, NVIDIA NIM, OpenRouter, Bytez) rejects this combination — this
+codebase has never sent `tools` + `stream=true` to a real provider in the
+first place; `proxy_completion()` always forces `upstream["stream"] = False`
+for tool-calling requests. `_chat_response_sse_chunks` (the SSE framing
+function this passthrough already calls) already had full, independently
+tested support for both tool_calls delta framing and honest usage-chunk
+emission (`usage_source: "reported"` vs `"estimated"`) — the only thing
+missing was reachability.
+
+**Fix**: [PR #925](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/925)
+narrowed the rejection from *all* `tools`/`response_format` structured
+passthrough to `response_format`-only (conduct mode, no tools).
+
+**Why not remove the rejection entirely** (a competing, independently-authored
+fix, PR #924, took that broader approach and was closed in favor of #925):
+traced `cost_router.py:456-507` — a conduct-mode multi-step workflow's
+`result["usage"]` dict is built by summing per-step counts and is *always*
+populated, but carries no `usage_source`/`measurement_status` tag of its own;
+when a step's provider response omits usage, the sum silently includes a
+local token-count estimate (the `measurement_status="estimated"` case, which
+only survives on the sibling `cost` key, never on `usage` itself).
+`_chat_response_sse_chunks` labels any populated `usage` dict
+`"usage_source": "reported"` unconditionally — it does not check
+`payload["cost"]["measurement_status"]`, unlike the sibling
+`orchestrator.py::chat_completion_chunks` (used by the *other* conduct-mode
+streaming path), which already correctly gates usage emission on
+`cost.get("measurement_status") == "measured"`. Removing the rejection for
+`response_format`-only would have let the gateway present a gateway-side
+token estimate as `"reported"` for a live SSE consumer — precisely the kind
+of fabricated-precision the project's Honest metrics convention exists to
+prevent. `tools` passthrough doesn't have this exposure (always one
+non-streaming upstream call; `payload["usage"]` there is always the raw
+provider JSON's own field), which is also exactly the shape Strix needs.
+**Follow-up (not yet scheduled)**: teach `_chat_response_sse_chunks` the same
+`measurement_status == "measured"` gate `chat_completion_chunks` already has,
+so conduct-mode streamed usage can be exposed honestly too, instead of kept
+closed.
+
+**Duplicate-work consolidation** (concurrent autonomous sessions independently
+converged on the same bug): closed contextual-orchestrator#924 (superseded by
+#925, evidence above); closed `.github`#1445 (duplicate of #1442, orphaned
+direct-NVIDIA-NIM resolver removal — unrelated cleanup, same root discovery
+day); closed `.github`#1447 (duplicate of #1448, both temporary
+`LLM_DISABLE_STREAMING` mitigations for Strix — #1448 is correctly scoped to
+only the contextual-orchestrator loopback base URL, #1447 was unconditional
+and would have also disabled streaming on Strix's other provider fallbacks).
+`.github`#1448 is held open, unmerged, as a fallback only: the correct fix is
+root-cause (#925, in normal — not bypassed — review, since it does not touch
+`.github`'s trusted scripts), and a non-streaming workaround is technical debt
+that would need a follow-up revert. Will bypass-merge #1448 only if #925's
+review stalls well beyond this org's accepted multi-hour LLM-review latency.
+
+**Follow-up (2026-08-30, same head): Devin review finding on #925, CONFIRMED
+and fixed.** The `tools`-passthrough narrowing above assumed the one
+upstream call "always" carries provider-reported usage. Traced
+`ModelClient.proxy_send`/`_proxy_send` (`orchestrator.py`): it returns a
+provider's raw JSON verbatim and neither requires nor synthesizes a `usage`
+key, so a real provider omitting it was untested and unproven safe. Added
+`tests/test_stream_options_null_flags_noop_http_honesty.py::test_http_chat_tools_streams_estimated_usage_when_provider_omits_it`,
+a real (loopback `local://`) HTTP provider — `mock://` agents cannot exercise
+this, since `ModelClient._mock_raw` always injects a zero-valued `usage`
+dict — whose tool-call response omits `usage` entirely; confirmed the
+existing `_chat_response_sse_chunks` fallback (already used for the
+non-tools case) correctly labels the resulting chunk `usage_source:
+"estimated"`, never `"reported"` (RED-before-GREEN: flipping that one label
+in `server.py` makes this new test fail). No behavior change was needed —
+this closes the coverage gap and corrects the PR's own comment/README/
+CHANGELOG language, which had overclaimed the guarantee.
+
+**TRACKED FOLLOW-UP (2026-08-30, action required once this PR merges):**
+a concurrent session merged `.github#1448`
+(`LLM_DISABLE_STREAMING=true` for Strix against the contextual-orchestrator
+loopback) at 12:15 UTC, before this PR merged. Its own justification is a
+*separate*, real deadlock, not a disagreement with the analysis above:
+`pr_review_merge_scheduler.py::inspect_pr` requires completed Strix
+evidence on a PR's head before it will ever dispatch OpenCode review, so a
+PR fixing Strix's only failure mode could never itself pass the review
+gated behind Strix succeeding — a genuine self-referential deadlock,
+independent of the `stream_options`/`tools` root cause this PR fixes.
+Confirmed with the user this is explicitly a temporary workaround, not the
+resolution: it trades away Strix's real-time SSE streaming to route around
+the gateway bug rather than fixing it. **Once this PR (#925) merges**,
+Strix's `tools` + `stream_options.include_usage=true` requests will
+succeed on their own against `orchestrator/free`, and the
+`LLM_DISABLE_STREAMING` opt-in in `scripts/ci/strix_quick_gate.sh`
+(`.github`) becomes unnecessary technical debt — file a follow-up PR in
+`.github` to revert it and restore real SSE streaming for Strix scans.
+Do not let this workaround become permanent by omission.
+
+**CONFIRMED (2026-08-30, ~21:52 KST): `.github#1451`'s narrower-scope claim
+proven correct, with a real posted verdict as evidence.** Earlier today
+`.github#1451`'s own PR body/comments overclaimed "blocking every PR
+org-wide" for the `pingora_edge_policy.py:345` coverage gap; corrected in
+that PR's comments once verified. The precise mechanism:
+`opencode-review-dispatch.yml`'s `coverage-evidence` job measures the
+*target PR's own repository's* coverage (it clones and tests whichever
+repo the reviewed PR lives in) — for a `.github`-hosted PR that happens to
+equal `.github`'s own `scripts/ci`, so the fix only unblocks `.github`
+PRs specifically. Confirmed by contrast: `fast-mlsirm#1473`'s post-merge
+dispatch (run `33311678659`) still failed `coverage-evidence`, but for a
+completely unrelated reason native to that repo (a Rust extension import
+error, `cannot import name '_core' from partially initialized module
+'fast_mlsirm'`, plus 69.8% docstring coverage) — proving the fix's scope
+boundary directly rather than assuming it.
+
+**End-to-end proof the `.github` scope now works**: `.github#1452`'s
+dispatch (run `33312352417`) is the first all the way through today:
+`coverage-evidence` succeeded, `Run OpenCode PR Review model pool`
+succeeded, and `opencode-agent[bot]` posted a real, substantive,
+evidence-based review on the current head — `CHANGES_REQUESTED` citing
+that PR's own unrelated failing checks (`osv-scan`, cancelled `Strix`),
+plus a genuine Changed-File Evidence Map covering the actual diff. Not a
+rubber stamp, not a coverage-gate skip: the review mechanism itself is
+now demonstrably working for `.github`-hosted PRs. Minor unresolved
+detail on that same run: "Publish repository_dispatch OpenCode status"
+failed after the verdict was already correctly published and enforced —
+a downstream status-publish step, not the review pipeline itself; not yet
+investigated.
+
+**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+`noema-review` run, flagged by the user as "still not working" after the
+above fixes landed): `TaskOrchestrator._invoke()`
+(`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
+call/retry/failover loop) has no overall wall-clock deadline. Each
+attempt is capped at `ModelClient.timeout = 90s`, but a hanging (not
+erroring) candidate plus one same-agent retry can chain past 90s +
+backoff + 90s = 180s+ before any response — well past
+`contextual_orchestrator_review_sidecar.sh`'s 120s outer
+`curl --max-time` bound on its own gateway-preflight self-check, so the
+sidecar sees exactly "0 bytes received after 120002ms" even though
+nothing is truly hung, just still working through an unbounded internal
+retry chain. Reproduced once (`.github` run `33312258611`, job
+`99259327051`); org-wide evidence since the pingora/Strix fixes landed
+shows this is now occasional, not the dominant failure mode (most
+`.github`-hosted PRs' `noema-review`/dispatch runs succeed). Correct fix
+is an overall deadline on `_invoke`'s candidate/retry loop, not another
+timeout increase on the sidecar's client side — deferred rather than
+rushed into this heavily-tested core file without dedicated validation.

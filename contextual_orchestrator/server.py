@@ -5127,6 +5127,13 @@ def _chat_response_sse_chunks(
         final["orchestration"] = orchestration
     chunks.append(final)
     if include_usage:
+        # Every normal chunk must carry usage: null so a consumer that checks
+        # key presence (rather than dict.get()) sees the same OpenAI
+        # include_usage contract this framing's sibling, the live
+        # _stream_route_completion path, already honors — only the terminal
+        # choices-empty chunk below carries the real usage value.
+        for normal_chunk in chunks:
+            normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
         if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}
@@ -6652,13 +6659,32 @@ def build_server(
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if body.get("response_format") or tools_list:
                         trace_audited = False
-                        if stream and include_usage:
+                        tool_loop = bool(tools_list)
+                        # Single-agent tool passthrough (tool_loop) always makes one
+                        # non-streaming upstream call (orchestrator.proxy_completion
+                        # forces upstream["stream"] = False) and returns the provider's
+                        # raw JSON body verbatim as response_payload — the same object
+                        # the non-streaming reply below already sends today.
+                        # ModelClient.proxy_send does not require or synthesize a
+                        # "usage" key, so a provider may still omit it.
+                        # _chat_response_sse_chunks (below) already frames that payload
+                        # into a correctly-shaped terminal SSE chunk alongside tool_call
+                        # deltas, honestly labeling usage "reported" when the provider
+                        # sent it and "estimated" (never fabricated as "reported")
+                        # otherwise — the same fallback already exercised for the
+                        # non-tools streaming path — so there is nothing to fail closed
+                        # on here.
+                        # response_format-only structured passthrough (conduct mode)
+                        # is different: its usage comes from a multi-step workflow's
+                        # cost ledger, which may be unmeasured, so it keeps failing
+                        # closed rather than let _chat_response_sse_chunks synthesize
+                        # an estimated figure for a workflow-level answer.
+                        if stream and include_usage and not tool_loop:
                             raise RequestError(
                                 400,
                                 "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with tools or response_format",
+                                "stream_options.include_usage=true is not supported with response_format-only structured passthrough",
                             )
-                        tool_loop = bool(tools_list)
                         if (
                             tool_loop
                             and "include_orchestration_trace" in body
@@ -6783,7 +6809,11 @@ def build_server(
                                         model=model_name,
                                         include_usage=include_usage,
                                         prompt_text=json.dumps(
-                                            body.get("messages", []), ensure_ascii=False
+                                            {
+                                                "messages": body.get("messages", []),
+                                                "tools": body.get("tools"),
+                                            },
+                                            ensure_ascii=False,
                                         ),
                                     )
                                 )
