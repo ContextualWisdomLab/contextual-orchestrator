@@ -292,6 +292,10 @@ def _synchronize_durable_agent_pool(
             selected_ids.add(
                 next((item.id for item in matches if item.id == agent.id), matches[-1].id)
             )
+        if len(selected_ids) != len(agents):
+            raise ProviderBootstrapError(
+                "selected discovered models conflict with operator-managed agent identities"
+            )
 
         for candidate in list(bootstrap.candidates):
             if candidate.id in selected_ids:

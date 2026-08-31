@@ -5302,6 +5302,8 @@ class TaskOrchestrator:
         updated: list[str] = []
         for agent in discovered_agents:
             index = existing_by_id.get(agent.id)
+            if index is not None and "discovered" not in updated_candidates[index].tags:
+                continue
             if index is None:
                 index = legacy_discovered.get(
                     (
