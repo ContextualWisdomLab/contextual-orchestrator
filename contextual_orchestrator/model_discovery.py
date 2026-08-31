@@ -13,6 +13,7 @@ registering a subset of the declared provider keys still works. Stdlib only
 
 from __future__ import annotations
 
+import _thread
 from decimal import Decimal
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 import json
@@ -21,7 +22,6 @@ import math
 import queue
 import re
 import ssl
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -60,8 +60,8 @@ _OPENROUTER_ENDPOINT_WORKERS = 8
 _OPENROUTER_ENDPOINT_QUEUE: queue.SimpleQueue[
     tuple[Future[Any], Callable[..., Any], tuple[Any, ...]]
 ] = queue.SimpleQueue()
-_OPENROUTER_ENDPOINT_THREADS: tuple[threading.Thread, ...] = ()
-_OPENROUTER_ENDPOINT_THREADS_LOCK = threading.Lock()
+_OPENROUTER_ENDPOINT_THREADS: tuple[int, ...] = ()
+_OPENROUTER_ENDPOINT_THREADS_LOCK = _thread.allocate_lock()
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 # One bounded retry for a provider's primary model-list fetch, reusing the same
@@ -1024,16 +1024,12 @@ def _ensure_openrouter_endpoint_workers() -> None:
                 except BaseException as exc:
                     future.set_exception(exc)
 
+        # Low-level threads are daemon workers by definition and are not joined
+        # during interpreter shutdown; the fixed tuple is the process-wide cap.
         _OPENROUTER_ENDPOINT_THREADS = tuple(
-            threading.Thread(
-                target=worker,
-                name=f"openrouter-endpoint-{index}",
-                daemon=True,
-            )
-            for index in range(_OPENROUTER_ENDPOINT_WORKERS)
+            _thread.start_new_thread(worker, ())
+            for _ in range(_OPENROUTER_ENDPOINT_WORKERS)
         )
-        for thread in _OPENROUTER_ENDPOINT_THREADS:
-            thread.start()
 
 
 def _privacy_policy_urls(

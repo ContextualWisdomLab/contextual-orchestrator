@@ -6,7 +6,6 @@ import json
 import ssl
 import subprocess
 import sys
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -19,6 +18,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import model_discovery as model_discovery_module  # noqa: E402
 from contextual_orchestrator.orchestrator import AUTH_SCHEME_RAW_TOKEN  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
@@ -740,11 +740,13 @@ def test_openrouter_free_endpoint_workers_have_a_fixed_ceiling() -> None:
         "contextual_orchestrator.model_discovery._fetch_json",
         side_effect=lambda *_args, **_kwargs: time.sleep(0.2),
     ):
+        _openrouter_free_model_endpoints(payload, api_key="secret", timeout=0.005)
+        worker_ids = model_discovery_module._OPENROUTER_ENDPOINT_THREADS
         for _ in range(12):
             _openrouter_free_model_endpoints(payload, api_key="secret", timeout=0.005)
 
-    workers = [thread for thread in threading.enumerate() if thread.name.startswith("openrouter-endpoint-")]
-    assert len(workers) == 8
+    assert len(worker_ids) == 8
+    assert model_discovery_module._OPENROUTER_ENDPOINT_THREADS == worker_ids
 
 
 def test_fetch_json_tls_retry_uses_only_remaining_deadline() -> None:
