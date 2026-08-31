@@ -61,6 +61,7 @@ from .telemetry import (
     detach_trace_context,
     reset_session_id,
     session_id_from_headers,
+    session_id_from_metadata,
     session_id_from_request,
     set_session_id,
 )
@@ -5569,7 +5570,11 @@ def build_server(
                     self._authorize("inference")
                     batch_id = path[len("/v1/batch/embeddings/"):]
                     try:
-                        self._send(coordinator.embeddings_batch_document(batch_id))
+                        self._send(
+                            coordinator.embeddings_batch_document(
+                                batch_id, owner_id=security.principal_id(self.headers)
+                            )
+                        )
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
@@ -6337,7 +6342,16 @@ def build_server(
                     if isinstance((value := body.get(key)), dict)
                 ]
                 if "session_id" in body:
-                    metadata_values.append({"session_id": body["session_id"]})
+                    normalized_session_id = session_id_from_metadata(
+                        {"session_id": body["session_id"]}
+                    )
+                    if normalized_session_id is None:
+                        raise RequestError(
+                            400,
+                            "invalid_session_id",
+                            "session_id must be a non-empty string of at most 128 characters",
+                        )
+                    metadata_values.append({"session_id": normalized_session_id})
                 request_session_id = session_id_from_request(self.headers, *metadata_values)
                 if request_session_id != current_session_id():
                     self._bind_session(request_session_id)
@@ -7021,9 +7035,15 @@ def build_server(
                     if not attribution.get("service"):
                         attribution["service"] = "embeddings_api"
                     started_at = time.perf_counter()
+                    embedding_deadline = time.monotonic() + float(
+                        orchestrator.client.timeout
+                    )
                     document = None
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
+                        remaining_timeout = embedding_deadline - time.monotonic()
+                        if remaining_timeout <= 0:
+                            break
                         attempt_started_at = time.perf_counter()
                         try:
                             document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
@@ -7033,7 +7053,8 @@ def build_server(
                                 metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
                                 zdr_only=zdr_only,
                                 agent_id=agent.id,
-                                wait_timeout=float(orchestrator.client.timeout),
+                                wait_timeout=remaining_timeout,
+                                owner_id=security.principal_id(self.headers),
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
@@ -7044,7 +7065,12 @@ def build_server(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
                             )
-                        break
+                            break
+                        last_embedding_error = RuntimeError(
+                            f"embedding member ended with {document.get('status', 'unknown')}"
+                        )
+                        orchestrator._group_router.observe_failure(embedding_agent.id)
+                        document = None
                     if document is None:
                         raise RequestError(
                             503,
@@ -7115,6 +7141,7 @@ def build_server(
                                 metadata=submit_metadata,
                                 zdr_only=zdr_only,
                                 agent_id=agent.id,
+                                owner_id=security.principal_id(self.headers),
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc

@@ -439,6 +439,25 @@ def test_lineage_structured_payload_accepts_session_without_provider_forwarding(
     assert observed_sessions == ["synthetic-lineage-session"]
 
 
+@pytest.mark.parametrize("session_id", [7, "", "x" * 129, "line\nbreak"])
+def test_http_rejects_invalid_top_level_session_id(session_id: object) -> None:
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "hello"}],
+                "session_id": session_id,
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+    assert status == 400
+    assert body["error"]["code"] == "invalid_session_id"
+
+
 def test_http_gateway_default_response_format_resolves_concrete_agent() -> None:
     """The virtual gateway default remains valid on provider-native passthrough."""
     server, port, token = _serve()

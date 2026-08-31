@@ -146,6 +146,26 @@ def test_provider_batch_returns_before_terminal_result() -> None:
     backend.close()
 
 
+def test_provider_reservation_does_not_execute_before_public_registration() -> None:
+    called = threading.Event()
+
+    def runner(requests):
+        called.set()
+        return [[1.0] for _request in requests], len(requests)
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    job = backend.reserve(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+
+    assert backend.poll(job)["status"] == "reserved"
+    assert called.is_set() is False
+    backend.start(job)
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    assert called.is_set() is True
+    backend.close()
+
+
 def test_provider_batch_failure_is_terminal_without_payload_leak() -> None:
     def runner(_requests):
         raise RuntimeError("synthetic provider failure")

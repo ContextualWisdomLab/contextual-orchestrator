@@ -713,19 +713,40 @@ class ProviderEmbeddingBatchBackend:
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:
         """Persist a queued job and return immediately with a pollable handle."""
+        job = self.reserve(requests, metadata=metadata)
+        self.start(job)
+        return job
+
+    def reserve(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Persist provider work without making it executable yet."""
         if self._closed.is_set():
             raise RuntimeError("provider embedding backend is closed")
         job_id = f"providerembed_{uuid.uuid4().hex}"
         self._requests[job_id] = list(requests)
         self._deadlines[job_id] = time.time() + self._registry.retention_seconds
-        self._states[job_id] = "queued"
-        self._terminal_events[job_id] = threading.Event()
+        self._states[job_id] = "reserved"
+        return BatchJob(
+            job_id=job_id,
+            backend=self.name,
+            status="reserved",
+            request_count=len(requests),
+        )
+
+    def start(self, job: BatchJob) -> None:
+        """Make a fully registered reservation executable."""
+        if self._closed.is_set():
+            raise RuntimeError("provider embedding backend is closed")
+        if self._states.get(job.job_id) != "reserved":
+            return
+        self._states[job.job_id] = "queued"
+        self._terminal_events[job.job_id] = threading.Event()
         with self._executor_lock:
             if self._executor is None:
                 self._executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
             executor = self._executor
-        executor.submit(copy_context().run, self._run_job, job_id)
-        return BatchJob(job_id=job_id, backend=self.name, status="queued", request_count=len(requests))
+        executor.submit(copy_context().run, self._run_job, job.job_id)
 
     def _run_job(self, job_id: str) -> None:
         """Execute or reclaim one persisted job until it becomes terminal."""

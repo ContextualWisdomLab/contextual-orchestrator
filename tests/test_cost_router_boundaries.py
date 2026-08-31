@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 import pytest
@@ -350,10 +351,40 @@ def test_embeddings_document_is_idempotent_after_completion() -> None:
     assert backend.polled.count(job.job_id) == 1
 
 
+def test_concurrent_embedding_polls_record_usage_once() -> None:
+    backend = _DroppingEmbeddingBackend()
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    job = coordinator.submit_embeddings_batch(["only one"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        documents = list(
+            executor.map(
+                lambda _index: coordinator.embeddings_batch_document(job.job_id),
+                range(2),
+            )
+        )
+
+    assert documents[0] == documents[1]
+    assert len(coordinator.ledger.records()) == 1
+
+
 def test_embeddings_document_requires_known_batch() -> None:
     coordinator = _coordinator()
     with pytest.raises(KeyError, match="embeddings batch job"):
         coordinator.embeddings_batch_document("no_such_batch")
+
+
+def test_embeddings_document_requires_the_bound_owner() -> None:
+    coordinator = _coordinator(embedding_batch_backend=_DroppingEmbeddingBackend())
+    job = coordinator.submit_embeddings_batch(["private"], owner_id="principal-a")
+
+    with pytest.raises(KeyError, match="embeddings batch job"):
+        coordinator.embeddings_batch_document(job.job_id, owner_id="principal-b")
+
+    assert (
+        coordinator.embeddings_batch_document(job.job_id, owner_id="principal-a")["status"]
+        == "completed"
+    )
 
 
 def test_embeddings_document_incomplete_status_has_no_vectors() -> None:

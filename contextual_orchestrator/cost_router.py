@@ -202,6 +202,7 @@ class CostRoutingCoordinator:
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
         self._embedding_jobs = registry.mapping("embedding_jobs", decode=lambda raw: BatchJob(**raw))
         self._embedding_models = registry.mapping("embedding_models")
+        self._embedding_owners = registry.mapping("embedding_owners")
         self._embedding_requests = registry.mapping(
             "embedding_requests", decode=lambda raw: EmbeddingBatchRequest(**raw)
         )
@@ -209,6 +210,10 @@ class CostRoutingCoordinator:
         self._embedding_part_counts = registry.mapping("embedding_part_counts")
         self._embedding_part_limits = registry.mapping("embedding_part_limits")
         self._embedding_documents = registry.mapping("embedding_documents")
+        start_embedding_job = getattr(self.embedding_batch_backend, "start", None)
+        if callable(start_embedding_job):
+            for recovered_job in list(self._embedding_jobs.values()):
+                start_embedding_job(recovered_job)
 
     # ------------------------------------------------------------------
     # Provider / model resolution
@@ -864,6 +869,7 @@ class CostRoutingCoordinator:
         metadata: Optional[Dict[str, Any]] = None,
         zdr_only: bool = False,
         agent_id: Optional[str] = None,
+        owner_id: Optional[str] = None,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -885,13 +891,21 @@ class CostRoutingCoordinator:
             zdr_only=zdr_only,
             agent_id=resolved_agent_id,
         )
-        job = self.embedding_batch_backend.submit(requests, metadata=metadata)
-        self._embedding_jobs[job.job_id] = job
+        reserve = getattr(self.embedding_batch_backend, "reserve", None)
+        start = getattr(self.embedding_batch_backend, "start", None)
+        if callable(reserve) and callable(start):
+            job = reserve(requests, metadata=metadata)
+        else:
+            job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_models[job.job_id] = resolved_model
+        self._embedding_owners[job.job_id] = owner_id
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
         self._embedding_part_limits[job.job_id] = part_limits
+        self._embedding_jobs[job.job_id] = job
+        if callable(reserve) and callable(start):
+            start(job)
         return job
 
     def _resolve_embedding_target(
@@ -1105,7 +1119,23 @@ class CostRoutingCoordinator:
             raise RuntimeError("an authoritative tokenizer returned a non-positive count")
         return max(0, value)
 
-    def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
+    def embeddings_batch_document(
+        self, batch_id: str, *, owner_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Materialize one owner-bound document under the shared job lock."""
+        self._require_embedding_job(batch_id, owner_id=owner_id)
+        raw_lease = getattr(self.orchestrator.client, "timeout", 30) or 30
+        lease_seconds = max(1.0, float(raw_lease))
+        with self.job_registry.lock(
+            "embedding_document", batch_id, lease_seconds=lease_seconds
+        ):
+            return self._embeddings_batch_document_locked(
+                batch_id, owner_id=owner_id
+            )
+
+    def _embeddings_batch_document_locked(
+        self, batch_id: str, *, owner_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Return the naruon-shaped batch document for ``batch_id``.
 
         Polls the backend; once complete, retrieves the vectors, records one
@@ -1118,7 +1148,7 @@ class CostRoutingCoordinator:
         if cached is not None:
             return cached
 
-        job = self._require_embedding_job(batch_id)
+        job = self._require_embedding_job(batch_id, owner_id=owner_id)
         requests = self._embedding_requests.get(batch_id, [])
         model_name = self._embedding_models.get(batch_id, "contextual-orchestrator")
         status = self.embedding_batch_backend.poll(job)
@@ -1220,6 +1250,7 @@ class CostRoutingCoordinator:
                         route_mode="embedding",
                         workflow_run_id=batch_id,
                         attribution=dict(parts[0]["attribution"]),
+                        usage_record_id=f"usage_embedding_{batch_id}_aggregate",
                     )
                     total_cost_amount += float(record.cost_amount)
                     currency_code = record.currency_code
@@ -1249,6 +1280,7 @@ class CostRoutingCoordinator:
                 route_mode="embedding",
                 workflow_run_id=batch_id,
                 attribution=attribution,
+                usage_record_id=f"usage_embedding_{batch_id}_{source_index}",
             )
             total_cost_amount += float(record.cost_amount)
             currency_code = record.currency_code
@@ -1297,6 +1329,7 @@ class CostRoutingCoordinator:
         zdr_only: bool = False,
         agent_id: Optional[str] = None,
         wait_timeout: Optional[float] = None,
+        owner_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
@@ -1311,16 +1344,19 @@ class CostRoutingCoordinator:
             metadata=metadata,
             zdr_only=zdr_only,
             agent_id=agent_id,
+            owner_id=owner_id,
         )
         if wait_timeout is not None and hasattr(self.embedding_batch_backend, "wait"):
             status = self.embedding_batch_backend.wait(job, timeout=wait_timeout)
             if not status.get("is_complete") and hasattr(self.embedding_batch_backend, "cancel"):
                 self.embedding_batch_backend.cancel(job, reason="synchronous request deadline elapsed")
-        return self.embeddings_batch_document(job.job_id)
+        return self.embeddings_batch_document(job.job_id, owner_id=owner_id)
 
-    def _require_embedding_job(self, batch_id: str) -> BatchJob:
+    def _require_embedding_job(
+        self, batch_id: str, *, owner_id: Optional[str] = None
+    ) -> BatchJob:
         job = self._embedding_jobs.get(batch_id)
-        if job is None:
+        if job is None or self._embedding_owners.get(batch_id) != owner_id:
             raise KeyError(f"embeddings batch job {batch_id!r} not found")
         return job
 
