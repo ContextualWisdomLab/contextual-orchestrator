@@ -1847,6 +1847,7 @@ class ModelClient:
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
+        payload = self._clamp_agent_token_budget(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -2412,12 +2413,15 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": self.apply_effort_profile(agent, {
-                    "model": agent.model,
-                    "messages": messages,
-                    "temperature": settings["temperature"] if temperature is None else temperature,
-                    "max_tokens": settings["max_output_tokens"],
-                }, effort_profile),
+                "body": self._clamp_agent_token_budget(
+                    agent,
+                    self.apply_effort_profile(agent, {
+                        "model": agent.model,
+                        "messages": messages,
+                        "temperature": settings["temperature"] if temperature is None else temperature,
+                        "max_tokens": settings["max_output_tokens"],
+                    }, effort_profile),
+                ),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]

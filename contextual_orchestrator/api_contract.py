@@ -437,8 +437,18 @@ OPENAPI_SPEC = {
                                     "tags": {"type": "array", "items": {"type": "string"}},
                                     "provider_exclusions": {"type": "array", "items": {"type": "string"}},
                                     "group_name": {"type": "string"},
-                                    "max_output_tokens": {"type": "integer"},
-                                    "context_window": {"type": "integer"},
+                                    "max_output_tokens": {
+                                        "anyOf": [
+                                            {"type": "integer", "minimum": 1},
+                                            {"type": "null"},
+                                        ]
+                                    },
+                                    "context_window": {
+                                        "anyOf": [
+                                            {"type": "integer", "minimum": 1},
+                                            {"type": "null"},
+                                        ]
+                                    },
                                     "stream_usage_supported": {"type": "boolean"},
                                 },
                             },

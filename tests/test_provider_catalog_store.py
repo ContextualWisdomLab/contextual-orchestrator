@@ -118,6 +118,21 @@ def test_model_normalization_withholds_non_positive_limit_metadata() -> None:
     assert normalized.context_window is None
 
 
+def test_model_normalization_withholds_out_of_range_limit_metadata() -> None:
+    source = _source()
+    normalized = normalize_discovered_model(
+        source,
+        replace(
+            _model(source, "model-a"),
+            max_output_tokens=2_147_483_648,
+            context_window=Decimal("2147483648"),
+        ),
+    )
+
+    assert normalized.max_output_tokens is None
+    assert normalized.context_window is None
+
+
 def test_underflowing_positive_price_is_rejected_not_treated_as_free() -> None:
     """A nonzero price that underflows to 0.0 in float must stay unknown."""
     source = _source()

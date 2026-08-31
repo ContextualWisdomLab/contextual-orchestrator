@@ -425,6 +425,28 @@ def test_stream_survives_noise_and_stream_without_done_marker() -> None:
     assert deltas == ["hel", "lo"]
 
 
+def test_stream_send_clamps_known_provider_output_ceiling() -> None:
+    agent = ModelAgent(
+        id="stream_limited_agent",
+        model="remote-chat-model",
+        base_url="https://stream.example/v1",
+        credential_key="STREAM_API_KEY",
+        max_output_tokens=32,
+    )
+    client = ModelClient()
+    lines = [b'data: {"choices":[{"delta":{"content":"ok"}}]}', b"data: [DONE]"]
+    seen_payload: dict[str, object] = {}
+
+    def open_provider(request, destination=None, timeout=None):
+        del destination, timeout
+        seen_payload.update(json.loads(request.data.decode("utf-8")))
+        return _StreamResponse(lines)
+
+    with patch.object(client, "_open_provider", side_effect=open_provider):
+        assert list(client._stream_send(agent, {"max_tokens": 64})) == ["ok"]
+    assert seen_payload["max_tokens"] == 32
+
+
 def test_stream_preserves_tool_stop_contract_mid_stream() -> None:
     """A terminal tool-stop raised during streaming keeps its own semantics."""
     agent = _streaming_agent()
@@ -606,6 +628,48 @@ def test_batch_run_skips_blank_lines_in_output_content() -> None:
         )
     assert results["task_0"]["content"] == "ok"
     assert results["task_0"]["usage"] == {"prompt_tokens": 3}
+
+
+def test_batch_run_clamps_known_provider_output_ceiling() -> None:
+    client = ModelClient(max_output_tokens=256)
+    agent = ModelAgent(
+        id="batch_limited_agent",
+        model="remote-chat-model",
+        base_url="https://remote.example/v1",
+        credential_key="REMOTE_API_KEY",
+        max_output_tokens=32,
+    )
+    uploaded_lines: list[dict[str, object]] = []
+    raw = (
+        b'{"custom_id": "task_0", "response": {"body": '
+        b'{"choices": [{"message": {"content": "ok"}}]}}}\n'
+    )
+
+    def batch_upload(_agent, payload, destination=None):
+        del _agent, destination
+        uploaded_lines.extend(json.loads(line) for line in payload.decode("utf-8").splitlines())
+        return "file_1"
+
+    def batch_json(_agent, method, _path, payload=None, destination=None):
+        del destination
+        if method == "POST":
+            assert payload["endpoint"] == "/v1/chat/completions"
+            return {"id": "batch_1"}
+        return {"status": "completed", "output_file_id": "file_9"}
+
+    with patch.object(client, "_batch_upload", side_effect=batch_upload), patch.object(
+        client, "_batch_json", side_effect=batch_json
+    ), patch.object(client, "_batch_raw", return_value=raw):
+        results = client._batch_run(
+            agent,
+            {"task_0": [{"role": "user", "content": "hi"}]},
+            None,
+            0.01,
+            5.0,
+        )
+
+    assert results["task_0"]["content"] == "ok"
+    assert uploaded_lines[0]["body"]["max_tokens"] == 32
 
 
 # -- Responses input coercion shapes -------------------------------------------------

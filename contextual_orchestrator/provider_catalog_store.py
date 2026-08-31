@@ -29,6 +29,9 @@ if TYPE_CHECKING:
     from .privacy_policy_analysis import PrivacyPolicyAssessment
 
 
+_POSTGRES_INT_MAX = 2_147_483_647
+
+
 PROVIDER_CATALOG_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS provider_account (
     provider_account_id text PRIMARY KEY,
@@ -50,8 +53,14 @@ CREATE TABLE IF NOT EXISTS provider_model (
     provider_account_id text NOT NULL
         REFERENCES provider_account(provider_account_id) ON DELETE CASCADE,
     model_name text NOT NULL,
-    max_output_tokens integer CHECK (max_output_tokens IS NULL OR max_output_tokens > 0),
-    context_window integer CHECK (context_window IS NULL OR context_window > 0),
+    max_output_tokens integer CHECK (
+        max_output_tokens IS NULL
+        OR (max_output_tokens > 0 AND max_output_tokens <= 2147483647)
+    ),
+    context_window integer CHECK (
+        context_window IS NULL
+        OR (context_window > 0 AND context_window <= 2147483647)
+    ),
     prompt_price_per_1k numeric(20, 8),
     completion_price_per_1k numeric(20, 8),
     currency_code text NOT NULL,
@@ -272,17 +281,17 @@ def _normalize_positive_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if value > 0 else None
+        return value if 0 < value <= _POSTGRES_INT_MAX else None
     if isinstance(value, float):
         if not math.isfinite(value) or not value.is_integer():
             return None
         integer = int(value)
-        return integer if integer > 0 else None
+        return integer if 0 < integer <= _POSTGRES_INT_MAX else None
     if isinstance(value, Decimal):
         if not value.is_finite() or value != value.to_integral_value():
             return None
         integer = int(value)
-        return integer if integer > 0 else None
+        return integer if 0 < integer <= _POSTGRES_INT_MAX else None
     return None
 
 
@@ -633,12 +642,14 @@ class PostgresProviderCatalogStore:
                 cursor.execute(
                     "ALTER TABLE provider_model "
                     "ADD COLUMN IF NOT EXISTS max_output_tokens integer "
-                    "CHECK (max_output_tokens IS NULL OR max_output_tokens > 0)"
+                    "CHECK (max_output_tokens IS NULL "
+                    "OR (max_output_tokens > 0 AND max_output_tokens <= 2147483647))"
                 )
                 cursor.execute(
                     "ALTER TABLE provider_model "
                     "ADD COLUMN IF NOT EXISTS context_window integer "
-                    "CHECK (context_window IS NULL OR context_window > 0)"
+                    "CHECK (context_window IS NULL "
+                    "OR (context_window > 0 AND context_window <= 2147483647))"
                 )
             connection.commit()
             self._schema_ready = True
