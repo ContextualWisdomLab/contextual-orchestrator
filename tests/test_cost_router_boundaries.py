@@ -210,6 +210,50 @@ def test_invalid_batch_usage_estimates_prompt_tokens_from_original_request() -> 
     assert item["prompt_tokens"] > 100
 
 
+def test_invalid_batch_usage_uses_legacy_request_registry_when_job_predates_prompt_estimates() -> None:
+    """Pre-upgrade jobs keep old prompt fallback compatibility without new writes."""
+    class LegacyRegistry(JobRegistryFactory):
+        def __init__(self) -> None:
+            super().__init__()
+            self._mappings: dict[str, Any] = {}
+
+        def mapping(self, name, *, decode=None):  # type: ignore[no-untyped-def]
+            if name not in self._mappings:
+                self._mappings[name] = {}
+            return self._mappings[name]
+
+    class InvalidUsageBackend:
+        name = "invalid-usage"
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            return [BatchResultItem(
+                "legacy-request", "short answer", prompt_tokens=-1, completion_tokens=2,
+                model="mock-a", usage_valid=False,
+            )]
+
+    registry = LegacyRegistry()
+    coordinator = _coordinator(batch_backend=InvalidUsageBackend(), job_registry=registry)
+    coordinator._batch_jobs["legacy-job"] = BatchJob(  # noqa: SLF001
+        "legacy-job", "invalid-usage", request_count=1
+    )
+    registry.mapping("batch_requests", decode=lambda raw: BatchRequest(**raw))["legacy-job"] = [
+        BatchRequest(
+            messages=[{"role": "user", "content": "word " * 500}],
+            model="mock-a",
+            custom_id="legacy-request",
+        )
+    ]
+
+    item = coordinator.retrieve_batch("legacy-job")["results"][0]
+
+    assert item["measurement_status"] == "estimated"
+    assert item["prompt_tokens"] > 100
+    assert coordinator._batch_jobs["legacy-job"].prompt_token_estimates == {  # noqa: SLF001
+        "legacy-request": item["prompt_tokens"]
+    }
+
+
 def test_batch_prompt_fallback_has_no_separate_registry_publication() -> None:
     """Accepted jobs publish their safe fallback metadata in one job record."""
     class RecordingRegistry(JobRegistryFactory):

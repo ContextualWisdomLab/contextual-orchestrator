@@ -115,6 +115,7 @@ class CostRoutingCoordinator:
                 token_counter=self.token_counter, job_registry=registry
             )
         )
+        self._job_registry = registry
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
         # embeddings batch state: job handle + submitted requests + cached doc,
@@ -719,6 +720,8 @@ class CostRoutingCoordinator:
         """Retrieve results for a batch owned by ``owner_id`` and record usage."""
         job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
+        request_by_custom_id = self._legacy_batch_requests(job)
+        prompt_token_estimates = dict(job.prompt_token_estimates)
         recorded: List[Dict[str, Any]] = []
         for item in items:
             provider_model = self._resolve_batch_provider_model(item)
@@ -733,6 +736,12 @@ class CostRoutingCoordinator:
                     )
                 )
             )
+            if not usage_valid and item.custom_id not in prompt_token_estimates:
+                original_request = request_by_custom_id.get(item.custom_id)
+                if original_request is not None:
+                    prompt_token_estimates[item.custom_id] = self.token_counter.count_messages(
+                        original_request.messages, item.model
+                    )
             record = self._record_completion(
                 messages=[{"role": "user", "content": ""}],
                 answer=item.answer,
@@ -745,7 +754,7 @@ class CostRoutingCoordinator:
                 prompt_tokens=(
                     item.prompt_tokens
                     if usage_valid
-                    else job.prompt_token_estimates.get(item.custom_id)
+                    else prompt_token_estimates.get(item.custom_id)
                 ),
                 completion_tokens=item.completion_tokens if usage_valid else None,
             )
@@ -762,11 +771,33 @@ class CostRoutingCoordinator:
                     "measurement_status": record.measurement_status,
                 }
             )
+        if prompt_token_estimates != job.prompt_token_estimates:
+            job.prompt_token_estimates = prompt_token_estimates
+            self._batch_jobs[job.job_id] = job
         return {
             "job_id": job_id,
             "backend": job.backend,
             "result_count": len(recorded),
             "results": recorded,
+        }
+
+    def _legacy_batch_requests(self, job: BatchJob) -> Dict[str, BatchRequest]:
+        """Read pre-upgrade batch requests only when a stored estimate is absent."""
+        if job.prompt_token_estimates:
+            return {}
+        legacy_requests = self._job_registry.mapping(
+            "batch_requests", decode=lambda raw: BatchRequest(**raw)
+        )
+        try:
+            requests = legacy_requests[job.job_id]
+        except KeyError:
+            return {}
+        if not isinstance(requests, list):
+            return {}
+        return {
+            request.custom_id: request
+            for request in requests
+            if isinstance(request, BatchRequest)
         }
 
     def _resolve_batch_provider_model(self, item: BatchResultItem) -> tuple[str, str]:
