@@ -1017,6 +1017,40 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
     return _deduplicate_discovered_models(discovered)
 
 
+def _bytez_meter_price_is_free(meter_price: Any) -> bool:
+    """Return whether a Bytez ``meterPrice`` names an exact-zero GPU-second rate.
+
+    Bytez prices by GPU-second, e.g. ``"0.0006478333 / sec"`` (see
+    https://docs.bytez.com/http-reference/list/models.md), not per-token --
+    this never feeds ``prompt_price_per_1k``/``completion_price_per_1k``,
+    only whether the *rate itself* is known to be exactly zero. Parses
+    through :class:`~decimal.Decimal` to avoid a nonzero rate underflowing to
+    ``0.0`` in float, matching :func:`_price_per_1k`'s precision handling. A
+    missing, non-numeric, or malformed value is unknown, not free -- the same
+    fail-closed default this module uses everywhere else pricing evidence is
+    incomplete. The sibling ``meter`` field (a GPU-tier name, e.g.
+    ``"sm-free"``) is not used here: live documentation shows tier names can
+    contain "free" while their own ``meterPrice`` is nonzero, so tier naming
+    is not a trustworthy zero-cost signal.
+    """
+    if isinstance(meter_price, bool):
+        return False
+    if isinstance(meter_price, (int, float)):
+        try:
+            return Decimal(str(meter_price)) == 0
+        except (ArithmeticError, ValueError):
+            return False
+    if not isinstance(meter_price, str):
+        return False
+    rate = meter_price.split("/", 1)[0].strip()
+    if not rate:
+        return False
+    try:
+        return Decimal(rate) == 0
+    except (ArithmeticError, ValueError):
+        return False
+
+
 def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
     rows = payload.get("output") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
@@ -1043,6 +1077,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 privacy_policy_urls=_privacy_policy_urls(source, row),
                 # Bytez prices by GPU-second (meterPrice), not per-token; leaving
                 # per-1k pricing unset is more honest than a misleading estimate.
+                is_free=_bytez_meter_price_is_free(row.get("meterPrice")),
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -1422,6 +1457,44 @@ def free_discovered_models(discovered: list[DiscoveredModel]) -> list[Discovered
     return [model for model in discovered if model.is_free]
 
 
+def _log_zero_free_serving_contribution(
+    discovered: list[DiscoveredModel], candidates: list[DiscoveredModel]
+) -> None:
+    """Log one non-fatal diagnostic per account that discovered rows but seeded no
+    ``orchestrator/free`` serving candidate, naming the coarse reason.
+
+    A hard provider failure (e.g. Bytez's HTTP 500) already gets an explicit
+    ``model discovery failed account=bytez ...`` line from
+    :func:`discover_provider_models`. But a provider that discovers rows just fine
+    and still contributes nothing to the free pool -- OpenRouter's deliberate
+    ``evidence_only`` exclusion, or a provider with real pricing but no zero-cost
+    model today -- previously left no comparable trace, making a single-family
+    pool (e.g. 100% ``nvidia_nim``) look identical whether every other provider
+    was failing or simply had nothing free to offer. This is derived entirely from
+    already-discovered rows -- no extra fetch, no behavior change to the returned
+    candidate list.
+    """
+    serving_account_names = {model.credential_name for model in candidates}
+    seen: set[str] = set()
+    for model in discovered:
+        if model.credential_name in seen or model.credential_name in serving_account_names:
+            continue
+        seen.add(model.credential_name)
+        account_rows = [m for m in discovered if m.credential_name == model.credential_name]
+        if all(row.evidence_only for row in account_rows):
+            reason = "evidence_only"
+        elif not any(row.is_free for row in account_rows):
+            reason = "no_free_pricing_reported"
+        else:
+            reason = "free_rows_excluded_from_general_pool"
+        _LOGGER.debug(
+            "free serving pool contribution zero account=%s credential=%s reason=%s",
+            model.provider_name,
+            model.credential_name,
+            reason,
+        )
+
+
 def general_free_serving_candidates(
     discovered: list[DiscoveredModel],
 ) -> list[DiscoveredModel]:
@@ -1470,11 +1543,13 @@ def general_free_serving_candidates(
     count never overstates how many free models the general chat pool could
     actually serve.
     """
-    return [
+    candidates = [
         model
         for model in free_discovered_models(discovered)
         if is_routable_discovered_model(model) and not _requires_non_text_input(model)
     ]
+    _log_zero_free_serving_contribution(discovered, candidates)
+    return candidates
 
 
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
