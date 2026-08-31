@@ -285,7 +285,7 @@ def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> Non
         return "recovered"
 
     with patch.object(orch.client, "chat", side_effect=flaky_chat):
-        output, served, usage = orch._invoke(
+        output, served, served_model, usage = orch._invoke(
             orch.candidates[0],
             [{"role": "user", "content": "go"}],
             text="go",
@@ -293,6 +293,7 @@ def test_invoke_retries_idempotent_rate_limits_with_circuit_and_backoff() -> Non
         )
     assert output == "recovered"
     assert served == "planner_agent"
+    assert served_model == "mock-model"
     assert usage is None
     assert len(sleeps) == 1
     fallback = orch.list_recent_audit_events()[0]

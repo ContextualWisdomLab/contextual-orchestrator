@@ -285,6 +285,7 @@ class _FastMLSIJudgeAdapter:
     text: str
     judge: str
     served_agent_id: str | None = None
+    served_model: str | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
 
@@ -302,7 +303,7 @@ class _FastMLSIJudgeAdapter:
         """Return one judge completion through the constrained adapter."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, usage = self.orchestrator._invoke(
+        output, served_id, served_model, usage = self.orchestrator._invoke(
             self._agent(),
             messages,
             text=self.text,
@@ -310,7 +311,9 @@ class _FastMLSIJudgeAdapter:
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
         )
-        return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
+        return self._completion_payload(
+            output, served_id, served_model, usage, self.mode if mode is None else mode
+        )
 
     def complete_structured(
         self,
@@ -343,17 +346,21 @@ class _FastMLSIJudgeAdapter:
         )
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
-        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
+        return self._completion_payload(
+            output, agent.id, agent.model, usage, self.mode if mode is None else mode
+        )
 
     def _completion_payload(
         self,
         output: str,
         served_id: str,
+        served_model: str,
         usage: dict[str, Any] | None,
         mode: str,
     ) -> dict[str, Any]:
         """Build the bounded adapter response shared by normal and structured calls."""
         self.served_agent_id = served_id
+        self.served_model = served_model
         trace = [
             {
                 "id": 0,
@@ -5342,7 +5349,7 @@ class TaskOrchestrator:
                 break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
-            attempt_answer, attempt_served_id, attempt_usage = self._invoke(
+            attempt_answer, attempt_served_id, _attempt_served_model, attempt_usage = self._invoke(
                 candidate,
                 messages,
                 text=text,
@@ -5593,7 +5600,7 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id, usage = self._invoke(
+            output, served_id, _served_model, usage = self._invoke(
                 agent,
                 step_messages,
                 text=task,
@@ -6590,7 +6597,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
-    ) -> tuple[str, str, dict[str, Any] | None]:
+    ) -> tuple[str, str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
         ``ModelClient`` handles provider transport retries. This layer classifies
@@ -6630,7 +6637,7 @@ class TaskOrchestrator:
             effort_profile = self._role_effort_profile(role)
             request_settings = self.client.request_settings_snapshot()
 
-            def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
+            def call(agent: ModelAgent) -> tuple[str, str, str, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
                     output = (
                         self.client.chat(agent, messages, effort_profile=effort_profile)
@@ -6638,7 +6645,7 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                     usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
-                return output, agent.id, usage
+                return output, agent.id, agent.model, usage
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
@@ -6665,7 +6672,7 @@ class TaskOrchestrator:
             if outcome is not None:
                 self._record_endpoint_race(outcome, capability="text")
                 self._record_success(outcome.winner_endpoint_id)
-                usage = outcome.value[2]
+                usage = outcome.value[3]
                 output_tokens = None
                 if isinstance(usage, dict):
                     reported = usage.get("completion_tokens", usage.get("output_tokens"))
@@ -6788,7 +6795,7 @@ class TaskOrchestrator:
                         total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
-                return output, agent.id, usage
+                return output, agent.id, agent.model, usage
         if (
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
@@ -7042,12 +7049,15 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            judge_served_id = judge_adapter.served_agent_id or judge.id
-            verification["judge_agent_id"] = judge_served_id
-            verification["judge_model"] = next(
-                (agent.model for agent in self.candidates if agent.id == judge_served_id),
-                judge.model,
-            )
+            verification["judge_agent_id"] = judge_adapter.served_agent_id or judge.id
+            # Captured directly from the agent object the provider call actually
+            # succeeded against (threaded through _invoke's return value), not
+            # re-resolved from self.candidates after the fact -- self.candidates
+            # is a plain mutable list a concurrent admin request can reassign
+            # between the call completing and any later lookup, which would
+            # otherwise let a fast-moving pool change mis-attribute this exact
+            # call's spend to the wrong (or no longer existing) model.
+            verification["judge_model"] = judge_adapter.served_model or judge.model
             if result.usage:
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode

@@ -147,7 +147,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   agent's model at that exact moment, following failover the same way
   `judge_agent_id` already does), and both read sites prefer that stored
   value, falling back to the old live-pool resolution only for
-  already-persisted records that predate this fix.
+  already-persisted records that predate this fix. (Devin review on #961)
+  That first fix still resolved `judge_model` via one more `self.candidates`
+  lookup performed right after the provider call returned -- narrower than
+  the original bug, but not closed: `self.candidates` is a plain mutable
+  list a concurrent admin request (agent add/remove/re-discovery) can
+  reassign in the gap between the call completing and that lookup running,
+  which could still mis-price that one call against whatever the pool
+  became a moment later. `_invoke` (and the model-group endpoint race path
+  inside it) now returns the exact `ModelAgent.model` of the agent object
+  the call actually succeeded against, captured from the same local
+  reference used for its `agent.id` -- no separate lookup, so there is no
+  window left to race. `_FastMLSIJudgeAdapter` carries it the same way it
+  already carries `served_agent_id`, and `_model_judge_verification` reads
+  it directly instead of touching `self.candidates` at all. The two
+  non-judge callers of `_invoke` (`route_once`'s worker call, `conduct()`'s
+  step call) accept the new return value and discard it, unchanged from
+  before -- those callers' own `trace` row `model` field already comes
+  from the originally-selected candidate, not this served value, and stays
+  that way; only the judge path, where this PR introduced the bug, changes
+  behavior. New regression test drives the real judge harness and mutates
+  the pool from inside the scripted judge's own `judge()` call --
+  immediately after its provider call completes but before
+  `_model_judge_verification` builds its result -- and asserts the
+  persisted `judge_model` still reflects what actually served the request.
 
 ### Added
 

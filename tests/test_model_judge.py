@@ -364,7 +364,7 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
         with patch.object(
             orchestrator,
             "_invoke",
-            return_value=("judge completion", "backup_judge", {"total_tokens": 7}),
+            return_value=("judge completion", "backup_judge", "backup-model", {"total_tokens": 7}),
         ):
             result = orchestrator._model_judge_verification(
                 "task",
@@ -374,12 +374,76 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
     assert result["accepted"] is True
     assert result["judge"] == "model"
     assert result["judge_agent_id"] == "backup_judge"
+    # Captured directly from _invoke's return value, not re-resolved from the
+    # candidate pool -- "backup_judge" is not a real pool member here.
+    assert result["judge_model"] == "backup-model"
     assert result["judge_orchestration_mode"] == "route"
     assert result["judge_usage"] == {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
     assert result["judge_criterion_scores"] == {"evidence_quality": 0.8, "risk_signal": 0.9}
     assert result["judge_irt_item_type"] == "dichotomous"
     assert result["judge_irt_row"] == [1, 1]
     assert result["reason"] == "structured score exceeded threshold"
+
+
+def test_judge_model_survives_concurrent_pool_change_during_verification() -> None:
+    """A judge's served model must be captured atomically with its provider call,
+    not re-derived from ``self.candidates`` afterward (Devin review on #961): a
+    concurrent admin request can mutate the pool in the gap between the judge's
+    completion returning and any later lookup, which would otherwise mis-price
+    (or lose) that exact call's spend."""
+
+    class _ConcurrentMutationJudge:
+        def __init__(self, orchestrator, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            self.adapter = orchestrator
+            self.mode = mode
+            self.accept_threshold = accept_threshold
+
+        def judge(self, **_) -> object:
+            self.adapter.complete([{"role": "user", "content": "ping"}])
+            # Simulate a concurrent request reassigning the pool -- same agent
+            # id, different model -- in the window between this judge's own
+            # provider call completing and _model_judge_verification building
+            # its verification dict from the adapter's result.
+            self.adapter.orchestrator.candidates = [
+                ModelAgent("general_agent", "model-mutated-concurrently", tags=("reasoning",))
+            ]
+            return type("Result", (), {
+                "accepted": True,
+                "rationale": "structured score exceeded threshold",
+                "criterion_scores": {"evidence_quality": 0.8, "risk_signal": 0.9},
+                "usage": None,
+                "orchestration_mode": self.mode,
+                "to_irt_row": lambda *, item_type: (1, 1),
+            })
+
+    class _FormatError(Exception):
+        pass
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_ConcurrentMutationJudge,
+            criterion_cls=_Criterion,
+            format_error=_FormatError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification(
+            "task",
+            {"verifier_output": "report"},
+        )
+
+    assert result["judge_agent_id"] == "general_agent"
+    # The judge actually served against model-x; the pool mutation happened
+    # only after that call completed, so it must not leak into this record.
+    assert result["judge_model"] == "model-x"
 
 
 def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
@@ -398,7 +462,7 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
     with patch.object(
         orchestrator,
         "_invoke",
-        return_value=("judge completion", "general_agent", None),
+        return_value=("judge completion", "general_agent", "model-x", None),
     ) as invoke:
         completion = adapter.complete(
             [{"role": "user", "content": "ping"}],
