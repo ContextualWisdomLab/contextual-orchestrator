@@ -12,6 +12,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- OpenRouter's `ProviderModelSource.evidence_only` is no longer a blanket
+  `True` set once at module load for every discovered OpenRouter model,
+  regardless of that model's own evidence (introduced without an ADR update
+  in `952996ec`, contradicting ADR 0032's "privacy discovery is
+  model-specific ... discovery does not turn either ambiguous state into
+  blanket non-support"). `_apply_discovered_model_evidence` now gates
+  `evidence_only`/`zdr_capable` for OpenRouter's own rows per model, using
+  the exact same authoritative `/api/v1/endpoints/zdr` feed match already
+  used to donate ZDR evidence to other providers' matching rows: a row
+  becomes routable only when its own model id is present on that feed.
+  Fail-closed is preserved — a model absent from the feed, or any feed
+  fetch/parse failure, still leaves the row `evidence_only=True` and
+  unroutable, exactly as before; only models with genuine per-model ZDR
+  evidence gain a change in outcome. `PROVIDER_MODEL_SOURCES`'s `openrouter`
+  entry now leaves `evidence_only` at the `False` default like every other
+  provider source.
 - Model discovery now treats every KV credential as an independent account/catalog boundary, removes provider-family collapsing, and offers secret-free `--verbose` progress diagnostics. Logical equivalence and latency-based switching remain explicit `model_group` decisions only.
 - Model-group evidence now reports peak observed RPM and provider-reported TPM over a real 60-second completion window without generating probe traffic or inferring missing usage.
 - `discover_provider_models`'s primary model-list fetch is now retried once

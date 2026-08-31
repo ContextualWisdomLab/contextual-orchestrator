@@ -43,6 +43,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_provider_models,
     free_discovered_models,
     general_free_serving_candidates,
+    is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -1510,7 +1511,11 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
-    assert sources["openrouter"].evidence_only is True
+    # Not a blanket provider-level default: OpenRouter rows are gated
+    # per model against OpenRouter's own ZDR feed in
+    # _apply_discovered_model_evidence (ADR 0032), same as every other
+    # provider source.
+    assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
@@ -1622,10 +1627,15 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
         discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
 
     assert errors == []
+    # OpenRouter's own row is a genuine ZDR-feed match too: it gets to use
+    # its own evidence for its own serving eligibility, the same as the
+    # evidence it donates to nvidia_nim's matching row.
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", True),
     ]
+    openrouter_model = next(m for m in discovered if m.provider_name == "openrouter")
+    assert openrouter_model.evidence_only is False
 
 
 def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:
@@ -1711,8 +1721,11 @@ def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
         discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
 
     assert errors == []
+    # OpenRouter's own "openai/shared-model" row is an exact feed match and
+    # correctly becomes zdr_capable; nvidia_nim's "shared-model" is only a
+    # suffix of that id and correctly stays unmatched.
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
@@ -1751,10 +1764,84 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
         discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
 
     assert errors == []
+    # OpenRouter's own "openai/shared-model" row is still an exact,
+    # unambiguous feed match on its own id; nvidia_nim's bare "shared-model"
+    # remains rejected as an ambiguous suffix of two distinct feed entries.
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
+
+
+def test_discover_all_models_openrouter_model_absent_from_zdr_feed_stays_evidence_only() -> None:
+    """A real negative: an OpenRouter model the feed does not attest to.
+
+    Companion to test_discover_all_models_applies_model_zdr_evidence_to_other_sources
+    (the positive case). Fixing the blanket evidence_only=True override must
+    not turn every OpenRouter row into a serving agent -- only rows the feed
+    itself attests to. This model shares no id with the feed, so it must stay
+    evidence_only=True/zdr_capable=False and unroutable, exactly like before
+    the fix, even though the source itself is no longer blanket evidence_only.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+
+    def urlopen(request, timeout=None):
+        return _Response({"data": [{"id": "openai/not-on-zdr-feed"}]})
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={"data": [{"model_id": "openai/some-other-model"}]},
+        ),
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE,))
+
+    assert errors == []
+    assert len(discovered) == 1
+    model = discovered[0]
+    assert model.provider_name == "openrouter"
+    assert model.evidence_only is True
+    assert model.zdr_capable is False
+    assert is_routable_discovered_model(model) is False
+    with pytest.raises(ValueError, match="evidence-only"):
+        agent_from_discovered(model)
+
+
+def test_discover_all_models_openrouter_zdr_feed_failure_keeps_every_row_evidence_only() -> None:
+    """Fail closed: a total ZDR-feed fetch failure must not default rows open.
+
+    If the feed cannot be read at all, no OpenRouter row has any evidence --
+    positive or negative -- so every row must stay evidence_only=True and
+    unroutable, never fall back to the (now-default) False.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+
+    def urlopen(request, timeout=None):
+        return _Response({"data": [{"id": "openai/would-have-matched"}]})
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            side_effect=urllib.error.URLError("zdr feed unreachable"),
+        ),
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE,))
+
+    assert errors == []
+    assert len(discovered) == 1
+    model = discovered[0]
+    assert model.provider_name == "openrouter"
+    assert model.evidence_only is True
+    assert model.zdr_capable is False
+    assert is_routable_discovered_model(model) is False
 
 
 def test_malformed_openrouter_zdr_data_is_ignored(monkeypatch) -> None:

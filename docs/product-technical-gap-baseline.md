@@ -1,5 +1,46 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-31 OpenRouter per-model ZDR evidence: blanket `evidence_only=True` reconciled against ADR 0032
+
+A 5-agent investigation confirmed `ProviderModelSource.evidence_only` was
+hardcoded `True` for OpenRouter's provider source declaration only (every
+other one of the six provider sources uses the `False` default), set once at
+module load before any HTTP call, applying to every discovered OpenRouter
+model unconditionally regardless of that specific model's own evidence. That
+override (`952996ec`, a bare one-line commit message, no accompanying ADR
+amendment) contradicts ADR 0032's binding design for this exact subsystem:
+"Privacy discovery is also model-specific rather than inferred from price
+... discovery does not turn either ambiguous state into blanket
+non-support." Earlier entries in this file and ADR 0041 both repeated the
+blanket claim ("OpenRouter is deliberately `evidence_only=True` ... so it
+never serves inference") as a stated fact when it was current; that
+statement is superseded by this fix and no longer describes current
+behavior, though the historical entries and ADR 0041's own decision (not to
+add a `models_dev_provider_id` join for OpenRouter, since OpenRouter already
+reports its own real pricing) are otherwise unaffected.
+
+Per-model ZDR evidence for OpenRouter already existed and was actively
+computed elsewhere in the same file (`_merge_openrouter_zdr_metadata` /
+`_merge_openrouter_provider_privacy` fetch OpenRouter's authoritative
+`/api/v1/endpoints/zdr` feed and per-endpoint provider privacy policy) but
+was thrown away for OpenRouter's own rows — used exclusively to donate ZDR
+status to other providers' rows sharing the same canonical model id.
+`_apply_discovered_model_evidence` now gates `evidence_only`/`zdr_capable`
+for OpenRouter's own rows through that identical per-model feed match: a row
+becomes routable only when its own model id is present on the feed. A model
+absent from the feed, or any feed fetch/parse failure, still leaves the row
+`evidence_only=True` and unroutable (fail-closed unchanged). See
+`CHANGELOG.md` and the PR for the exact diff and test coverage (including a
+dedicated negative case for a genuinely non-attested OpenRouter model and a
+feed-fetch-failure case).
+
+A companion, independent blanket filter in
+`ContextualWisdomLab/.github`'s `scripts/ci/contextual_orchestrator_review_launcher.py`
+(`_routable_discovered_models()`) strips every OpenRouter row before that
+repo's own already-correct per-route ZDR mechanism (`zdr_policy.py`'s
+`is_zdr_model()` / `openrouter_endpoints_feed`) ever evaluates them. That is
+tracked and fixed separately in `.github`, not in this change.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential

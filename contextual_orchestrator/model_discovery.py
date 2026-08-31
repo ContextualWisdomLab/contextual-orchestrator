@@ -197,7 +197,10 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
-        evidence_only=True,
+        # Not a blanket True: OpenRouter rows are gated per model, in
+        # _apply_discovered_model_evidence, against OpenRouter's own
+        # authoritative ZDR feed (ADR 0032 -- privacy discovery is
+        # model-specific, never inferred/defaulted at the provider level).
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -1097,22 +1100,29 @@ def _apply_discovered_model_evidence(
     a different upstream endpoint. Exact canonical ids are the only portable
     identity; suffix matching would transfer privacy evidence to an unrelated
     model that merely shares a display name.
+
+    OpenRouter's own rows are gated by this exact same feed match, not a
+    provider-wide default (ADR 0032): a row becomes ``evidence_only=False``
+    and ``zdr_capable=True`` only when its own model id is present in
+    ``zdr_model_ids``. Any other outcome for an OpenRouter row -- the model
+    genuinely absent from the feed, an empty feed, or a feed-fetch failure
+    (``zdr_model_ids`` empty) -- leaves it ``evidence_only=True`` and
+    ``zdr_capable=False``: fail closed, never a blanket default independent
+    of that model's own feed coverage.
     """
-    if not zdr_model_ids:
-        return discovered
     exact_ids = {model_id.strip().casefold() for model_id in zdr_model_ids if model_id.strip()}
 
     def matches(model_id: str) -> bool:
         normalized = model_id.strip().casefold()
-        return normalized in exact_ids
+        return bool(exact_ids) and normalized in exact_ids
 
-    return [
-        replace(
-            model,
-            zdr_capable=not model.evidence_only and matches(model.model_id),
-        )
-        for model in discovered
-    ]
+    def apply(model: DiscoveredModel) -> DiscoveredModel:
+        if model.provider_name == "openrouter":
+            is_zdr_match = matches(model.model_id)
+            return replace(model, evidence_only=not is_zdr_match, zdr_capable=is_zdr_match)
+        return replace(model, zdr_capable=not model.evidence_only and matches(model.model_id))
+
+    return [apply(model) for model in discovered]
 
 
 def discover_provider_models(
@@ -1279,9 +1289,12 @@ def discover_all_models(
             )
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
-    # matching privacy evidence for discovered models from other providers. It
-    # is never selected as an inference upstream here.
+    # OpenRouter's public ZDR endpoint supplies matching privacy evidence both
+    # for its own rows and for discovered models from other providers that
+    # share a canonical model id. An OpenRouter row becomes a usable
+    # inference upstream only when this same feed attests to that specific
+    # model (see _apply_discovered_model_evidence); it is never blanket
+    # evidence-only or blanket eligible as a provider class.
     return _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
