@@ -180,6 +180,7 @@ class _ProviderRequestCancelled(RuntimeError):
 _PROVIDER_CANCELLATION: ContextVar[_ProviderCancellation | None] = ContextVar(
     "provider_cancellation", default=None
 )
+_PROVIDER_DNS_SLOTS = threading.BoundedSemaphore(4)
 
 
 def _safe_provider_probe_error_type(exc: Exception) -> str:
@@ -1344,7 +1345,9 @@ class ModelClient:
         # No deadline is selected by default. Explicit legacy caller limits remain
         # compatible; review workflows and readiness paths never supply them.
         self.timeout = timeout
-        self.connect_timeout = connect_timeout
+        if connect_timeout is not None and connect_timeout <= 0:
+            raise ValueError("connect_timeout must be positive")
+        self.connect_timeout = None if connect_timeout is None else float(connect_timeout)
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -1787,10 +1790,17 @@ class ModelClient:
             if result not in {0, errno.EISCONN}:
                 if result not in {errno.EINPROGRESS, errno.EALREADY, errno.EWOULDBLOCK}:
                     raise OSError(result, os.strerror(result))
+                deadline = None if timeout is None else time.monotonic() + timeout
                 while True:
                     cancellation.raise_if_cancelled()
+                    wait = 0.05
+                    if deadline is not None:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("provider connection exceeded its explicit deadline")
+                        wait = min(wait, remaining)
                     _readable, writable, exceptional = select.select(
-                        (), (connection,), (connection,), 0.05
+                        (), (connection,), (connection,), wait
                     )
                     if writable or exceptional:
                         error = connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
@@ -1814,6 +1824,9 @@ class ModelClient:
                 result: list[Any] = []
                 finished = threading.Event()
 
+                while not _PROVIDER_DNS_SLOTS.acquire(timeout=0.05):
+                    cancellation.raise_if_cancelled()
+
                 def resolve() -> None:
                     try:
                         result.append(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
@@ -1821,6 +1834,7 @@ class ModelClient:
                         result.append(exc)
                     finally:
                         finished.set()
+                        _PROVIDER_DNS_SLOTS.release()
 
                 threading.Thread(target=resolve, daemon=True, name="provider-dns").start()
                 while not finished.wait(0.05):

@@ -805,6 +805,30 @@ def test_cancellable_provider_call_stops_nonblocking_tcp_establishment() -> None
     assert connection.closed
 
 
+def test_cancellable_tcp_establishment_honors_explicit_caller_deadline() -> None:
+    class Socket:
+        def setblocking(self, _enabled):
+            return None
+
+        def connect_ex(self, _sockaddr):
+            return errno.EINPROGRESS
+
+        def close(self):
+            return None
+
+    client = ModelClient()
+    call, _cancel = client.cancellable_call(
+        lambda: client._connect_validated(
+            (socket.AF_INET, ("127.0.0.1", 443)), 0.01, None
+        )
+    )
+    with patch("contextual_orchestrator.orchestrator.socket.socket", return_value=Socket()), patch(
+        "contextual_orchestrator.orchestrator.select.select", return_value=((), (), ())
+    ):
+        with pytest.raises(TimeoutError, match="explicit deadline"):
+            call()
+
+
 def test_cancellable_provider_call_stops_waiting_for_dns() -> None:
     entered = threading.Event()
     released = threading.Event()
@@ -836,6 +860,63 @@ def test_cancellable_provider_call_stops_waiting_for_dns() -> None:
 
     assert not thread.is_alive()
     assert errors
+
+
+def test_cancelled_dns_lookups_have_bounded_worker_ownership() -> None:
+    all_workers_entered = threading.Event()
+    release = threading.Event()
+    lock = threading.Lock()
+    calls = 0
+
+    def resolve(*_args, **_kwargs):
+        nonlocal calls
+        with lock:
+            calls += 1
+            if calls == 4:
+                all_workers_entered.set()
+        release.wait(timeout=2)
+        return []
+
+    request_threads = []
+    cancels = []
+    errors = []
+
+    def start_request():
+        call, cancel = ModelClient().cancellable_call(
+            lambda: ModelClient._resolve_addresses("provider.example", 443)
+        )
+        cancels.append(cancel)
+
+        def run():
+            try:
+                call()
+            except _ProviderRequestCancelled as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=run)
+        request_threads.append(thread)
+        thread.start()
+
+    with patch("contextual_orchestrator.orchestrator.socket.getaddrinfo", side_effect=resolve):
+        for _ in range(4):
+            start_request()
+        assert all_workers_entered.wait(timeout=1)
+        for cancel in cancels:
+            cancel()
+        for thread in request_threads:
+            thread.join(timeout=1)
+
+        start_request()
+        fifth_cancel = cancels[-1]
+        fifth_thread = request_threads[-1]
+        fifth_cancel()
+        fifth_thread.join(timeout=1)
+        with lock:
+            assert calls == 4
+        release.set()
+
+    assert all(not thread.is_alive() for thread in request_threads)
+    assert len(errors) == 5
 
 
 def test_cancellable_provider_call_ignores_connection_close_failure() -> None:
