@@ -103,7 +103,7 @@ jobs:
             --serve \
             --agents examples/agents.mock.json \
             --auto-discover-model-agents \
-            --auth-token "$GATEWAY_BEARER_TOKEN" \
+            --auth-token="$GATEWAY_BEARER_TOKEN" \
             --host 127.0.0.1 --port 8000 \
             > /tmp/gateway.log 2>&1 &
           for _attempt in $(seq 1 30); do
