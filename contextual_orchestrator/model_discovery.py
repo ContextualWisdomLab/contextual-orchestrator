@@ -29,7 +29,12 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
 from .credentials import get_credential
-from .orchestrator import ModelAgent, ModelClient
+from .orchestrator import (
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelAgent,
+    ModelClient,
+    format_authorization_header,
+)
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
@@ -201,7 +206,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         credential_name="BYTEZ_API_KEY",
         list_url="https://api.bytez.com/models/v2/list/models",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
         capabilities=("chat",),
@@ -277,7 +282,7 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
     headers = {"user-agent": _HTTP_USER_AGENT}
     if api_key:
-        headers["authorization"] = f"{auth_scheme} {api_key}"
+        headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
@@ -351,7 +356,7 @@ def _fetch_configured_gateway_json(
         credential_key=CONFIGURED_GATEWAY_CREDENTIAL_NAME,
     )
     destination = client._validate_provider(agent)
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     with client._open_provider(request, destination, timeout=timeout) as response:
         raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
@@ -389,7 +394,7 @@ def _fetch_json_same_host_https(
     parsed = urlsplit(url)
     if not parsed.hostname:
         raise ValueError(f"refusing discovery URL without hostname: {url!r}")
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     opener = urllib.request.build_opener(
         _TrustedDiscoveryRedirectHandler(parsed.hostname)
