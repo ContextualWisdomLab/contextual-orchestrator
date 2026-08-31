@@ -482,16 +482,15 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     agents = []
     for model in runtime_models:
         existing = existing_by_id.get(agent_id_for(model))
-        spend_routable = is_routable_discovered_model(model) or (
-            "embedding" in model.capabilities and model.spend_admitted
-        )
+        embedding_routable = "embedding" in model.capabilities and model.spend_admitted
+        spend_routable = is_routable_discovered_model(model) or embedding_routable
         structured_routable = agent_id_for(model) not in failed_configured_gateway_probe_ids
-        routable = spend_routable and structured_routable
+        routable = embedding_routable or (spend_routable and structured_routable)
         if existing is None:
             agents.append(replace(agent_from_discovered(model), disabled=not routable))
         elif "discovered" not in existing.tags:
             continue
-        elif not routable:
+        elif not routable or not structured_routable:
             block_markers = {
                 "spend:blocked",
                 "spend:blocked:preserve-disabled",
@@ -516,7 +515,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             agents.append(
                 replace(
                     existing,
-                    disabled=True,
+                    disabled=not routable or preserve_disabled,
                     tags=tuple(dict.fromkeys(tags)),
                 )
             )

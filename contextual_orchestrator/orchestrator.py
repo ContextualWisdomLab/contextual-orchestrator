@@ -567,7 +567,7 @@ class ModelAgent:
 
 def _is_general_chat_agent(agent: ModelAgent) -> bool:
     """Apply persisted provider capability tags before model-name fallback."""
-    return is_general_chat_candidate(
+    return "structured:blocked" not in agent.tags and is_general_chat_candidate(
         agent.model,
         capabilities=(
             tag.split(":", 1)[1]
@@ -5516,7 +5516,9 @@ class TaskOrchestrator:
         }
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
-            {
+            _allowed_agent_ids
+            if _allowed_agent_ids is not None
+            else {
                 candidate.id
                 for candidate in self.agents
                 if candidate.group_name == requested_agent.group_name

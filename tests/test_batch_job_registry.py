@@ -369,6 +369,34 @@ def test_durable_cancellation_wins_atomically_over_terminal_publication() -> Non
     backend.close()
 
 
+def test_durable_job_past_deadline_becomes_failed_atomically() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    backend = ProviderEmbeddingBatchBackend(
+        lambda _requests: pytest.fail("expired work must not reach the provider"),
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=1,
+    )
+    job = backend.reserve(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+    backend._deadlines[job.job_id] = time.time() - 1
+    backend.start(job)
+
+    document = backend.wait(job, timeout=1)
+    assert document["status"] == "failed"
+    assert document["failure"] == {
+        "error_type": "TimeoutError",
+        "http_status": None,
+        "provider_code": "provider_embedding_deadline_exceeded",
+        "retryable": True,
+        "failed_shard_index": None,
+    }
+    assert backend.retrieve(job) == []
+    assert backend.usage(job) == {}
+    backend.close()
+
+
 if __name__ == "__main__":
     for name, value in sorted(globals().items()):
         if name.startswith("test_") and callable(value):

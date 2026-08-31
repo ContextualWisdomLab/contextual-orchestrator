@@ -769,10 +769,41 @@ class ProviderEmbeddingBatchBackend:
             except ClaimNotAcquired:
                 remaining = max(0.0, deadline_epoch - time.time())
                 threading.Event().wait(min(0.05, remaining))
+        if (
+            not self._closed.is_set()
+            and time.time() >= deadline_epoch
+            and self._states.get(job_id) in {"queued", "running"}
+        ):
+            self._fail_expired_job(job_id)
         if self._states.get(job_id) in {"completed", "failed", "cancelled"}:
             event = self._terminal_events.pop(job_id, None)
             if event is not None:
                 event.set()
+
+    def _fail_expired_job(self, job_id: str) -> None:
+        """Claim and atomically terminate provider work past its deadline."""
+        while not self._closed.is_set() and self._states.get(job_id) in {"queued", "running"}:
+            try:
+                with self._registry.lock(
+                    "provider_embedding_job_execution",
+                    job_id,
+                    lease_seconds=self._claim_lease_seconds,
+                ) as execution_claim:
+                    self._publish_terminal(
+                        job_id,
+                        execution_claim,
+                        status="failed",
+                        error={
+                            "error_type": "TimeoutError",
+                            "http_status": None,
+                            "provider_code": "provider_embedding_deadline_exceeded",
+                            "retryable": True,
+                            "failed_shard_index": None,
+                        },
+                    )
+                    return
+            except ClaimNotAcquired:
+                threading.Event().wait(0.05)
 
     def _run_claimed_job(self, job_id: str, execution_claim: Any) -> None:
         """Run one claim attempt and atomically publish its terminal outcome."""

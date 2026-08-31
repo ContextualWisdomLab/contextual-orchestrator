@@ -167,6 +167,43 @@ def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
     assert "structured:blocked" in restarted.candidates[0].tags
 
 
+def test_failed_gateway_probe_keeps_persisted_embedding_capability(
+    monkeypatch, tmp_path
+) -> None:
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="mixed-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat", "embedding"),
+    )
+    mixed = replace(agent_from_discovered(model), disabled=False, priority=100)
+    fallback = ModelAgent("fallback_agent", "fallback-chat-model")
+    agents_db = str(tmp_path / "agents.db")
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: "present"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([model], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: False,
+    )
+    orchestrator = TaskOrchestrator([fallback, mixed], agents_db=agents_db)
+
+    _auto_discover_runtime_agents(orchestrator)
+    restarted = TaskOrchestrator([fallback], agents_db=agents_db)
+
+    persisted = next(agent for agent in restarted.candidates if agent.id == mixed.id)
+    assert persisted.disabled is False
+    assert "structured:blocked" in persisted.tags
+    assert restarted.select_capability_agent("embedding").id == mixed.id
+    assert restarted._select_agent("task", "synthesizer").id == fallback.id
+
+
 def test_configured_gateway_structured_probe_is_bounded_and_validates_output() -> None:
     """The startup probe proves JSON object service with a bounded synthetic call."""
     model = DiscoveredModel(

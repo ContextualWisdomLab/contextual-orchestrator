@@ -208,6 +208,50 @@ def test_group_conduct_keeps_model_judge_inside_requested_group() -> None:
     assert set(client.agent_ids) == {"group_member"}
 
 
+def test_explicit_structured_group_model_pins_every_provider_call() -> None:
+    class _RecordingClient(_ScriptedClient):
+        def __init__(self) -> None:
+            super().__init__('{"decision":"ACCEPT","reason":"Exact judge passed."}')
+            self.calls_by_kind: list[tuple[str, str]] = []
+
+        def chat(self, agent: ModelAgent, messages: list, **kwargs: object) -> str:  # type: ignore[override]
+            self.calls_by_kind.append(("evidence_or_judge", agent.id))
+            return super().chat(agent, messages, **kwargs)
+
+        def proxy_send(self, agent: ModelAgent, endpoint: str, body: dict) -> dict:  # type: ignore[override]
+            del endpoint, body
+            self.calls_by_kind.append(("synthesis", agent.id))
+            return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
+
+    client = _RecordingClient()
+    selected = ModelAgent(
+        "selected_member", "selected-model", group_name="shared_model_group"
+    )
+    sibling = ModelAgent(
+        "sibling_member", "sibling-model", group_name="shared_model_group", priority=100
+    )
+    orchestrator = TaskOrchestrator([selected, sibling], client=client)
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": selected.model,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+    assert result["choices"][0]["message"]["content"] == '{"status":"ok"}'
+    assert client.calls_by_kind == [
+        *(('evidence_or_judge', selected.id) for _ in range(5)),
+        ("synthesis", selected.id),
+    ]
+
+
 def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -> None:
     class _ProxyClient(ModelClient):
         def __init__(self) -> None:
