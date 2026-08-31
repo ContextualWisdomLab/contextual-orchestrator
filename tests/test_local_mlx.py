@@ -267,6 +267,80 @@ def test_provider_readiness_report_reuses_latest_refresh_until_next_probe() -> N
     probe.assert_called_once_with(orchestrator.agents[0], timeout=2.0)
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda orchestrator: orchestrator.patch_agent("default", "ready_agent", {"priority": 2}),
+        lambda orchestrator: orchestrator.patch_agent("default", "ready_agent", {"status": "disabled"}),
+        lambda orchestrator: orchestrator.patch_agent("default", "disabled_agent", {"status": "enabled"}),
+        lambda orchestrator: orchestrator.set_model_group("updated_group", ["ready_agent", "backup_agent"]),
+        lambda orchestrator: orchestrator.delete_model_group("shared_group"),
+        lambda orchestrator: orchestrator.add_agent(
+            "default", {"id": "added_agent", "model": "added-model"}
+        ),
+        lambda orchestrator: orchestrator.sync_discovered_agents([
+            ModelAgent("discovered_agent", "discovered-model", disabled=True)
+        ]),
+        lambda orchestrator: orchestrator.remove_agent("default", "backup_agent"),
+    ],
+)
+def test_provider_readiness_cache_is_invalidated_by_pool_mutations(mutate) -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model", group_name="shared_group"),
+        ModelAgent("backup_agent", "backup-model", group_name="shared_group"),
+        ModelAgent("disabled_agent", "disabled-model", disabled=True),
+    ], client=client)
+    with patch.object(
+        client,
+        "probe",
+        side_effect=lambda agent, **_kwargs: {
+            "status": "ready", "agent_id": agent.id, "model": agent.model,
+        },
+    ):
+        assert orchestrator.provider_readiness_report(refresh=True)["status"] == "ready"
+        mutate(orchestrator)
+
+    report = orchestrator.provider_readiness_report()
+    assert report["status"] == "unprobed"
+    assert report["checked_at"] is None
+
+
+def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> None:
+    import threading
+
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent("backup_agent", "backup-model"),
+    ], client=client)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def probe(agent, **_kwargs):
+        entered.set()
+        release.wait(timeout=2)
+        return {"status": "ready", "agent_id": agent.id, "model": agent.model}
+
+    with patch.object(client, "probe", side_effect=probe):
+        refresh = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
+        mutation = threading.Thread(target=lambda: orchestrator.add_agent(
+            "default", {"id": "added_agent", "model": "added-model"}
+        ))
+        refresh.start()
+        assert entered.wait(timeout=2)
+        mutation.start()
+        release.set()
+        refresh.join(timeout=2)
+        mutation.join(timeout=2)
+
+    report = orchestrator.provider_readiness_report()
+    assert report["status"] == "unprobed"
+    assert {item["agent_id"] for item in report["items"]} == {
+        "ready_agent", "backup_agent", "added_agent"
+    }
+
+
 def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     import threading
 
