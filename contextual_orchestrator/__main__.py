@@ -575,10 +575,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 ):
                     orchestrator.remove_agent("default", agent.id)
                 else:
-                    retired = orchestrator.sync_discovered_agents(
-                        [replace(agent, disabled=True)]
-                    )
-                    result["updated"].extend(retired["updated"])
+                    orchestrator._retire_runtime_agent(agent.id)
     has_real_runtime_agent = any(
         not candidate.disabled
         and not candidate.base_url.startswith("mock://")

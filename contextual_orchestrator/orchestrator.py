@@ -5350,6 +5350,20 @@ class TaskOrchestrator:
         )
         return {"removed": worker_agent_id}
 
+    def _retire_runtime_agent(self, worker_agent_id: str) -> None:
+        """Remove a bootstrap row for this process without persisting a tombstone."""
+        self._agent_in_pool("default", worker_agent_id)
+        self.candidates = [
+            agent for agent in self.candidates if agent.id != worker_agent_id
+        ]
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
+        self._rebuild_budget_meter()
+        self._routers_forget_members({agent.id for agent in self.candidates})
+        self._append_audit_event(
+            "runtime_agent_retired",
+            {"agent_pool_id": "default", "worker_agent_id": worker_agent_id},
+        )
+
     def route_once(
         self,
         messages: list[ChatMessage],

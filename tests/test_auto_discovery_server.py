@@ -10,7 +10,11 @@ from contextual_orchestrator.__main__ import (
     _auto_discover_runtime_agents,
     _probe_configured_gateway_structured_chat,
 )
-from contextual_orchestrator.model_discovery import DiscoveredModel, agent_from_discovered
+from contextual_orchestrator.model_discovery import (
+    DiscoveredModel,
+    agent_from_discovered,
+    agent_id_for,
+)
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
 
@@ -183,8 +187,10 @@ def test_failed_gateway_catalog_probes_remove_unprobed_blank_seed(monkeypatch) -
     assert selected.model == live_model.model_id
 
 
-def test_failed_gateway_catalog_probe_disables_the_only_blank_seed(monkeypatch) -> None:
-    """A failed sole catalog row leaves startup alive but no callable blank seed."""
+def test_failed_gateway_catalog_probe_transiently_retires_the_only_blank_seed(
+    monkeypatch, tmp_path
+) -> None:
+    """A failed sole seed is uncallable now and can be reprobed after restart."""
     model = DiscoveredModel(
         provider_name="configured_gateway",
         model_id="auth-failing-model",
@@ -212,15 +218,27 @@ def test_failed_gateway_catalog_probe_disables_the_only_blank_seed(monkeypatch) 
         "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
         lambda *_args: False,
     )
-    orchestrator = TaskOrchestrator([seed])
+    agents_db = str(tmp_path / "agents.db")
+    orchestrator = TaskOrchestrator([seed], agents_db=agents_db)
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result["updated"] == [seed.id]
+    assert result["updated"] == []
     assert orchestrator.agents == []
-    assert orchestrator.candidates == [replace(seed, disabled=True)]
+    assert orchestrator.candidates == []
     with pytest.raises(RuntimeError, match="no chat-compatible agent available"):
         orchestrator._select_agent("task", "synthesizer")
+
+    restarted = TaskOrchestrator([seed], agents_db=agents_db)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: True,
+    )
+
+    recovered = _auto_discover_runtime_agents(restarted)
+
+    assert recovered["added"] == [agent_id_for(model)]
+    assert restarted.agents[0].model == model.model_id
 
 
 def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
