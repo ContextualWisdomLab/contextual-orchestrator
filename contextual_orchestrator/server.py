@@ -3778,13 +3778,18 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
         stripped = effort.strip().lower()
         if not stripped:
             return
+        if stripped == "auto":
+            # ``auto`` is the orchestrator-owned default used by consumers such
+            # as LineageWeave; it is not an OpenAI provider wire value.
+            body.pop("reasoning_effort", None)
+            return
         if stripped in _OPENAI_REASONING_EFFORT_LEVELS:
             body["reasoning_effort"] = stripped
             return
     raise RequestError(
         400,
         "invalid_reasoning_effort",
-        "reasoning_effort must be one of none, minimal, low, medium, high "
+        "reasoning_effort must be one of auto, none, minimal, low, medium, high "
         "on /v1/chat/completions",
     )
 

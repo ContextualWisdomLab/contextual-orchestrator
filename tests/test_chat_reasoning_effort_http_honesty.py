@@ -105,6 +105,26 @@ def test_http_chat_accepts_reasoning_effort_none_as_omit() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_accepts_orchestrator_auto_without_provider_forwarding() -> None:
+    """Consumer default ``auto`` stays at the orchestration boundary."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "synthetic auto effort"}],
+                "reasoning_effort": "auto",
+            },
+        )
+        assert status == 200, body
+        assert "choices" in body
+        assert "reasoning_effort" not in body.get("echo", {})
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_reasoning_effort_bool() -> None:
     server, thread, port = _server()
     try:
