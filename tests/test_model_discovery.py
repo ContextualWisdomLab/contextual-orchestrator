@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import ssl
+import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -706,6 +709,57 @@ def test_openrouter_free_model_endpoint_fetch_bounded_by_one_overall_deadline() 
     # the shared deadline keeps this well under that regardless of catalog size.
     assert elapsed < 2.0
     assert result == {model_id: None for model_id in model_ids}
+
+
+def test_openrouter_free_endpoint_deadline_does_not_hold_process_open() -> None:
+    """Timed-out endpoint workers must not extend one-shot CLI process lifetime."""
+    script = """
+import time
+from unittest.mock import patch
+from contextual_orchestrator.model_discovery import _openrouter_free_model_endpoints
+payload = {'data': [{'id': 'vendor/free', 'pricing': {'prompt': '0', 'completion': '0'}}]}
+with patch('contextual_orchestrator.model_discovery._fetch_json', side_effect=lambda *a, **k: time.sleep(60)):
+    _openrouter_free_model_endpoints(payload, api_key='secret', timeout=0.05)
+"""
+    started = time.monotonic()
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=2)
+    assert time.monotonic() - started < 2
+
+
+def test_openrouter_free_endpoint_workers_have_a_fixed_ceiling() -> None:
+    """Repeated timed-out calls reuse one bounded daemon pool."""
+    payload = {
+        "data": [
+            {"id": f"vendor/free-{index}", "pricing": {"prompt": "0", "completion": "0"}}
+            for index in range(20)
+        ]
+    }
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_json",
+        side_effect=lambda *_args, **_kwargs: time.sleep(0.2),
+    ):
+        for _ in range(12):
+            _openrouter_free_model_endpoints(payload, api_key="secret", timeout=0.005)
+
+    workers = [thread for thread in threading.enumerate() if thread.name.startswith("openrouter-endpoint-")]
+    assert len(workers) == 8
+
+
+def test_fetch_json_tls_retry_uses_only_remaining_deadline() -> None:
+    """Certificate fallback cannot start after the caller's shared deadline."""
+    certificate_error = ssl.SSLCertVerificationError(1, "untrusted")
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urllib.error.URLError(certificate_error),
+        ) as urlopen,
+        patch("contextual_orchestrator.model_discovery.time.monotonic", side_effect=[0.0, 2.0]),
+        pytest.raises(TimeoutError, match="deadline exceeded"),
+    ):
+        _fetch_json("https://provider.example/models", timeout=5.0, deadline=1.0)
+
+    assert urlopen.call_count == 1
 
 
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:

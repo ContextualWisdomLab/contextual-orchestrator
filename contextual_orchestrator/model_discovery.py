@@ -14,18 +14,20 @@ registering a subset of the declared provider keys still works. Stdlib only
 from __future__ import annotations
 
 from decimal import Decimal
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, wait
 import json
 import logging
 import math
+import queue
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
@@ -53,6 +55,13 @@ if TYPE_CHECKING:
 # ``__main__.main()``), matching this repo's existing per-module logger
 # convention (``server.py``, ``telemetry.py``, ``video_jobs.py``).
 _LOGGER = logging.getLogger(__name__)
+
+_OPENROUTER_ENDPOINT_WORKERS = 8
+_OPENROUTER_ENDPOINT_QUEUE: queue.SimpleQueue[
+    tuple[Future[Any], Callable[..., Any], tuple[Any, ...]]
+] = queue.SimpleQueue()
+_OPENROUTER_ENDPOINT_THREADS: tuple[threading.Thread, ...] = ()
+_OPENROUTER_ENDPOINT_THREADS_LOCK = threading.Lock()
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 # One bounded retry for a provider's primary model-list fetch, reusing the same
@@ -304,7 +313,14 @@ class ProviderDiscoveryError(RuntimeError):
         super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
-def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
+def _fetch_json(
+    url: str,
+    *,
+    api_key: str = "",
+    auth_scheme: str = "Bearer",
+    timeout: float,
+    deadline: float | None = None,
+) -> Any:
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
         # constants below, never external input -- but urlopen also honors
@@ -315,15 +331,23 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
     if api_key:
         headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
+    def remaining_timeout() -> float:
+        if deadline is None:
+            return timeout
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("model discovery deadline exceeded")
+        return min(timeout, remaining)
+
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        response = urllib.request.urlopen(request, timeout=remaining_timeout())  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
     except urllib.error.URLError as exc:
         if not isinstance(exc.reason, ssl.SSLCertVerificationError):
             raise
         context = ssl.create_default_context(cafile=certifi.where())
         response = urllib.request.urlopen(  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request, timeout=timeout, context=context
+            request, timeout=remaining_timeout(), context=context
         )
     with response:
         return json.loads(response.read().decode("utf-8"))
@@ -901,7 +925,9 @@ def _openrouter_free_model_endpoints(
     Models whose fetch has not completed by the shared deadline are
     reported as unmapped (``None``) rather than waited on further; this
     data is best-effort provider-privacy enrichment, not required for a
-    model to be discovered.
+    model to be discovered. In-flight stdlib HTTP calls cannot be cancelled,
+    so a process-wide pool of eight daemon workers caps their accumulation
+    without extending one-shot process shutdown.
     """
     rows = payload.get("data") if isinstance(payload, dict) else None
     model_ids = [
@@ -920,6 +946,8 @@ def _openrouter_free_model_endpoints(
         timeout,
     )
 
+    deadline = time.monotonic() + max(0.0, timeout)
+
     def fetch(model_id: str) -> tuple[str, Any]:
         author, separator, slug = model_id.partition("/")
         if not separator or not author or not slug:
@@ -929,26 +957,83 @@ def _openrouter_free_model_endpoints(
                 f"https://openrouter.ai/api/v1/models/{quote(author, safe='')}/{quote(slug, safe=':')}/endpoints",
                 api_key=api_key,
                 timeout=timeout,
+                deadline=deadline,
             ).get("data")
         except (AttributeError, urllib.error.URLError, TimeoutError, ValueError, OSError):
             return model_id, None
 
+    _ensure_openrouter_endpoint_workers()
     started = time.monotonic()
-    executor = ThreadPoolExecutor(max_workers=min(8, len(model_ids)))
-    try:
-        futures = {executor.submit(fetch, model_id): model_id for model_id in model_ids}
-        done, not_done = wait(futures, timeout=timeout)
-        results: dict[str, Any] = {futures[future]: None for future in not_done}
-        results.update(dict(future.result() for future in done))
-        _LOGGER.debug(
-            "openrouter_free_endpoints_finished elapsed=%.2f completed=%d deadline_exceeded=%d",
-            time.monotonic() - started,
-            len(done),
-            len(not_done),
+    results: dict[str, Any] = dict.fromkeys(model_ids)
+    model_iter = iter(model_ids)
+    pending: dict[Future[Any], str] = {}
+
+    def submit_next() -> bool:
+        try:
+            model_id = next(model_iter)
+        except StopIteration:
+            return False
+        future: Future[Any] = Future()
+        pending[future] = model_id
+        _OPENROUTER_ENDPOINT_QUEUE.put((future, fetch, (model_id,)))
+        return True
+
+    for _ in range(min(_OPENROUTER_ENDPOINT_WORKERS, len(model_ids))):
+        submit_next()
+    completed = 0
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        done, _ = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+        if not done:
+            break
+        for future in done:
+            pending.pop(future)
+            model_id, endpoint = future.result()
+            results[model_id] = endpoint
+            completed += 1
+            submit_next()
+    for future in pending:
+        future.cancel()
+    _LOGGER.debug(
+        "openrouter_free_endpoints_finished elapsed=%.2f completed=%d deadline_exceeded=%d",
+        time.monotonic() - started,
+        completed,
+        len(model_ids) - completed,
+    )
+    return results
+
+
+def _ensure_openrouter_endpoint_workers() -> None:
+    """Start the fixed daemon pool used by best-effort endpoint enrichment."""
+    global _OPENROUTER_ENDPOINT_THREADS
+    if _OPENROUTER_ENDPOINT_THREADS:
+        return
+    with _OPENROUTER_ENDPOINT_THREADS_LOCK:
+        if _OPENROUTER_ENDPOINT_THREADS:
+            return
+
+        def worker() -> None:
+            while True:
+                future, function, args = _OPENROUTER_ENDPOINT_QUEUE.get()
+                if not future.set_running_or_notify_cancel():
+                    continue
+                try:
+                    future.set_result(function(*args))
+                except BaseException as exc:
+                    future.set_exception(exc)
+
+        _OPENROUTER_ENDPOINT_THREADS = tuple(
+            threading.Thread(
+                target=worker,
+                name=f"openrouter-endpoint-{index}",
+                daemon=True,
+            )
+            for index in range(_OPENROUTER_ENDPOINT_WORKERS)
         )
-        return results
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        for thread in _OPENROUTER_ENDPOINT_THREADS:
+            thread.start()
 
 
 def _privacy_policy_urls(

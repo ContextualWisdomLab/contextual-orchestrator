@@ -315,6 +315,13 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Emit secret-free provider discovery diagnostics to stderr.",
     )
     parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVEL_NAMES,
+        default=None,
+        help="Verbosity for provider discovery diagnostics (default: "
+        "$CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL or WARNING).",
+    )
+    parser.add_argument(
         "--agents-db",
         default=None,
         help="Persist discovered agents (added disabled; enable via the admin API) into this sqlite agent-pool file.",
@@ -347,8 +354,10 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
     )
     args = parser.parse_args(argv)
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
+    if args.log_level:
+        _configure_logging(args.log_level)
+    elif args.verbose:
+        _configure_logging("DEBUG")
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
