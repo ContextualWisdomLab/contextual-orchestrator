@@ -82,6 +82,10 @@ class SqliteRoutingObservationStore:
         "CREATE INDEX IF NOT EXISTS routing_observations_ledger_time "
         "ON routing_observations(ledger_name, member_id, context_key, observed_at, observation_id)"
     )
+    _CREATE_RETENTION_INDEX_SQL = (
+        "CREATE INDEX IF NOT EXISTS routing_observations_observed_at "
+        "ON routing_observations(observed_at)"
+    )
     _METADATA_TABLE_NAME = "routing_observation_metadata"
     _CREATE_METADATA_TABLE_SQL = (
         "CREATE TABLE IF NOT EXISTS routing_observation_metadata ("
@@ -113,6 +117,7 @@ class SqliteRoutingObservationStore:
                 connection.execute(self._CREATE_METADATA_TABLE_SQL)
                 self._ensure_schema(connection)
                 connection.execute(self._CREATE_INDEX_SQL)
+                connection.execute(self._CREATE_RETENTION_INDEX_SQL)
                 self._register_retention_window(connection)
                 connection.commit()
             finally:

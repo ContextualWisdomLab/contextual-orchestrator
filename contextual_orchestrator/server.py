@@ -18,7 +18,6 @@ import struct
 import tempfile
 import threading
 import time
-import traceback
 import urllib.error
 import urllib.parse
 from typing import Any, Callable, Mapping
@@ -6034,9 +6033,8 @@ def build_server(
                     _provider_upstream_message(exc),
                     exc.detail,
                 )
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
 
         def do_PATCH(self) -> None:  # noqa: N802
             """Apply an authenticated agent-pool worker update."""
@@ -6078,9 +6076,8 @@ def build_server(
                     _provider_upstream_message(exc),
                     exc.detail,
                 )
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
 
         def do_DELETE(self) -> None:  # noqa: N802
             """Delete an authenticated agent-pool worker resource."""
@@ -6171,9 +6168,8 @@ def build_server(
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
                 self._send_error(404, "agent_not_found", str(exc))
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
 
         def do_POST(self) -> None:  # noqa: N802
             """Dispatch authenticated completion, agent, and simulation writes."""
@@ -7651,9 +7647,8 @@ def build_server(
                     _provider_upstream_message(exc),
                     exc.detail,
                 )
-            except Exception:
-                traceback.print_exc()
-                self._send_error(500, "internal_error", "internal server error")
+            except Exception as exc:
+                self._send_internal_error(exc)
             finally:
                 if request_policy is not None:
                     request_policy.__exit__(None, None, None)
@@ -7846,6 +7841,23 @@ def build_server(
         ) -> None:
             _LOGGER.warning("request_failed status=%s code=%s", status, code)
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+
+        def _send_internal_error(self, exc: Exception) -> None:
+            """Log one internal failure with a request ID and return a generic 500."""
+            request_id = uuid.uuid4().hex
+            _LOGGER.error(
+                "internal_request_error request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            self._send(
+                _error_payload(
+                    "internal_error",
+                    "internal server error",
+                    {"request_id": request_id},
+                ),
+                500,
+            )
 
         def _write_response(self, writer: Callable[[], None]) -> bool:
             """Run a response-writing callback, swallowing a dead-peer disconnect.

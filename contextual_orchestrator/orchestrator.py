@@ -4060,7 +4060,7 @@ class TaskOrchestrator:
         active_profile = effort_profile or self._role_effort_profile("synthesizer")
         virtual_model = requested_model in {
             None,
-            "contextual-orchestrator",
+            self.GATEWAY_DEFAULT_MODEL,
             self.AUTO_MODEL,
             self.FREE_MODEL,
         }

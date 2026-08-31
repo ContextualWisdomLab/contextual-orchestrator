@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import socket
 import ssl
 import sys
@@ -20,6 +21,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from contextual_orchestrator import server as server_module  # noqa: E402
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, is_transient_error  # noqa: E402
 from contextual_orchestrator.provider_errors import (  # noqa: E402
@@ -469,10 +471,45 @@ def test_chat_completions_redacts_sensitive_manual_provider_message() -> None:
     assert len(message) < 300
 
 
+def test_chat_completions_internal_errors_log_only_request_id_and_type() -> None:
+    """Unhandled server exceptions log structured metadata without a traceback dump."""
+
+    class ExplodingClient(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            del agent, messages, temperature
+            raise RuntimeError("sensitive stack details should stay server-side")
+
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_agent", "gpt-x", tags=("reasoning",))],
+        client=ExplodingClient(),
+    )
+    orchestrator._triage_fn = lambda text: False
+    token = "taxonomy_internal_error_token"
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with patch.object(server_module._LOGGER, "error") as log_error:
+            status, body = _post(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                {"model": "gpt-x", "messages": [{"role": "user", "content": "hello"}]},
+                token,
+            )
+    finally:
+        server.shutdown()
+
+    assert status == 500
+    request_id = body["error"]["detail"]["request_id"]
+    assert re.fullmatch(r"[0-9a-f]{32}", request_id)
+    assert log_error.call_count == 1
+    assert log_error.call_args.args == (
+        "internal_request_error request_id=%s error_type=%s",
+        request_id,
+        "RuntimeError",
+    )
+
+
 def test_guidance_table_covers_every_documented_code() -> None:
     """Every classified code has caller guidance; unknown codes get a default."""
-    from contextual_orchestrator import server as server_module
-
     codes = {surface[1] for surface in PROVIDER_STATUS_SURFACES.values()}
     codes.update({"tls_verification_failed", "tls_failure", "provider_connection_error"})
     for code in codes:

@@ -76,6 +76,19 @@ def test_store_shares_current_window_and_keeps_ledgers_separate(tmp_path) -> Non
     second.close()
 
 
+def test_store_creates_retention_index_for_prune_path(tmp_path) -> None:
+    store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60)
+    try:
+        with sqlite3.connect(tmp_path / "routing.sqlite") as connection:
+            index_names = {
+                row[1] for row in connection.execute("PRAGMA index_list(routing_observations)")
+            }
+    finally:
+        store.close()
+
+    assert "routing_observations_observed_at" in index_names
+
+
 def test_store_deletes_only_requested_members(tmp_path) -> None:
     clock = _Clock(100.0)
     store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60, clock=clock)
@@ -607,13 +620,13 @@ def test_store_prunes_only_rows_older_than_database_retention_window(tmp_path) -
 def test_concurrent_window_registration_keeps_longest_retention(tmp_path) -> None:
     path = tmp_path / "routing.sqlite"
     ready = threading.Barrier(2)
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
 
     def build(window_seconds: int) -> None:
         try:
             ready.wait(timeout=1.0)
             SqliteRoutingObservationStore(path, window_seconds, clock=_Clock(100.0)).close()
-        except BaseException as exc:  # pragma: no cover - test assertion path
+        except Exception as exc:  # pragma: no cover - test assertion path
             errors.append(exc)
 
     short = threading.Thread(target=build, args=(10,), name="short-window")
