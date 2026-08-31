@@ -9,7 +9,9 @@ Python 3.11+.
 Runtime dependencies:
 
 - `cryptography` for AES-256-GCM protection of explicitly marked PII fields.
-- The HTTP server, persistence, and orchestration core remain Python standard-library based.
+- `opentelemetry-api`/`-sdk`/`-exporter-otlp-proto-http` for optional request-correlation tracing (ADR 0122; disabled unless an OTLP endpoint is configured).
+- `jsonschema` for structured-output validation against caller-supplied schemas.
+- The HTTP server, persistence, orchestration core, and verbose/debug logging (`debug_logging.py`, ADR 0007) remain Python standard-library based.
 
 Production target dependencies after this lab hardens:
 

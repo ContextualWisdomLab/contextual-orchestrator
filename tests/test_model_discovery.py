@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import sys
 import urllib.error
 import urllib.parse
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -1711,3 +1715,110 @@ def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None
 
     second = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     assert any(a.id == "openai_gpt_5_5" for a in second.candidates)
+
+
+_MODEL_DISCOVERY_LOGGER_NAME = "contextual_orchestrator.model_discovery"
+
+
+@contextmanager
+def _captured_discovery_logs(level: int) -> Iterator[io.StringIO]:
+    """Attach an isolated StringIO handler to the model_discovery logger only."""
+    logger = logging.getLogger(_MODEL_DISCOVERY_LOGGER_NAME)
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    logger.addHandler(handler)
+    logger.setLevel(level)
+    logger.propagate = False
+    try:
+        yield buffer
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
+
+
+def test_discover_provider_models_debug_logs_credential_name_not_value() -> None:
+    fake_value = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    register_credential("OPENAI_API_KEY", fake_value)
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}]}),
+        ),
+        _captured_discovery_logs(logging.DEBUG) as buffer,
+    ):
+        discover_provider_models(OPENAI_SOURCE)
+    output = buffer.getvalue()
+    assert "credential_name=OPENAI_API_KEY" in output
+    assert fake_value not in output
+
+
+def test_discover_provider_models_debug_logs_attempt_and_result() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}, {"id": "gpt-5.5-mini"}]}),
+        ),
+        _captured_discovery_logs(logging.DEBUG) as buffer,
+    ):
+        discover_provider_models(OPENAI_SOURCE)
+    output = buffer.getvalue()
+    assert "discovery_attempt provider=openai" in output
+    assert "discovery_result provider=openai model_count=2" in output
+
+
+def test_discover_provider_models_debug_logs_are_silent_without_debug() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}]}),
+        ),
+        _captured_discovery_logs(logging.WARNING) as buffer,
+    ):
+        discover_provider_models(OPENAI_SOURCE)
+    assert buffer.getvalue() == ""
+
+
+def test_discover_provider_models_debug_logs_failure_error_type_and_redacts_message() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+
+    def urlopen(request, timeout=None):
+        raise urllib.error.URLError(f"connection refused api_key={fake_secret}")
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        _captured_discovery_logs(logging.DEBUG) as buffer,
+    ):
+        try:
+            discover_provider_models(OPENAI_SOURCE)
+        except ProviderDiscoveryError:
+            pass
+        else:  # pragma: no cover
+            raise AssertionError("a transport failure must raise ProviderDiscoveryError")
+    output = buffer.getvalue()
+    assert "discovery_provider_failed provider=openai" in output
+    assert "error_type=URLError" in output
+    assert "[REDACTED]" in output
+    assert fake_secret not in output
+
+
+def test_discover_all_models_logs_aggregate_summary_at_info() -> None:
+    register_credential("OPENAI_API_KEY", "sk-router")
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            return_value=_Response({"data": [{"id": "gpt-5.5"}]}),
+        ),
+        _captured_discovery_logs(logging.INFO) as buffer,
+    ):
+        discover_all_models((OPENAI_SOURCE,))
+    output = buffer.getvalue()
+    assert "discovery_complete providers=1" in output
+    assert "models=" in output
+    assert "errors=" in output

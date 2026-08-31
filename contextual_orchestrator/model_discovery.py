@@ -16,6 +16,7 @@ from __future__ import annotations
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import math
 import re
 import ssl
@@ -34,11 +35,13 @@ from .orchestrator import (
     ModelAgent,
     ModelClient,
     format_authorization_header,
+    redact_text,
 )
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
+_LOGGER = logging.getLogger(__name__)
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
@@ -1111,6 +1114,13 @@ def discover_provider_models(
     api_key = get_credential(source.credential_name)
     if not api_key:
         return []
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "discovery_attempt provider=%s credential_name=%s",
+            source.provider_name,
+            source.credential_name,
+        )
+    started = time.monotonic()
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
@@ -1131,6 +1141,13 @@ def discover_provider_models(
         # OSError covers ConnectionError/reset failures that are not URLError
         # subclasses, so a raw provider transport failure can never escape the
         # discovery boundary with provider text attached.
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "discovery_provider_failed provider=%s error_type=%s error_message=%s",
+                source.provider_name,
+                type(exc).__name__,
+                redact_text(str(exc))[:500],
+            )
         raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
@@ -1175,7 +1192,15 @@ def discover_provider_models(
         discovered = _parse_bytez(payload, source)
     else:
         discovered = _parse_openai_compatible(payload, source)
-    return [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "discovery_result provider=%s model_count=%d elapsed_ms=%.1f",
+            source.provider_name,
+            len(result),
+            (time.monotonic() - started) * 1000.0,
+        )
+    return result
 
 
 def discover_all_models(
@@ -1219,10 +1244,18 @@ def discover_all_models(
     # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
     # matching privacy evidence for discovered models from other providers. It
     # is never selected as an inference upstream here.
-    return _apply_discovered_model_evidence(
+    result = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
-    ), errors
+    )
+    if _LOGGER.isEnabledFor(logging.INFO):
+        _LOGGER.info(
+            "discovery_complete providers=%d models=%d errors=%d",
+            len(sources),
+            len(result),
+            len(errors),
+        )
+    return result, errors
 
 
 def openrouter_paid_inference_available(

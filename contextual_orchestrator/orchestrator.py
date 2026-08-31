@@ -1119,6 +1119,60 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+def _log_provider_attempt(agent: ModelAgent, attempt: int, retry_limit: int) -> None:
+    """DEBUG-log one provider call attempt before it is made."""
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "provider_attempt agent_id=%s model=%s attempt=%d/%d",
+            agent.id,
+            agent.model,
+            attempt + 1,
+            retry_limit + 1,
+        )
+
+
+def _log_provider_attempt_failed(
+    agent: ModelAgent, attempt: int, exc: Exception, transient: bool
+) -> None:
+    """DEBUG-log one failed provider attempt with a redacted, bounded error message."""
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "provider_attempt_failed agent_id=%s model=%s attempt=%d error_type=%s transient=%s error_message=%s",
+            agent.id,
+            agent.model,
+            attempt + 1,
+            type(exc).__name__,
+            transient,
+            redact_text(str(exc))[:500],
+        )
+
+
+def _log_provider_backoff(agent: ModelAgent, attempt: int, delay: float) -> None:
+    """DEBUG-log one backoff sleep before the next retry attempt."""
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        _LOGGER.debug(
+            "provider_backoff agent_id=%s attempt=%d delay_seconds=%.3f",
+            agent.id,
+            attempt + 1,
+            delay,
+        )
+
+
+def _log_provider_exhausted(agent: ModelAgent, attempts: int, last_error: Exception) -> None:
+    """WARNING-log a provider call that failed after using its full retry budget.
+
+    Fires by default (no --verbose needed): a provider call that ultimately
+    failed is an actionable operational event, not just internal reasoning.
+    """
+    _LOGGER.warning(
+        "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s",
+        agent.id,
+        agent.model,
+        attempts,
+        type(last_error).__name__,
+    )
+
+
 def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> None:
     """Annotate the active provider span with one response's concrete evidence.
 
@@ -1595,7 +1649,9 @@ class ModelClient:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        attempt = 0
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
+            _log_provider_attempt(agent, attempt, retry_limit)
             try:
                 return (
                     self._send(agent, payload, destination)
@@ -1604,9 +1660,15 @@ class ModelClient:
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+                transient = is_transient_error(exc)
+                _log_provider_attempt_failed(agent, attempt, exc, transient)
+                if attempt >= retry_limit or not transient:
                     break
-                self._sleep(self._backoff_delay(attempt))
+                delay = self._backoff_delay(attempt)
+                _log_provider_backoff(agent, attempt, delay)
+                self._sleep(delay)
+        if last_error is not None:
+            _log_provider_exhausted(agent, attempt + 1, last_error)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -2133,14 +2195,22 @@ class ModelClient:
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
+        attempt = 0
         for attempt in range(retry_limit + 1):
+            _log_provider_attempt(agent, attempt, retry_limit)
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+                transient = is_transient_error(exc)
+                _log_provider_attempt_failed(agent, attempt, exc, transient)
+                if attempt >= retry_limit or not transient:
                     break
-                self._sleep(self._backoff_delay(attempt))
+                delay = self._backoff_delay(attempt)
+                _log_provider_backoff(agent, attempt, delay)
+                self._sleep(delay)
+        if last_error is not None:
+            _log_provider_exhausted(agent, attempt + 1, last_error)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -5689,6 +5759,15 @@ class TaskOrchestrator:
             priority = 0
         has_affinity = 1 if affinity is None else 0
         negated_affinity = 0.0 if affinity is None else -float(affinity)
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "rank_candidate agent_id=%s model=%s priority=%s capability_fit=%s affinity=%s",
+                agent.id,
+                agent.model,
+                priority,
+                bool(role_fit),
+                "unmeasured" if affinity is None else f"{affinity:.3f}",
+            )
         return (-role_fit, -int(priority), has_affinity, negated_affinity, agent.id)
 
     def _ranked_agents(
@@ -5723,6 +5802,14 @@ class TaskOrchestrator:
             and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "rank_partition role=%s candidates=%d free_only=%s chat_only=%s",
+                role,
+                len(candidates),
+                free_only,
+                chat_only,
+            )
         if not candidates:
             if _REQUEST_ZDR_ONLY.get():
                 raise RuntimeError("no ZDR-eligible agent is available for the active privacy policy")
@@ -5772,12 +5859,20 @@ class TaskOrchestrator:
         throughput/stability ledger decides; with no evidence at all the
         caller's input order survives untouched. No synthetic scores.
         """
-        if any(
+        judged_quality = any(
             self._quality_router.member_observation_count(member_id) > 0
             for member_id in member_ids
-        ):
-            return self._quality_router.ranked_member_ids(member_ids)
-        return self._group_router.ranked_member_ids(member_ids)
+        )
+        router = self._quality_router if judged_quality else self._group_router
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            for member_id in member_ids:
+                _LOGGER.debug(
+                    "rank_candidate agent_id=%s judged_quality=%s success_rps=%.3f",
+                    member_id,
+                    judged_quality,
+                    router.member_score(member_id),
+                )
+        return router.ranked_member_ids(member_ids)
 
     def _psychometric_order(
         self, candidates: list[ModelAgent], prompt_context: str | None
@@ -6068,6 +6163,15 @@ class TaskOrchestrator:
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
             raise RuntimeError(f"no eligible agent available for role={role}")
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "select_agent role=%s free_only=%s zdr_only=%s chosen_agent_id=%s chosen_model=%s",
+                role,
+                free_only,
+                bool(_REQUEST_ZDR_ONLY.get()),
+                selected.id,
+                selected.model,
+            )
         return selected
 
     def _capability_agents(self, capability: str, model_name: str | None = None) -> list[ModelAgent]:
@@ -6676,19 +6780,45 @@ class TaskOrchestrator:
             if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
                 state["failures"] = 0.0
                 state["opened_at"] = 0.0
-                return False
-            return True
+                reset_occurred = True
+            else:
+                reset_occurred = False
+        if reset_occurred:
+            if _LOGGER.isEnabledFor(logging.DEBUG):
+                _LOGGER.debug("circuit_reset agent_id=%s", agent_id)
+            return False
+        return True
 
     def _record_failure(self, agent_id: str) -> None:
+        opened = False
         with self._circuit_lock:
             state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
             state["failures"] += 1.0
-            if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
+            failures = state["failures"]
+            if failures >= self.circuit_failure_threshold and not state["opened_at"]:
                 state["opened_at"] = time.monotonic()
+                opened = True
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "circuit_failure agent_id=%s failures=%s threshold=%s",
+                agent_id,
+                failures,
+                self.circuit_failure_threshold,
+            )
+        if opened:
+            _LOGGER.warning(
+                "circuit_opened agent_id=%s failures=%s threshold=%s reset_seconds=%s",
+                agent_id,
+                failures,
+                self.circuit_failure_threshold,
+                self.circuit_reset_seconds,
+            )
 
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:
-            self._circuit.pop(agent_id, None)
+            cleared = self._circuit.pop(agent_id, None)
+        if cleared is not None and _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug("circuit_cleared agent_id=%s", agent_id)
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:

@@ -33,6 +33,7 @@ from .cost_router import (
     InvalidBatchModelError,
 )
 from .batch_routing import BatchRequest
+from .debug_logging import summarize_payload_for_log, summarize_request_for_log
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
@@ -62,6 +63,7 @@ from .telemetry import (
     reset_session_id,
     session_id_from_headers,
     session_id_from_request,
+    session_id_hash,
     set_session_id,
 )
 from .video_jobs import (
@@ -5042,6 +5044,10 @@ def _strip_internal_fields(value: Any) -> Any:
 
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
+    if _LOGGER.isEnabledFor(logging.DEBUG):
+        # Reuses this SAME already-redacted safe_payload -- never a second,
+        # separate, possibly-unredacted copy of the response body.
+        _LOGGER.debug(summarize_payload_for_log("response", safe_payload))
     public_payload = _strip_internal_fields(safe_payload)
     if include_trace:
         return public_payload
@@ -5431,9 +5437,12 @@ def build_server(
             state must never leak across requests on a reused connection.
             """
             self._request_body_consumed = False
+            self._last_status = None
+            request_started = time.monotonic()
             try:
                 super().handle_one_request()
             finally:
+                self._log_request_summary(request_started)
                 self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
@@ -5447,6 +5456,31 @@ def build_server(
                 )
             ):
                 self.close_connection = True
+
+        def _log_request_summary(self, started: float) -> None:
+            """Emit one body-free INFO summary line per completed request.
+
+            Carries method, path, status, latency, and the bounded ADR 0122
+            correlation hash only -- never headers, a query string beyond the
+            raw path, or a request/response body. A request that never got far
+            enough to be parsed (e.g. a malformed request line on a reused
+            connection) has no method/path to report and is skipped.
+            """
+            if not _LOGGER.isEnabledFor(logging.INFO):
+                return
+            method = getattr(self, "command", None)
+            path = getattr(self, "path", None)
+            if not method and not path:
+                return
+            _LOGGER.info(
+                summarize_request_for_log(
+                    method=method or "-",
+                    path=path or "-",
+                    status=getattr(self, "_last_status", None),
+                    latency_ms=(time.monotonic() - started) * 1000.0,
+                    session_id_hash=session_id_hash(),
+                )
+            )
 
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""
@@ -7905,6 +7939,7 @@ def build_server(
             *,
             extra_headers: dict[str, str] | None = None,
         ) -> None:
+            self._last_status = status
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
             def _write() -> None:
@@ -7920,6 +7955,7 @@ def build_server(
             self._write_response(_write)
 
         def _send_text(self, payload: str, content_type: str, status: int = 200) -> None:
+            self._last_status = status
             raw = payload.encode("utf-8")
 
             def _write() -> None:
@@ -7933,6 +7969,8 @@ def build_server(
             self._write_response(_write)
 
         def _send_bytes(self, payload: bytes, content_type: str, status: int = 200) -> None:
+            self._last_status = status
+
             def _write() -> None:
                 self.send_response(status)
                 self.send_header("content-type", content_type)
@@ -7944,6 +7982,7 @@ def build_server(
             self._write_response(_write)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
+            self._last_status = status
             raw = body.encode("utf-8")
 
             def _write() -> None:
@@ -7959,6 +7998,7 @@ def build_server(
 
         def _begin_sse(self) -> bool:
             # Incremental SSE: no content-length; the connection close delimits the body.
+            self._last_status = 200
             self.close_connection = True
 
             def _write() -> None:

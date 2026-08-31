@@ -12,6 +12,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Verbose/debug logging (ADR 0007): a new stdlib-only `debug_logging.py`
+  module, a `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` CLI flag with a
+  `--verbose`/`--debug` shorthand and a `CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`
+  env-var default (default unchanged: `WARNING`), and new instrumentation at
+  the provider retry loop, per-agent circuit breaker, evidence-based ranking
+  (`_ranked_agents`/`_select_agent`), model discovery, and one body-free
+  per-request summary line in `server.py`. Two-layer redaction (explicit
+  `redact_text`/`redact_value` call sites plus a handler-level filter safety
+  net) keeps credential-shaped content out of DEBUG output; raw prompt/answer
+  text is never logged, only lengths and identifiers.
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
   `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
   declared `ProviderModelSource.models_dev_provider_id` field, and hoisted

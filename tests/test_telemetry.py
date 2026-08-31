@@ -94,6 +94,20 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
         reset_session_id(token)
 
 
+def test_session_id_hash_matches_safe_attributes_convention():
+    """The shared correlation-hash helper agrees with _safe_attributes' own hashing."""
+    assert telemetry_module.session_id_hash() is None
+    token = set_session_id("session-safe")
+    try:
+        assert telemetry_module.session_id_hash() == hashlib.sha256(b"session-safe").hexdigest()
+        assert (
+            telemetry_module._safe_attributes({})["contextual_orchestrator.session_id_hash"]
+            == telemetry_module.session_id_hash()
+        )
+    finally:
+        reset_session_id(token)
+
+
 def test_finish_reason_attribute_accepts_only_bounded_string_arrays():
     """The standard finish-reasons array remains bounded and prompt-safe."""
     assert telemetry_module._safe_attributes(
@@ -347,6 +361,75 @@ def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeyp
     assert "client_disconnected" in caplog.text
     assert "private-record" not in caplog.text
     server.server_close()
+
+
+def test_response_payload_debug_log_reuses_redacted_payload_never_raw_secret(caplog):
+    """The DEBUG response summary reuses _response_payload's own redact_value() output."""
+    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    payload = {
+        "choices": [{"message": {"content": "ok"}}],
+        "error": {"message": f"upstream rejected request: api_key={fake_secret}"},
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert "[REDACTED]" in caplog.text
+    assert fake_secret not in caplog.text
+
+
+def test_response_payload_debug_log_is_silent_without_debug(caplog):
+    payload = {"choices": [{"message": {"content": "ok"}}]}
+
+    with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" not in caplog.text
+
+
+def test_per_request_info_summary_reports_method_path_and_status(caplog):
+    """One body-free INFO line per completed request, using method/path/status/latency."""
+    import threading
+    import urllib.request
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
+                assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert "http_request" in caplog.text
+    assert "method=GET" in caplog.text
+    assert "path=/healthz" in caplog.text
+    assert "status=200" in caplog.text
+
+
+def test_per_request_info_summary_absent_below_info(caplog):
+    import threading
+    import urllib.request
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("WARNING", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
+                assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert "http_request" not in caplog.text
 
 
 def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):
