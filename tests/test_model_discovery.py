@@ -2022,7 +2022,7 @@ def test_discover_provider_models_retries_transient_failure_then_succeeds() -> N
         discovered = discover_provider_models(OPENAI_SOURCE)
 
     assert len(attempt_timeouts) == 2
-    assert attempt_timeouts[1] < attempt_timeouts[0]  # retry uses the shortened timeout
+    assert attempt_timeouts == [None, None]
     mock_sleep.assert_called_once()
     assert [model.model_id for model in discovered] == ["gpt-test"]
 

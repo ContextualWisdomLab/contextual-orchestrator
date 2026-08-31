@@ -45,16 +45,14 @@ from .orchestrator import (
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
-DISCOVERY_TIMEOUT_SECONDS = 15.0
+DISCOVERY_TIMEOUT_SECONDS: float | None = None
 _LOGGER = logging.getLogger(__name__)
-# One bounded retry for a provider's primary model-list fetch, reusing the same
+# One retry for a provider's primary model-list fetch, reusing the same
 # transient-vs-terminal classification completion calls already trust
-# (is_transient_error). A short, fixed delay and a shortened retry timeout keep
-# the added worst case small and predictable for CI callers with their own
-# overall time budget (see ContextualWisdomLab/.github's review sidecar).
+# (is_transient_error). Discovery has no default wall-clock deadline: a slow
+# provider catalog must not be mistaken for an unavailable provider.
 # Non-transient failures (auth/config errors, malformed responses) are never
 # retried — a retry cannot fix those and would only waste the time budget.
-_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
 _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
@@ -296,7 +294,7 @@ class ProviderDiscoveryError(RuntimeError):
         super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
-def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
+def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float | None) -> Any:
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
         # constants below, never external input -- but urlopen also honors
@@ -321,8 +319,8 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         return json.loads(response.read().decode("utf-8"))
 
 
-def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
-    """Fetch the shared Models.dev catalog with a small bounded retry.
+def _fetch_models_dev_metadata(*, timeout: float | None) -> Any | None:
+    """Fetch the shared Models.dev catalog with a small retry count.
 
     Every ``models_dev_provider_id``-joined source (``opencode_zen``,
     ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
@@ -336,7 +334,7 @@ def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
 
     Returns ``None`` -- the existing "no evidence" fail-closed signal
     :func:`_merge_models_dev_metadata` already handles -- only once every
-    bounded attempt has failed; a successful attempt returns immediately
+    attempt has failed; a successful attempt returns immediately
     without spending the rest of the retry budget.
     """
     for attempt in range(_MODELS_DEV_FETCH_ATTEMPTS):
@@ -353,7 +351,7 @@ def _fetch_configured_gateway_json(
     *,
     api_key: str,
     auth_scheme: str,
-    timeout: float,
+    timeout: float | None,
     ca_bundle: str | None = None,
 ) -> Any:
     """Fetch an operator URL through the gateway's pinned hardened transport."""
@@ -369,7 +367,7 @@ def _fetch_configured_gateway_json(
     origin = urlunsplit(("https", parsed.netloc, "", "", ""))
     client = ModelClient(
         ca_bundle=ca_bundle,
-        timeout=max(1, math.ceil(timeout)),
+        timeout=None if timeout is None else max(1, math.ceil(timeout)),
         allowed_provider_hosts={parsed.hostname},
     )
     agent = ModelAgent(
@@ -409,7 +407,7 @@ class _TrustedDiscoveryRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def _fetch_json_same_host_https(
-    url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float
+    url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float | None
 ) -> Any:
     """Fetch JSON while rejecting redirects outside the original trusted HTTPS host."""
     if not url.startswith("https://"):
@@ -880,7 +878,7 @@ def _merge_openrouter_provider_privacy(
 
 
 def _openrouter_free_model_endpoints(
-    payload: Any, *, api_key: str, timeout: float
+    payload: Any, *, api_key: str, timeout: float | None
 ) -> dict[str, Any]:
     """Fetch endpoint/provider mappings only for explicitly zero-price models."""
     rows = payload.get("data") if isinstance(payload, dict) else None
@@ -1117,7 +1115,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
     return _deduplicate_discovered_models(discovered)
 
 
-def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
+def _openrouter_zdr_model_ids(*, timeout: float | None) -> set[str]:
     """Read public OpenRouter ZDR evidence for discovered provider models."""
     api_key = get_credential("OPENROUTER_API_KEY") or ""
     try:
@@ -1170,7 +1168,7 @@ def _apply_discovered_model_evidence(
 def discover_provider_models(
     source: ProviderModelSource,
     *,
-    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    timeout: float | None = DISCOVERY_TIMEOUT_SECONDS,
     ca_bundle: str | None = None,
     models_dev_metadata: Any = _NOT_FETCHED,
 ) -> list[DiscoveredModel]:
@@ -1183,8 +1181,8 @@ def discover_provider_models(
     preserves this function's existing lazy, per-call fetch-on-demand
     behavior for every other caller, tests included.
 
-    The primary model-list fetch gets one bounded retry (short fixed delay,
-    shortened timeout) when the failure is transient (5xx/timeout/connection
+    The primary model-list fetch gets one count-bounded retry (short fixed
+    delay) when the failure is transient (5xx/timeout/connection
     reset, per :func:`~contextual_orchestrator.orchestrator.is_transient_error`)
     — a single provider's momentary blip no longer has to zero out that
     provider's entire contribution for this discovery pass. A non-transient
@@ -1214,7 +1212,7 @@ def discover_provider_models(
         "auth_scheme": source.auth_scheme,
         **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
     }
-    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
+    attempt_timeouts = (timeout, timeout)
     payload: Any = None
     last_exc: Exception | None = None
     for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
@@ -1296,7 +1294,7 @@ def discover_provider_models(
 def discover_all_models(
     sources: tuple[ProviderModelSource, ...] = PROVIDER_MODEL_SOURCES,
     *,
-    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    timeout: float | None = DISCOVERY_TIMEOUT_SECONDS,
     ca_bundle: str | None = None,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
     """Discover models across every provider with a registered credential.
@@ -1307,7 +1305,7 @@ def discover_all_models(
     Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
     ``openai``) each want the same Models.dev catalog. When any registered
     source declares ``models_dev_provider_id``, fetch it here exactly once
-    (:func:`_fetch_models_dev_metadata`, with its own small bounded retry) and
+    (:func:`_fetch_models_dev_metadata`, with its own small retry count) and
     hand every source the identical parsed payload, instead of each source
     independently repeating the fetch inside :func:`discover_provider_models`.
     """
@@ -1351,7 +1349,7 @@ def discover_all_models(
 
 
 def openrouter_paid_inference_available(
-    *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+    *, timeout: float | None = DISCOVERY_TIMEOUT_SECONDS
 ) -> bool | None:
     """Return whether OpenRouter attests a strictly positive credit balance."""
     api_key = get_credential("OPENROUTER_API_KEY")
