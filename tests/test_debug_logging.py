@@ -170,6 +170,38 @@ def test_configure_logging_redactor_none_still_leaves_secret_unmasked() -> None:
     assert fake_secret in captured.getvalue()
 
 
+def test_configure_logging_redactor_masks_exception_traceback_in_captured_output() -> None:
+    """Exception tracebacks (`exc_info=True` / `logger.exception`) must be redacted too.
+
+    `_RedactingLogFilter` previously only rewrote `record.msg`/`record.args`
+    -- `record.exc_info` (and any already-rendered `record.exc_text`) passed
+    through untouched. `logging.Formatter.format()` renders the traceback
+    from `exc_info` *after* filters have already run and returned, so a call
+    site using `exc_info=True` or `logger.exception(...)` could still leak a
+    secret embedded in the exception's own `str()` straight into the
+    formatted traceback, bypassing this safety net entirely -- exactly the
+    kind of secret-shaped content (e.g. `api_key=sk-...`) this whole
+    redaction system exists to catch.
+    """
+    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    captured = io.StringIO()
+    original_stderr = sys.stderr
+    sys.stderr = captured
+    try:
+        with _restored_root_logger():
+            configure_logging("DEBUG", redactor=redact_text)
+            logger = logging.getLogger("contextual_orchestrator.test.leak_traceback")
+            try:
+                raise RuntimeError(f"upstream rejected request: api_key={fake_secret}")
+            except RuntimeError:
+                logger.exception("provider call failed")
+    finally:
+        sys.stderr = original_stderr
+    output = captured.getvalue()
+    assert "[REDACTED]" in output
+    assert fake_secret not in output
+
+
 def test_summarize_request_for_log_is_body_free_and_bounded() -> None:
     line = summarize_request_for_log(
         method="POST",

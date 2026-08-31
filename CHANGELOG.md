@@ -60,14 +60,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   applied on top of that allowlist, defense-in-depth, plus a handler-level
   filter safety net. Raw prompt/answer text is never logged, only lengths and
   identifiers. The INFO per-request summary strips any query string before
-  logging and is skipped entirely for a keep-alive connection's closing call
+  logging, is skipped entirely for a keep-alive connection's closing call
   that parsed no new request (previously logged the prior request a second
-  time, statuslessly). A `--log-level`/`--verbose`/`--debug` flag placed
-  before a subcommand (`register-credential`, `discover-models`,
-  `check-fast-mlsirm`) no longer bypasses subcommand dispatch. The retry
-  loop's `provider_exhausted` WARNING now fires only when the retry budget
-  was actually used up; an immediate non-transient (permanent) rejection
-  logs the distinct `provider_rejected_permanent` instead.
+  time, statuslessly), and now also captures a status the framework itself
+  sends (e.g. its built-in 501 for an unsupported HTTP method), not just
+  status codes sent through this module's own response writers. A
+  `--log-level`/`--verbose`/`--debug` flag placed before a subcommand
+  (`register-credential`, `discover-models`, `check-fast-mlsirm`) no longer
+  bypasses subcommand dispatch, including an abbreviated spelling of one of
+  those flags (`--log-l`, `--ver`) — every CLI parser now sets
+  `allow_abbrev=False` so an abbreviation is rejected consistently
+  everywhere with a clear error, rather than silently accepted by one parser
+  and not another. The retry loop's `provider_exhausted` WARNING now fires
+  only when a real, non-zero retry budget was actually used up; an
+  immediate non-transient (permanent) rejection, or any failure at all with
+  a configured retry limit of 0 (there was never a budget to exhaust), logs
+  the distinct `provider_rejected_permanent` instead. The handler-level
+  redaction safety net now also redacts an exception's traceback
+  (`exc_info=True` / `logger.exception(...)`), not just `record.msg` — a
+  secret embedded in an exception's own message (e.g. an upstream error
+  reflecting `api_key=sk-...`) previously reached DEBUG output unredacted
+  via the traceback even when the message-level redaction worked correctly.
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
   `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
   declared `ProviderModelSource.models_dev_provider_id` field, and hoisted

@@ -374,6 +374,58 @@ def test_leading_log_level_flag_before_serve_still_configures_and_serves() -> No
         assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
 
 
+def test_abbreviated_value_flag_before_subcommand_fails_closed_not_misrouted() -> None:
+    """An abbreviated `--log-level` (e.g. `--log-l`) before a subcommand must fail closed.
+
+    argparse's abbreviation matching and `_subcommand_token_index`'s plain
+    string comparison used to disagree: argparse would accept `--log-l` as
+    shorthand for `--log-level`, but the locator did not recognize it as a
+    flag to skip past, so it treated `--log-l` itself as a (non-matching)
+    subcommand token and fell through to the one-shot completion parser with
+    the real subcommand name parsed as a prompt -- silently wrong, not an
+    error. `allow_abbrev=False` on every parser here removes the
+    disagreement instead: an abbreviated flag is now rejected everywhere
+    with a clear argparse `SystemExit(2)`, never silently accepted by one
+    parser and not the other.
+    """
+    stderr = StringIO()
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "--log-l", "DEBUG", "discover-models"],
+        ),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("an abbreviated flag before a subcommand must exit(2)")
+    assert "unrecognized arguments" in stderr.getvalue()
+
+
+def test_abbreviated_boolean_flag_before_subcommand_fails_closed_not_misrouted() -> None:
+    """Same property as above, for a boolean flag abbreviation (`--ver` for `--verbose`)."""
+    stderr = StringIO()
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(sys, "argv", ["contextual-orchestrator", "--ver", "discover-models"]),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("an abbreviated flag before a subcommand must exit(2)")
+    assert "unrecognized arguments" in stderr.getvalue()
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_help_text_lists_log_level_flag()
     test_register_credential_help_lists_log_level_flag()

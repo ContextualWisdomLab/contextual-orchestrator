@@ -109,7 +109,16 @@ def _configure_logging_from_cli(arguments: list[str]) -> None:
             an explicit ``--log-level`` or the env var names an unrecognized
             level. The level is never silently ignored.
     """
-    pre_scan = argparse.ArgumentParser(add_help=False)
+    # allow_abbrev=False: an abbreviated flag (e.g. "--log-l" for
+    # "--log-level") would otherwise be silently accepted by this pre-scan's
+    # own parse_known_args, while _subcommand_token_index -- a plain string
+    # comparison, not argparse -- would not recognize that same abbreviation
+    # and misroute a leading "--log-l DEBUG discover-models" into one-shot
+    # completion. Disabling abbreviations here (and on every subcommand's own
+    # parser below) makes an abbreviated flag consistently rejected with a
+    # clear argparse error everywhere, rather than silently divergent
+    # between this pre-scan and the locator.
+    pre_scan = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     _add_log_level_arguments(pre_scan)
     known, _unrecognized = pre_scan.parse_known_args(arguments)
     if known.log_level is not None:
@@ -316,6 +325,7 @@ def _register_credential_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator register-credential",
         description="Store a provider credential into the KV registry at bootstrap.",
+        allow_abbrev=False,
     )
     parser.add_argument("--name", required=True, help="Credential name, e.g. OPENAI_API_KEY.")
     _add_log_level_arguments(parser)
@@ -399,6 +409,7 @@ def _discover_models_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
         description="Discover models from every provider with a KV-registered credential.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--agents-db",
@@ -604,7 +615,10 @@ def main(argv: list[str] | None = None) -> None:
         _check_fast_mlsirm_command()
         return
 
-    parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
+    parser = argparse.ArgumentParser(
+        description="Route or conduct chat requests across model agents.",
+        allow_abbrev=False,
+    )
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,

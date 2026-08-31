@@ -102,15 +102,36 @@ class _RedactingLogFilter(logging.Filter):
         self._redactor = redactor
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """Rewrite ``record`` in place with its rendered message redacted.
+        """Rewrite ``record`` in place with its message AND traceback redacted.
 
         Renders ``record``'s message (applying any `%`-style args) first, so
         the redactor sees the final text a handler would emit, then clears
         ``args`` since the redacted text is no longer a format string.
+
+        A record built via ``exc_info=True`` or ``logger.exception(...)``
+        carries the exception separately in ``record.exc_info``;
+        ``logging.Formatter.format()`` renders it into text (caching the
+        result on ``record.exc_text``) *after* every filter has already run,
+        so redacting only ``record.msg`` above would leave the traceback --
+        including the exception's own ``str()``, which can itself carry a
+        secret shape (e.g. an upstream error message embedding
+        ``api_key=sk-...``) -- to reach the handler completely unredacted.
+        This renders the traceback text itself now (via a throwaway
+        `logging.Formatter`, independent of whatever formatter the handler
+        actually uses), redacts it, and caches it as ``record.exc_text``
+        while clearing ``record.exc_info`` so the handler's own formatter
+        uses this already-redacted text instead of re-deriving an
+        unredacted one from the original exception.
+
         Always returns ``True``: this filter redacts, it never drops records.
         """
         record.msg = self._redactor(record.getMessage())
         record.args = ()
+        if record.exc_info:
+            record.exc_text = self._redactor(logging.Formatter().formatException(record.exc_info))
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = self._redactor(record.exc_text)
         return True
 
 

@@ -5451,6 +5451,26 @@ def build_server(
         # semantics: assume the connection closes until a request says keep-alive.
         close_connection = True
 
+        def send_response(self, code: int, message: str | None = None) -> None:
+            """Capture the response status for the per-request log, then delegate to stdlib.
+
+            `_last_status` (read by `_log_request_summary`) used to be set
+            only by this class's own `_send`/`_send_text`/`_send_bytes`/
+            `_send_sse` writers. A response the framework generates itself --
+            e.g. `BaseHTTPRequestHandler`'s built-in 501 for an unsupported
+            HTTP method, or a `send_error` call from `parse_request()` on a
+            malformed request line -- calls `send_response` directly and
+            bypasses all of those writers, so the INFO summary logged
+            `status=-` even though a real status was already sent to the
+            client. `send_response` is stdlib's own single choke point every
+            response path (including its own `send_error`) already goes
+            through, so overriding it here captures the status for every
+            current and future response path uniformly, not just this
+            module's own writers.
+            """
+            self._last_status = code
+            super().send_response(code, message)
+
         def handle_one_request(self) -> None:
             """Reset per-request state before parsing each persistent request.
 

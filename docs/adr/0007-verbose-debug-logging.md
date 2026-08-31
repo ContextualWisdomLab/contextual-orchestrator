@@ -52,16 +52,27 @@ leading `--log-level`/`--verbose`/`--debug` tokens (without removing them
 from the argument list a subcommand's own parser sees) so that, e.g.,
 `--verbose discover-models` still reaches the `discover-models` subcommand
 instead of falling through to the one-shot completion parser with
-`discover-models` parsed as the prompt.
+`discover-models` parsed as the prompt. Every CLI parser here (the pre-scan
+and each subcommand's own parser) sets `allow_abbrev=False`: without it,
+argparse's own prefix-abbreviation matching (`--log-l` for `--log-level`,
+`--ver` for `--verbose`) and `_subcommand_token_index`'s plain string
+comparison would disagree -- argparse would silently accept the
+abbreviation while the locator would not recognize it as a flag to skip
+past, misrouting the same way an unrecognized flag would. Disabling
+abbreviations everywhere removes the disagreement: an abbreviated flag is
+now rejected consistently, with a clear argparse error, rather than
+silently accepted by one parser and not the other.
 
 New instrumentation lands at the previously silent decision points: the
 provider retry loop (`_send_with_retry`/`_send_raw_with_retry`: per-attempt,
 backoff, and a WARNING-level `provider_exhausted` line that fires without
 `--verbose`, since a call that used its full retry budget is an actionable
 operational event -- an immediate non-transient failure that never spent any
-retry budget logs the distinct `provider_rejected_permanent` instead, chosen
-by whether the loop broke from reaching the retry limit or from an early
-non-transient break); the per-agent circuit breaker (`_record_failure` logs a
+retry budget, or any failure at all with a configured retry limit of 0
+(there was never a budget to exhaust), logs the distinct
+`provider_rejected_permanent` instead, chosen by whether the loop actually
+reached a *real, non-zero* retry limit or broke early for either of those
+other two reasons); the per-agent circuit breaker (`_record_failure` logs a
 DEBUG line on every increment and a WARNING `circuit_opened` line only on the
 edge transition into the open state; `_record_success` logs DEBUG only when
 there was real breaker state to clear, to avoid a firehose on every healthy
@@ -75,7 +86,14 @@ status, latency, and the ADR 0122 session correlation hash -- factored into
 a new `telemetry.session_id_hash()` shared by both surfaces; skipped
 entirely on a keep-alive connection's closing call, which parses no new
 request) and a DEBUG response-body summary that logs only an allowlisted
-metadata shape, never the payload itself (see below).
+metadata shape, never the payload itself (see below). The status this
+summary reports is captured by overriding `send_response` -- stdlib's own
+single choke point every response path goes through, including its own
+`send_error` -- rather than only this module's own `_send`/`_send_text`/
+`_send_bytes`/`_send_sse` writers, so a response `BaseHTTPRequestHandler`
+generates itself (e.g. its built-in 501 for an HTTP method with no matching
+`do_*` handler) is captured too, instead of logging `status=-` for a
+response the client actually received.
 
 Redaction is layered, and for the response-body summary specifically an
 allowlist replaces "log the (redacted) payload" outright: every call site
@@ -106,7 +124,17 @@ callers. Finally, `configure_logging`'s optional `redactor` attaches a
 `logging.Filter` to the handler `basicConfig` installs -- deliberately the
 handler, not the Logger object, since a Logger-level filter does not run on
 records propagating up from a child logger -- as a safety net for a call
-site that forgets. Raw prompt or message text is never logged at any level,
+site that forgets. That filter redacts a record's exception traceback too,
+not just its rendered message: `logging.Formatter.format()` renders
+`record.exc_info` into text strictly *after* every filter has already run,
+so a call site using `exc_info=True`/`logger.exception(...)` could carry a
+secret embedded in the exception's own `str()` (e.g. an upstream error
+reflecting `api_key=sk-...`) straight into the formatted traceback,
+bypassing message-level redaction entirely. The filter now renders
+`record.exc_info` into text itself, redacts that text, caches it as
+`record.exc_text`, and clears `record.exc_info` so the handler's own
+formatter uses the already-redacted text instead of re-deriving an
+unredacted one. Raw prompt or message text is never logged at any level,
 only lengths, identifiers, and (for the response-body summary specifically)
 allowlisted shape metadata: `redact_text` is documented to deliberately
 leave PII alone, so this design does not lean on it to scrub content it was

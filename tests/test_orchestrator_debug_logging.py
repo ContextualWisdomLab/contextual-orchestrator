@@ -180,6 +180,65 @@ def test_send_raw_with_retry_also_distinguishes_permanent_rejection_from_exhaust
     assert "provider_rejected_permanent agent_id=worker_agent" in output
 
 
+def test_zero_retry_limit_never_labels_a_failure_as_exhausted() -> None:
+    """`max_retries=0` means no retry budget ever existed, so nothing was "exhausted".
+
+    With `retry_limit == 0`, `attempt >= retry_limit` is trivially true after
+    the single allowed attempt regardless of whether that failure was
+    transient or not -- the round-2 provider_exhausted/provider_rejected_permanent
+    split alone doesn't catch this, since it only checked attempt vs.
+    retry_limit. Uses a *transient* error (503) deliberately: even a
+    transient failure must not be reported as "exhausted" when there was
+    never any retry budget to exhaust.
+    """
+
+    class ZeroRetryClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(503)  # transient -- would normally be retried
+
+    client = ZeroRetryClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_with_retry(agent, {"model": "gpt"})
+        except Exception:
+            pass
+    assert client.attempts == 1
+    output = buffer.getvalue()
+    assert "provider_exhausted" not in output
+    assert "provider_rejected_permanent agent_id=worker_agent" in output
+
+
+def test_send_raw_with_retry_zero_retry_limit_never_labels_a_failure_as_exhausted() -> None:
+    """`_send_raw_with_retry` duplicates the retry loop and must share the zero-retry fix."""
+
+    class ZeroRetryRawClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.attempts = 0
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(503)  # transient -- would normally be retried
+
+    client = ZeroRetryRawClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_raw_with_retry(agent, "chat/completions", {})
+        except Exception:
+            pass
+    assert client.attempts == 1
+    output = buffer.getvalue()
+    assert "provider_exhausted" not in output
+    assert "provider_rejected_permanent agent_id=worker_agent" in output
+
+
 def test_circuit_opened_emits_warning_without_debug() -> None:
     """The WARNING-tier edge-transition line fires by default; the per-increment DEBUG line does not."""
     orchestrator = TaskOrchestrator([ModelAgent("solo_agent", "mock-model")])

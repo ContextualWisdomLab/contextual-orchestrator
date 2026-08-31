@@ -657,6 +657,43 @@ def test_keep_alive_close_does_not_log_phantom_request(caplog):
     assert "path=/healthz" in caplog.text
 
 
+def test_framework_generated_error_status_is_captured_in_log(caplog):
+    """A status the framework sends itself (not via our own writers) is still logged.
+
+    `_last_status` used to be updated only by this module's own
+    `_send`/`_send_text`/`_send_bytes`/`_send_sse` writers.
+    `BaseHTTPRequestHandler`'s own machinery -- e.g. its built-in 501 for an
+    HTTP method with no matching `do_*` handler -- calls `send_response`
+    directly and bypasses all of those writers, so the INFO per-request
+    summary logged `status=-` even though a real status (501) was already
+    sent to the client.
+    """
+    import http.client
+    import threading
+    import time
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("PUT", "/healthz")  # no do_PUT -- stdlib's own 501 path
+            response = connection.getresponse()
+            assert response.status == 501
+            response.read()
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "status=501" in caplog.text
+
+
 def test_per_request_info_summary_absent_below_info(caplog):
     import threading
     import time
