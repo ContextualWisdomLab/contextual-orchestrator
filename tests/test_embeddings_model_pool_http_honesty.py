@@ -11,7 +11,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator import (
+    CostRoutingCoordinator,
+    InMemoryConfigStore,
+    ModelAgent,
+    TaskOrchestrator,
+)
 from contextual_orchestrator.server import SecurityConfig, build_server
 
 _TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
@@ -266,6 +271,69 @@ def test_http_batch_embeddings_auto_selects_enabled_embedding_agent() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_embedding_attempts_keep_their_original_routing_context() -> None:
+    for path, input_key, value in (
+        ("/v1/embeddings", "input", "alpha"),
+        ("/v1/batch/embeddings", "inputs", ["alpha"]),
+    ):
+        original = ModelAgent(
+            "embedding_agent",
+            "mock-planner",
+            base_url="mock://original",
+            tags=("embedding",),
+        )
+        orchestrator = TaskOrchestrator(
+            [original, ModelAgent("survivor_agent", "mock-survivor", tags=("embedding",))]
+        )
+        expected_context = orchestrator._routing_observation_context_for_agent(original)
+        coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+        complete = coordinator.complete_embeddings_batch
+
+        def complete_after_reassignment(*args, **kwargs):
+            document = complete(*args, **kwargs)
+            orchestrator.remove_agent("default", original.id)
+            orchestrator.add_agent(
+                "default",
+                {
+                    "id": original.id,
+                    "model": original.model,
+                    "base_url": "mock://replacement",
+                    "tags": ["embedding"],
+                },
+            )
+            return document
+
+        coordinator.complete_embeddings_batch = complete_after_reassignment  # type: ignore[method-assign]
+        observed_contexts: list[str | None] = []
+        observe_success = orchestrator._group_router.observe_success
+
+        def capture_success(*args, **kwargs):
+            observed_contexts.append(kwargs.get("observation_context_key"))
+            return observe_success(*args, **kwargs)
+
+        orchestrator._group_router.observe_success = capture_success  # type: ignore[method-assign]
+        server = build_server(
+            orchestrator,
+            port=0,
+            security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+            coordinator=coordinator,
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = _post(
+                server.server_address[1],
+                path,
+                {"model": original.model, input_key: value},
+            )
+            assert status == 200, body
+            assert observed_contexts == [expected_context]
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            orchestrator.close()
 
 
 if __name__ == "__main__":

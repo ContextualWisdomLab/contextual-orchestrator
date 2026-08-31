@@ -230,6 +230,8 @@ class ModelGroupRouter:
                 raise ValueError(f"{name} must be finite and non-negative")
         with self._lock:
             state = self._ensure_locked(member_id)
+            if state is None:
+                return
             old_alpha = self._float_value(state.get("prior_alpha"))
             old_beta = self._float_value(state.get("prior_beta"))
             delta_alpha = float(prior_alpha) - old_alpha

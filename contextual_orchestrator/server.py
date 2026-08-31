@@ -6982,6 +6982,9 @@ def build_server(
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
                         attempt_started_at = time.perf_counter()
+                        observation_context_key = (
+                            orchestrator._routing_observation_context_for_agent(embedding_agent)
+                        )
                         try:
                             document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
                                 inputs,
@@ -6993,12 +6996,16 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._record_group_failure(embedding_agent.id)
+                            orchestrator._record_group_failure(
+                                embedding_agent.id,
+                                observation_context_key=observation_context_key,
+                            )
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
+                                observation_context_key=observation_context_key,
                             )
                         break
                     if document is None:
@@ -7063,6 +7070,9 @@ def build_server(
                     last_embedding_error: Exception | None = None
                     for embedding_agent in embedding_agents:
                         attempt_started_at = time.perf_counter()
+                        observation_context_key = (
+                            orchestrator._routing_observation_context_for_agent(embedding_agent)
+                        )
                         try:
                             document = self._run(lambda agent=embedding_agent: coordinator.complete_embeddings_batch(
                                 inputs,
@@ -7074,12 +7084,16 @@ def build_server(
                             ))
                         except Exception as exc:  # noqa: BLE001 - measured member failover
                             last_embedding_error = exc
-                            orchestrator._record_group_failure(embedding_agent.id)
+                            orchestrator._record_group_failure(
+                                embedding_agent.id,
+                                observation_context_key=observation_context_key,
+                            )
                             continue
                         if document.get("status") == "completed":
                             orchestrator._group_router.observe_success(
                                 embedding_agent.id,
                                 time.perf_counter() - attempt_started_at,
+                                observation_context_key=observation_context_key,
                             )
                         break
                     if document is None:

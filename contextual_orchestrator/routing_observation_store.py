@@ -102,11 +102,17 @@ class SqliteRoutingObservationStore:
     ) -> None:
         if not isinstance(path, (str, os.PathLike)) or not str(path):
             raise TypeError("path must be a non-empty filesystem path")
+        path_text = os.fspath(path)
+        if path_text == ":memory:" or (
+            path_text.startswith("file:")
+            and (path_text.startswith("file::memory:") or "mode=memory" in path_text)
+        ):
+            raise ValueError("path must be a durable SQLite filesystem path, not an in-memory database")
         if isinstance(window_seconds, bool) or type(window_seconds) is not int or window_seconds < 1:
             raise ValueError("window_seconds must be a positive integer")
         if not callable(clock):
             raise TypeError("clock must be callable")
-        self._path = path
+        self._path = path_text
         self._window_seconds = window_seconds
         self._clock = clock
         self._lock = threading.Lock()

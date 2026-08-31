@@ -121,6 +121,12 @@ def test_store_constructor_validates_configuration(path, window, clock, error, t
         )
 
 
+@pytest.mark.parametrize("path", [":memory:", "file::memory:?cache=shared", "file:routing?mode=memory&cache=shared"])
+def test_store_rejects_in_memory_databases(path) -> None:
+    with pytest.raises(ValueError, match="durable SQLite filesystem path"):
+        SqliteRoutingObservationStore(path, 60)
+
+
 def test_store_validates_attempt_shape(tmp_path) -> None:
     store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60)
     with pytest.raises(ValueError):
