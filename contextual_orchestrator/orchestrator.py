@@ -16,6 +16,7 @@ import http.client
 import io
 import ipaddress
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -88,6 +89,7 @@ from .reasoning_effort_profile import (
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
+_LOGGER = logging.getLogger(__name__)
 MAX_LOCAL_CONCURRENCY = 64
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8

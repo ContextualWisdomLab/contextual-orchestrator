@@ -11,6 +11,7 @@ from dataclasses import replace
 from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
+from .debug_logging import configure_logging, parse_log_level_name
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     CONFIGURED_GATEWAY_CREDENTIAL_NAME,
@@ -31,6 +32,7 @@ from .orchestrator import (
     ModelClient,
     TaskOrchestrator,
     load_agents,
+    redact_text,
 )
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
@@ -40,6 +42,80 @@ from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+
+#: Bootstrap-transport env var read once at process start to default the
+#: effective log level (see docs/planning/adrs, ADR "verbose debug logging").
+#: Never read again at request time -- this is a CLI/process-start knob, not
+#: runtime config sourced from the KV.
+LOG_LEVEL_ENVIRONMENT_VARIABLE = "CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL"
+
+
+def _log_level(value: str) -> str:
+    """Parse a case-insensitive stdlib logging level name for an argparse option."""
+    try:
+        return parse_log_level_name(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _add_log_level_arguments(parser: argparse.ArgumentParser) -> None:
+    """Declare `--log-level`/`--verbose`/`--debug` on one parser for `--help`.
+
+    Actual resolution happens once in :func:`_configure_logging_from_cli`,
+    which runs before subcommand dispatch and already consumed these values
+    from raw ``argv`` via its own pre-scan parser; declaring them here again
+    is only so ``--help`` documents them on every subcommand and so this
+    parser's own `parse_args` does not reject them as unrecognized.
+    """
+    parser.add_argument(
+        "--log-level",
+        type=_log_level,
+        default=None,
+        metavar="{DEBUG,INFO,WARNING,ERROR,CRITICAL}",
+        help="Set the effective log level explicitly (case-insensitive; overrides "
+        "--verbose/--debug and " + LOG_LEVEL_ENVIRONMENT_VARIABLE + "; default: WARNING).",
+    )
+    parser.add_argument(
+        "--verbose",
+        "--debug",
+        action="store_true",
+        dest="verbose",
+        help="Shorthand for --log-level DEBUG, unless --log-level is also given explicitly.",
+    )
+
+
+def _configure_logging_from_cli(arguments: list[str]) -> None:
+    """Resolve the effective log level and configure stdlib logging, once.
+
+    Runs before the ``arguments[0]`` subcommand-string dispatch so
+    ``register-credential``, ``discover-models``, ``check-fast-mlsirm``,
+    one-shot completion, and ``--serve`` are all configured uniformly from
+    one call site, using a lightweight ``parse_known_args`` pre-scan that
+    does not need to know any subcommand's full argument set.
+
+    Precedence: explicit ``--log-level`` > ``--verbose``/``--debug`` >
+    ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` > default ``WARNING``.
+
+    Raises:
+        SystemExit: With status 2 and an argparse-style message on stderr, if
+            an explicit ``--log-level`` or the env var names an unrecognized
+            level. The level is never silently ignored.
+    """
+    pre_scan = argparse.ArgumentParser(add_help=False)
+    _add_log_level_arguments(pre_scan)
+    known, _unrecognized = pre_scan.parse_known_args(arguments)
+    if known.log_level is not None:
+        effective_level = known.log_level
+    elif known.verbose:
+        effective_level = "DEBUG"
+    else:
+        raw_env = os.environ.get(LOG_LEVEL_ENVIRONMENT_VARIABLE, "").strip()
+        try:
+            effective_level = _log_level(raw_env) if raw_env else "WARNING"
+        except argparse.ArgumentTypeError as exc:
+            pre_scan.error(str(exc))
+            return  # pragma: no cover - pre_scan.error() always raises SystemExit
+    configure_logging(effective_level, redactor=redact_text)
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -184,6 +260,7 @@ def _register_credential_command(argv: list[str]) -> None:
         description="Store a provider credential into the KV registry at bootstrap.",
     )
     parser.add_argument("--name", required=True, help="Credential name, e.g. OPENAI_API_KEY.")
+    _add_log_level_arguments(parser)
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--value-stdin",
@@ -297,6 +374,7 @@ def _discover_models_command(argv: list[str]) -> None:
         default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
         help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
     )
+    _add_log_level_arguments(parser)
     args = parser.parse_args(argv)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
@@ -440,6 +518,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
 def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     arguments = list(sys.argv[1:] if argv is None else argv)
+    _configure_logging_from_cli(arguments)
     if arguments and arguments[0] == "register-credential":
         _register_credential_command(arguments[1:])
         return
@@ -545,6 +624,7 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
+    _add_log_level_arguments(parser)
     args = parser.parse_args(arguments)
 
     client = ModelClient(
