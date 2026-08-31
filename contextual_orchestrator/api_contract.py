@@ -32,13 +32,18 @@ OPENAPI_SPEC = {
                     "candidate_id": {
                         "type": "string",
                         "minLength": 1,
+                        "pattern": r".*\S.*",
                         "description": "Exact private agent ID to use for this request.",
                     },
                     "exclude_candidate_ids": {
                         "type": "array",
                         "maxItems": 32,
                         "uniqueItems": True,
-                        "items": {"type": "string", "minLength": 1},
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "pattern": r".*\S.*",
+                        },
                     },
                 },
                 "additionalProperties": False,

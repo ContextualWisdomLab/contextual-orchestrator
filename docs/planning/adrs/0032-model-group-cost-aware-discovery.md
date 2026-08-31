@@ -172,6 +172,11 @@ motivate evidence-based model routing, while this amendment only makes one
 caller-held observation explicit and auditable. Ordinary omitted-control
 behavior and response shape remain unchanged.
 
+A response-cache hit records an empty attempted-candidate list and omits the
+served-candidate field because no provider served that request. Historical
+trace rows remain available as cache provenance but are never reported as a
+current request attempt.
+
 Redistributable research artifacts are already committed at
 `docs/papers/routellm-routing-2406.18665.pdf` and
 `docs/papers/frugalgpt-cost-2305.05176.pdf`; `docs/papers/README.md` records

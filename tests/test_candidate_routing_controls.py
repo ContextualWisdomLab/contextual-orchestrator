@@ -219,6 +219,87 @@ def test_candidate_controls_fail_closed_and_omission_preserves_response_shape() 
     assert "orchestration" not in body
 
 
+def test_candidate_controls_reject_an_unserviceable_worker_pool() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_excluded",
+                "excluded-model",
+                provider_exclusions=("worker",),
+            ),
+            ModelAgent("worker_agent", "worker-model", tags=("cost:free",)),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="eligible agent"):
+        with orchestrator.candidate_routing_policy(
+            {"candidate_id": "worker_excluded"}
+        ):
+            pass
+    with pytest.raises(ValueError, match="leaves no eligible agent"):
+        with orchestrator.candidate_routing_policy(
+            {"exclude_candidate_ids": ["worker_agent"]},
+            model_name="orchestrator/free",
+        ):
+            pass
+
+    zdr_orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("plain_agent", "plain-model"),
+            ModelAgent("zdr_agent", "zdr-model", tags=("privacy:zdr",)),
+        ]
+    )
+    with zdr_orchestrator.request_policy(True):
+        with pytest.raises(ValueError, match="leaves no eligible agent"):
+            with zdr_orchestrator.candidate_routing_policy(
+                {"exclude_candidate_ids": ["zdr_agent"]}
+            ):
+                pass
+
+
+def test_generated_planner_uses_only_request_eligible_candidates(monkeypatch) -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("candidate_a", "model-a"),
+            ModelAgent("candidate_b", "model-b"),
+        ]
+    )
+    prompts: list[str] = []
+
+    def plan(_agent, messages, **_kwargs):
+        prompts.append(messages[0]["content"])
+        return json.dumps(
+            {
+                "steps": [
+                    {
+                        "id": 0,
+                        "role": "worker",
+                        "agent_id": "candidate_a",
+                        "subtask": "work",
+                        "access": [],
+                    },
+                    {
+                        "id": 1,
+                        "role": "synthesizer",
+                        "agent_id": "candidate_a",
+                        "subtask": "answer",
+                        "access": [0],
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr(orchestrator.client, "chat", plan)
+    with orchestrator.candidate_routing_policy(
+        {"exclude_candidate_ids": ["candidate_a"]}
+    ):
+        steps = orchestrator._plan_generated("plan this")
+
+    assert "candidate_a" not in prompts[0]
+    assert "candidate_b" in prompts[0]
+    assert {step.agent_id for step in steps} == {"candidate_b"}
+
+
 def test_candidate_pin_is_honored_by_structured_and_streaming_chat_paths() -> None:
     server, thread, token, client = _serve()
     routing = {"candidate_id": "candidate_b", "exclude_candidate_ids": ["candidate_a"]}
@@ -369,3 +450,30 @@ def test_attempt_evidence_keeps_failed_candidate_before_success() -> None:
         "candidate_b",
     ]
     assert body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+
+
+def test_cache_hit_reports_no_current_candidate_attempt() -> None:
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("candidate_b", "model-b", provider_name="provider-b")],
+        client=client,
+        cache_ttl=60,
+    )
+    messages = [{"role": "user", "content": "cached candidate request"}]
+
+    with orchestrator.candidate_routing_policy({"candidate_id": "candidate_b"}):
+        first = orchestrator.complete(messages, mode="route")
+        first_evidence = orchestrator._candidate_routing_evidence(first)
+    with orchestrator.candidate_routing_policy({"candidate_id": "candidate_b"}):
+        second = orchestrator.complete(messages, mode="route")
+        second_evidence = orchestrator._candidate_routing_evidence(second)
+
+    assert first["cache_status"] == "miss"
+    assert first_evidence["attempted_candidate_ids"] == ["candidate_b"]
+    assert first_evidence["served_candidate_id"] == "candidate_b"
+    assert second["cache_status"] == "hit"
+    assert second_evidence == {
+        "candidate_id": "candidate_b",
+        "exclude_candidate_ids": [],
+        "attempted_candidate_ids": [],
+    }

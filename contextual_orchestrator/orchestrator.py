@@ -3490,10 +3490,24 @@ class TaskOrchestrator:
                 or candidate.disabled
                 or not self._zdr_agent_allowed(candidate)
                 or not _is_general_chat_agent(candidate)
+                or "worker" in candidate.provider_exclusions
             ):
                 raise ValueError("candidate_id is not an eligible agent")
             if model_name == self.FREE_MODEL and not self._is_general_free_agent(candidate):
                 raise ValueError("candidate_id is not eligible for orchestrator/free")
+        elif not any(
+            agent.id not in normalized
+            and not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            and _is_general_chat_agent(agent)
+            and "worker" not in agent.provider_exclusions
+            and (
+                model_name != self.FREE_MODEL
+                or self._is_general_free_agent(agent)
+            )
+            for agent in self.candidates
+        ):
+            raise ValueError("exclude_candidate_ids leaves no eligible agent")
         candidate_token = _REQUEST_CANDIDATE_ID.set(candidate_id)
         excluded_token = _REQUEST_EXCLUDED_CANDIDATE_IDS.set(frozenset(normalized))
         attempted_token = _REQUEST_ATTEMPTED_CANDIDATE_IDS.set([])
@@ -3526,8 +3540,9 @@ class TaskOrchestrator:
             return None
         trace = result.get("trace")
         rows = trace if isinstance(trace, list) else []
-        attempted = list(_REQUEST_ATTEMPTED_CANDIDATE_IDS.get() or ())
-        if not attempted:
+        tracked_attempts = _REQUEST_ATTEMPTED_CANDIDATE_IDS.get()
+        attempted = list(tracked_attempts or ())
+        if tracked_attempts is None:
             attempted = [
                 value
                 for row in rows
@@ -3535,15 +3550,19 @@ class TaskOrchestrator:
                 for value in [row.get("agent_id")]
                 if isinstance(value, str) and value
             ]
-        served = next(
-            (
-                value
-                for row in reversed(rows)
-                if isinstance(row, Mapping)
-                for value in [row.get("served_agent_id") or row.get("agent_id")]
-                if isinstance(value, str) and value
-            ),
-            None,
+        served = (
+            None
+            if tracked_attempts == []
+            else next(
+                (
+                    value
+                    for row in reversed(rows)
+                    if isinstance(row, Mapping)
+                    for value in [row.get("served_agent_id") or row.get("agent_id")]
+                    if isinstance(value, str) and value
+                ),
+                None,
+            )
         )
         evidence: dict[str, Any] = {
             "exclude_candidate_ids": excluded,
@@ -5614,9 +5633,7 @@ class TaskOrchestrator:
                     capable = []
                 if capable:
                     agent = capable[0]
-                if not self._request_candidate_allowed(agent) or any(
-                    tag not in agent.tags for tag in required_tags
-                ):
+                if not self._request_candidate_allowed(agent):
                     raise ValueError(
                         "no eligible candidate satisfies the active routing controls"
                     )
@@ -5779,7 +5796,9 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if _is_general_chat_agent(agent) and self._zdr_agent_allowed(agent)
+            if _is_general_chat_agent(agent)
+            and self._zdr_agent_allowed(agent)
+            and self._request_candidate_allowed(agent)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -5831,6 +5850,8 @@ class TaskOrchestrator:
                 assigned is None
                 or not _is_general_chat_agent(assigned)
                 or not self._zdr_agent_allowed(assigned)
+                or not self._request_candidate_allowed(assigned)
+                or role in assigned.provider_exclusions
             ):
                 # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
