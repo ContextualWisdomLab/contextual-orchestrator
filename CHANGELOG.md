@@ -45,6 +45,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `TaskOrchestrator.route_once()` accepts an optional `deadline_seconds`
+  bounding the *combined* wall-clock time across every retry/failover layer
+  it triggers -- its own next-ranked-candidate loop, `_invoke`'s
+  cross-candidate failover, and `_invoke`'s same-agent tool retry -- instead
+  of each layer retrying/failing over on its own terms with no shared
+  ceiling. Diagnosed against `contextual-orchestrator#946`'s
+  `noema-review` `TimeoutError` failures: enumerating the worst case on
+  `main` showed a single candidate agent's own same-agent retry
+  (`ModelClient`'s internal transport retry stacked with `_invoke`'s
+  independent `RETRY_SAME_AGENT` layer for the identical transient-transport
+  classification) alone can exceed 2x a caller's fixed external timeout
+  before cross-candidate failover is even considered, with no way for a
+  caller to bound the total. Left `None` (the default), behavior is
+  unchanged for every existing caller. Passing it does not change
+  `ModelClient`'s or `TaskOrchestrator`'s own retry/timeout defaults, which
+  remain general-purpose; a caller with a fixed external deadline should
+  pass a `deadline_seconds` comfortably below it. Known gap: the
+  `immediate_race` capability-equivalence branch inside `_invoke` has its own
+  independent `deadline_seconds=self.client.timeout` bound and does not yet
+  observe this parameter.
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
   `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
   declared `ProviderModelSource.models_dev_provider_id` field, and hoisted

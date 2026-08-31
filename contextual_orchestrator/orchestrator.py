@@ -5193,6 +5193,7 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         *,
         model_name: str = GATEWAY_DEFAULT_MODEL,
+        deadline_seconds: float | None = None,
     ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace.
 
@@ -5201,8 +5202,33 @@ class TaskOrchestrator:
         answers fail over to the next measured candidate within the configured
         tool-retry budget, and every verdict updates the quality ledger so
         measured accuracy steers future routing. Speed is explicitly not a
-        design constraint at this layer -- correctness is.
+        design constraint at this layer -- correctness is, by default.
+
+        ``deadline_seconds``, when provided, bounds the *total* wall-clock
+        time this call may spend across every layer of retry and failover
+        (this method's own next-ranked-candidate loop, ``_invoke``'s
+        cross-candidate failover, and its same-agent tool retry) combined --
+        unlike ``self.client.timeout``, which only bounds one HTTP attempt.
+        Left ``None`` (the default), behavior is unchanged: every layer keeps
+        retrying/failing over on its own terms with no combined ceiling,
+        which is appropriate for a caller with no fixed external deadline of
+        its own. A caller that does have one (for example a fixed-timeout
+        HTTP client budget) should pass a ``deadline_seconds`` comfortably
+        below its own external timeout so this call fails closed with a
+        clear, bounded error instead of the external caller aborting the
+        connection first while this call is still working through retries
+        the external caller can no longer see the result of.
         """
+        if deadline_seconds is not None and (
+            isinstance(deadline_seconds, bool)
+            or not isinstance(deadline_seconds, (int, float))
+            or not math.isfinite(float(deadline_seconds))
+            or deadline_seconds <= 0
+        ):
+            raise ValueError("deadline_seconds must be a positive finite number when provided")
+        deadline = (
+            None if deadline_seconds is None else time.monotonic() + float(deadline_seconds)
+        )
         text = self._latest_user_text(messages)
         prompt_context = self._prompt_interaction(messages)
         free_only = model_name == self.FREE_MODEL
@@ -5233,6 +5259,8 @@ class TaskOrchestrator:
         for attempt_index, candidate in enumerate(ranked_pool):
             if len(tried_ids) >= max_attempts:
                 break
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             tried_ids.add(candidate.id)
             start = time.perf_counter()
             attempt_answer, attempt_served_id, attempt_usage = self._invoke(
@@ -5241,6 +5269,7 @@ class TaskOrchestrator:
                 text=text,
                 role="worker",
                 allowed_agent_ids=allowed_agent_ids,
+                deadline=deadline,
             )
             latency_seconds = time.perf_counter() - start
             row = {
@@ -6479,6 +6508,7 @@ class TaskOrchestrator:
         role: str,
         allowed_agent_ids: set[str] | None = None,
         eligibility_role: str | None = None,
+        deadline: float | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -6489,6 +6519,19 @@ class TaskOrchestrator:
 
         ``eligibility_role`` keeps operator exclusions tied to the role used to
         select the primary when the call's effort profile has a distinct name.
+
+        ``deadline`` is an absolute ``time.monotonic()`` value (see
+        ``route_once``'s ``deadline_seconds``), never a duration. When set,
+        this method starts no new attempt -- neither a fresh candidate agent
+        nor a same-agent tool retry -- once it has passed; an attempt already
+        in flight is never interrupted mid-call. Left ``None``, both loops
+        below run exactly as before with no combined ceiling. Known gap: the
+        ``immediate_race`` capability-equivalence branch below has its own,
+        independent ``deadline_seconds=self.client.timeout`` bound on
+        ``race_first_valid`` and does not observe this parameter -- a caller
+        that both requests immediate-race equivalence and passes a
+        ``deadline`` smaller than ``self.client.timeout`` is not yet fully
+        protected on that specific path.
         """
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
@@ -6574,9 +6617,18 @@ class TaskOrchestrator:
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
+        attempted_candidates = 0
+        deadline_exhausted = False
         for agent in candidates:
+            if deadline is not None and time.monotonic() >= deadline:
+                deadline_exhausted = True
+                break
+            attempted_candidates += 1
             retry_attempt = 0
             while True:
+                if deadline is not None and time.monotonic() >= deadline:
+                    deadline_exhausted = True
+                    break
                 try:
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
@@ -6678,17 +6730,33 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
+        # ``attempted_candidates`` equals ``len(candidates)`` whenever no
+        # deadline truncated the loop early (the only way to exit the ``for``
+        # above without attempting every remaining candidate), so every
+        # comparison below against it is a no-op change for the undeadlined
+        # (``deadline is None``) path and only relaxes correctly for a
+        # deadline-truncated one.
+        if deadline_exhausted and attempted_candidates == 0:
+            raise RuntimeError(
+                f"request deadline exceeded before any candidate agent could be "
+                f"attempted for role={role}"
+            )
         if (
             last_provider_response_error is not None
-            and bounded_provider_response_failures == len(candidates)
+            and bounded_provider_response_failures == attempted_candidates
         ):
             raise last_provider_response_error
-        if candidates and every_failure_was_request_too_large:
+        if candidates and attempted_candidates and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
         if last_upstream_error is not None:
             raise last_upstream_error
+        if deadline_exhausted:
+            raise RuntimeError(
+                f"request deadline exceeded after attempting {attempted_candidates} of "
+                f"{len(candidates)} candidate agents for role={role}"
+            )
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(

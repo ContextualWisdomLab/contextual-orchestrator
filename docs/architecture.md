@@ -76,6 +76,11 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   model group — instead of surfacing an opaque error; exhausting every
   eligible candidate still fails closed with the last classified provider
   error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+  `route_once` accepts an optional `deadline_seconds` bounding the *combined*
+  wall-clock time across this failover plus `_invoke`'s own same-agent tool
+  retry, for a caller with a fixed external deadline of its own; left
+  unset (the default), every layer retries/fails over with no combined
+  ceiling, unchanged from before. See [ADR 0001's 2026-08-31 amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-31-a-caller-scoped-combined-deadline).
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.

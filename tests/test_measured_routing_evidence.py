@@ -14,6 +14,7 @@ Covers the anti-heuristic routing stack (ADR 0034):
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -338,6 +339,55 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
     backup_quality = orchestrator._quality_router.member_report("backup_worker")
     assert primary_quality["failure_count"] == 1
     assert backup_quality["success_count"] == 1
+
+
+def test_route_once_deadline_stops_judge_driven_failover_early(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tight ``deadline_seconds`` also blocks route_once's own next-candidate retry.
+
+    ``route_once``'s outer loop (distinct from ``_invoke``'s cross-candidate
+    failover) only advances to a second ranked candidate when the first's
+    answer comes back successfully but the real-time judge rejects it (see
+    ``test_route_once_failover_after_judge_reject`` above). A deadline must
+    stop that judge-driven retry too, not only a transport-failure retry.
+    """
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning",), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning",), priority=1),
+    ]
+    orchestrator = TaskOrchestrator(agents, tool_retry_attempts=1)
+    calls: list[str] = []
+
+    def slow_fake_invoke(primary, messages, **kwargs):
+        calls.append(primary.id)
+        time.sleep(0.08)
+        return "weak answer", primary.id, None
+
+    monkeypatch.setattr(orchestrator, "_invoke", slow_fake_invoke)
+    monkeypatch.setattr(
+        orchestrator,
+        "_model_judge_verification",
+        lambda *a, **k: {
+            "accepted": False,
+            "reason": "always reject",
+            "verifier_output": "",
+            "judge": "model",
+        },
+    )
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "do work"}],
+        deadline_seconds=0.05,
+    )
+
+    # Without the deadline, the always-rejecting judge would make route_once
+    # try both ranked candidates (max_attempts = 1 + min(1, MAX_TOOL_RETRY_ATTEMPTS) = 2).
+    # The 0.05s deadline, shorter than one 0.08s call, must cut this off
+    # after only the first.
+    assert calls == ["primary_worker"]
+    assert result["answer"] == "weak answer"
+    assert result["verification"]["accepted"] is False
 
 
 def test_policy_realtime_judge_must_be_boolean() -> None:

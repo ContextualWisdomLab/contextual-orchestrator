@@ -7,6 +7,7 @@ import json
 import socket
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -933,6 +934,140 @@ def test_classify_provider_transport_failure_never_fails_closed() -> None:
 def test_classify_provider_transport_failure_rejects_non_boolean() -> None:
     with pytest.raises(TypeError, match="retryable must be a boolean"):
         classify_provider_transport_failure(1)  # type: ignore[arg-type]
+
+
+class _SlowScriptedToolClient(_ScriptedToolClient):
+    """Like ``_ScriptedToolClient`` but sleeps a fixed real delay per call.
+
+    Exercises ``route_once``/``_invoke``'s ``deadline_seconds`` wall-clock
+    ceiling against real elapsed time, matching this suite's existing
+    small-real-sleep convention (see ``tests/test_endpoint_race.py``) rather
+    than mocking ``time.monotonic``, which the circuit breaker and group
+    router also read for unrelated purposes.
+    """
+
+    def __init__(self, scripts: dict[str, list[object]], *, delay_seconds: float) -> None:
+        super().__init__(scripts)
+        self.delay_seconds = delay_seconds
+
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        time.sleep(self.delay_seconds)
+        return super().chat(agent, messages, temperature)
+
+
+def test_invoke_deadline_already_expired_raises_before_first_attempt() -> None:
+    """An already-past deadline attempts no candidate at all, not even the first.
+
+    Regression test for the layered-retry-vs-external-timeout mismatch
+    diagnosed against ``contextual-orchestrator#946``'s ``noema-review``
+    ``TimeoutError`` failures: a caller with its own fixed external budget
+    must get a clean, immediate, bounded failure instead of this method
+    silently starting work it cannot finish in time.
+    """
+    client = _ScriptedToolClient({"primary_worker": ["unused"], "backup_worker": ["unused"]})
+    orchestrator = _orchestrator(client)
+    with pytest.raises(RuntimeError, match="deadline exceeded before any candidate"):
+        orchestrator._invoke(
+            orchestrator.candidates[0],
+            [{"role": "user", "content": "inspect repository"}],
+            text="inspect repository",
+            role="worker",
+            deadline=time.monotonic() - 1.0,
+        )
+    assert client.calls == []
+
+
+def test_route_once_deadline_stops_cross_candidate_failover_early() -> None:
+    """A tight ``deadline_seconds`` stops trying new candidates before pool exhaustion.
+
+    Without a deadline, every one of 5 always-failing agents would be tried
+    (``tool_retry_attempts=0`` means no same-agent retry, only cross-candidate
+    failover). With a deadline shorter than a full sweep, fewer than 5 are
+    attempted -- reproducing, deterministically and with bounded real sleeps,
+    the exact layered cross-candidate-failover mechanism that let the
+    sidecar's serving path run far longer than any external caller's fixed
+    timeout in the org's real incident.
+    """
+    timeout = ToolExecutionError(
+        "read timed out",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    agent_ids = [f"worker_{index}" for index in range(5)]
+    client = _SlowScriptedToolClient(
+        {agent_id: [timeout] for agent_id in agent_ids},
+        delay_seconds=0.08,
+    )
+    agents = [
+        ModelAgent(agent_id, "mock", tags=("reasoning", "writing"), priority=5 - index)
+        for index, agent_id in enumerate(agent_ids)
+    ]
+    orchestrator = TaskOrchestrator(agents, client=client, tool_retry_attempts=0)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    with pytest.raises(RuntimeError, match="request deadline exceeded"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.2,
+        )
+
+    assert 0 < len(client.calls) < len(agent_ids)
+
+
+def test_route_once_deadline_stops_same_agent_retry_early() -> None:
+    """A tight deadline also blocks a scheduled same-agent retry, not only cross-candidate failover."""
+    timeout = ToolExecutionError(
+        "read timed out",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    client = _SlowScriptedToolClient(
+        {"primary_worker": [timeout] * (MAX_TOOL_RETRY_ATTEMPTS + 1)},
+        delay_seconds=0.08,
+    )
+    agents = [ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5)]
+    orchestrator = TaskOrchestrator(
+        agents,
+        client=client,
+        tool_retry_attempts=MAX_TOOL_RETRY_ATTEMPTS,
+        tool_retry_backoff_seconds=0.0,
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    with pytest.raises(RuntimeError, match="request deadline exceeded"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.12,
+        )
+
+    # Without the deadline, all MAX_TOOL_RETRY_ATTEMPTS + 1 same-agent
+    # attempts would run; the tight deadline must cut this off well short.
+    assert 0 < len(client.calls) < MAX_TOOL_RETRY_ATTEMPTS + 1
+
+
+def test_route_once_generous_deadline_does_not_interfere_with_success() -> None:
+    """A deadline comfortably larger than what a request needs changes nothing."""
+    client = _ScriptedToolClient({"primary_worker": ["ok"], "backup_worker": ["unused"]})
+    orchestrator = _orchestrator(client)
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "inspect repository"}],
+        deadline_seconds=60.0,
+    )
+    assert result["answer"] == "ok"
+    assert client.calls == ["primary_worker"]
+
+
+@pytest.mark.parametrize("value", [0, -1, -0.5, float("inf"), float("nan"), "1", True])
+def test_route_once_deadline_seconds_rejects_invalid_values(value: object) -> None:
+    client = _ScriptedToolClient({"primary_worker": ["unused"], "backup_worker": ["unused"]})
+    orchestrator = _orchestrator(client)
+    with pytest.raises(ValueError, match="deadline_seconds"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=value,  # type: ignore[arg-type]
+        )
 
 
 if __name__ == "__main__":
