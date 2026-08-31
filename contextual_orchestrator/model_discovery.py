@@ -1689,7 +1689,9 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     if not any(
         capability not in {"chat", "response_format"}
         for capability in discovered.capabilities
-    ) and not is_discovered_chat_candidate(discovered):
+    ) and not is_discovered_chat_candidate(
+        replace(discovered, supports_parallel_tool_calls=None)
+    ):
         raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),

@@ -650,6 +650,37 @@ def test_auto_discovery_preserves_operator_disable_across_spend_recovery(
     assert orchestrator.candidates[0] == existing
 
 
+def test_auto_discovery_unknown_capability_keeps_operator_tool_call_override(
+    monkeypatch,
+) -> None:
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/parallel",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        supports_parallel_tool_calls=None,
+    )
+    existing = ModelAgent(
+        "openrouter_provider_parallel",
+        discovered.model_id,
+        provider_name="openrouter",
+        tags=("discovered", "chat", "tool_call:single", "operator-tag"),
+    )
+    orchestrator = TaskOrchestrator([existing], allow_empty_agents=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([discovered], []),
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    refreshed = orchestrator.candidates[0]
+    assert "tool_call:single" in refreshed.tags
+    assert "operator-tag" in refreshed.tags
+
+
 def test_auto_discovery_does_not_make_spend_blocker_sticky_after_capability_swap(
     monkeypatch,
 ) -> None:

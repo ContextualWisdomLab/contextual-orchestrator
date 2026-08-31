@@ -326,6 +326,50 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
     assert any(agent.id == "openai_gpt_5_5" for agent in reloaded.candidates)
 
 
+def test_discover_models_persists_single_tool_chat_rows_to_agents_db(tmp_path) -> None:
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.model_discovery import DiscoveredModel
+    from contextual_orchestrator.orchestrator import ModelAgent
+
+    set_backend(InMemoryCredentialBackend())
+    db_path = str(tmp_path / "pool.db")
+    stdout = StringIO()
+    discovered = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="generic/single-tool-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        supports_parallel_tool_calls=False,
+        is_free=True,
+    )
+
+    try:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["contextual-orchestrator", "discover-models", "--agents-db", db_path],
+            ),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.__main__.discover_all_models",
+                lambda *_args, **_kwargs: ([discovered], []),
+            ),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    report = json.loads(stdout.getvalue())
+    assert report["discovered_count"] == 1
+    reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
+    stored = next(agent for agent in reloaded.candidates if agent.model == discovered.model_id)
+    assert stored.disabled is True
+    assert "tool_call:single" in stored.tags
+
+
 def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> None:
     from contextual_orchestrator import TaskOrchestrator
     from contextual_orchestrator import __main__ as cli

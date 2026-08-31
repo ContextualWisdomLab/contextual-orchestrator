@@ -2279,6 +2279,20 @@ def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
         "privacy:no_training",
         "privacy:retention_only",
     } <= set(agent_from_discovered(discovered).tags)
+
+
+def test_agent_from_discovered_allows_single_tool_chat_rows_as_disabled_agents() -> None:
+    """Single-tool chat evidence blocks general routing, not durable representation."""
+    discovered = _single_tool_discovered_model()
+
+    agent = agent_from_discovered(discovered)
+
+    assert agent.disabled is True
+    assert agent.model == discovered.model_id
+    assert "chat" in agent.tags
+    assert "tool_call:single" in agent.tags
+
+
 def test_response_format_metadata_does_not_make_non_chat_model_eligible() -> None:
     discovered = DiscoveredModel(
         provider_name="openai",
