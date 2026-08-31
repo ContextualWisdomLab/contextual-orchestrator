@@ -321,7 +321,8 @@ def test_route_once_failover_after_judge_reject(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(orchestrator, "_invoke", fake_invoke)
 
-    def judge(text, fallback, *, free_only=False):
+    def judge(text, fallback, *, free_only=False, deadline=None):
+        del deadline
         accepted = "strong" in fallback["verifier_output"]
         return {
             "accepted": accepted,
@@ -376,18 +377,39 @@ def test_route_once_deadline_stops_judge_driven_failover_early(
         },
     )
 
-    result = orchestrator.route_once(
-        [{"role": "user", "content": "do work"}],
-        deadline_seconds=0.05,
-    )
+    with pytest.raises(RuntimeError, match="request deadline exceeded"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "do work"}],
+            deadline_seconds=0.05,
+        )
 
     # Without the deadline, the always-rejecting judge would make route_once
     # try both ranked candidates (max_attempts = 1 + min(1, MAX_TOOL_RETRY_ATTEMPTS) = 2).
     # The 0.05s deadline, shorter than one 0.08s call, must cut this off
     # after only the first.
     assert calls == ["primary_worker"]
-    assert result["answer"] == "weak answer"
-    assert result["verification"]["accepted"] is False
+
+
+def test_route_once_deadline_is_propagated_to_slow_judge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_worker", "mock", tags=("reasoning",), priority=5)]
+    )
+
+    def deadline_aware_judge(text, fallback, *, free_only=False, deadline=None):
+        del text, fallback, free_only
+        assert deadline is not None
+        time.sleep(max(0.0, deadline - time.monotonic()))
+        raise TimeoutError("judge deadline exceeded")
+
+    monkeypatch.setattr(orchestrator, "_model_judge_verification", deadline_aware_judge)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match="judge deadline exceeded"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "do work"}], deadline_seconds=0.04
+        )
+    assert time.monotonic() - started < 0.12
 
 
 def test_policy_realtime_judge_must_be_boolean() -> None:

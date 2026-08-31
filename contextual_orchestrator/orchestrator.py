@@ -287,6 +287,7 @@ class _FastMLSIJudgeAdapter:
     served_agent_id: str | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
+    deadline: float | None = None
 
     @property
     def contextual_orchestrator_contract(self) -> str:
@@ -309,6 +310,7 @@ class _FastMLSIJudgeAdapter:
             role="judge",
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
+            deadline=self.deadline,
         )
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
@@ -338,9 +340,12 @@ class _FastMLSIJudgeAdapter:
                 agent, request, effort_profile
             )
         request["stream"] = False
-        response = self.orchestrator.client.proxy_send(
-            agent, "chat/completions", request
-        )
+        with self.orchestrator.client.request_settings(deadline=self.deadline):
+            response = self.orchestrator.client.proxy_send(
+                agent, "chat/completions", request
+            )
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise TimeoutError("judge request deadline exceeded")
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -1363,6 +1368,7 @@ class ModelClient:
             "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
             "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
             "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
+            "deadline": scoped.get("deadline"),
         }
 
     @contextmanager
@@ -1444,6 +1450,10 @@ class ModelClient:
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         settings = self.request_settings_snapshot()
+        deadline = settings["deadline"]
+        request_timeout = None if deadline is None else deadline - time.monotonic()
+        if request_timeout is not None and request_timeout <= 0:
+            raise TimeoutError("provider request deadline exceeded before dispatch")
         effective_temperature = settings["temperature"] if temperature is None else temperature
         effective_top_p = settings["top_p"] if top_p is None else top_p
         effective_presence = settings["presence_penalty"]
@@ -1490,8 +1500,12 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_with_retry(agent, payload, destination)
+        ), _local_provider_slot(
+            agent,
+            self.local_concurrency,
+            self.timeout if request_timeout is None else request_timeout,
+        ):
+            return self._send_with_retry(agent, payload, destination, deadline=deadline)
 
     def apply_effort_profile(
         self,
@@ -1607,22 +1621,32 @@ class ModelClient:
         destination: ProviderDestination | None = None,
         *,
         timeout: float | None = None,
+        deadline: float | None = None,
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
+                attempt_timeout = timeout
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("provider request deadline exceeded")
+                    attempt_timeout = remaining if timeout is None else min(timeout, remaining)
                 return (
                     self._send(agent, payload, destination)
-                    if timeout is None
-                    else self._send(agent, payload, destination, timeout=timeout)
+                    if attempt_timeout is None
+                    else self._send(agent, payload, destination, timeout=attempt_timeout)
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
-                self._sleep(self._backoff_delay(attempt))
+                delay = self._backoff_delay(attempt)
+                if deadline is not None:
+                    delay = min(delay, max(0.0, deadline - time.monotonic()))
+                self._sleep(delay)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -2149,14 +2173,27 @@ class ModelClient:
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
+        deadline = self.request_settings_snapshot()["deadline"]
         for attempt in range(retry_limit + 1):
             try:
-                return self._send_raw(agent, endpoint, payload, destination)
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise TimeoutError("provider request deadline exceeded")
+                return (
+                    self._send_raw(agent, endpoint, payload, destination)
+                    if remaining is None
+                    else self._send_raw(
+                        agent, endpoint, payload, destination, timeout=remaining
+                    )
+                )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
-                self._sleep(self._backoff_delay(attempt))
+                delay = self._backoff_delay(attempt)
+                if deadline is not None:
+                    delay = min(delay, max(0.0, deadline - time.monotonic()))
+                self._sleep(delay)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -2183,6 +2220,8 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
         api_key = _provider_credential(agent)
@@ -2197,7 +2236,12 @@ class ModelClient:
             method="POST",
         )
         started = time.monotonic()
-        with self._open_provider(request, destination) as response:
+        opened = (
+            self._open_provider(request, destination)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
+        )
+        with opened as response:
             data = json.loads(response.read().decode("utf-8"))
         _record_provider_response_telemetry(data, started)
         return data
@@ -4533,6 +4577,7 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
+        parameters.pop("deadline", None)
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
         return build_response_cache_key(
             messages,
@@ -5271,6 +5316,8 @@ class TaskOrchestrator:
                 allowed_agent_ids=allowed_agent_ids,
                 deadline=deadline,
             )
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RuntimeError("request deadline exceeded during provider invocation")
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -5297,7 +5344,10 @@ class TaskOrchestrator:
                 usage=attempt_usage,
                 free_only=free_only,
                 prompt_context=prompt_context,
+                deadline=deadline,
             )
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RuntimeError("request deadline exceeded during real-time judging")
             row["realtime_judge"] = {
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
@@ -5337,6 +5387,7 @@ class TaskOrchestrator:
         usage: dict[str, Any] | None,
         free_only: bool,
         prompt_context: str | None = None,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         """Judge one direct-route answer now and feed the quality ledger.
 
@@ -5372,9 +5423,10 @@ class TaskOrchestrator:
                 "judge": "model",
             }
         fallback_report = {"verifier_output": answer}
-        base = self._model_judge_verification(
-            text, fallback_report, free_only=free_only
-        )
+        judge_kwargs: dict[str, Any] = {"free_only": free_only}
+        if deadline is not None:
+            judge_kwargs["deadline"] = deadline
+        base = self._model_judge_verification(text, fallback_report, **judge_kwargs)
         accepted = bool(base.get("accepted"))
         raw_irt_row = base.get("judge_irt_row")
         irt_row = (
@@ -6522,16 +6574,9 @@ class TaskOrchestrator:
 
         ``deadline`` is an absolute ``time.monotonic()`` value (see
         ``route_once``'s ``deadline_seconds``), never a duration. When set,
-        this method starts no new attempt -- neither a fresh candidate agent
-        nor a same-agent tool retry -- once it has passed; an attempt already
-        in flight is never interrupted mid-call. Left ``None``, both loops
-        below run exactly as before with no combined ceiling. Known gap: the
-        ``immediate_race`` capability-equivalence branch below has its own,
-        independent ``deadline_seconds=self.client.timeout`` bound on
-        ``race_first_valid`` and does not observe this parameter -- a caller
-        that both requests immediate-race equivalence and passes a
-        ``deadline`` smaller than ``self.client.timeout`` is not yet fully
-        protected on that specific path.
+        remaining time bounds provider I/O, endpoint racing, retry backoff,
+        and every fresh candidate or same-agent retry. Left ``None``, both
+        loops below run exactly as before with no combined ceiling.
         """
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         prompt_context = self._prompt_interaction(messages)
@@ -6561,6 +6606,8 @@ class TaskOrchestrator:
                 )
             effort_profile = self._role_effort_profile(role)
             request_settings = self.client.request_settings_snapshot()
+            if deadline is not None:
+                request_settings["deadline"] = deadline
 
             def call(agent: ModelAgent) -> tuple[str, str, dict[str, Any] | None]:
                 with self.client.request_settings(**request_settings):
@@ -6585,11 +6632,15 @@ class TaskOrchestrator:
                     for agent in race_members
                     ],
                     validate=lambda value: isinstance(value[0], str) and bool(value[0]),
-                    deadline_seconds=self.client.timeout,
+                    deadline_seconds=(
+                        self.client.timeout
+                        if deadline is None
+                        else max(0.0, deadline - time.monotonic())
+                    ),
                     max_concurrency=len(race_members),
                     on_attempt_complete=attempt_completed,
                 )
-            except RuntimeError:
+            except (RuntimeError, TimeoutError):
                 outcome = None
             finalize_attempts(
                 None if outcome is None else outcome.winner_endpoint_id
@@ -6632,12 +6683,19 @@ class TaskOrchestrator:
                 try:
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
-                    output = (
-                        self.client.chat(agent, messages, effort_profile=effort_profile)
-                        if effort_profile is not None
-                        else self.client.chat(agent, messages)
-                    )
+                    with self.client.request_settings(deadline=deadline):
+                        output = (
+                            self.client.chat(agent, messages, effort_profile=effort_profile)
+                            if effort_profile is not None
+                            else self.client.chat(agent, messages)
+                        )
+                    if deadline is not None and time.monotonic() >= deadline:
+                        deadline_exhausted = True
+                        break
                 except Exception as exc:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        deadline_exhausted = True
+                        break
                     if _is_request_too_large_error(exc):
                         break
                     every_failure_was_request_too_large = False
@@ -6703,6 +6761,11 @@ class TaskOrchestrator:
                                 30.0,
                             )
                             retry_delay = self._tool_retry_jitter(0.0, retry_ceiling)
+                            if deadline is not None:
+                                retry_delay = min(
+                                    retry_delay,
+                                    max(0.0, deadline - time.monotonic()),
+                                )
                             self._tool_retry_sleep(retry_delay)
                         continue
                     if action is ToolFallbackAction.RETRY_SAME_AGENT:
@@ -6741,6 +6804,11 @@ class TaskOrchestrator:
                 f"request deadline exceeded before any candidate agent could be "
                 f"attempted for role={role}"
             )
+        if deadline_exhausted:
+            raise RuntimeError(
+                f"request deadline exceeded after attempting {attempted_candidates} of "
+                f"{len(candidates)} candidate agents for role={role}"
+            )
         if (
             last_provider_response_error is not None
             and bounded_provider_response_failures == attempted_candidates
@@ -6752,11 +6820,6 @@ class TaskOrchestrator:
             )
         if last_upstream_error is not None:
             raise last_upstream_error
-        if deadline_exhausted:
-            raise RuntimeError(
-                f"request deadline exceeded after attempting {attempted_candidates} of "
-                f"{len(candidates)} candidate agents for role={role}"
-            )
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
@@ -6930,6 +6993,7 @@ class TaskOrchestrator:
         *,
         free_only: bool = False,
         allowed_agent_ids: set[str] | None = None,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
@@ -6971,6 +7035,7 @@ class TaskOrchestrator:
                 judge.id,
                 mode="route",
                 allowed_agent_ids=allowed_agent_ids,
+                deadline=deadline,
             )
             fast_judge = components.judge_cls(
                 judge_adapter,

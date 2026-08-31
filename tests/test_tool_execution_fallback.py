@@ -18,6 +18,7 @@ from dataclasses import replace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+import contextual_orchestrator.orchestrator as orchestrator_module
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
@@ -951,7 +952,13 @@ class _SlowScriptedToolClient(_ScriptedToolClient):
         self.delay_seconds = delay_seconds
 
     def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
-        time.sleep(self.delay_seconds)
+        deadline = self.request_settings_snapshot()["deadline"]
+        delay = self.delay_seconds if deadline is None else min(
+            self.delay_seconds, max(0.0, deadline - time.monotonic())
+        )
+        time.sleep(delay)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("provider request deadline exceeded")
         return super().chat(agent, messages, temperature)
 
 
@@ -1013,6 +1020,91 @@ def test_route_once_deadline_stops_cross_candidate_failover_early() -> None:
         )
 
     assert 0 < len(client.calls) < len(agent_ids)
+
+
+def test_route_once_deadline_bounds_one_slow_provider_call() -> None:
+    client = _SlowScriptedToolClient(
+        {"primary_worker": ["late success"]}, delay_seconds=0.2
+    )
+    orchestrator = _orchestrator(client)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="request deadline exceeded"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.04,
+        )
+    assert time.monotonic() - started < 0.12
+
+
+def test_route_once_deadline_clamps_retry_backoff() -> None:
+    timeout = ToolExecutionError(
+        "read timed out",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    client = _ScriptedToolClient({"primary_worker": [timeout, "unused"]})
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"))],
+        client=client,
+        tool_retry_attempts=1,
+        tool_retry_backoff_seconds=1.0,
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    orchestrator._tool_retry_jitter = lambda _low, high: high
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="request deadline exceeded"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.04,
+        )
+    assert time.monotonic() - started < 0.12
+
+
+def test_route_once_deadline_bounds_immediate_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract = {
+        "contract_id": "same-model",
+        "model_revision": "r1",
+        "reasoning_effort_profile": "default",
+        "capability_set": ("text",),
+        "structured_output_contract": "none",
+        "accuracy_class": "same",
+        "data_residency_policy": "same",
+        "retention_policy": "same",
+        "context_limit": 4096,
+        "pricing_evidence_id": "price-1",
+        "hedge_eligible": True,
+        "cancellation_supported": False,
+        "execution_policy": "immediate_race",
+    }
+    agents = [
+        ModelAgent(
+            f"worker_{index}", "mock", tags=("reasoning", "writing"),
+            group_name="same_model", endpoint_equivalence=contract,
+        )
+        for index in range(2)
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    observed: list[float] = []
+
+    def slow_race(*args, deadline_seconds, **kwargs):
+        del args, kwargs
+        observed.append(deadline_seconds)
+        time.sleep(deadline_seconds)
+        raise TimeoutError("race deadline exceeded")
+
+    monkeypatch.setattr(orchestrator_module, "race_first_valid", slow_race)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="request deadline exceeded"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.04,
+        )
+    assert observed and 0 < observed[0] <= 0.04
+    assert time.monotonic() - started < 0.12
 
 
 def test_route_once_deadline_stops_same_agent_retry_early() -> None:
