@@ -58,6 +58,27 @@ CREDENTIAL_SHAPED_KEY_NAMES = frozenset(
     }
 )
 
+#: The only ``usage`` dict keys `response_metadata_for_log` ever logs, even
+#: when their value happens to be numeric. A fixed allowlist, not just a
+#: numeric-type check: a provider's ``usage`` object is attacker/upstream
+#: -controlled JSON, so a key shaped like ``"customer_note=<secret>"`` with a
+#: throwaway numeric value would otherwise sail through the old numeric-only
+#: filter and log that key string (CWE-532) verbatim. These are the standard
+#: OpenAI-compatible token counters this codebase itself already reads
+#: elsewhere (`orchestrator.py`, `cost_router.py`): ``prompt_tokens`` /
+#: ``completion_tokens`` / ``total_tokens`` (the OpenAI chat-completion
+#: names) and the ``input_tokens`` / ``output_tokens`` alternates some
+#: providers use instead.
+SAFE_USAGE_COUNTER_KEY_NAMES = frozenset(
+    {
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+    }
+)
+
 #: Recognized stdlib logging level names, most to least verbose.
 LOG_LEVEL_NAMES: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -302,8 +323,9 @@ def response_metadata_for_log(payload: object) -> dict[str, object]:
     Returns:
         A dict with exactly the keys ``has_error`` (bool), ``model`` (the
         served model name, or ``None``), ``choice_count`` (``int``), and
-        ``usage`` (a dict of only the numeric usage counters, or ``None``)
-        -- never any other field from ``payload``.
+        ``usage`` (a dict of only the allowlisted, numeric usage counters --
+        see :data:`SAFE_USAGE_COUNTER_KEY_NAMES` -- or ``None``) -- never any
+        other field from ``payload``.
     """
     if not isinstance(payload, dict):
         return {"has_error": False, "model": None, "choice_count": 0, "usage": None}
@@ -312,12 +334,17 @@ def response_metadata_for_log(payload: object) -> dict[str, object]:
     usage = payload.get("usage")
     safe_usage: dict[str, object] | None = None
     if isinstance(usage, dict):
-        # Numeric-only, in case a malformed or adversarial upstream response
-        # ever put non-numeric (e.g. string) content under a "usage" key.
+        # Allowlisted key names, not just a numeric-value check: `usage` is
+        # upstream-controlled JSON, so a key shaped like
+        # "customer_note=<secret>" with a throwaway numeric value must not
+        # sail through just because its value happens to be numeric.
         safe_usage = {
             key: value
             for key, value in usage.items()
-            if isinstance(key, str) and isinstance(value, (int, float)) and not isinstance(value, bool)
+            if isinstance(key, str)
+            and key in SAFE_USAGE_COUNTER_KEY_NAMES
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
         }
     return {
         "has_error": isinstance(payload.get("error"), dict),

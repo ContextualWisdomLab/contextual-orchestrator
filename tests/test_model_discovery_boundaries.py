@@ -60,13 +60,13 @@ def test_http_error_maps_to_stable_status_code_without_provider_text() -> None:
     """An HTTP 429 from a provider becomes ``http_status_429`` evidence."""
     register_credential("OPENAI_API_KEY", "sk-openai")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         raise urllib.error.HTTPError(
             request.full_url, 429, "rate limited", hdrs=None, fp=None
         )
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         with pytest.raises(ProviderDiscoveryError) as excinfo:
@@ -79,11 +79,11 @@ def test_timeout_maps_to_stable_timeout_code() -> None:
     """A socket-level timeout never leaks as an unclassified failure."""
     register_credential("OPENAI_API_KEY", "sk-openai")
 
-    def urlopen(request, timeout=None):
+    def urlopen(request, timeout=None, **_kwargs):
         raise TimeoutError("timed out")
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         with pytest.raises(ProviderDiscoveryError) as excinfo:
@@ -169,7 +169,7 @@ def test_fixed_provider_ca_failure_retries_with_certifi_verification() -> None:
         return _Response({"data": []})
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         side_effect=urlopen,
     ):
         assert _fetch_json("https://provider.example/v1/models", timeout=1) == {
@@ -195,7 +195,7 @@ def test_malformed_json_maps_to_invalid_response_code() -> None:
             return b"<html>not json</html>"
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=GarbageResponse(),
     ):
         with pytest.raises(ProviderDiscoveryError) as excinfo:
@@ -213,7 +213,7 @@ def test_insecure_discovery_url_is_refused_before_any_network_call() -> None:
     )
     register_credential("INSECURE_API_KEY", "secret-value")
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen"
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request"
     ) as urlopen:
         with pytest.raises(ProviderDiscoveryError) as excinfo:
             discover_provider_models(source)
@@ -246,7 +246,7 @@ def test_openai_rows_that_are_not_objects_are_skipped() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     payload = {"data": ["junk-string", 42, None, {"id": "meta/llama-3.3"}]}
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
@@ -258,7 +258,7 @@ def test_bytez_rows_that_are_not_objects_are_skipped() -> None:
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     payload = {"output": [7, "bad", {"modelId": "0-hero/Matter-0.1-Slim-7B-C"}]}
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
         return_value=_Response(payload),
     ):
         discovered = discover_provider_models(BYTEZ_SOURCE)

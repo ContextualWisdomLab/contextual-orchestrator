@@ -1251,6 +1251,35 @@ def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_erro
     )
 
 
+def _log_retry_outcome(
+    agent: ModelAgent,
+    attempt: int,
+    retry_limit: int,
+    last_error: Exception,
+    *,
+    transient: bool,
+) -> None:
+    """Log a terminated retry loop's outcome under its correct distinct event name.
+
+    ``ModelClient._send_with_retry`` and ``ModelClient._send_raw_with_retry``
+    run this identical three-way classification (no retry budget at all /
+    budget exhausted / stopped early on a non-transient error) once their
+    retry loop ends. It used to be duplicated verbatim in both methods, and
+    that duplication already caused a real regression once -- a fix landed
+    in one copy but was missed in the other (see
+    ``tests/test_orchestrator_debug_logging.py``'s
+    ``test_send_raw_with_retry_*`` tests, which exist specifically to catch
+    that class of drift). Extracting the shared logic here makes it
+    impossible for the two call sites to diverge again.
+    """
+    if retry_limit == 0:
+        _log_provider_no_retry_budget(agent, attempt + 1, last_error, transient=transient)
+    elif attempt >= retry_limit:
+        _log_provider_exhausted(agent, attempt + 1, last_error)
+    else:
+        _log_provider_rejected_permanent(agent, attempt + 1, last_error)
+
+
 def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> None:
     """Annotate the active provider span with one response's concrete evidence.
 
@@ -1746,12 +1775,7 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            if retry_limit == 0:
-                _log_provider_no_retry_budget(agent, attempt + 1, last_error, transient=transient)
-            elif attempt >= retry_limit:
-                _log_provider_exhausted(agent, attempt + 1, last_error)
-            else:
-                _log_provider_rejected_permanent(agent, attempt + 1, last_error)
+            _log_retry_outcome(agent, attempt, retry_limit, last_error, transient=transient)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -2293,12 +2317,7 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            if retry_limit == 0:
-                _log_provider_no_retry_budget(agent, attempt + 1, last_error, transient=transient)
-            elif attempt >= retry_limit:
-                _log_provider_exhausted(agent, attempt + 1, last_error)
-            else:
-                _log_provider_rejected_permanent(agent, attempt + 1, last_error)
+            _log_retry_outcome(agent, attempt, retry_limit, last_error, transient=transient)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (

@@ -18,6 +18,7 @@ from contextual_orchestrator.debug_logging import (  # noqa: E402
     configure_logging,
     log_debug_event,
     parse_log_level_name,
+    response_metadata_for_log,
     summarize_payload_for_log,
     summarize_request_for_log,
 )
@@ -260,6 +261,51 @@ def test_summarize_payload_for_log_handles_unserializable_payload() -> None:
     assert line.startswith("request_summary ")
 
 
+def test_response_metadata_for_log_keeps_only_allowlisted_usage_counters() -> None:
+    """CodeRabbit regression: a numeric-looking key must still be allowlisted by name.
+
+    Before this fix, `response_metadata_for_log`'s "usage" summary kept ANY
+    string key with a numeric value, not a fixed allowlist of known counter
+    names. A provider's `usage` object is upstream-controlled JSON, so a key
+    shaped like `"customer_note=<secret>"` with a throwaway numeric value
+    would sail through the old numeric-only filter and get logged verbatim
+    (CWE-532). This proves such a key is excluded while the real,
+    allowlisted OpenAI-compatible counters still come through untouched.
+    """
+    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    payload = {
+        "model": "gpt-test",
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {
+            "prompt_tokens": 12,
+            "completion_tokens": 34,
+            "total_tokens": 46,
+            f"customer_note={fake_secret}": 1,
+        },
+    }
+
+    metadata = response_metadata_for_log(payload)
+
+    assert metadata["usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 34,
+        "total_tokens": 46,
+    }
+    assert not any(fake_secret in str(key) for key in metadata["usage"])
+
+
+def test_response_metadata_for_log_usage_none_when_no_allowlisted_keys_present() -> None:
+    """An entirely non-allowlisted "usage" dict summarizes to an empty, not absent, dict.
+
+    (`usage` stays a dict -- just with nothing left in it -- distinct from
+    a payload with no "usage" key at all, which stays `None`.)
+    """
+    metadata = response_metadata_for_log(
+        {"usage": {"unexpected_field": 1, "another_one": 2.5}}
+    )
+    assert metadata["usage"] == {}
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_parse_log_level_name_accepts_known_levels_case_insensitively()
     test_parse_log_level_name_rejects_unknown_level()
@@ -275,4 +321,6 @@ if __name__ == "__main__":  # pragma: no cover
     test_summarize_request_for_log_handles_missing_status_and_session()
     test_summarize_payload_for_log_truncates_and_labels()
     test_summarize_payload_for_log_handles_unserializable_payload()
+    test_response_metadata_for_log_keeps_only_allowlisted_usage_counters()
+    test_response_metadata_for_log_usage_none_when_no_allowlisted_keys_present()
     print("ok")

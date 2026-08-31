@@ -298,25 +298,41 @@ class ProviderDiscoveryError(RuntimeError):
 
 
 def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float) -> Any:
+    """Fetch JSON, sending any credential only to the original trusted HTTPS host.
+
+    Plain ``urllib`` follows a 3xx redirect by copying the original request's
+    headers -- ``Authorization`` included -- onto the redirected request even
+    when the redirect target is a completely different host (unlike some
+    other HTTP clients, urllib never strips sensitive headers on cross-origin
+    redirects). Every call site here passes a real provider credential in
+    ``api_key``, so a malicious or compromised provider endpoint issuing a
+    redirect to an attacker-controlled host would otherwise leak it. This
+    uses the same :class:`_TrustedDiscoveryRedirectHandler` opener as
+    :func:`_fetch_json_same_host_https` to reject any redirect that leaves
+    the original host instead of silently forwarding the header.
+    """
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
         # constants below, never external input -- but urlopen also honors
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
+    parsed = urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError(f"refusing discovery URL without hostname: {url!r}")
     headers = {"user-agent": _HTTP_USER_AGENT}
     if api_key:
         headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
-        response = urllib.request.urlopen(request, timeout=timeout)  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        response = _open_trusted_discovery_request(request, trusted_host=parsed.hostname, timeout=timeout)
     except urllib.error.URLError as exc:
         if not isinstance(exc.reason, ssl.SSLCertVerificationError):
             raise
         context = ssl.create_default_context(cafile=certifi.where())
-        response = urllib.request.urlopen(  # noqa: S310 - fixed provider inventory  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request, timeout=timeout, context=context
+        response = _open_trusted_discovery_request(
+            request, trusted_host=parsed.hostname, timeout=timeout, context=context
         )
     with response:
         return json.loads(response.read().decode("utf-8"))
@@ -409,6 +425,28 @@ class _TrustedDiscoveryRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def _open_trusted_discovery_request(
+    request: urllib.request.Request,
+    *,
+    trusted_host: str,
+    timeout: float,
+    context: ssl.SSLContext | None = None,
+) -> Any:
+    """Open ``request`` through an opener that rejects redirects leaving ``trusted_host``.
+
+    Shared by :func:`_fetch_json` and :func:`_fetch_json_same_host_https` so
+    both authenticated discovery paths get identical, single-implementation
+    redirect protection instead of two copies that could silently drift
+    apart. ``context`` lets a caller retry once under a certificate-fallback
+    ``SSLContext`` without losing the redirect guard.
+    """
+    handlers: list[urllib.request.BaseHandler] = [_TrustedDiscoveryRedirectHandler(trusted_host)]
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(*handlers)
+    return opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+
+
 def _fetch_json_same_host_https(
     url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float
 ) -> Any:
@@ -420,11 +458,8 @@ def _fetch_json_same_host_https(
         raise ValueError(f"refusing discovery URL without hostname: {url!r}")
     headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
-    opener = urllib.request.build_opener(
-        _TrustedDiscoveryRedirectHandler(parsed.hostname)
-    )
     try:
-        response = opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        response = _open_trusted_discovery_request(request, trusted_host=parsed.hostname, timeout=timeout)
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
             raise TimeoutError(str(exc.reason)) from exc
@@ -1236,7 +1271,14 @@ def discover_provider_models(
                 timeout=timeout,
                 ca_bundle=ca_bundle,
             )
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError):
+            # RuntimeError matches the primary list-request retry loop above:
+            # ModelClient._resolve_addresses / _open_provider raise RuntimeError
+            # for DNS and request-validation transport failures, and this
+            # metadata fetch sits outside that loop's except tuple -- without
+            # RuntimeError here, a raw transport failure on this call alone
+            # would escape discover_provider_models uncaught and abort the
+            # entire discovery pass instead of just this provider's metadata.
             metadata = None
         payload = _merge_configured_gateway_metadata(payload, metadata)
     if source.style == "bytez":

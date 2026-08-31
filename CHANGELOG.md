@@ -39,6 +39,56 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
+- (CodeRabbit review on #946) **Credential leak via cross-host redirect,
+  doubled by #923's retry.** `_fetch_json` -- the function every standard
+  provider's authenticated "list models" call goes through (openai,
+  openrouter, nvidia_nim, nvidia_nim_sub, bytez), including under #923's one
+  bounded retry -- called plain `urllib.request.urlopen`, whose default
+  `HTTPRedirectHandler` copies the `Authorization` header onto a redirected
+  request even when the redirect target is a completely different host
+  (unlike some other HTTP clients, urllib never strips sensitive headers on
+  cross-origin redirects). A malicious or compromised provider endpoint
+  issuing a 3xx redirect could have exfiltrated the credential, and the
+  retry meant up to twice per discovery attempt. `_fetch_json_same_host_https`
+  already carried the correct fix for this exact risk (`_TrustedDiscoveryRedirectHandler`,
+  raising on any redirect leaving the original host) for a different call
+  path; `_fetch_json` now goes through the same protection via a new shared
+  `_open_trusted_discovery_request` helper, so both functions get one
+  single-implementation redirect guard instead of two copies that could
+  drift apart. A legitimate same-host redirect (e.g. a real provider's
+  `/v1/models` -> `/v2/models`) still succeeds unchanged.
+- (CodeRabbit review on #946) The `configured_gateway` provider's
+  `/model/info` metadata fetch now also catches `RuntimeError` (raised by
+  `ModelClient._resolve_addresses`/`_open_provider` on a DNS or
+  request-validation transport failure), matching the primary list-request
+  retry loop's except tuple. Previously a raw `RuntimeError` from this one
+  metadata fetch escaped `discover_provider_models` uncaught and aborted the
+  entire discovery pass instead of just this provider's metadata.
+- (CodeRabbit review on #946) `server.py`'s per-request `latency_ms` no
+  longer counts a keep-alive connection's idle time between requests.
+  `request_started` used to be timestamped immediately before
+  `BaseHTTPRequestHandler.handle_one_request()`, whose first action is a
+  blocking `self.rfile.readline()` that, on a reused connection, waits on
+  the client's next request rather than doing any work. The timestamp is
+  now taken inside an overridden `parse_request()`, right after that
+  blocking read has already returned real request bytes, so `latency_ms`
+  reflects only actual request handling.
+- (CodeRabbit review on #946) `orchestrator.py`'s retry-outcome
+  classification (no retry budget at all / budget exhausted / stopped early
+  on a non-transient error) was duplicated verbatim in
+  `ModelClient._send_with_retry` and `_send_raw_with_retry` -- duplication
+  that had already caused a real regression once, when a fix landed in one
+  copy but was missed in the other (see the round-4 `provider_no_retry_budget`
+  fix above). Extracted into one shared `_log_retry_outcome` helper both
+  methods call, so the two call sites cannot diverge again.
+- (CodeRabbit review on #946) `debug_logging.response_metadata_for_log`'s
+  `usage` summary now keeps only a fixed allowlist of known counter names
+  (`prompt_tokens`, `completion_tokens`, `total_tokens`, `input_tokens`,
+  `output_tokens`; see `SAFE_USAGE_COUNTER_KEY_NAMES`), not any string key
+  with a numeric value. A provider's `usage` object is upstream-controlled
+  JSON, so a key shaped like `"customer_note=<secret>"` with a throwaway
+  numeric value would otherwise have sailed through the old numeric-only
+  filter and reached DEBUG output verbatim (CWE-532).
 
 ### Added
 

@@ -5471,6 +5471,23 @@ def build_server(
             self._last_status = code
             super().send_response(code, message)
 
+        def parse_request(self) -> bool:
+            """Timestamp the moment real request data starts being handled.
+
+            ``BaseHTTPRequestHandler.handle_one_request`` blocks on
+            ``self.rfile.readline()`` *before* calling this method -- on a
+            keep-alive connection that read waits on the client's idle time
+            between requests, not on any processing this server does.
+            Recording ``_request_started`` here, at the top of
+            ``parse_request`` (immediately after that blocking read has
+            already returned real request bytes), keeps
+            ``_log_request_summary``'s ``latency_ms`` scoped to actual
+            request handling instead of also counting the client's think
+            time.
+            """
+            self._request_started = time.monotonic()
+            return super().parse_request()
+
         def handle_one_request(self) -> None:
             """Reset per-request state before parsing each persistent request.
 
@@ -5488,16 +5505,23 @@ def build_server(
             correctly recognize that no new request happened this call,
             instead of logging the prior request a second time with a
             statusless "phantom" entry.
+
+            ``_request_started`` is reset to ``None`` here too, ahead of the
+            blocking read: it is only ever set for real inside
+            ``parse_request`` above (once request data has actually
+            arrived), and a call that reads nothing at all (a closed
+            keep-alive connection) never reaches that point -- exactly the
+            case ``_log_request_summary``'s own guard already skips.
             """
             self._request_body_consumed = False
             self._last_status = None
             self.command = None
             self.path = None
-            request_started = time.monotonic()
+            self._request_started = None
             try:
                 super().handle_one_request()
             finally:
-                self._log_request_summary(request_started)
+                self._log_request_summary(self._request_started)
                 self._reset_session()
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
@@ -5512,7 +5536,7 @@ def build_server(
             ):
                 self.close_connection = True
 
-        def _log_request_summary(self, started: float) -> None:
+        def _log_request_summary(self, started: float | None) -> None:
             """Emit one body-free INFO summary line per completed request.
 
             Carries method, path, status, latency, and the bounded ADR 0122
@@ -5520,6 +5544,13 @@ def build_server(
             raw path, or a request/response body. A request that never got far
             enough to be parsed (e.g. a malformed request line on a reused
             connection) has no method/path to report and is skipped.
+
+            ``started`` is only ever ``None`` when ``command``/``path`` are
+            also unset (``parse_request`` is the sole place that sets any of
+            the three), so the guard below already skips that case before
+            ``started`` is used; the ``or time.monotonic()`` fallback is
+            defensive only, to keep this from ever raising on a future
+            stdlib change rather than to be exercised today.
             """
             if not _LOGGER.isEnabledFor(logging.INFO):
                 return
@@ -5532,7 +5563,7 @@ def build_server(
                     method=method or "-",
                     path=path or "-",
                     status=getattr(self, "_last_status", None),
-                    latency_ms=(time.monotonic() - started) * 1000.0,
+                    latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
                     session_id_hash=session_id_hash(),
                 )
             )
