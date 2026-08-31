@@ -569,7 +569,16 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     or bool(failed_configured_gateway_probe_ids)
                 )
             ):
-                orchestrator.remove_agent("default", agent.id)
+                if any(
+                    candidate.id != agent.id and not candidate.disabled
+                    for candidate in orchestrator.candidates
+                ):
+                    orchestrator.remove_agent("default", agent.id)
+                else:
+                    retired = orchestrator.sync_discovered_agents(
+                        [replace(agent, disabled=True)]
+                    )
+                    result["updated"].extend(retired["updated"])
     has_real_runtime_agent = any(
         not candidate.disabled
         and not candidate.base_url.startswith("mock://")

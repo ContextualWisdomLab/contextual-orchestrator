@@ -4,6 +4,8 @@ from dataclasses import replace
 import os
 from unittest.mock import patch
 
+import pytest
+
 from contextual_orchestrator.__main__ import (
     _auto_discover_runtime_agents,
     _probe_configured_gateway_structured_chat,
@@ -179,6 +181,46 @@ def test_failed_gateway_catalog_probes_remove_unprobed_blank_seed(monkeypatch) -
     selected = orchestrator._select_agent("task", "synthesizer")
     assert selected.provider_name == "openrouter"
     assert selected.model == live_model.model_id
+
+
+def test_failed_gateway_catalog_probe_disables_the_only_blank_seed(monkeypatch) -> None:
+    """A failed sole catalog row leaves startup alive but no callable blank seed."""
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="auth-failing-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    seed = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        base_url="https://gateway.synthetic.example/v1",
+        provider_name="configured_gateway",
+        credential_key="LLM_GATEWAY_API_KEY",
+        tags=("bootstrap_seed",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: "present"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([model], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: False,
+    )
+    orchestrator = TaskOrchestrator([seed])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result["updated"] == [seed.id]
+    assert orchestrator.agents == []
+    assert orchestrator.candidates == [replace(seed, disabled=True)]
+    with pytest.raises(RuntimeError, match="no chat-compatible agent available"):
+        orchestrator._select_agent("task", "synthesizer")
 
 
 def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
