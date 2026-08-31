@@ -370,6 +370,36 @@ def test_runtime_added_remote_embedding_member_uses_provider_backend() -> None:
     assert client.embedding_calls == [["provider input"]]
 
 
+def test_local_startup_registers_provider_backend_for_recovered_jobs() -> None:
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([], allow_empty_agents=True),
+        embedding_token_counter=_SyntheticExactCounter(),
+    )
+
+    assert isinstance(
+        coordinator._embedding_backends["provider"], ProviderEmbeddingBatchBackend
+    )
+
+
+def test_server_closes_provider_backend_added_after_startup() -> None:
+    orchestrator = TaskOrchestrator([], allow_empty_agents=True)
+    coordinator = CostRoutingCoordinator(
+        orchestrator, embedding_token_counter=_SyntheticExactCounter()
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="runtime_backend_close_token"),
+        coordinator=coordinator,
+    )
+    closed = threading.Event()
+    coordinator._embedding_backends["provider"].close = closed.set
+
+    server.server_close()
+
+    assert closed.is_set()
+
+
 def test_provider_embedding_requests_are_sharded_by_the_existing_token_limit() -> None:
     agent = ModelAgent(
         "synthetic_embedding",

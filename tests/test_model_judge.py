@@ -667,6 +667,33 @@ def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> N
     assert result["judge_orchestration_mode"] == "route"
 
 
+def test_model_judge_does_not_retry_request_excluded_agent() -> None:
+    stale = ModelAgent("stale_agent", "stale-model", tags=("reasoning", "writing"))
+    live = ModelAgent("live_agent", "live-model", tags=("reasoning", "writing"))
+    calls = []
+
+    class _Client(ModelClient):
+        def chat(self, agent, messages, temperature=None):
+            del messages, temperature
+            calls.append(agent.id)
+            return '{"decision":"ACCEPT","reason":"live judge"}'
+
+    orchestrator = TaskOrchestrator([stale, live], client=_Client())
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ), patch.object(orchestrator, "_ranked_agents", return_value=[stale, live]):
+        result = orchestrator._model_judge_verification(
+            "task",
+            {"verifier_output": "report"},
+            excluded_agent_ids={stale.id},
+        )
+
+    assert result["accepted"] is True
+    assert calls == [live.id]
+
+
 def test_fast_mlsirm_invalid_irt_projection_fails_closed() -> None:
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:

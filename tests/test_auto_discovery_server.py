@@ -8,7 +8,7 @@ from contextual_orchestrator.__main__ import (
     _auto_discover_runtime_agents,
     _probe_configured_gateway_structured_chat,
 )
-from contextual_orchestrator.model_discovery import DiscoveredModel
+from contextual_orchestrator.model_discovery import DiscoveredModel, agent_from_discovered
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
 
@@ -132,6 +132,39 @@ def test_configured_gateway_discovery_retains_only_structured_probe_successes(
     assert probes == ["stale-model", "live-model"]
     assert result["added"] == ["configured_gateway_live_model"]
     assert all(agent.model != "stale-model" for agent in orchestrator.agents)
+
+
+def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
+    monkeypatch, tmp_path
+) -> None:
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="stale-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    existing = replace(agent_from_discovered(model), disabled=False)
+    agents_db = str(tmp_path / "agents.db")
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: "present"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([model], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: False,
+    )
+    orchestrator = TaskOrchestrator([existing], agents_db=agents_db)
+
+    _auto_discover_runtime_agents(orchestrator)
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+
+    assert restarted.candidates[0].disabled is True
+    assert "structured:blocked" in restarted.candidates[0].tags
 
 
 def test_configured_gateway_structured_probe_is_bounded_and_validates_output() -> None:

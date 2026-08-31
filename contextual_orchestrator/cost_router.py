@@ -151,6 +151,8 @@ class CostRoutingCoordinator:
             self._embedding_backends["local"] = LocalEmbeddingBatchBackend(
                 token_counter=self.embedding_token_counter, job_registry=registry
             )
+        if self._uses_default_embedding_backend and "provider" not in self._embedding_backends:
+            self._embedding_backends["provider"] = self._provider_embedding_backend()
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
         # embeddings batch state: job handle + submitted requests + cached doc,
@@ -165,9 +167,13 @@ class CostRoutingCoordinator:
         self._embedding_part_counts = registry.mapping("embedding_part_counts")
         self._embedding_part_limits = registry.mapping("embedding_part_limits")
         self._embedding_documents = registry.mapping("embedding_documents")
-        start_embedding_job = getattr(self.embedding_batch_backend, "start", None)
-        if callable(start_embedding_job):
-            for recovered_job in list(self._embedding_jobs.values()):
+        for recovered_job in list(self._embedding_jobs.values()):
+            try:
+                recovered_backend = self._embedding_backend_for(recovered_job)
+            except RuntimeError:
+                continue
+            start_embedding_job = getattr(recovered_backend, "start", None)
+            if callable(start_embedding_job):
                 start_embedding_job(recovered_job)
 
     # ------------------------------------------------------------------
@@ -267,14 +273,25 @@ class CostRoutingCoordinator:
                 ):
                     return
                 self._resolve_virtual_embedding_target = True
-                self.embedding_batch_backend = self._provider_embedding_backend()
-                self._embedding_backends[
-                    self.embedding_batch_backend.name
-                ] = self.embedding_batch_backend
+                self.embedding_batch_backend = self._embedding_backends["provider"]
 
     def _embedding_backend_for(self, job: BatchJob) -> EmbeddingBatchBackend:
         """Keep already-submitted jobs bound to the backend that owns them."""
-        return self._embedding_backends.get(job.backend, self.embedding_batch_backend)
+        backend = self._embedding_backends.get(job.backend)
+        if backend is None:
+            raise RuntimeError(f"embedding backend {job.backend!r} is unavailable")
+        return backend
+
+    def close_embedding_backends(self) -> None:
+        """Release every worker backend created during this coordinator's lifetime."""
+        closed: set[int] = set()
+        for backend in self._embedding_backends.values():
+            if id(backend) in closed:
+                continue
+            closed.add(id(backend))
+            close = getattr(backend, "close", None)
+            if callable(close):
+                close()
 
     def _embedding_backend_for_route(
         self, model: str, agent_id: Optional[str]

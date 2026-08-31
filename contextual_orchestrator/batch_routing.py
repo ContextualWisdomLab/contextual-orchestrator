@@ -891,18 +891,23 @@ class ProviderEmbeddingBatchBackend:
 
     def cancel(self, job: BatchJob, *, reason: str) -> Dict[str, Any]:
         """Mark queued/running work cancelled and discard any late provider result."""
-        with self._registry.lock(
-            "provider_embedding_job_states", job.job_id,
-            lease_seconds=self._claim_lease_seconds,
-        ):
-            status = str(self._states.get(job.job_id, "failed"))
-            if status not in {"completed", "failed", "cancelled"}:
-                self._cancellations[job.job_id] = {"reason": reason}
-                self._states[job.job_id] = "cancelled"
-                status = "cancelled"
-                event = self._terminal_events.pop(job.job_id, None)
-                if event is not None:
-                    event.set()
+        if self._registry.durable:
+            cancelled = self._registry.cancel_provider_embedding(job.job_id, reason=reason)
+            status = "cancelled" if cancelled else str(self._states.get(job.job_id, "failed"))
+        else:
+            with self._registry.lock(
+                "provider_embedding_job_states", job.job_id,
+                lease_seconds=self._claim_lease_seconds,
+            ):
+                status = str(self._states.get(job.job_id, "failed"))
+                if status not in {"completed", "failed", "cancelled"}:
+                    self._cancellations[job.job_id] = {"reason": reason}
+                    self._states[job.job_id] = "cancelled"
+                    status = "cancelled"
+        if status == "cancelled":
+            event = self._terminal_events.pop(job.job_id, None)
+            if event is not None:
+                event.set()
         return {
             "job_id": job.job_id,
             "status": status,

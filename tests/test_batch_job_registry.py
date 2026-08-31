@@ -124,6 +124,17 @@ class FakeValkeyClient:
     def eval(self, _script: str, key_count: int, *values: Any) -> int:
         keys = values[:key_count]
         args = values[key_count:]
+        if key_count == 2:
+            states_key, cancellations_key = keys
+            job_id, reserved, queued, running, cancellation, cancelled, retention = args
+            current = self.hashes.get(states_key, {}).get(job_id)
+            if current not in {reserved, queued, running}:
+                return 0
+            self.hset(cancellations_key, job_id, cancellation)
+            self.hset(states_key, job_id, cancelled)
+            for key in keys:
+                self.expire(key, int(retention))
+            return 1
         lock_key, states_key, results_key, usage_key, errors_key = keys
         token, job_id, running, queued, terminal, results, usage, error, retention = args
         if self.strings.get(lock_key) != token:
@@ -327,6 +338,35 @@ def test_terminal_transaction_rejects_a_transferred_claim_without_partial_writes
     assert states["job"] == "running"
     assert "batch_job_registry:provider_embedding_results" not in client.hashes
     assert "batch_job_registry:provider_embedding_usage" not in client.hashes
+
+
+def test_durable_cancellation_wins_atomically_over_terminal_publication() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    release = threading.Event()
+    started = threading.Event()
+
+    def runner(_requests):
+        started.set()
+        assert release.wait(timeout=1)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=1,
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+    assert started.wait(timeout=1)
+    assert backend.cancel(job, reason="caller cancelled")["status"] == "cancelled"
+    release.set()
+
+    assert backend.wait(job, timeout=1)["status"] == "cancelled"
+    assert backend.retrieve(job) == []
+    assert backend.usage(job) == {}
+    backend.close()
 
 
 if __name__ == "__main__":

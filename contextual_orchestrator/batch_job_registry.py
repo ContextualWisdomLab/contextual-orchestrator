@@ -331,6 +331,37 @@ class JobRegistryFactory:
             claim.mark_lost()
             raise ClaimNotAcquired("durable job claim ownership was lost before publication")
 
+    def cancel_provider_embedding(self, job_id: str, *, reason: str) -> bool:
+        """Atomically cancel a durable job unless terminal publication won."""
+        if self._client is None:
+            raise RuntimeError("atomic cancellation requires a durable registry")
+        script = """
+        local current = redis.call('hget', KEYS[1], ARGV[1])
+        if current ~= ARGV[2] and current ~= ARGV[3] and current ~= ARGV[4] then
+            return 0
+        end
+        redis.call('hset', KEYS[2], ARGV[1], ARGV[5])
+        redis.call('hset', KEYS[1], ARGV[1], ARGV[6])
+        redis.call('expire', KEYS[1], ARGV[7])
+        redis.call('expire', KEYS[2], ARGV[7])
+        return 1
+        """
+        return bool(
+            self._client.eval(
+                script,
+                2,
+                "batch_job_registry:provider_embedding_states",
+                "batch_job_registry:provider_embedding_cancellations",
+                job_id,
+                _encode("reserved"),
+                _encode("queued"),
+                _encode("running"),
+                _encode({"reason": reason}),
+                _encode("cancelled"),
+                self._retention_seconds,
+            )
+        )
+
     @property
     def durable(self) -> bool:
         """True when registries survive a process restart."""

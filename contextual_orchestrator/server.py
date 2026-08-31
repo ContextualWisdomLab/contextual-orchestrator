@@ -160,8 +160,12 @@ class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
 
     request_queue_size = socket.SOMAXCONN
     embedding_batch_backend: Any = None
+    embedding_backend_closer: Any = None
 
     def _close_embedding_backend(self) -> None:
+        if callable(self.embedding_backend_closer):
+            self.embedding_backend_closer()
+            return
         close = getattr(self.embedding_batch_backend, "close", None)
         if callable(close):
             close()
@@ -8377,6 +8381,7 @@ def build_server(
 
     server = ResponsiveThreadingHTTPServer((host, port), Handler)
     server.embedding_batch_backend = coordinator.embedding_batch_backend
+    server.embedding_backend_closer = coordinator.close_embedding_backends
     return server
 
 

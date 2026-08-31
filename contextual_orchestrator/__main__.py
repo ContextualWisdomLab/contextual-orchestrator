@@ -456,35 +456,67 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         and get_credential(model.credential_name) is not None
         for model in chat_models
     )
+    failed_configured_gateway_probe_ids: set[str] = set()
     if configured_gateway_probe_required:
-        chat_models = [
-            model
-            for model in chat_models
-            if model.provider_name != "configured_gateway"
-            or _probe_configured_gateway_structured_chat(orchestrator, model)
-        ]
+        probed_chat_models = []
+        for model in chat_models:
+            if (
+                model.provider_name == "configured_gateway"
+                and not _probe_configured_gateway_structured_chat(orchestrator, model)
+            ):
+                failed_configured_gateway_probe_ids.add(agent_id_for(model))
+            else:
+                probed_chat_models.append(model)
+        chat_models = probed_chat_models
+    existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     runtime_models = [
         model
         for model in discovered
         if not model.evidence_only
-        and (model in chat_models or "embedding" in model.capabilities)
+        and (
+            model in chat_models
+            or "embedding" in model.capabilities
+            or (
+                agent_id_for(model) in failed_configured_gateway_probe_ids
+                and agent_id_for(model) in existing_by_id
+            )
+        )
     ]
     discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models}
-    existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     agents = []
     for model in runtime_models:
         existing = existing_by_id.get(agent_id_for(model))
-        routable = is_routable_discovered_model(model) or (
+        spend_routable = is_routable_discovered_model(model) or (
             "embedding" in model.capabilities and model.spend_admitted
         )
+        structured_routable = agent_id_for(model) not in failed_configured_gateway_probe_ids
+        routable = spend_routable and structured_routable
         if existing is None:
             agents.append(replace(agent_from_discovered(model), disabled=not routable))
         elif "discovered" not in existing.tags:
             continue
         elif not routable:
-            tags = (*existing.tags, "spend:blocked")
-            if existing.disabled and "spend:blocked" not in existing.tags:
-                tags = (*tags, "spend:blocked:preserve-disabled")
+            block_markers = {
+                "spend:blocked",
+                "spend:blocked:preserve-disabled",
+                "structured:blocked",
+                "structured:blocked:preserve-disabled",
+            }
+            preserve_disabled = existing.disabled and (
+                not block_markers.intersection(existing.tags)
+                or any(tag.endswith(":preserve-disabled") for tag in existing.tags)
+            )
+            blocked_tags = []
+            if not spend_routable:
+                blocked_tags.append("spend:blocked")
+            if not structured_routable:
+                blocked_tags.append("structured:blocked")
+            tags = (
+                *(tag for tag in existing.tags if tag not in block_markers),
+                *blocked_tags,
+            )
+            if preserve_disabled:
+                tags = (*tags, *(f"{tag}:preserve-disabled" for tag in blocked_tags))
             agents.append(
                 replace(
                     existing,
@@ -492,15 +524,27 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     tags=tuple(dict.fromkeys(tags)),
                 )
             )
-        elif "spend:blocked" in existing.tags:
+        elif any(tag in existing.tags for tag in ("spend:blocked", "structured:blocked")):
             agents.append(
                 replace(
                     existing,
-                    disabled="spend:blocked:preserve-disabled" in existing.tags,
+                    disabled=any(
+                        tag in existing.tags
+                        for tag in (
+                            "spend:blocked:preserve-disabled",
+                            "structured:blocked:preserve-disabled",
+                        )
+                    ),
                     tags=tuple(
                         tag
                         for tag in existing.tags
-                        if tag not in {"spend:blocked", "spend:blocked:preserve-disabled"}
+                        if tag
+                        not in {
+                            "spend:blocked",
+                            "spend:blocked:preserve-disabled",
+                            "structured:blocked",
+                            "structured:blocked:preserve-disabled",
+                        }
                     ),
                 )
             )

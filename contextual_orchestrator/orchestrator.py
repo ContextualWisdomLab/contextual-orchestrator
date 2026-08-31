@@ -287,6 +287,7 @@ class _FastMLSIJudgeAdapter:
     served_agent_id: str | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
+    excluded_agent_ids: set[str] | None = None
 
     @property
     def contextual_orchestrator_contract(self) -> str:
@@ -309,6 +310,7 @@ class _FastMLSIJudgeAdapter:
             role="judge",
             allowed_agent_ids=self.allowed_agent_ids,
             eligibility_role="verifier",
+            excluded_agent_ids=self.excluded_agent_ids,
         )
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
@@ -5592,6 +5594,7 @@ class TaskOrchestrator:
                     verification,
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
+                    excluded_agent_ids=_excluded_agent_ids,
                 )
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
@@ -5604,6 +5607,7 @@ class TaskOrchestrator:
                     verification,
                     free_only=model_name == self.FREE_MODEL,
                     allowed_agent_ids=judge_agent_ids,
+                    excluded_agent_ids=_excluded_agent_ids,
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
@@ -6947,6 +6951,7 @@ class TaskOrchestrator:
         *,
         free_only: bool = False,
         allowed_agent_ids: set[str] | None = None,
+        excluded_agent_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
@@ -6978,6 +6983,7 @@ class TaskOrchestrator:
                 agent
                 for agent in self._ranked_agents(task, "verifier", free_only=free_only)
                 if allowed_agent_ids is None or agent.id in allowed_agent_ids
+                if excluded_agent_ids is None or agent.id not in excluded_agent_ids
             )
             # The judge is one bounded provider call.  Do not pass the
             # planning strategy ("template"/"generated") as an
@@ -6988,6 +6994,7 @@ class TaskOrchestrator:
                 judge.id,
                 mode="route",
                 allowed_agent_ids=allowed_agent_ids,
+                excluded_agent_ids=excluded_agent_ids,
             )
             fast_judge = components.judge_cls(
                 judge_adapter,
