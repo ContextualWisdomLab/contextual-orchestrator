@@ -521,6 +521,19 @@ def test_pin_openrouter_zdr_infers_provider_from_base_url_when_name_is_empty() -
     assert pinned["provider"] == {"zdr": True}
 
 
+def test_pin_openrouter_zdr_overrides_mistyped_provider_name_from_exact_host() -> None:
+    """The actual OpenRouter destination wins over unvalidated provider text."""
+    agent = _openrouter_agent(provider_name="open_router")
+    payload = {"model": agent.model, "messages": []}
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        pinned = _pin_openrouter_zdr(agent, payload)
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+
+    assert pinned["provider"] == {"zdr": True}
+
+
 def test_pin_openrouter_zdr_adds_provider_zdr_flag() -> None:
     """A zdr_only request to an OpenRouter agent gets OpenRouter's own enforcement pin."""
     agent = _openrouter_agent()

@@ -259,17 +259,16 @@ def _resolved_openrouter_provider(agent: ModelAgent) -> str:
     scope while still routing bytes to OpenRouter (base_url decides where the
     request goes; this function only decides whether the pin is applied) —
     a silent ZDR-policy bypass, not a crash (CodeRabbit review on #953,
-    discussion_r3898471887). Falling back to the ``base_url`` hostname when
-    ``provider_name`` is empty mirrors the same normalization already applied
-    in ``cost_router.py``'s embedding-target resolver, so every call site that
-    funnels through this shared choke point (chat, streaming, raw, binary
-    media, and non-embedding batch JSONL) gets the same protection the
-    embedding batch path already has.
+    discussion_r3898471887). Treating the exact OpenRouter hostname as
+    authoritative also covers a nonempty typo in that free-text field. Every
+    call site that funnels through this shared choke point (chat, streaming,
+    raw, binary media, and non-embedding batch JSONL) therefore gets the same
+    protection the embedding batch path already has.
     """
-    if agent.provider_name:
-        return agent.provider_name
     host = urlparse(agent.base_url).hostname or ""
-    return "openrouter" if host == "openrouter.ai" else host
+    if host == "openrouter.ai":
+        return "openrouter"
+    return agent.provider_name or host
 
 
 def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str, Any]:
