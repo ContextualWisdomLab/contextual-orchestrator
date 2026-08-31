@@ -73,6 +73,7 @@ class SqliteRoutingObservationStore:
 
     _TABLE_NAME = "routing_observations"
     _REGISTRATION_LEASE_WINDOW_MULTIPLIER = 2
+    _HEARTBEAT_INTERVAL_MAX_SECONDS = 30.0
     _CREATE_TABLE_SQL = (
         "CREATE TABLE IF NOT EXISTS routing_observations ("
         "observation_id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -125,9 +126,11 @@ class SqliteRoutingObservationStore:
         self._lock = threading.Lock()
         self._registration_id = uuid.uuid4().hex
         self._closed = False
+        self._heartbeat_stop = threading.Event()
         with self._lock:
             connection = self._connect()
             try:
+                connection.execute("BEGIN IMMEDIATE")
                 connection.execute(self._CREATE_TABLE_SQL)
                 connection.execute(self._CREATE_METADATA_TABLE_SQL)
                 connection.execute(self._CREATE_REGISTRATIONS_TABLE_SQL)
@@ -139,6 +142,12 @@ class SqliteRoutingObservationStore:
                 connection.commit()
             finally:
                 connection.close()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_registration,
+            name=f"routing-observation-heartbeat-{self._registration_id[:8]}",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
 
     @property
     def window_seconds(self) -> int:
@@ -220,6 +229,25 @@ class SqliteRoutingObservationStore:
             ),
         )
         return current
+
+    def _heartbeat_registration(self) -> None:
+        """Renew this live store's lease independently of routing traffic."""
+        interval = min(
+            float(self._window_seconds), self._HEARTBEAT_INTERVAL_MAX_SECONDS
+        )
+        while not self._heartbeat_stop.wait(interval):
+            with self._lock:
+                if self._closed:
+                    return
+                connection = self._connect()
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                    self._refresh_registration(connection)
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                finally:
+                    connection.close()
 
     def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
         """Return the physical prune boundary from the shared database-wide window."""
@@ -397,6 +425,8 @@ class SqliteRoutingObservationStore:
 
     def close(self) -> None:
         """Release this store's retention-window registration."""
+        self._heartbeat_stop.set()
+        self._heartbeat_thread.join()
         with self._lock:
             if self._closed:
                 return

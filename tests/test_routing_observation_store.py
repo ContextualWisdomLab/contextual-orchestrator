@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 
 import pytest
 
@@ -118,6 +119,47 @@ def test_store_migrates_prelease_registration_schema(tmp_path) -> None:
 
     assert "lease_expires_at" in columns
     assert registrations == [(store._registration_id,)]
+
+
+def test_concurrent_stores_atomically_migrate_prelease_registration_schema(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE routing_observation_registrations ("
+            "registration_id TEXT PRIMARY KEY, window_seconds INTEGER NOT NULL)"
+        )
+
+    ready = threading.Barrier(2)
+    stores: list[SqliteRoutingObservationStore] = []
+    errors: list[Exception] = []
+
+    def build() -> None:
+        try:
+            ready.wait(timeout=1.0)
+            stores.append(SqliteRoutingObservationStore(path, 60))
+        except Exception as exc:  # pragma: no cover - test assertion path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2.0)
+
+    try:
+        assert not errors
+        assert all(not thread.is_alive() for thread in threads)
+        with sqlite3.connect(path) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(routing_observation_registrations)"
+                )
+            }
+        assert "lease_expires_at" in columns
+    finally:
+        for store in stores:
+            store.close()
 
 
 def test_store_deletes_only_requested_members(tmp_path) -> None:
@@ -755,6 +797,62 @@ def test_crashed_long_window_registration_expires_and_no_longer_controls_retenti
 
     assert registrations == [(short_window._registration_id,)]
     assert observations == [("member_b",)]
+
+
+def test_idle_live_long_window_heartbeat_preserves_replay_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "routing.sqlite"
+    clock = _Clock(100.0)
+    monkeypatch.setattr(
+        SqliteRoutingObservationStore, "_HEARTBEAT_INTERVAL_MAX_SECONDS", 0.01
+    )
+    long_window = SqliteRoutingObservationStore(path, 60, clock=clock)
+    short_window = SqliteRoutingObservationStore(path, 10, clock=clock)
+    try:
+        long_window.append(
+            "transport",
+            "member_a",
+            context_key="member_a:v1",
+            observed_at=170.0,
+            success=False,
+        )
+
+        # The long-window gateway receives no more routing traffic, but its
+        # independent heartbeat must keep its retention registration live.
+        clock.value = 221.0
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            with sqlite3.connect(path) as connection:
+                lease = connection.execute(
+                    "SELECT lease_expires_at FROM routing_observation_registrations "
+                    "WHERE registration_id = ?",
+                    (long_window._registration_id,),
+                ).fetchone()
+            if lease is not None and lease[0] > clock.value:
+                break
+            time.sleep(0.01)
+        else:  # pragma: no cover - assertion diagnostic
+            raise AssertionError("idle store heartbeat did not renew its lease")
+
+        short_window.append(
+            "transport",
+            "member_b",
+            context_key="member_b:v1",
+            observed_at=clock(),
+            success=False,
+        )
+
+        assert [
+            row.member_id
+            for row in long_window.load(
+                "transport",
+                {"member_a": "member_a:v1", "member_b": "member_b:v1"},
+            )
+        ] == ["member_a", "member_b"]
+    finally:
+        long_window.close()
+        short_window.close()
 
 
 def test_store_prunes_only_rows_older_than_database_retention_window(tmp_path) -> None:
