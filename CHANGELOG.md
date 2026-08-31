@@ -48,17 +48,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   env-var default (default unchanged: `WARNING`), and new instrumentation at
   the provider retry loop, per-agent circuit breaker, evidence-based ranking
   (`_ranked_agents`/`_select_agent`), model discovery, and one body-free
-  per-request summary line in `server.py`. Three-layer redaction (explicit
-  `redact_text`/`redact_value` call sites, a new key-name-aware
-  `debug_logging.redact_credential_shaped_keys` pass over the DEBUG
-  response-body summary that catches a secret nested under a credential-shaped
-  JSON key regardless of its value's shape, and a handler-level filter safety
-  net) keeps credential-shaped content out of DEBUG output; raw prompt/answer
-  text is never logged, only lengths and identifiers. The INFO per-request
-  summary strips any query string before logging, and a `--log-level`/
-  `--verbose`/`--debug` flag placed before a subcommand (`register-credential`,
-  `discover-models`, `check-fast-mlsirm`) no longer bypasses subcommand
-  dispatch.
+  per-request summary line in `server.py`. The DEBUG response-body summary
+  logs only an allowlisted metadata shape (`debug_logging.response_metadata_for_log`:
+  whether the response is error-shaped, the model name, the choice count, and
+  numeric usage counts) rather than the payload itself, so ordinary response
+  text (message content, tool-call arguments, an error message) never reaches
+  DEBUG output — `redact_text`/`redact_value`'s in-string value-pattern
+  matching and the additional key-name-aware
+  `debug_logging.redact_credential_shaped_keys` pass (catches a secret nested
+  under a credential-shaped JSON key regardless of its value's shape) are
+  applied on top of that allowlist, defense-in-depth, plus a handler-level
+  filter safety net. Raw prompt/answer text is never logged, only lengths and
+  identifiers. The INFO per-request summary strips any query string before
+  logging and is skipped entirely for a keep-alive connection's closing call
+  that parsed no new request (previously logged the prior request a second
+  time, statuslessly). A `--log-level`/`--verbose`/`--debug` flag placed
+  before a subcommand (`register-credential`, `discover-models`,
+  `check-fast-mlsirm`) no longer bypasses subcommand dispatch. The retry
+  loop's `provider_exhausted` WARNING now fires only when the retry budget
+  was actually used up; an immediate non-transient (permanent) rejection
+  logs the distinct `provider_rejected_permanent` instead.
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
   `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
   declared `ProviderModelSource.models_dev_provider_id` field, and hoisted

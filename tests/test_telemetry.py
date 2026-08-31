@@ -28,6 +28,30 @@ from contextual_orchestrator.telemetry import (
 )
 
 
+def _wait_for_caplog(caplog, predicate, *, timeout: float = 1.0, interval: float = 0.02) -> None:
+    """Poll ``predicate(caplog.text)`` until true or ``timeout`` elapses.
+
+    The per-request INFO summary is logged by a real server thread strictly
+    *after* it has already flushed the HTTP response back to the client
+    (`server.py`'s ``handle_one_request`` logs in its ``finally`` block,
+    which runs after ``super().handle_one_request()`` -- and therefore the
+    response write -- completes). A test that asserts on this log line
+    immediately after its client call returns has no guarantee the server
+    thread has reached that ``finally`` block yet; bounded polling closes
+    that race deterministically and quickly in the common case, rather than
+    a fixed sleep that is either too short (still flaky) or wastefully long.
+    Call this while the relevant ``caplog.at_level(...)`` scope is still
+    open, so a late record is not filtered out by the time it arrives.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while not predicate(caplog.text):
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(interval)
+
+
 def test_session_id_accepts_lineageweave_header_and_metadata():
     """The two compatible transport forms identify the same processing session."""
     assert (
@@ -527,6 +551,7 @@ def test_response_payload_debug_log_is_silent_without_debug(caplog):
 def test_per_request_info_summary_reports_method_path_and_status(caplog):
     """One body-free INFO line per completed request, using method/path/status/latency."""
     import threading
+    import time
     import urllib.request
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
@@ -537,10 +562,18 @@ def test_per_request_info_summary_reports_method_path_and_status(caplog):
         with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as response:
                 assert response.status == 200
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+        # ThreadingHTTPServer's per-connection handler threads are daemon
+        # threads server_close() does not wait for; a brief settle avoids a
+        # straggler's own _log_request_summary call landing inside a *later*
+        # test's caplog window instead of being filtered out here at the
+        # default WARNING level once this test's own caplog.at_level scope
+        # has already exited.
+        time.sleep(0.2)
 
     assert "http_request" in caplog.text
     assert "method=GET" in caplog.text
@@ -558,6 +591,7 @@ def test_per_request_info_summary_never_includes_query_string(caplog):
     (and anything in it) must never reach this log line.
     """
     import threading
+    import time
     import urllib.request
 
     fake_token = "sk-FAKEFAKEFAKEFAKEFAKEQUERYSTRING123"
@@ -571,10 +605,12 @@ def test_per_request_info_summary_never_includes_query_string(caplog):
                 f"http://127.0.0.1:{port}/healthz?api_key={fake_token}", timeout=5
             ) as response:
                 assert response.status == 200
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
 
     assert "http_request" in caplog.text
     assert "path=/healthz" in caplog.text
@@ -608,12 +644,14 @@ def test_keep_alive_close_does_not_log_phantom_request(caplog):
             response = connection.getresponse()
             assert response.status == 200
             response.read()
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
             connection.close()  # keep-alive connection closed with no second request
             time_module.sleep(0.3)  # let the server's connection thread observe the close
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+        time_module.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
 
     assert caplog.text.count("http_request") == 1
     assert "path=/healthz" in caplog.text
@@ -621,6 +659,7 @@ def test_keep_alive_close_does_not_log_phantom_request(caplog):
 
 def test_per_request_info_summary_absent_below_info(caplog):
     import threading
+    import time
     import urllib.request
 
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
@@ -635,6 +674,7 @@ def test_per_request_info_summary_absent_below_info(caplog):
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
 
     assert "http_request" not in caplog.text
 

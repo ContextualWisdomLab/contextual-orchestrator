@@ -58,7 +58,10 @@ New instrumentation lands at the previously silent decision points: the
 provider retry loop (`_send_with_retry`/`_send_raw_with_retry`: per-attempt,
 backoff, and a WARNING-level `provider_exhausted` line that fires without
 `--verbose`, since a call that used its full retry budget is an actionable
-operational event); the per-agent circuit breaker (`_record_failure` logs a
+operational event -- an immediate non-transient failure that never spent any
+retry budget logs the distinct `provider_rejected_permanent` instead, chosen
+by whether the loop broke from reaching the retry limit or from an early
+non-transient break); the per-agent circuit breaker (`_record_failure` logs a
 DEBUG line on every increment and a WARNING `circuit_opened` line only on the
 edge transition into the open state; `_record_success` logs DEBUG only when
 there was real breaker state to clear, to avoid a firehose on every healthy
@@ -69,37 +72,45 @@ the account by provider name only -- never the KV credential name or value)
 and one `discovery_complete` INFO summary. `server.py` gains one body-free
 per-request INFO summary (method, bare path with any query string stripped,
 status, latency, and the ADR 0122 session correlation hash -- factored into
-a new `telemetry.session_id_hash()` shared by both surfaces) and a DEBUG
-response-body summary that reuses the exact `safe_payload` object
-`_response_payload` already computes via `redact_value`, never a second,
-separately-redacted (or unredacted) copy, plus one additional
-key-name-aware redaction pass applied only to what gets logged (see below).
+a new `telemetry.session_id_hash()` shared by both surfaces; skipped
+entirely on a keep-alive connection's closing call, which parses no new
+request) and a DEBUG response-body summary that logs only an allowlisted
+metadata shape, never the payload itself (see below).
 
-Redaction is three layers: every new call site that logs caller- or
-provider-derived string content wraps it in the existing, unmodified
-`orchestrator.redact_text`/`redact_value` before logging (e.g.
-`redact_text(str(exc))[:500]` in the retry loop) -- but `redact_text`/
-`redact_value` only pattern-match a secret's in-string *value* shape (e.g.
-`api_key=...` or `Bearer ...`) and never inspect the JSON key a string is
-nested under, so a response field like `{"private_key": "..."}` or
-`{"auth": "sk-live..."}` would otherwise still leak verbatim. The `server.py`
-DEBUG response-body summary therefore also runs the already-redacted
-`safe_payload` through a second, additional pass,
-`debug_logging.redact_credential_shaped_keys`, which recursively replaces
-any dict value under a credential-shaped key name (`key`, `api_key`, `token`,
+Redaction is layered, and for the response-body summary specifically an
+allowlist replaces "log the (redacted) payload" outright: every call site
+that logs caller- or provider-derived string content wraps it in the
+existing, unmodified `orchestrator.redact_text`/`redact_value` before
+logging (e.g. `redact_text(str(exc))[:500]` in the retry loop) -- but
+`redact_text`/`redact_value` only pattern-match a secret's in-string *value*
+shape (e.g. `api_key=...` or `Bearer ...`) and never inspect the JSON key a
+string is nested under, nor do they (nor should they) touch *ordinary*
+response text at all. An earlier revision of this design logged the entire
+already-redacted response payload at DEBUG, plus an additional
+`debug_logging.redact_credential_shaped_keys` pass that replaces any dict
+value under a credential-shaped key name (`key`, `api_key`, `token`,
 `secret`, `password`, `credential`, `auth`, `private_key`, `pem`, and
-similar) with `[REDACTED]` regardless of the value's own shape -- a
-structural, key-name-based net for exactly the blind spot the
-pattern-matching layer cannot see. This log-only pass never changes what
-`_response_payload` returns to actual HTTP callers. Finally,
-`configure_logging`'s optional `redactor` attaches a `logging.Filter` to the
-handler `basicConfig` installs -- deliberately the handler, not the Logger
-object, since a Logger-level filter does not run on records propagating up
-from a child logger -- as a safety net for a call site that forgets either
-of the first two passes. Raw prompt or message text is never logged at any
-level, only lengths and identifiers: `redact_text` is documented to
-deliberately leave PII alone, so this design does not lean on it to scrub
-content it was never meant to scrub.
+similar) with `[REDACTED]` regardless of the value's own shape; independent
+adversarial review (CodeRabbit, CWE-532) found that this still let ordinary,
+non-credential response content -- `choices[].message.content`, tool-call
+arguments, an `error.message` that can reflect caller-supplied input --
+reach DEBUG output verbatim, which can carry PII or business-sensitive text
+that has nothing to do with secrets. `debug_logging.response_metadata_for_log`
+now extracts a small, fixed allowlist instead -- `has_error`, `model`,
+`choice_count`, and numeric-only `usage` counts -- and that allowlisted dict,
+not the payload, is what `redact_credential_shaped_keys` runs over
+(defense-in-depth, in case a future allowlist field ever collides with a
+credential-shaped key name) and what reaches the log line. This log-only
+summary never changes what `_response_payload` returns to actual HTTP
+callers. Finally, `configure_logging`'s optional `redactor` attaches a
+`logging.Filter` to the handler `basicConfig` installs -- deliberately the
+handler, not the Logger object, since a Logger-level filter does not run on
+records propagating up from a child logger -- as a safety net for a call
+site that forgets. Raw prompt or message text is never logged at any level,
+only lengths, identifiers, and (for the response-body summary specifically)
+allowlisted shape metadata: `redact_text` is documented to deliberately
+leave PII alone, so this design does not lean on it to scrub content it was
+never meant to scrub.
 
 ## Consequences
 
@@ -107,11 +118,12 @@ An operator can now answer "why did this request retry", "why did the
 circuit breaker open on this agent", and "why did `orchestrator/free` pick
 this model" from `--log-level DEBUG` / `--verbose` output, and get a
 body-free per-request breadcrumb trail at `--log-level INFO`, without
-touching OpenTelemetry. The three-layer redaction means a call site that
-forgets value-pattern redaction, or that logs a secret nested under an
-unremarkable-looking key, is still caught by one of the other two layers,
-at the cost of a little extra work per already-redacted DEBUG line when a
-redactor is configured. Default (`WARNING`) behavior is unchanged: the new
+touching OpenTelemetry. Layering value-pattern redaction, key-name-based
+redaction, an allowlist for the one call site that would otherwise log
+arbitrary content, and a handler-level safety net means a call site that
+forgets one layer is still caught by one of the others, at the cost of a
+little extra work per already-redacted DEBUG line when a redactor is
+configured. Default (`WARNING`) behavior is unchanged: the new
 DEBUG/INFO lines are opt-in, and the two new WARNING lines
 (`circuit_opened`, `provider_exhausted`) are the only default-visible
 additions, both operator-actionable rather than internal reasoning.
