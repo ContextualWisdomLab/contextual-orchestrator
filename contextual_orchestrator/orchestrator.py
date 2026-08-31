@@ -97,10 +97,6 @@ _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
 )
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 _DNS_RESOLVER_WORKERS = 4
-_DNS_RESOLVER = ThreadPoolExecutor(
-    max_workers=_DNS_RESOLVER_WORKERS,
-    thread_name_prefix="provider_dns",
-)
 _DNS_RESOLVER_CAPACITY = threading.BoundedSemaphore(_DNS_RESOLVER_WORKERS)
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
@@ -1816,11 +1812,30 @@ class ModelClient:
                 remaining = max(0.0, deadline - time.monotonic())
                 if not _DNS_RESOLVER_CAPACITY.acquire(timeout=remaining):
                     raise TimeoutError("provider DNS resolver capacity deadline exceeded")
-                future = _DNS_RESOLVER.submit(
-                    socket.getaddrinfo, hostname, port, type=socket.SOCK_STREAM
-                )
-                future.add_done_callback(lambda _future: _DNS_RESOLVER_CAPACITY.release())
-                addresses = future.result(timeout=max(0.0, deadline - time.monotonic()))
+                completed = threading.Event()
+                outcome: dict[str, Any] = {}
+
+                def resolve() -> None:
+                    try:
+                        outcome["addresses"] = socket.getaddrinfo(
+                            hostname, port, type=socket.SOCK_STREAM
+                        )
+                    except BaseException as exc:  # noqa: BLE001 - re-raise in caller
+                        outcome["error"] = exc
+                    finally:
+                        _DNS_RESOLVER_CAPACITY.release()
+                        completed.set()
+
+                threading.Thread(
+                    target=resolve,
+                    name="provider_dns",
+                    daemon=True,
+                ).start()
+                if not completed.wait(timeout=max(0.0, deadline - time.monotonic())):
+                    raise TimeoutError("provider DNS resolution deadline exceeded")
+                if error := outcome.get("error"):
+                    raise error
+                addresses = outcome["addresses"]
         except socket.gaierror as exc:
             raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
         except TimeoutError:

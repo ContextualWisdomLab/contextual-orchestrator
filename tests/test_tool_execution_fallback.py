@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -1408,6 +1409,24 @@ def test_provider_dns_resolution_obeys_route_deadline(
     with client.request_settings(deadline=time.monotonic() + 0.01):
         with pytest.raises(TimeoutError, match="DNS resolution deadline"):
             client._resolve_addresses("slow.example", 443)
+
+
+def test_timed_out_dns_resolution_does_not_block_process_shutdown() -> None:
+    script = """
+import socket
+import threading
+import time
+from contextual_orchestrator.orchestrator import ModelClient
+
+socket.getaddrinfo = lambda *_args, **_kwargs: threading.Event().wait()
+client = ModelClient(timeout=1)
+try:
+    with client.request_settings(deadline=time.monotonic() + 0.01):
+        client._resolve_addresses("hung.example", 443)
+except TimeoutError:
+    pass
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=2)
 
 
 if __name__ == "__main__":
