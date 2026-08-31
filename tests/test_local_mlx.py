@@ -18,6 +18,8 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator, load_agents  #
 from contextual_orchestrator.credentials import NotConfigured  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
+    _ProviderCancellation,
+    _ProviderRequestCancelled,
     _chat_to_responses_payload,
     _is_local_provider_url,
     _responses_to_chat_payload,
@@ -731,7 +733,7 @@ def test_cancellable_provider_call_closes_blocked_transport_without_generation_t
     def run():
         try:
             call()
-        except OSError as exc:
+        except _ProviderRequestCancelled as exc:
             errors.append(exc)
 
     with patch(
@@ -747,6 +749,18 @@ def test_cancellable_provider_call_closes_blocked_transport_without_generation_t
     assert not thread.is_alive()
     assert errors
     assert connection.closed
+
+
+def test_cancellable_provider_call_ignores_connection_close_failure() -> None:
+    class Connection:
+        sock = None
+
+        def close(self):
+            raise OSError("close failed")
+
+    scope = _ProviderCancellation()
+    scope.register(Connection())
+    scope.cancel()
 
 
 def test_validated_connect_binds_source_address() -> None:

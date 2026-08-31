@@ -18,6 +18,7 @@ from contextual_orchestrator.credentials import (
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     ProviderModelSource,
+    agent_id_for,
 )
 from contextual_orchestrator.provider_bootstrap import (
     PROVIDER_CREDENTIAL_NAMES,
@@ -223,7 +224,7 @@ def test_runtime_skips_sources_without_registered_credential() -> None:
         )
         # The unregistered source contributes no model and no refresh evidence.
         assert report.catalog_model_count == 1
-        assert report.selected_agent_ids == ("openai_gpt_live",)
+        assert report.selected_agent_ids == (agent_id_for(_model(openai, "gpt-live")),)
         assert report.providers_with_errors == ()
         assert report.catalog_refresh_failure_count == 0
         refreshes = report.as_dict()["catalog_refreshes"]

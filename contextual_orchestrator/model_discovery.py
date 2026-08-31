@@ -1414,6 +1414,11 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
     return f"{discovered.provider_name}_{_slug(discovered.model_id)}_{fingerprint}"
 
 
+def legacy_agent_id_for(discovered: DiscoveredModel) -> str:
+    """Return the pre-fingerprint identifier used by durable discovered agents."""
+    return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
+
+
 def model_group_name_for(discovered: DiscoveredModel) -> str:
     """Use the provider-declared exact model identity as the logical group."""
     fingerprint = hashlib.sha256(discovered.model_id.encode("utf-8")).hexdigest()[:10]

@@ -124,14 +124,19 @@ class _ProviderCancellation:
         self._cancelled = False
 
     def register(self, connection: http.client.HTTPConnection) -> None:
+        """Register a live connection or reject it after cancellation."""
         with self._lock:
             if not self._cancelled:
                 self._connections.add(connection)
                 return
-        connection.close()
-        raise RuntimeError("provider request was cancelled")
+        try:
+            connection.close()
+        except Exception:
+            pass
+        raise _ProviderRequestCancelled("provider request was cancelled")
 
     def cancel(self) -> None:
+        """Best-effort close every registered connection exactly once."""
         with self._lock:
             self._cancelled = True
             connections = tuple(self._connections)
@@ -141,17 +146,29 @@ class _ProviderCancellation:
             if sock is not None:
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
+                except Exception:
                     pass
-            connection.close()
+            try:
+                connection.close()
+            except Exception:
+                pass
 
     def run(self, call: Callable[[], Any]) -> Any:
+        """Run one call and translate transport fallout from cancellation."""
         token = _PROVIDER_CANCELLATION.set(self)
         try:
             return call()
+        except BaseException as exc:
+            if self._cancelled:
+                raise _ProviderRequestCancelled("provider request was cancelled") from exc
+            raise
         finally:
             _PROVIDER_CANCELLATION.reset(token)
             self.cancel()
+
+
+class _ProviderRequestCancelled(RuntimeError):
+    """A provider attempt stopped because its equivalent race already completed."""
 
 
 _PROVIDER_CANCELLATION: ContextVar[_ProviderCancellation | None] = ContextVar(
@@ -5204,6 +5221,10 @@ class TaskOrchestrator:
         """
         existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
         legacy_discovered = {
+            (agent.provider_name, agent.model, agent.id): index
+            for index, agent in enumerate(self.candidates)
+        }
+        discovered_by_identity = {
             (agent.provider_name, agent.credential_name, agent.model): index
             for index, agent in enumerate(self.candidates)
             if "discovered" in agent.tags
@@ -5216,9 +5237,19 @@ class TaskOrchestrator:
             index = existing_by_id.get(agent.id)
             if index is None:
                 index = legacy_discovered.get(
-                    (agent.provider_name, agent.credential_name, agent.model)
+                    (
+                        agent.provider_name,
+                        agent.model,
+                        re.sub(r"[^a-z0-9]+", "_", f"{agent.provider_name}_{agent.model}".casefold()).strip("_"),
+                    )
                 )
+                if index is None:
+                    index = discovered_by_identity.get(
+                        (agent.provider_name, agent.credential_name, agent.model)
+                    )
                 if index is not None:
+                    if "discovered" not in updated_candidates[index].tags:
+                        continue
                     agent = replace(agent, id=updated_candidates[index].id)
             if index is None:
                 existing_by_id[agent.id] = len(updated_candidates)
@@ -6363,7 +6394,11 @@ class TaskOrchestrator:
             {
                 "capability": capability,
                 "endpoint_id": endpoint_id,
-                "validation_outcome": "provider_error" if error is not None else "completed",
+                "validation_outcome": (
+                    "cancelled"
+                    if isinstance(error, _ProviderRequestCancelled)
+                    else "provider_error" if error is not None else "completed"
+                ),
                 "usage": usage,
                 "duplicate_cost_evidence": (
                     "provider_reported_usage" if usage is not None
@@ -6382,7 +6417,11 @@ class TaskOrchestrator:
     ) -> None:
         """Share race completion evidence with normal stability/circuit ledgers."""
         self._record_endpoint_attempt(endpoint_id, value, error, capability=capability)
-        if error is not None and not _is_request_too_large_error(error):
+        if (
+            error is not None
+            and not isinstance(error, _ProviderRequestCancelled)
+            and not _is_request_too_large_error(error)
+        ):
             self._group_router.observe_failure(endpoint_id)
             self._record_failure(endpoint_id)
 

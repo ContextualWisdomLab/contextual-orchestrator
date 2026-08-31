@@ -13,6 +13,7 @@ from contextual_orchestrator.endpoint_race import (
     EndpointEquivalenceContract,
     race_first_valid,
 )
+from contextual_orchestrator.orchestrator import _ProviderRequestCancelled
 
 
 def contract(**changes: object) -> EndpointEquivalenceContract:
@@ -124,6 +125,51 @@ def test_winner_requests_running_loser_cancellation_exactly_once() -> None:
     )
 
     assert calls == 1
+
+
+def test_throwing_loser_cancellation_cannot_discard_valid_winner() -> None:
+    started = threading.Event()
+
+    def blocked() -> str:
+        started.set()
+        time.sleep(0.1)
+        return "late"
+
+    outcome = race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(cancellation_supported=True), blocked,
+                cancellation_supported=True,
+                cancel=lambda: (_ for _ in ()).throw(OSError("close failed")),
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(cancellation_supported=True),
+                lambda: started.wait(1) and "winner",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+
+    assert outcome.value == "winner"
+    assert outcome.cancellation_outcomes == (("slow_endpoint", "safe_drain"),)
+
+
+def test_cancelled_race_attempt_does_not_penalize_provider() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("cancelled_endpoint", "shared/model")])
+
+    orchestrator._record_race_attempt(
+        "cancelled_endpoint",
+        None,
+        _ProviderRequestCancelled("cancelled"),
+        capability="text",
+    )
+
+    assert orchestrator._circuit == {}
+    assert orchestrator._group_router.member_report("cancelled_endpoint")["failure_count"] == 0
+    event = orchestrator.list_recent_audit_events()[-1]
+    assert event["event_detail"]["validation_outcome"] == "cancelled"
 
 
 def test_already_completed_loser_is_reported_as_completed(monkeypatch) -> None:

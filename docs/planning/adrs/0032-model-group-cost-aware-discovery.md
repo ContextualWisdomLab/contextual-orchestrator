@@ -116,8 +116,10 @@ sequenceDiagram
 
 ## Data, web, and operational boundaries
 
-Provider model-list, OpenRouter ZDR/policy/credit metadata, DNS/TLS setup, and
-model inference have no default wall-clock timeout. A slow catalog or reasoning
+Provider model-list and OpenRouter ZDR/policy/credit metadata have no default
+wall-clock timeout. DNS resolution is not governed by the socket timeout; TCP/TLS
+establishment retains its separate 30-second default bound. Model inference has
+no default generation timeout. A slow catalog or reasoning
 model is not evidence that the route is unavailable; cancellation is an
 explicit operator or superseded-request action. Retry counts may remain finite
 after an explicit transport failure, but elapsed time alone must not discard a

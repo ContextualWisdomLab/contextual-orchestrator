@@ -2421,8 +2421,8 @@ because this baseline commit necessarily advances it.
   observed Bytez HTTP 500 remains upstream/account evidence, not proof that the
   provider should be silently excluded.
 
-Verification on implementation parent `a36770179a695b3825a0fc2ca45eace09b5e3b8f`:
-local full suite `2859 passed, 1 skipped`;
+Verification on the current PR working tree:
+local full suite `2873 passed, 1 skipped`;
 hosted Full unit/contract, Hypothesis, Atheris, CodeQL, dependency review,
 Python supply chain, OSV, Trivy, Semgrep, and OpenCode coverage checks passed.
 Devin and CodeRabbit reviews passed. Noema failed only because the central

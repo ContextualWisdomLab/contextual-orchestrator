@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.__main__ import main  # noqa: E402
+from contextual_orchestrator.model_discovery import DiscoveredModel, agent_id_for  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     get_credential,
@@ -178,7 +179,7 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
     assert report["discovered_count"] == 1
     assert report["models"] == [
         {
-            "provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5",
+                "provider": "openai", "model": "gpt-5.5", "agent_id": agent_id_for(DiscoveredModel("openai", "gpt-5.5", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer")),
             "is_free": False,
             "data_privacy": {
                 "zero_data_retention": "unknown",
@@ -323,7 +324,7 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
         set_backend(None)
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
-    assert any(agent.id == "openai_gpt_5_5" for agent in reloaded.candidates)
+    assert any(agent.model == "gpt-5.5" for agent in reloaded.candidates)
 
 
 def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> None:
@@ -412,11 +413,13 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
         set_backend(None)
 
     report = json.loads(stdout.getvalue())
-    assert report["enabled_agent_ids"] == ["openrouter_cheap_model"]
+    assert report["enabled_agent_ids"] == [
+        agent_id_for(DiscoveredModel("openrouter", "cheap-model", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "Bearer"))
+    ]
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
-    assert by_id["openrouter_cheap_model"].disabled is False
+    assert by_id[report["enabled_agent_ids"][0]].disabled is False
 
 
 def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> None:
@@ -456,9 +459,12 @@ def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> N
 
     report = json.loads(stdout.getvalue())
     assert report["enabled_agent_ids"] == [
-        "openrouter_router_model",
-        "nvidia_nim_nim_model",
-        "openai_openai_model",
+        agent_id_for(DiscoveredModel(provider, model, credential, url, "Bearer"))
+        for provider, model, credential, url in (
+            ("openrouter", "router-model", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+            ("nvidia_nim", "nim-model", "NVIDIA_NIM_API_KEY", "https://integrate.api.nvidia.com/v1"),
+            ("openai", "openai-model", "OPENAI_API_KEY", "https://api.openai.com/v1"),
+        )
     ]
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     enabled = {agent.id for agent in reloaded.candidates if not agent.disabled}

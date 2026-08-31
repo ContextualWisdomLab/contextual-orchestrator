@@ -5,7 +5,7 @@ import os
 from unittest.mock import patch
 
 from contextual_orchestrator.__main__ import _auto_discover_runtime_agents
-from contextual_orchestrator.model_discovery import DiscoveredModel
+from contextual_orchestrator.model_discovery import DiscoveredModel, agent_id_for
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
 
@@ -135,9 +135,9 @@ def test_auto_discovery_activates_bare_chat_but_not_embedding_ids(monkeypatch) -
         [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
     )
     result = _auto_discover_runtime_agents(orchestrator)
-    assert result["added"] == ["configured_gateway_gpt_chat_7x"]
+    assert result["added"] == [agent_id_for(bare_chat)]
     agents = orchestrator.agents
-    assert any(agent.id == "configured_gateway_gpt_chat_7x" for agent in agents)
+    assert any(agent.id == agent_id_for(bare_chat) for agent in agents)
     assert all(agent.model != "text-embedding-5" for agent in agents)
 
 
@@ -162,7 +162,7 @@ def test_auto_discovery_activates_provider_catalog_rows(monkeypatch) -> None:
     result = _auto_discover_runtime_agents(orchestrator)
 
     assert result == {
-        "added": ["nvidia_nim_provider_nim_chat"],
+        "added": [agent_id_for(provider_row)],
         "updated": ["bootstrap_agent"],
     }
     agent = orchestrator.candidates[-1]
@@ -211,7 +211,7 @@ def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> 
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result["added"] == ["openai_gpt_5_4"]
+    assert result["added"] == [agent_id_for(discovered)]
     assert orchestrator.agents[-1].model == discovered.model_id
 
 
@@ -238,7 +238,7 @@ def test_auto_discovery_removes_the_configured_gateway_placeholder(monkeypatch) 
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result["added"] == ["configured_gateway_chat_capable_model"]
+    assert result["added"] == [agent_id_for(discovered)]
     assert [agent.model for agent in orchestrator.agents] == ["chat-capable-model"]
     assert placeholder.id not in orchestrator._group_router.snapshot()
 
@@ -351,7 +351,7 @@ def test_unrelated_discovery_keeps_configured_gateway_placeholder(monkeypatch) -
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert result["added"] == ["openai_chat_capable_model"]
+    assert result["added"] == [agent_id_for(discovered)]
     assert placeholder in orchestrator.agents
 
 

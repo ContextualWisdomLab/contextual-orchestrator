@@ -19,6 +19,7 @@ from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    agent_id_for,
 )
 from contextual_orchestrator.privacy_policy_analysis import PrivacyPolicyAssessment
 from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
@@ -112,8 +113,8 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
         assert refreshes[1]["error_code"] is None
         assert all(row["finished_at"].endswith("+00:00") for row in refreshes)
         assert set(second.selected_agent_ids) == {
-            "openai_gpt_live",
-            "openrouter_router_new",
+            agent_id_for(_model(openai, "gpt-live")),
+            agent_id_for(_model(openrouter, "router-new")),
         }
         assert "secret-bearing detail" not in str(second.as_dict())
     finally:
@@ -158,7 +159,7 @@ def test_openrouter_fallback_rechecks_spend_before_last_known_good_selection(
         )
 
         assert report.last_known_good_model_count == 2
-        assert report.selected_agent_ids == ("openrouter_provider_free",)
+        assert report.selected_agent_ids == (agent_id_for(free),)
     finally:
         set_backend(None)
 

@@ -2411,6 +2411,24 @@ def test_durable_legacy_discovered_agent_adopts_generated_group_and_id(tmp_path)
     restarted.close()
 
 
+def test_legacy_operator_agent_is_not_duplicated_or_overwritten() -> None:
+    discovered = DiscoveredModel(
+        "openai", "Vendor/Model", "OPENAI_API_KEY",
+        "https://api.openai.com/v1", "Bearer",
+    )
+    incoming = agent_from_discovered(discovered)
+    operator = replace(
+        incoming,
+        id="openai_vendor_model",
+        tags=("operator-tag",),
+        disabled=True,
+    )
+    orchestrator = TaskOrchestrator([operator], allow_empty_agents=True)
+
+    assert orchestrator.sync_discovered_agents([incoming]) == {"added": [], "updated": []}
+    assert orchestrator.candidates == [operator]
+
+
 def test_exact_model_id_collisions_persist_as_distinct_discovered_agents(tmp_path) -> None:
     base = DiscoveredModel(
         "openrouter", "vendor/model-a", "OPENROUTER_API_KEY",

@@ -141,8 +141,12 @@ def race_first_valid(
             and attempt.cancellation_supported
             and attempt.cancel is not None
         ):
-            attempt.cancel()
-            outcome = "cancellation_requested"
+            try:
+                attempt.cancel()
+            except Exception:
+                outcome = "safe_drain"
+            else:
+                outcome = "cancellation_requested"
         else:
             outcome = "safe_drain"
         cancellation_outcomes[future] = outcome

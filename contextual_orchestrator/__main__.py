@@ -19,6 +19,7 @@ from .model_discovery import (
     ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
+    legacy_agent_id_for,
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
@@ -421,7 +422,9 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     agents = []
     for model in chat_models:
-        existing = existing_by_id.get(agent_id_for(model))
+        existing = existing_by_id.get(agent_id_for(model)) or existing_by_id.get(
+            legacy_agent_id_for(model)
+        )
         routable = is_routable_discovered_model(model)
         if existing is None:
             agents.append(replace(agent_from_discovered(model), disabled=not routable))
