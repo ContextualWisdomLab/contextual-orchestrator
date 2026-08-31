@@ -342,8 +342,16 @@ def normalize_discovered_model(
         credential_name=source.credential_name,
         chat_base_url=source.chat_base_url,
         auth_scheme=source.auth_scheme,
-        max_output_tokens=_normalize_positive_int(model.max_output_tokens),
-        context_window=_normalize_positive_int(model.context_window),
+        max_output_tokens=(
+            None
+            if model.max_output_tokens_conflicted
+            else _normalize_positive_int(model.max_output_tokens)
+        ),
+        context_window=(
+            None
+            if model.context_window_conflicted
+            else _normalize_positive_int(model.context_window)
+        ),
         max_output_tokens_conflicted=bool(model.max_output_tokens_conflicted),
         context_window_conflicted=bool(model.context_window_conflicted),
         prompt_price_per_1k=_normalize_price(model.prompt_price_per_1k),

@@ -315,8 +315,8 @@ def test_successful_refresh_clears_known_limits_after_fresh_conflict() -> None:
 
     conflicted = replace(
         known,
-        max_output_tokens=None,
-        context_window=None,
+        max_output_tokens=8192,
+        context_window=256000,
         max_output_tokens_conflicted=True,
         context_window_conflicted=True,
     )
@@ -581,6 +581,8 @@ def test_postgres_success_clears_limits_marked_as_conflicting() -> None:
     )
     conflicted = replace(
         _model(source, "model-a"),
+        max_output_tokens=8192,
+        context_window=256000,
         max_output_tokens_conflicted=True,
         context_window_conflicted=True,
     )
@@ -598,6 +600,7 @@ def test_postgres_success_clears_limits_marked_as_conflicting() -> None:
         if "INSERT INTO provider_model" in call[0]
     )
     assert "CASE WHEN %s THEN NULL" in statement
+    assert params[3:5] == (None, None)
     assert params[-2:] == (True, True)
 
 
