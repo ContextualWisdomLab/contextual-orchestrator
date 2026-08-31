@@ -785,12 +785,14 @@ def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -
 
 
 def test_embedding_batch_selects_cheapest_capability_candidate_when_unspecified() -> None:
-    """``cheapest_upstream`` wiring: an unspecified member picks price, not rank order.
+    """Price-aware selection: an unspecified member picks price, not rank order.
 
     ``ranked_first`` outranks ``cheaper`` under the orchestrator's own
     priority-based ordering (verified below), so a price-blind ``candidates[0]``
     pick would return it. The coordinator must instead resolve to the cheaper
-    member per the configured price table.
+    member via ``_cheapest_capability_candidate``'s direct
+    ``PriceBook.get_price()`` lookup and raw ``prompt_price_per_1k``
+    comparison (it does not call ``cheapest_upstream``).
     """
     from contextual_orchestrator.batch_routing import EmbeddingBatchResultItem
 

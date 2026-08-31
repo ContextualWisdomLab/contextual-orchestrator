@@ -12,11 +12,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- `cheapest_upstream` (`batch_routing.py`) is now actually called by
-  `CostRoutingCoordinator`: resolving an unspecified embedding batch member
+- `CostRoutingCoordinator._cheapest_capability_candidate` now performs
+  price-aware selection: resolving an unspecified embedding batch member
   out of several capability-matched candidates (e.g. operator-managed
   model-group members) now picks the cheapest one by the configured price
-  table instead of an arbitrary first/ranked pick. Previously it was a
+  table instead of an arbitrary first/ranked pick. It plays a role similar
+  to `cheapest_upstream` (`batch_routing.py`) but does not call it — see
+  below for how the two diverged. `cheapest_upstream` itself remains a
   headline-documented, `__all__`-exported utility with no production caller
   anywhere in the router.
 - `CostRoutingCoordinator._cheapest_capability_candidate` no longer treats an

@@ -134,10 +134,19 @@ def cheapest_upstream(
     cost ``0`` and are treated as free (explicit, so a missing price is visible
     rather than silently expensive). Ties keep input order.
 
-    :class:`~contextual_orchestrator.cost_router.CostRoutingCoordinator` calls
-    this (via its ``_cheapest_capability_candidate`` helper) to resolve one
-    embedding member out of several capability-matched candidates, so this is
-    not just a standalone utility — it backs a real routing decision.
+    :class:`~contextual_orchestrator.cost_router.CostRoutingCoordinator`'s
+    ``_cheapest_capability_candidate`` helper plays a similar upstream
+    cost-based selection role — resolving one embedding member out of
+    several capability-matched candidates — but does not call this
+    function. It looks up each candidate's price directly via
+    :meth:`~contextual_orchestrator.cost_ledger.PriceBook.get_price` and
+    compares raw, unrounded
+    :attr:`~contextual_orchestrator.cost_ledger.PriceEntry.prompt_price_per_1k`
+    values, rather than this function's ledger-rounded
+    :meth:`~contextual_orchestrator.cost_ledger.PriceBook.compute_cost`
+    output (see that helper's docstring for why). This function remains a
+    standalone, table-driven upstream selector used elsewhere for load
+    balancing.
     """
     if not candidates:
         return None
