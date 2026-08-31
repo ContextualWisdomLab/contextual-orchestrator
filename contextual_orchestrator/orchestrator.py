@@ -4667,9 +4667,12 @@ class TaskOrchestrator:
         """Route many prompts through the provider's Batch API and persist each run.
 
         The cheap lane for bulk/eval workloads (~50% provider discount, async window) —
-        not for latency-sensitive chat. Each prompt gets the same worker selection as
-        ``route_once``; results are persisted as normal route runs (with provider usage
-        when reported) so spend analytics and the admin console see them unchanged.
+        not for latency-sensitive chat. Each prompt gets the same worker selection and
+        the same ``_realtime_route_judge`` verification as ``route_once``: a genuine
+        fast-mlsirm verdict when ``policy.realtime_judge`` is on (the default), or the
+        same reviewed fallback shape when an operator has explicitly turned it off.
+        Results are persisted as normal route runs (with provider usage when reported)
+        so spend analytics and the admin console see them unchanged.
         """
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
@@ -4721,6 +4724,7 @@ class TaskOrchestrator:
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
             result = answers[index]
+            latency_seconds = batch_latency_ms_by_agent[agent.id] / 1000.0
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
                 "model": agent.model,
@@ -4730,6 +4734,22 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
+            # Judge each batched answer exactly like route_once: a genuine
+            # fast-mlsirm verdict when policy.realtime_judge is on (the
+            # default), or the same reviewed fallback shape when an operator
+            # has explicitly turned it off. Never a fabricated, ungated pass.
+            verification = self._realtime_route_judge(
+                text=prompt,
+                answer=result["content"],
+                served_id=agent.id,
+                latency_seconds=latency_seconds,
+                usage=result.get("usage"),
+                free_only=False,
+            )
+            row["realtime_judge"] = {
+                "accepted": verification["accepted"],
+                "reason": verification["reason"],
+            }
             record = self._with_effort_snapshot(
                 {
                     "workflow_run_id": f"run_{uuid.uuid4().hex}",
@@ -4740,7 +4760,7 @@ class TaskOrchestrator:
                     "answer": result["content"],
                     "trace": [row],
                     "policy_snapshot": self.policy.as_dict(),
-                    "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
+                    "verification": verification,
                 }
             )
             self._replace_workflow_run(record)

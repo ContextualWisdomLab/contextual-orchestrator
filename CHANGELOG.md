@@ -42,6 +42,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
+- `batch_route` no longer fabricates a hardcoded, ungated
+  `{"accepted": True, "verifier_output": ""}` verification verdict for every
+  batched answer regardless of `policy.realtime_judge`. It now calls the same
+  `_realtime_route_judge` path `route_once`/`stream_route` use: a genuine
+  fast-mlsirm judge verdict when `realtime_judge` is on (the default, feeding
+  the quality ledger like serial runs already do), or the identical reviewed
+  `{"accepted": True, "reason": "single route path", "verifier_output": answer}`
+  fallback when an operator has explicitly turned `realtime_judge` off —
+  closing the gap between the function's docstring claim of route_once parity
+  and its actual (previously unguarded) behavior.
 
 ### Added
 

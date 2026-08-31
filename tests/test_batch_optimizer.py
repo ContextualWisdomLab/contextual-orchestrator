@@ -8,7 +8,9 @@ gain use_batch: route configs evaluate via one batch, conduct stays serial.
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -125,6 +127,85 @@ def test_batch_route_rejects_incomplete_or_empty_provider_results(kind: str) -> 
     with pytest.raises(RuntimeError, match="batch provider"):
         orchestrator.batch_route([t["prompt"] for t in TASKS])
     assert orchestrator._workflow_runs == {}
+
+
+class _ScriptedFastJudge:
+    """Deterministic fast-mlsirm stand-in: rejects any answer matching a marker."""
+
+    def __init__(self, adapter, *, mode: str, accept_threshold: float) -> None:
+        del adapter, mode, accept_threshold
+
+    def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
+        del task, criteria
+        accepted = "task two" not in answer
+        return SimpleNamespace(
+            accepted=accepted,
+            rationale="scripted reject" if not accepted else "scripted accept",
+            criterion_scores={"evidence_quality": 1.0, "risk_signal": 1.0},
+            usage=None,
+            orchestration_mode="route",
+            to_irt_row=lambda *, item_type: (int(accepted), int(accepted)),
+        )
+
+
+def _scripted_fast_components() -> orchestrator_module.FastMLSIRMJudgeComponents:
+    return orchestrator_module.FastMLSIRMJudgeComponents(
+        judge_cls=_ScriptedFastJudge,
+        criterion_cls=lambda **kwargs: kwargs,
+        format_error=ValueError,
+    )
+
+
+def test_batch_route_records_real_judge_rejection() -> None:
+    """realtime_judge=True (the default) must feed each batched answer through the
+    same genuine fast-mlsirm judge route_once uses -- not a hardcoded pass. This
+    fails against the pre-fix hardcoded ``{"accepted": True, ...}`` literal.
+    """
+    client = _CountingClient()
+    orchestrator = _orch(client)
+    assert orchestrator.policy.realtime_judge is True  # exercising the default
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        records = orchestrator.batch_route([t["prompt"] for t in TASKS])
+
+    by_prompt = {record["prompt_text"]: record for record in records}
+    rejected = by_prompt["task two"]
+    accepted = by_prompt["task one"]
+
+    assert rejected["verification"]["accepted"] is False
+    assert rejected["verification"]["reason"] == "scripted reject"
+    assert rejected["verification"]["verifier_output"] == rejected["answer"]
+    assert rejected["verification"]["verifier_output"] != ""
+
+    assert accepted["verification"]["accepted"] is True
+    assert accepted["verification"]["reason"] == "scripted accept"
+    assert accepted["verification"]["verifier_output"] == accepted["answer"]
+
+
+def test_batch_route_realtime_judge_disabled_uses_reviewed_fallback() -> None:
+    """With realtime_judge explicitly off, batch_route must fall back to the same
+    reviewed shape _realtime_route_judge already produces for route_once -- a real,
+    non-empty verifier_output echoing the answer, not the old batch-only fabrication.
+    """
+    client = _CountingClient()
+    orchestrator = _orch(client)
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    records = orchestrator.batch_route([t["prompt"] for t in TASKS])
+
+    for record in records:
+        verification = record["verification"]
+        assert verification == {
+            "accepted": True,
+            "reason": "single route path",
+            "verifier_output": record["answer"],
+            "judge": "model",
+        }
+        assert verification["verifier_output"] != ""
 
 
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
