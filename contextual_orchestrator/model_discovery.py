@@ -205,7 +205,6 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
-        evidence_only=True,
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -293,6 +292,7 @@ class DiscoveredModel:
     privacy_policy_urls: tuple[str, ...] = ()
     zdr_capable: bool = False
     evidence_only: bool = False
+    spend_admitted: bool = True
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -1325,20 +1325,29 @@ def discover_all_models(
             )
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
-    # matching privacy evidence for discovered models from other providers. It
-    # is never selected as an inference upstream here.
-    result = _apply_discovered_model_evidence(
+    # OpenRouter's authenticated catalog supplies routable account-model rows;
+    # its public ZDR endpoint adds route-specific privacy evidence without
+    # turning the whole provider account into either ZDR-only or non-serving.
+    routed = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
     )
+    if any(
+        source.provider_name == "openrouter"
+        and get_credential(source.credential_name)
+        for source in sources
+    ):
+        routed = apply_openrouter_spend_admission(
+            routed,
+            openrouter_paid_inference_available(timeout=timeout),
+        )
     _LOGGER.info(
         "discover_all_models_finished elapsed=%.2f discovered=%d errors=%d",
         time.monotonic() - started,
-        len(result),
+        len(routed),
         len(errors),
     )
-    return result, errors
+    return routed, errors
 
 
 def openrouter_paid_inference_available(
@@ -1372,6 +1381,24 @@ def openrouter_paid_inference_available(
         OSError,
     ):
         return None
+
+
+def apply_openrouter_spend_admission(
+    discovered: Sequence[DiscoveredModel],
+    paid_available: bool | None,
+) -> list[DiscoveredModel]:
+    """Fail closed for paid OpenRouter rows without current credit evidence."""
+    return [
+        replace(
+            model,
+            spend_admitted=(
+                model.provider_name != "openrouter"
+                or model.is_free
+                or paid_available is True
+            ),
+        )
+        for model in discovered
+    ]
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -1420,8 +1447,10 @@ def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
     expose a media-only model with a generic identifier, so the model-name
     heuristic is only a fallback for rows with no capability or modality data.
     """
-    return not discovered.evidence_only and is_discovered_chat_candidate(
-        discovered
+    return (
+        not discovered.evidence_only
+        and discovered.spend_admitted
+        and is_discovered_chat_candidate(discovered)
     )
 
 
@@ -1446,6 +1475,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         tags=(
             "discovered",
             *(("cost:free",) if discovered.is_free else ()),
+            *(("spend:blocked",) if not discovered.spend_admitted else ()),
             *privacy_tags_for_discovered(discovered),
             *discovered.capabilities,
             *(f"capability:{value}" for value in discovered.capabilities),
