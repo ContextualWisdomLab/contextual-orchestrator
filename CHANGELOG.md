@@ -12,8 +12,36 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- OpenRouter discovery no longer marks the entire credential account
+  evidence-only. Authenticated catalog rows may serve ordinary requests, while
+  ZDR-only requests still require explicit route-level ZDR evidence.
 - Model discovery now treats every KV credential as an independent account/catalog boundary, removes provider-family collapsing, and offers secret-free `--verbose` progress diagnostics. Logical equivalence and latency-based switching remain explicit `model_group` decisions only.
 - Model-group evidence now reports peak observed RPM and provider-reported TPM over a real 60-second completion window without generating probe traffic or inferring missing usage.
+- `discover_provider_models`'s primary model-list fetch is now retried once
+  (short fixed delay, shortened timeout) when the failure is transient
+  (5xx/timeout/connection reset, via the existing `is_transient_error`
+  classifier), instead of raising `ProviderDiscoveryError` on the first
+  attempt. One provider's momentary blip (observed live: a Bytez HTTP 500)
+  no longer has to zero out that provider's entire contribution to a
+  discovery pass. Non-transient failures (bad credential, malformed
+  response) are still never retried. Deliberately does not touch
+  `ModelClient.proxy_send_once`'s single-shot completion-call contract
+  ("cross-provider failover cannot amplify load") — reusing the same
+  retry pattern there risks amplifying load against an already-degraded
+  provider and was left out of scope for this change.
+- (Devin review on #923) The retry attempt's timeout no longer expands past
+  a caller-supplied budget shorter than the retry default: it is now
+  `min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS)`, so a caller requesting
+  e.g. a 2s timeout still gets a 2s retry, not a 5s one.
+- (Devin review on #923) `is_transient_error` no longer misclassifies a TLS
+  certificate-verification failure as transient when `urlopen` wraps it as
+  `URLError(reason=ssl.SSLCertVerificationError(...))` rather than raising a
+  bare `ssl.SSLError`. The existing bare-`ssl.SSLError` unwrap couldn't see
+  this case, since the blanket "any `URLError` is transient" branch matched
+  first and returned early — a permanently invalid trust boundary was being
+  retried as if it were a network blip. Fixes the shared classifier itself
+  (not just the discovery retry call site), so every current and future
+  caller of `is_transient_error` benefits.
 
 ### Added
 
