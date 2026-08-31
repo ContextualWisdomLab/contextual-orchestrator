@@ -294,6 +294,32 @@ def test_virtual_capability_models_resolve_to_eligible_upstreams() -> None:
         )
 
 
+def test_require_pool_model_serves_capability_free_route_despite_non_text_input() -> None:
+    """A free transcription agent's own capability route is not modality-gated.
+
+    Devin's review on PR #933, fourth finding: ``_require_pool_model`` applies
+    ``TaskOrchestrator._is_free_agent`` a second time (independent of
+    ``_capability_agents``) when validating a capability-scoped
+    ``orchestrator/free`` request. A free agent naturally declaring
+    ``input:audio`` for a transcription capability must still resolve here;
+    only the capability-blind general-chat branch (``required_capability is
+    None``) applies the stricter general-chat exclusion.
+    """
+    orchestrator = TaskOrchestrator([
+        ModelAgent(
+            "free_transcription",
+            "free-transcription",
+            tags=("transcription", "cost:free", "input:audio"),
+        ),
+    ])
+
+    assert _require_pool_model(
+        orchestrator, "orchestrator/free", required_capability="transcription"
+    ) == "free-transcription"
+    with pytest.raises(RequestError, match="no enabled zero-cost model"):
+        _require_pool_model(orchestrator, "orchestrator/free")
+
+
 def test_virtual_capability_auto_rejects_non_zdr_pool() -> None:
     orchestrator = TaskOrchestrator(
         [ModelAgent("paid_embedding", "paid-embedding", tags=("embedding",))]
