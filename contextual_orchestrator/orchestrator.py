@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
 import copy
+import errno
 import hashlib
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -21,6 +22,7 @@ import os
 from pathlib import Path
 import random
 import re
+import select
 import socket
 import ssl
 import sqlite3
@@ -119,6 +121,7 @@ class _ProviderCancellation:
         self._connections: set[http.client.HTTPConnection] = set()
         self._lock = threading.Lock()
         self._cancelled = False
+        self._cancelled_event = threading.Event()
 
     def register(self, connection: http.client.HTTPConnection) -> None:
         """Register a live connection or reject it after cancellation."""
@@ -136,6 +139,7 @@ class _ProviderCancellation:
         """Best-effort close every registered connection exactly once."""
         with self._lock:
             self._cancelled = True
+            self._cancelled_event.set()
             connections = tuple(self._connections)
             self._connections.clear()
         for connection in connections:
@@ -149,6 +153,11 @@ class _ProviderCancellation:
                 connection.close()
             except Exception:
                 pass
+
+    def raise_if_cancelled(self) -> None:
+        """Abort a cancellable DNS or connect operation after explicit cancellation."""
+        if self._cancelled_event.is_set():
+            raise _ProviderRequestCancelled("provider request was cancelled")
 
     def run(self, call: Callable[[], Any]) -> Any:
         """Run one call and translate transport fallout from cancellation."""
@@ -1332,11 +1341,10 @@ class ModelClient:
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
-        # Retain the historical positional/keyword slots without enforcing an
-        # elapsed-time cutoff. Cancellation is explicit and transport-owned.
-        del timeout, connect_timeout
-        self.timeout: None = None
-        self.connect_timeout: None = None
+        # No deadline is selected by default. Explicit legacy caller limits remain
+        # compatible; review workflows and readiness paths never supply them.
+        self.timeout = timeout
+        self.connect_timeout = connect_timeout
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -1766,11 +1774,31 @@ class ModelClient:
         """Connect to one already-resolved address without performing another DNS lookup."""
         family, sockaddr = destination
         connection = socket.socket(family, socket.SOCK_STREAM)
+        cancellation = _PROVIDER_CANCELLATION.get()
         try:
-            connection.settimeout(timeout)
             if source_address is not None:
                 connection.bind(source_address)
-            connection.connect(sockaddr)
+            if cancellation is None:
+                connection.settimeout(timeout)
+                connection.connect(sockaddr)
+                return connection
+            connection.setblocking(False)
+            result = connection.connect_ex(sockaddr)
+            if result not in {0, errno.EISCONN}:
+                if result not in {errno.EINPROGRESS, errno.EALREADY, errno.EWOULDBLOCK}:
+                    raise OSError(result, os.strerror(result))
+                while True:
+                    cancellation.raise_if_cancelled()
+                    _readable, writable, exceptional = select.select(
+                        (), (connection,), (connection,), 0.05
+                    )
+                    if writable or exceptional:
+                        error = connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        if error:
+                            raise OSError(error, os.strerror(error))
+                        break
+            cancellation.raise_if_cancelled()
+            connection.settimeout(timeout)
             return connection
         except Exception:
             connection.close()
@@ -1778,8 +1806,29 @@ class ModelClient:
 
     @staticmethod
     def _resolve_addresses(hostname: str, port: int) -> list[ProviderDestination]:
+        cancellation = _PROVIDER_CANCELLATION.get()
         try:
-            addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+            if cancellation is None:
+                addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+            else:
+                result: list[Any] = []
+                finished = threading.Event()
+
+                def resolve() -> None:
+                    try:
+                        result.append(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
+                    except BaseException as exc:  # propagated on the requesting thread
+                        result.append(exc)
+                    finally:
+                        finished.set()
+
+                threading.Thread(target=resolve, daemon=True, name="provider-dns").start()
+                while not finished.wait(0.05):
+                    cancellation.raise_if_cancelled()
+                cancellation.raise_if_cancelled()
+                if isinstance(result[0], BaseException):
+                    raise result[0]
+                addresses = result[0]
         except socket.gaierror as exc:
             raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
         resolved = [(family, sockaddr) for family, _type, _proto, _canonname, sockaddr in addresses]
@@ -1811,18 +1860,25 @@ class ModelClient:
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
         generation_timeout = self.timeout if timeout is None else timeout
+        connection_timeout = generation_timeout
+        if self.connect_timeout is not None:
+            connection_timeout = (
+                self.connect_timeout
+                if generation_timeout is None
+                else min(self.connect_timeout, generation_timeout)
+            )
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
             connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
                 parsed.hostname,
                 port,
-                timeout=generation_timeout,
+                timeout=connection_timeout,
                 context=self._ssl_context,
             )
         else:
             connection = http.client.HTTPConnection(
-                parsed.hostname, port, timeout=generation_timeout
+                parsed.hostname, port, timeout=connection_timeout
             )
         connection._create_connection = (  # type: ignore[attr-defined]
             lambda _address, timeout, source_address: self._connect_validated(

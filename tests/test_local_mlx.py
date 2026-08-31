@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import socket
 import sys
@@ -188,11 +189,11 @@ def test_provider_probe_leaves_registry_and_model_inference_unbounded() -> None:
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_legacy_timeout_arguments_do_not_set_wall_clock_deadlines() -> None:
+def test_legacy_timeout_argument_positions_remain_compatible() -> None:
     client = ModelClient(0.25, 0.5, 321)
 
-    assert client.timeout is None
-    assert client.connect_timeout is None
+    assert client.timeout == 0.25
+    assert client.connect_timeout == 0.5
     assert client.max_output_tokens == 321
 
 
@@ -289,7 +290,7 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     assert counters["max_active"] == 1
 
 
-def test_local_provider_serializes_model_switches_without_expiring_waiters() -> None:
+def test_local_provider_serializes_model_switches_and_bounds_explicit_waiters() -> None:
     import threading
 
     first_agent = ModelAgent("first_agent", "model-a", base_url="mlx://127.0.0.1:8080/v1")
@@ -335,7 +336,8 @@ def test_local_provider_serializes_model_switches_without_expiring_waiters() -> 
     assert not first.is_alive()
     assert not second.is_alive()
     assert max_active == 1
-    assert errors == []
+    assert len(errors) == 1
+    assert isinstance(errors[0], TimeoutError)
 
 
 def test_reasoning_only_response_explains_local_template_fix() -> None:
@@ -758,26 +760,28 @@ def test_cancellable_provider_call_closes_blocked_transport_without_generation_t
     assert connection.closed
 
 
-def test_cancellable_provider_call_closes_blocked_connection_establishment() -> None:
+def test_cancellable_provider_call_stops_nonblocking_tcp_establishment() -> None:
     entered = threading.Event()
-    released = threading.Event()
 
-    class Connection:
-        sock = None
+    class Socket:
+        closed = False
 
-        def connect(self):
+        def setblocking(self, _enabled):
+            return None
+
+        def connect_ex(self, _sockaddr):
             entered.set()
-            assert released.wait(timeout=1)
-            raise OSError("cancelled")
+            return errno.EINPROGRESS
 
         def close(self):
-            released.set()
+            self.closed = True
 
     client = ModelClient()
-    connection = Connection()
-    request = urllib.request.Request("https://provider.example/v1/chat/completions")
+    connection = Socket()
     call, cancel = client.cancellable_call(
-        lambda: client._open_provider(request, (socket.AF_INET, ("127.0.0.1", 443)))
+        lambda: client._connect_validated(
+            (socket.AF_INET, ("127.0.0.1", 443)), None, None
+        )
     )
     errors = []
 
@@ -787,15 +791,48 @@ def test_cancellable_provider_call_closes_blocked_connection_establishment() -> 
         except _ProviderRequestCancelled as exc:
             errors.append(exc)
 
-    with patch(
-        "contextual_orchestrator.orchestrator.http.client.HTTPSConnection",
-        return_value=connection,
+    with patch("contextual_orchestrator.orchestrator.socket.socket", return_value=connection), patch(
+        "contextual_orchestrator.orchestrator.select.select", return_value=((), (), ())
     ):
         thread = threading.Thread(target=run)
         thread.start()
         assert entered.wait(timeout=1)
         cancel()
         thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert errors
+    assert connection.closed
+
+
+def test_cancellable_provider_call_stops_waiting_for_dns() -> None:
+    entered = threading.Event()
+    released = threading.Event()
+
+    def resolve(*_args, **_kwargs):
+        entered.set()
+        released.wait(timeout=1)
+        return []
+
+    client = ModelClient()
+    call, cancel = client.cancellable_call(
+        lambda: client._resolve_addresses("provider.example", 443)
+    )
+    errors = []
+
+    def run():
+        try:
+            call()
+        except _ProviderRequestCancelled as exc:
+            errors.append(exc)
+
+    with patch("contextual_orchestrator.orchestrator.socket.getaddrinfo", side_effect=resolve):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert entered.wait(timeout=1)
+        cancel()
+        thread.join(timeout=1)
+        released.set()
 
     assert not thread.is_alive()
     assert errors
