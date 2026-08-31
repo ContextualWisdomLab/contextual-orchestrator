@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from dataclasses import replace
@@ -54,6 +55,47 @@ def _bootstrap_telemetry_config() -> InMemoryConfigStore:
         if value:
             config.set("telemetry", key, value)
     return config
+
+
+_LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def _resolve_log_level(name: str | None) -> int:
+    """Map a log-level name to its :mod:`logging` constant, defaulting to WARNING.
+
+    Accepts case-insensitively any of :data:`_LOG_LEVEL_NAMES`; anything else
+    (including ``None`` or unset) resolves to ``logging.WARNING``, matching
+    this module's behavior before verbose logging was configurable.
+    """
+    normalized = (name or "").strip().upper()
+    if normalized not in _LOG_LEVEL_NAMES:
+        return logging.WARNING
+    return getattr(logging, normalized)
+
+
+def _configure_logging(explicit_level: str | None = None) -> None:
+    """Attach a stderr handler at the requested verbosity; a no-op if none was requested.
+
+    Verbosity is never a secret channel: only provider/model identifiers,
+    counts, and elapsed time are ever logged (see
+    :mod:`contextual_orchestrator.model_discovery`) -- never an ``api_key``
+    or provider payload/content -- so raising this to DEBUG is safe in any
+    environment, CI included. ``explicit_level`` (e.g. a ``--log-level`` CLI
+    flag) wins over the ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` environment
+    variable. With neither set, this leaves the process's logging
+    configuration untouched (Python's stdlib WARNING default applies, same
+    as before verbose logging was configurable) rather than pinning an
+    explicit level on every ``main()`` call -- ``main()`` runs many times
+    in-process in this repo's own test suite, and an unconditional
+    ``setLevel`` here would permanently shadow a later, unrelated test's
+    ``caplog.at_level("DEBUG")`` for the whole process.
+    """
+    requested = explicit_level or os.environ.get("CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL")
+    if not requested:
+        return
+    level = _resolve_log_level(requested)
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.getLogger("contextual_orchestrator").setLevel(level)
 
 
 def _positive_int(value: str) -> int:
@@ -440,6 +482,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
 def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     arguments = list(sys.argv[1:] if argv is None else argv)
+    _configure_logging()
     if arguments and arguments[0] == "register-credential":
         _register_credential_command(arguments[1:])
         return
@@ -545,7 +588,17 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
+    parser.add_argument(
+        "--log-level",
+        choices=_LOG_LEVEL_NAMES,
+        default=None,
+        help="Verbosity for provider-discovery and server diagnostics (default: "
+        "$CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL or WARNING). DEBUG never logs an "
+        "api_key or provider payload/content.",
+    )
     args = parser.parse_args(arguments)
+    if args.log_level:
+        _configure_logging(args.log_level)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,

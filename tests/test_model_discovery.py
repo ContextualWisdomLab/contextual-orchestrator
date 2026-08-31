@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import urllib.error
 import urllib.parse
 from dataclasses import replace
@@ -33,6 +34,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _deduplicate_discovered_models,
     _fetch_json,
     _merge_configured_gateway_metadata,
+    _openrouter_free_model_endpoints,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
     _price_per_1k,
@@ -623,6 +625,43 @@ def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -
 
     assert [model.model_id for model in discovered] == ["free/model"]
     endpoint_fetch.assert_not_called()
+
+
+def test_openrouter_free_model_endpoint_fetch_bounded_by_one_overall_deadline() -> None:
+    """Wall time must stay near one ``timeout`` regardless of free-catalog size.
+
+    A fixed-size thread pool with only a per-request timeout still lets total
+    wall time grow with the model count (sequential timeout waves), which can
+    make this single enrichment step consume a caller's entire startup
+    budget as the free catalog grows (see
+    ContextualWisdomLab/.github#1463 review discussion). Every one of a large
+    number of models hangs past the deadline here; if the fix regresses to
+    per-model timeout waves, this proves it by taking far longer than the
+    shared deadline.
+    """
+    model_ids = [f"vendor/free-{i}" for i in range(200)]
+    payload = {
+        "data": [
+            {"id": model_id, "pricing": {"prompt": "0", "completion": "0"}}
+            for model_id in model_ids
+        ]
+    }
+
+    def hang(*_args, **_kwargs):
+        time.sleep(5)
+        raise AssertionError("must not be awaited past the shared deadline")
+
+    with patch("contextual_orchestrator.model_discovery._fetch_json", side_effect=hang):
+        started = time.monotonic()
+        result = _openrouter_free_model_endpoints(payload, api_key="sk-router", timeout=0.2)
+        elapsed = time.monotonic() - started
+
+    # Unbounded-per-model waves would need ceil(200 / 8) * 5s = 125s here;
+    # the shared deadline keeps this well under that regardless of catalog size.
+    assert elapsed < 2.0
+    assert result == {model_id: None for model_id in model_ids}
+
+
 def test_non_text_model_does_not_gain_structured_response_capability() -> None:
     """A provider parameter alone cannot make an image-only model a synthesizer."""
     register_credential("OPENROUTER_API_KEY", "sk-router")

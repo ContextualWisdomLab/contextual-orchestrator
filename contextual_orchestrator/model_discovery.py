@@ -14,8 +14,9 @@ registering a subset of the declared provider keys still works. Stdlib only
 from __future__ import annotations
 
 from decimal import Decimal
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 import json
+import logging
 import math
 import re
 import ssl
@@ -38,6 +39,15 @@ from .orchestrator import (
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
+
+# Never logs an ``api_key``, a provider payload, or model content -- only
+# provider/model identifiers, counts, and elapsed time -- so this logger is
+# safe to enable at DEBUG in any environment, including CI. Silent by default
+# (module loggers have no handler until a caller configures one, e.g. via
+# ``logging.basicConfig`` gated on ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` in
+# ``__main__.main()``), matching this repo's existing per-module logger
+# convention (``server.py``, ``telemetry.py``, ``video_jobs.py``).
+_LOGGER = logging.getLogger(__name__)
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
@@ -859,7 +869,19 @@ def _merge_openrouter_provider_privacy(
 def _openrouter_free_model_endpoints(
     payload: Any, *, api_key: str, timeout: float
 ) -> dict[str, Any]:
-    """Fetch endpoint/provider mappings only for explicitly zero-price models."""
+    """Fetch endpoint/provider mappings only for explicitly zero-price models.
+
+    Bounded to one overall ``timeout``-second deadline for the whole free
+    catalog, not ``timeout`` seconds per model: with a fixed-size thread
+    pool, a per-request timeout alone still lets total wall time grow with
+    the free-model count (``ceil(len(model_ids) / max_workers)`` sequential
+    timeout waves), which can make this single enrichment step consume a
+    caller's entire startup budget on its own as the free catalog grows.
+    Models whose fetch has not completed by the shared deadline are
+    reported as unmapped (``None``) rather than waited on further; this
+    data is best-effort provider-privacy enrichment, not required for a
+    model to be discovered.
+    """
     rows = payload.get("data") if isinstance(payload, dict) else None
     model_ids = [
         row["id"]
@@ -869,6 +891,13 @@ def _openrouter_free_model_endpoints(
         and isinstance(row.get("pricing"), dict)
         and _pricing_is_free(row.get("pricing"))
     ]
+    if not model_ids:
+        return {}
+    _LOGGER.debug(
+        "openrouter_free_endpoints_started free_model_count=%d timeout=%.1f",
+        len(model_ids),
+        timeout,
+    )
 
     def fetch(model_id: str) -> tuple[str, Any]:
         author, separator, slug = model_id.partition("/")
@@ -883,8 +912,22 @@ def _openrouter_free_model_endpoints(
         except (AttributeError, urllib.error.URLError, TimeoutError, ValueError, OSError):
             return model_id, None
 
-    with ThreadPoolExecutor(max_workers=min(8, len(model_ids) or 1)) as executor:
-        return dict(executor.map(fetch, model_ids))
+    started = time.monotonic()
+    executor = ThreadPoolExecutor(max_workers=min(8, len(model_ids)))
+    try:
+        futures = {executor.submit(fetch, model_id): model_id for model_id in model_ids}
+        done, not_done = wait(futures, timeout=timeout)
+        results: dict[str, Any] = {futures[future]: None for future in not_done}
+        results.update(dict(future.result() for future in done))
+        _LOGGER.debug(
+            "openrouter_free_endpoints_finished elapsed=%.2f completed=%d deadline_exceeded=%d",
+            time.monotonic() - started,
+            len(done),
+            len(not_done),
+        )
+        return results
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _privacy_policy_urls(
@@ -1114,6 +1157,8 @@ def discover_provider_models(
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
+    started = time.monotonic()
+    _LOGGER.debug("provider_discovery_started provider=%s", source.provider_name)
     try:
         fetch = (
             _fetch_configured_gateway_json
@@ -1131,7 +1176,14 @@ def discover_provider_models(
         # OSError covers ConnectionError/reset failures that are not URLError
         # subclasses, so a raw provider transport failure can never escape the
         # discovery boundary with provider text attached.
-        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
+        error_code = _provider_discovery_error_code(exc)
+        _LOGGER.debug(
+            "provider_discovery_failed provider=%s error_code=%s elapsed=%.2f",
+            source.provider_name,
+            error_code,
+            time.monotonic() - started,
+        )
+        raise ProviderDiscoveryError(source.provider_name, error_code) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
             metadata = _fetch_models_dev_metadata(timeout=timeout)
@@ -1175,7 +1227,14 @@ def discover_provider_models(
         discovered = _parse_bytez(payload, source)
     else:
         discovered = _parse_openai_compatible(payload, source)
-    return [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    _LOGGER.debug(
+        "provider_discovery_finished provider=%s model_count=%d elapsed=%.2f",
+        source.provider_name,
+        len(result),
+        time.monotonic() - started,
+    )
+    return result
 
 
 def discover_all_models(
@@ -1196,6 +1255,8 @@ def discover_all_models(
     hand every source the identical parsed payload, instead of each source
     independently repeating the fetch inside :func:`discover_provider_models`.
     """
+    started = time.monotonic()
+    _LOGGER.debug("discover_all_models_started source_count=%d", len(sources))
     discovered: list[DiscoveredModel] = []
     errors: list[ProviderDiscoveryError] = []
     models_dev_metadata: Any = _NOT_FETCHED
@@ -1219,10 +1280,17 @@ def discover_all_models(
     # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
     # matching privacy evidence for discovered models from other providers. It
     # is never selected as an inference upstream here.
-    return _apply_discovered_model_evidence(
+    result = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
-    ), errors
+    )
+    _LOGGER.info(
+        "discover_all_models_finished elapsed=%.2f discovered=%d errors=%d",
+        time.monotonic() - started,
+        len(result),
+        len(errors),
+    )
+    return result, errors
 
 
 def openrouter_paid_inference_available(
