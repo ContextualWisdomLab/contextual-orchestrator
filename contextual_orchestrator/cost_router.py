@@ -192,6 +192,7 @@ class CostRoutingCoordinator:
             usage = value.get("usage")
         counts = self._provider_usage(usage)
         if counts is None:
+            context["race_usage_complete"] = False
             return
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
@@ -296,6 +297,7 @@ class CostRoutingCoordinator:
                 "workflow_ready": workflow_run_id is not None,
                 "records": [],
                 "pending_usage": [],
+                "race_usage_complete": True,
             }
             race_token = self._race_usage_context.set(race_context)
             try:
@@ -383,11 +385,14 @@ class CostRoutingCoordinator:
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
                 "measurement_status": (
                     "estimated"
-                    if any(record.measurement_status == "estimated" for record in records)
+                    if not race_context["race_usage_complete"]
+                    or any(record.measurement_status == "estimated" for record in records)
                     else "measured"
                 ),
             }
-            if all(record.measurement_status == "measured" for record in records):
+            if race_context["race_usage_complete"] and all(
+                record.measurement_status == "measured" for record in records
+            ):
                 race_ids = {record.usage_record_id for record in race_records}
                 client_records = [
                     record for record in records if record.usage_record_id not in race_ids
@@ -399,6 +404,8 @@ class CostRoutingCoordinator:
                     ),
                     "total_tokens": sum(record.total_tokens for record in client_records),
                 }
+            else:
+                provider_response.pop("usage", None)
             if len(currencies) > 1:
                 provider_response["cost"]["currency_components"] = [
                     {
@@ -435,6 +442,7 @@ class CostRoutingCoordinator:
             "workflow_ready": workflow_run_id is not None,
             "records": [],
             "pending_usage": [],
+            "race_usage_complete": True,
         }
         race_token = self._race_usage_context.set(race_context)
         try:
