@@ -47,6 +47,22 @@ def _body_http_error(code: int, payload: dict) -> urllib.error.HTTPError:
 # -- message redaction --------------------------------------------------------
 
 
+def test_reclassification_preserves_failure_and_updates_boundary_transport() -> None:
+    original = classify_provider_failure(
+        _http_error(404), agent_id="synthetic-agent", model="synthetic-model", transport="passthrough"
+    )
+    classified = classify_provider_failure(
+        original,
+        agent_id="synthetic-agent",
+        model="synthetic-model",
+        transport="structured_synthesis",
+    )
+    assert classified is not original
+    assert classified.error_code == original.error_code
+    assert classified.provider_status == original.provider_status
+    assert classified.transport == "structured_synthesis"
+
+
 def test_safe_message_prefers_nested_provider_error_fields() -> None:
     """``error.message`` / ``error.code`` / top-level fields are the only pass-through."""
     nested = safe_provider_message(_body_http_error(400, {"error": {"message": "max_tokens too large"}}))

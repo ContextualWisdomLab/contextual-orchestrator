@@ -421,6 +421,7 @@ def test_lineage_structured_payload_accepts_session_without_provider_forwarding(
     assert status == 200
     assert body["echo"]["response_format"] == {"type": "json_object"}
     assert "session_id" not in body["echo"]
+    assert "session_id" in TaskOrchestrator._ORCHESTRATION_ONLY_KEYS
 
 
 def test_http_gateway_default_response_format_resolves_concrete_agent() -> None:

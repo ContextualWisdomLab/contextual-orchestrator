@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -782,6 +783,28 @@ def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -
     assert document["status"] == "completed"
     assert backend.requests[0].model == second.model
     assert backend.requests[0].agent_id == second.id
+
+
+def test_provider_embedding_runner_accepts_empty_direct_batch() -> None:
+    """The provider backend's direct contract returns an empty batch without indexing it."""
+    agent = ModelAgent(
+        "remote_embedding",
+        "synthetic-embedding",
+        "https://provider.synthetic.invalid/v1",
+        tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+    orchestrator.client.embed = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("an empty batch must not call the provider")
+    )
+    coordinator = CostRoutingCoordinator(orchestrator)
+    backend = coordinator.embedding_batch_backend
+    job = backend.submit([])
+    deadline = time.time() + 2
+    while backend.poll(job)["status"] not in {"completed", "failed"} and time.time() < deadline:
+        time.sleep(0.01)
+    assert backend.poll(job)["status"] == "completed"
+    assert backend.retrieve(job) == []
 
 
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:

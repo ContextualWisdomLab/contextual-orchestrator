@@ -209,7 +209,18 @@ def classify_provider_failure(
     secrets) can never reach callers or logs.
     """
     if isinstance(exc, ProviderUpstreamError):
-        return exc
+        if exc.transport == transport:
+            return exc
+        return ProviderUpstreamError(
+            agent_id=exc.agent_id,
+            model=exc.model,
+            error_code=exc.error_code,
+            message=str(exc),
+            client_status=exc.client_status,
+            provider_status=exc.provider_status,
+            retryable=exc.retryable,
+            transport=transport,
+        )
     if isinstance(exc, urllib.error.HTTPError):
         status = exc.code
         client_status, error_code, retryable = PROVIDER_STATUS_SURFACES.get(

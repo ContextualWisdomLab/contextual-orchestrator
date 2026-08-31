@@ -421,7 +421,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     runtime_models = [
         model
         for model in discovered
-        if model in chat_models or "embedding" in model.capabilities
+        if not model.evidence_only
+        and (model in chat_models or "embedding" in model.capabilities)
     ]
     existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     agents = []

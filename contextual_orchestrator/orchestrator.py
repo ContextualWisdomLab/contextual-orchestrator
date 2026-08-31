@@ -3559,6 +3559,7 @@ class TaskOrchestrator:
             "stream_options",
             "_required_agent_id",
             "_file_replicas",
+            "session_id",
         }
     )
 

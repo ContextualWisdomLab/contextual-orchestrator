@@ -195,6 +195,30 @@ def test_auto_discovery_never_activates_openrouter_evidence_rows(monkeypatch) ->
     assert [agent.model for agent in orchestrator.agents] == ["bootstrap-model"]
 
 
+def test_auto_discovery_never_activates_evidence_only_embedding_rows(monkeypatch) -> None:
+    """Embedding capability cannot bypass the evidence-only serving boundary."""
+    evidence = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="provider/evidence-embedding",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+        evidence_only=True,
+        spend_admitted=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([evidence], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model", tags=("bootstrap_seed",))]
+    )
+
+    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    assert [agent.model for agent in orchestrator.agents] == ["bootstrap-model"]
+
+
 def test_auto_discovery_keeps_metadata_free_general_chat_models(monkeypatch) -> None:
     """OpenAI-style model rows without capability metadata remain discoverable."""
     discovered = DiscoveredModel(

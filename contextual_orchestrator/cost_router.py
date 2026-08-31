@@ -124,6 +124,8 @@ class CostRoutingCoordinator:
                 def run_provider_embeddings(
                     requests: List[EmbeddingBatchRequest],
                 ) -> tuple[List[List[float]], int]:
+                    if not requests:
+                        return [], 0
                     first = requests[0]
                     agent = (
                         orchestrator._agent(first.agent_id)
