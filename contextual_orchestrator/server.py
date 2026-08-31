@@ -6316,7 +6316,11 @@ def build_server(
                         min(security.max_body_bytes, MAX_MULTIMODAL_JSON_BODY_BYTES)
                         if large_inference_json
                         else security.max_body_bytes
-                    )
+                    ),
+                    allow_empty_without_content_type=(
+                        path.startswith("/api/v1/batch_routing_jobs/")
+                        and path.endswith("/results")
+                    ),
                 )
                 zdr_only = _validate_zdr_only(body)
                 request_policy = orchestrator.request_policy(zdr_only)
@@ -7847,9 +7851,12 @@ def build_server(
                 return None
             return int(raw)
 
-        def _read_json(self, *, max_body_bytes: int | None = None) -> dict[str, Any]:
-            if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
-                raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
+        def _read_json(
+            self,
+            *,
+            max_body_bytes: int | None = None,
+            allow_empty_without_content_type: bool = False,
+        ) -> dict[str, Any]:
             try:
                 body_size = _request_body_size(
                     self.headers,
@@ -7859,6 +7866,10 @@ def build_server(
                 # Do not let a peer reuse a connection after an ambiguous frame.
                 self.close_connection = True
                 raise
+            if (
+                body_size > 0 or not allow_empty_without_content_type
+            ) and self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+                raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
             raw = self.rfile.read(body_size)
             if len(raw) != body_size:
                 self.close_connection = True

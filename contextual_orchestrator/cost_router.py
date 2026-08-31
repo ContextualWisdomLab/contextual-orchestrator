@@ -725,8 +725,7 @@ class CostRoutingCoordinator:
                 prompt_tokens=item.prompt_tokens or None,
                 completion_tokens=item.completion_tokens or None,
             )
-            recorded.append(
-                {
+            result_payload = {
                     "custom_id": item.custom_id,
                     "answer": item.answer,
                     "usage_record_id": record.usage_record_id,
@@ -736,7 +735,9 @@ class CostRoutingCoordinator:
                     "completion_tokens": record.completion_tokens,
                     "measurement_status": record.measurement_status,
                 }
-            )
+            if item.trace is not None:
+                result_payload["trace"] = item.trace
+            recorded.append(result_payload)
         return {
             "job_id": job_id,
             "backend": job.backend,

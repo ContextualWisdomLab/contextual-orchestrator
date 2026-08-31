@@ -404,7 +404,7 @@ def test_batch_routing_jobs_are_principal_bound_for_poll_and_results() -> None:
         server.shutdown()
 
 
-def test_batch_results_require_explicit_trace_authority(monkeypatch) -> None:
+def test_batch_results_require_explicit_trace_authority() -> None:
     """Plain inference retrieves answers while trace opt-in stays privileged."""
     inference_token = "batch_inference_owner"
     trace_token = "batch_trace_reader"
@@ -420,13 +420,6 @@ def test_batch_results_require_explicit_trace_authority(monkeypatch) -> None:
     agent = ModelAgent("mock_worker", "mock-a", base_url="mock://a")
     orchestrator = TaskOrchestrator([agent])
     coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
-    original_retrieve = coordinator.retrieve_batch
-
-    def retrieve_with_trace(job_id, *, owner_id=None):
-        result = original_retrieve(job_id, owner_id=owner_id)
-        return {**result, "trace": [{"output": "intermediate"}]}
-
-    monkeypatch.setattr(coordinator, "retrieve_batch", retrieve_with_trace)
     server = build_server(
         orchestrator,
         port=0,
@@ -444,6 +437,17 @@ def test_batch_results_require_explicit_trace_authority(monkeypatch) -> None:
         )
         assert status == 201
         results_url = f"{base}/api/v1/batch_routing_jobs/{submitted['job_id']}/results"
+
+        bodyless_request = urllib.request.Request(
+            results_url,
+            method="POST",
+            headers={"authorization": f"Bearer {inference_token}"},
+        )
+        with urllib.request.urlopen(bodyless_request) as response:
+            bodyless = json.loads(response.read())
+        assert response.status == 200
+        assert bodyless["results"][0]["answer"]
+        assert "trace" not in json.dumps(bodyless)
 
         status, plain = _request("POST", results_url, inference_token, {})
         assert status == 200
@@ -477,7 +481,7 @@ def test_batch_results_require_explicit_trace_authority(monkeypatch) -> None:
             {"include_orchestration_trace": True},
         )
         assert status == 200
-        assert traced["trace"] == [{"output": "intermediate"}]
+        assert traced["results"][0]["trace"]
         assert any(
             event["event_type"] == "orchestration_trace_access_granted"
             for event in orchestrator.list_recent_audit_events()

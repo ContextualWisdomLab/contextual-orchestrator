@@ -203,6 +203,7 @@ class BatchResultItem:
     attribution: Dict[str, Any] = field(default_factory=dict)
     model: str = "contextual-orchestrator"
     mode: str = "auto"
+    trace: Any = None
 
 
 class BatchBackend(Protocol):
@@ -274,6 +275,7 @@ class LocalBatchBackend:
                 attribution=dict(request.attribution),
                 model=request.model,
                 mode=result.get("mode", request.mode),
+                trace=result.get("trace"),
             )
         if self.max_concurrency == 1 or len(requests) <= 1:
             items = [run(request) for request in requests]
@@ -414,6 +416,7 @@ class PgLlmBatchBackend:
                     attribution=dict(request.attribution) if request else {},
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",
+                    trace=body.get("trace"),
                 )
             )
         return items
