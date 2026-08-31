@@ -431,6 +431,9 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
     return decision_value, reason.strip()
 
 
+_AGENT_POOL_INTEGER_MAX = 9_223_372_036_854_775_807
+
+
 @dataclass(frozen=True)
 class ModelAgent:
     """Configuration for one model-backed worker in the agent pool."""
@@ -483,8 +486,14 @@ class ModelAgent:
             raise ValueError("auth_scheme must be a non-empty string")
         for field_name in ("max_output_tokens", "context_window"):
             value = getattr(self, field_name)
-            if value is not None and (type(value) is not int or value <= 0):
-                raise TypeError(f"{field_name} must be a positive integer or null")
+            if value is not None and (
+                type(value) is not int
+                or value <= 0
+                or value > _AGENT_POOL_INTEGER_MAX
+            ):
+                raise TypeError(
+                    f"{field_name} must be a positive integer <= {_AGENT_POOL_INTEGER_MAX} or null"
+                )
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
@@ -2642,9 +2651,21 @@ class _AgentPoolStore:
                 stream_usage_supported INTEGER NOT NULL DEFAULT 0,
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_max_output_tokens_check
-                    CHECK (max_output_tokens IS NULL OR max_output_tokens > 0),
+                    CHECK (
+                        max_output_tokens IS NULL
+                        OR (
+                            max_output_tokens > 0
+                            AND max_output_tokens <= 9223372036854775807
+                        )
+                    ),
                 CONSTRAINT agent_pool_context_window_check
-                    CHECK (context_window IS NULL OR context_window > 0),
+                    CHECK (
+                        context_window IS NULL
+                        OR (
+                            context_window > 0
+                            AND context_window <= 9223372036854775807
+                        )
+                    ),
                 CONSTRAINT agent_pool_reasoning_effort_flag_check
                     CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1)),
                 CONSTRAINT agent_pool_stream_usage_flag_check
@@ -2759,13 +2780,15 @@ class _AgentPoolStore:
         if "max_output_tokens" not in columns:
             conn.execute(
                 "ALTER TABLE agent_pool ADD COLUMN max_output_tokens INTEGER "
-                "CHECK (max_output_tokens IS NULL OR max_output_tokens > 0)"
+                "CHECK (max_output_tokens IS NULL "
+                "OR (max_output_tokens > 0 AND max_output_tokens <= 9223372036854775807))"
             )
             columns.add("max_output_tokens")
         if "context_window" not in columns:
             conn.execute(
                 "ALTER TABLE agent_pool ADD COLUMN context_window INTEGER "
-                "CHECK (context_window IS NULL OR context_window > 0)"
+                "CHECK (context_window IS NULL "
+                "OR (context_window > 0 AND context_window <= 9223372036854775807))"
             )
             columns.add("context_window")
         if "stream_usage_supported" not in columns:
@@ -4989,6 +5012,8 @@ class TaskOrchestrator:
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
         if not updated_agents:
             raise ValueError("cannot disable the last enabled agent")
+        if self._pool_store is not None:
+            self._pool_store.save(patched)
         self.candidates = updated_candidates
         self.agents = updated_agents
         self._rebuild_budget_meter()
@@ -4998,8 +5023,6 @@ class TaskOrchestrator:
         for agent_id in candidate_ids:
             self._routers_register_member(agent_id)
         self._routers_forget_members(candidate_ids)
-        if self._pool_store is not None:
-            self._pool_store.save(patched)
         self._append_audit_event(
             "agent_patched",
             {
@@ -5131,12 +5154,12 @@ class TaskOrchestrator:
                 raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
             if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
+        if self._pool_store is not None:
+            self._pool_store.save(agent)
         self.candidates = [*self.candidates, agent]
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         self._rebuild_budget_meter()
         self._routers_register_member(agent.id)
-        if self._pool_store is not None:
-            self._pool_store.save(agent)
         self._append_audit_event(
             "agent_added",
             {"agent_pool_id": agent_pool_id, "worker_agent_id": agent.id, "model": agent.model},

@@ -178,6 +178,51 @@ def test_agent_pool_persists_limit_metadata_across_restart() -> None:
         assert restored._agent("persisted_agent").context_window == 128000
 
 
+def test_add_agent_rejects_unpersistable_limit_without_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        orchestrator = TaskOrchestrator(_seed(), agents_db=db)
+
+        with pytest.raises(TypeError, match="max_output_tokens must be"):
+            orchestrator.add_agent(
+                "default",
+                {
+                    "id": "overflow_agent",
+                    "model": "model-x",
+                    "base_url": "https://api.openai.com/v1",
+                    "credential_key": "OPENAI_API_KEY",
+                    "max_output_tokens": 9_223_372_036_854_775_808,
+                },
+            )
+
+        assert [agent.id for agent in orchestrator.candidates] == ["general_agent"]
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM agent_pool WHERE agent_id = ?",
+                ("overflow_agent",),
+            ).fetchone() == (0,)
+
+
+def test_patch_agent_rejects_unpersistable_limit_without_mutation() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        orchestrator = TaskOrchestrator(_seed(), agents_db=db)
+
+        with pytest.raises(TypeError, match="context_window must be"):
+            orchestrator.patch_agent(
+                "default",
+                "general_agent",
+                {"context_window": 9_223_372_036_854_775_808},
+            )
+
+        assert orchestrator._agent("general_agent").context_window is None
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT context_window FROM agent_pool WHERE agent_id = ?",
+                ("general_agent",),
+            ).fetchone() is None
+
+
 def test_legacy_payload_group_is_migrated_without_data_loss() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "pool.db")

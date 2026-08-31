@@ -66,11 +66,19 @@ def test_openapi_documents_compatibility_front_door() -> None:
     ]["patch"]["requestBody"]["content"]["application/json"]["schema"]
     assert patch_schema["properties"]["stream_usage_supported"]["type"] == "boolean"
     assert patch_schema["properties"]["max_output_tokens"]["anyOf"] == [
-        {"type": "integer", "minimum": 1},
+        {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9_223_372_036_854_775_807,
+        },
         {"type": "null"},
     ]
     assert patch_schema["properties"]["context_window"]["anyOf"] == [
-        {"type": "integer", "minimum": 1},
+        {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9_223_372_036_854_775_807,
+        },
         {"type": "null"},
     ]
     assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (

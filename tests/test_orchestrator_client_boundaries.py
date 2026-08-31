@@ -164,8 +164,12 @@ def test_model_agent_rejects_bad_local_credential_key_and_effort_flag() -> None:
         ModelAgent(id="agent_two", model="m", reasoning_effort_supported="yes")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="max_output_tokens must be"):
         ModelAgent(id="agent_two", model="m", max_output_tokens=0)
+    with pytest.raises(TypeError, match="max_output_tokens must be"):
+        ModelAgent(id="agent_two", model="m", max_output_tokens=9_223_372_036_854_775_808)
     with pytest.raises(TypeError, match="context_window must be"):
         ModelAgent(id="agent_two", model="m", context_window="128000")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="context_window must be"):
+        ModelAgent(id="agent_two", model="m", context_window=9_223_372_036_854_775_808)
 
 
 def test_client_clamps_known_provider_output_ceiling() -> None:
