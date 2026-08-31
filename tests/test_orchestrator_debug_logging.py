@@ -180,16 +180,14 @@ def test_send_raw_with_retry_also_distinguishes_permanent_rejection_from_exhaust
     assert "provider_rejected_permanent agent_id=worker_agent" in output
 
 
-def test_zero_retry_limit_never_labels_a_failure_as_exhausted() -> None:
-    """`max_retries=0` means no retry budget ever existed, so nothing was "exhausted".
-
-    With `retry_limit == 0`, `attempt >= retry_limit` is trivially true after
-    the single allowed attempt regardless of whether that failure was
-    transient or not -- the round-2 provider_exhausted/provider_rejected_permanent
-    split alone doesn't catch this, since it only checked attempt vs.
-    retry_limit. Uses a *transient* error (503) deliberately: even a
-    transient failure must not be reported as "exhausted" when there was
-    never any retry budget to exhaust.
+def test_zero_retry_limit_with_transient_error_logs_no_retry_budget_not_permanent() -> None:
+    """`max_retries=0` means no retry budget ever existed, so nothing was "exhausted" --
+    and, separately, a *transient* error under a zero budget must not be mislabeled
+    "permanent" either: "no retry budget was configured" and "this error is
+    non-retryable by nature" are two independent facts. Uses a transient error
+    (503, would normally be retried) deliberately, paired with the
+    non-transient counterpart below to cover all 4 (retries>0 vs =0) x
+    (transient vs non-transient) combinations.
     """
 
     class ZeroRetryClient(ModelClient):
@@ -211,10 +209,39 @@ def test_zero_retry_limit_never_labels_a_failure_as_exhausted() -> None:
     assert client.attempts == 1
     output = buffer.getvalue()
     assert "provider_exhausted" not in output
-    assert "provider_rejected_permanent agent_id=worker_agent" in output
+    assert "provider_rejected_permanent" not in output
+    assert "provider_no_retry_budget agent_id=worker_agent" in output
+    assert "transient=True" in output
 
 
-def test_send_raw_with_retry_zero_retry_limit_never_labels_a_failure_as_exhausted() -> None:
+def test_zero_retry_limit_with_non_transient_error_logs_no_retry_budget_too() -> None:
+    """Same zero-budget event fires for a non-transient error too, with `transient=False`."""
+
+    class ZeroRetryUnauthorizedClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(401)  # non-transient
+
+    client = ZeroRetryUnauthorizedClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_with_retry(agent, {"model": "gpt"})
+        except Exception:
+            pass
+    assert client.attempts == 1
+    output = buffer.getvalue()
+    assert "provider_exhausted" not in output
+    assert "provider_rejected_permanent" not in output
+    assert "provider_no_retry_budget agent_id=worker_agent" in output
+    assert "transient=False" in output
+
+
+def test_send_raw_with_retry_zero_retry_limit_with_transient_error_logs_no_retry_budget() -> None:
     """`_send_raw_with_retry` duplicates the retry loop and must share the zero-retry fix."""
 
     class ZeroRetryRawClient(ModelClient):
@@ -236,7 +263,36 @@ def test_send_raw_with_retry_zero_retry_limit_never_labels_a_failure_as_exhauste
     assert client.attempts == 1
     output = buffer.getvalue()
     assert "provider_exhausted" not in output
-    assert "provider_rejected_permanent agent_id=worker_agent" in output
+    assert "provider_rejected_permanent" not in output
+    assert "provider_no_retry_budget agent_id=worker_agent" in output
+    assert "transient=True" in output
+
+
+def test_send_raw_with_retry_zero_retry_limit_with_non_transient_error_logs_no_retry_budget() -> None:
+    """`_send_raw_with_retry` counterpart of the non-transient zero-budget case."""
+
+    class ZeroRetryRawUnauthorizedClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+            self.attempts = 0
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(401)  # non-transient
+
+    client = ZeroRetryRawUnauthorizedClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_raw_with_retry(agent, "chat/completions", {})
+        except Exception:
+            pass
+    assert client.attempts == 1
+    output = buffer.getvalue()
+    assert "provider_exhausted" not in output
+    assert "provider_rejected_permanent" not in output
+    assert "provider_no_retry_budget agent_id=worker_agent" in output
+    assert "transient=False" in output
 
 
 def test_circuit_opened_emits_warning_without_debug() -> None:

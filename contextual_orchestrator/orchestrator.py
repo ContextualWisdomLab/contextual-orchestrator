@@ -1182,12 +1182,15 @@ def _log_provider_exhausted(agent: ModelAgent, attempts: int, last_error: Except
     Fires by default (no --verbose needed): a provider call that ultimately
     failed is an actionable operational event, not just internal reasoning.
     Only fires when a *real, non-zero* retry budget was configured and
-    actually exhausted -- an immediate non-transient rejection, or any
-    failure at all when the configured retry limit is 0 (there was never a
-    retry to exhaust), logs :func:`_log_provider_rejected_permanent`
-    instead, so an operator scanning WARNING output never mistakes "gave up
-    after using its full retry budget" for "was never going to be retried
-    in the first place".
+    actually exhausted. Two distinct, more precise events cover the cases
+    this must not be confused with: :func:`_log_provider_rejected_permanent`
+    (a real budget existed, but the failure was judged non-retryable before
+    it ran out) and :func:`_log_provider_no_retry_budget` (no retry budget
+    was ever configured at all, so there was never anything to exhaust,
+    regardless of whether the error itself was transient or not) -- so an
+    operator scanning WARNING output never mistakes "gave up after using its
+    full retry budget" for either "was never going to be retried in the
+    first place" or "was never allowed to be retried at all".
     """
     _LOGGER.warning(
         "provider_exhausted agent_id=%s model=%s attempts=%s final_error_type=%s",
@@ -1198,19 +1201,46 @@ def _log_provider_exhausted(agent: ModelAgent, attempts: int, last_error: Except
     )
 
 
-def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_error: Exception) -> None:
-    """WARNING-log a provider call that stopped without ever exhausting a real retry budget.
+def _log_provider_no_retry_budget(
+    agent: ModelAgent, attempts: int, last_error: Exception, *, transient: bool
+) -> None:
+    """WARNING-log a provider call that failed with no retry budget configured at all.
 
     Fires by default (no --verbose needed), mirroring
     :func:`_log_provider_exhausted`'s default visibility, but under a
-    distinct event name, in either of two cases: the retry loop stopped
-    because ``is_transient_error`` classified the final failure as permanent
-    (e.g. a 401/403/malformed-request response), which can happen well
-    before the configured retry budget is used up; or the agent's retry
-    limit is configured as 0, so there was never any retry budget to
-    exhaust in the first place (``attempts`` is then always exactly 1) --
-    calling that "exhausted" would misleadingly imply retries were
-    attempted and ran out, when none were ever possible by configuration.
+    distinct event name for the case where the agent's configured retry
+    limit is 0: there was never any retry budget to exhaust or to give up
+    on early, regardless of whether the error itself was transient or not
+    (``attempts`` is then always exactly 1). "No retry budget was
+    configured" and "this error is non-retryable by nature" are two
+    different, independent facts -- collapsing every zero-budget failure
+    into :func:`_log_provider_rejected_permanent` would misleadingly imply
+    the error type itself was judged permanent, even for a transient error
+    (e.g. an HTTP 503) that simply never got a chance to retry. ``transient``
+    carries the error's own classification explicitly so an operator can
+    still tell "this might have succeeded on retry, but none was allowed"
+    from "this wouldn't have been retried anyway" from this one event name.
+    """
+    _LOGGER.warning(
+        "provider_no_retry_budget agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s",
+        agent.id,
+        agent.model,
+        attempts,
+        type(last_error).__name__,
+        transient,
+    )
+
+
+def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_error: Exception) -> None:
+    """WARNING-log a provider call that stopped on a non-transient failure with budget left.
+
+    Fires by default (no --verbose needed), mirroring
+    :func:`_log_provider_exhausted`'s default visibility, but under a
+    distinct event name: a real, non-zero retry budget was configured, and
+    the retry loop stopped early -- before that budget ran out -- because
+    ``is_transient_error`` classified the final failure as permanent (e.g. a
+    401/403/malformed-request response). See :func:`_log_provider_no_retry_budget`
+    for the separate case where no retry budget was configured at all.
     """
     _LOGGER.warning(
         "provider_rejected_permanent agent_id=%s model=%s attempts=%s final_error_type=%s",
@@ -1716,7 +1746,9 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            if retry_limit > 0 and attempt >= retry_limit:
+            if retry_limit == 0:
+                _log_provider_no_retry_budget(agent, attempt + 1, last_error, transient=transient)
+            elif attempt >= retry_limit:
                 _log_provider_exhausted(agent, attempt + 1, last_error)
             else:
                 _log_provider_rejected_permanent(agent, attempt + 1, last_error)
@@ -2261,7 +2293,9 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            if retry_limit > 0 and attempt >= retry_limit:
+            if retry_limit == 0:
+                _log_provider_no_retry_budget(agent, attempt + 1, last_error, transient=transient)
+            elif attempt >= retry_limit:
                 _log_provider_exhausted(agent, attempt + 1, last_error)
             else:
                 _log_provider_rejected_permanent(agent, attempt + 1, last_error)

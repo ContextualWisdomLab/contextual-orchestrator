@@ -73,9 +73,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   everywhere with a clear error, rather than silently accepted by one parser
   and not another. The retry loop's `provider_exhausted` WARNING now fires
   only when a real, non-zero retry budget was actually used up; an
-  immediate non-transient (permanent) rejection, or any failure at all with
-  a configured retry limit of 0 (there was never a budget to exhaust), logs
-  the distinct `provider_rejected_permanent` instead. The handler-level
+  immediate non-transient (permanent) rejection with budget left logs the
+  distinct `provider_rejected_permanent`, and any failure at all with a
+  configured retry limit of 0 (there was never a budget to exhaust) logs a
+  separate `provider_no_retry_budget` carrying the error's own
+  transient/non-transient classification explicitly — collapsing a
+  zero-budget *transient* failure into "permanent" would conflate "no retry
+  budget was configured" with "this error is non-retryable by nature", two
+  independent facts. The handler-level
   redaction safety net now also redacts an exception's traceback
   (`exc_info=True` / `logger.exception(...)`), not just `record.msg` — a
   secret embedded in an exception's own message (e.g. an upstream error

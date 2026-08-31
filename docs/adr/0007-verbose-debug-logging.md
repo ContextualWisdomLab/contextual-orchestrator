@@ -67,12 +67,17 @@ New instrumentation lands at the previously silent decision points: the
 provider retry loop (`_send_with_retry`/`_send_raw_with_retry`: per-attempt,
 backoff, and a WARNING-level `provider_exhausted` line that fires without
 `--verbose`, since a call that used its full retry budget is an actionable
-operational event -- an immediate non-transient failure that never spent any
-retry budget, or any failure at all with a configured retry limit of 0
-(there was never a budget to exhaust), logs the distinct
-`provider_rejected_permanent` instead, chosen by whether the loop actually
-reached a *real, non-zero* retry limit or broke early for either of those
-other two reasons); the per-agent circuit breaker (`_record_failure` logs a
+operational event -- fires only when a *real, non-zero* retry budget was
+configured and actually used up. Two other, distinctly named events cover
+the cases this must not be confused with: `provider_rejected_permanent`
+(a real budget existed, but the retry loop stopped early because
+`is_transient_error` classified the final failure as permanent) and
+`provider_no_retry_budget` (the configured retry limit is 0, so there was
+never any budget to exhaust or give up on early, regardless of whether the
+error itself was transient -- carries that classification explicitly via a
+`transient=%s` field, since "no retry budget was configured" and "this
+error is non-retryable by nature" are independent facts that collapsing
+into one event would conflate); the per-agent circuit breaker (`_record_failure` logs a
 DEBUG line on every increment and a WARNING `circuit_opened` line only on the
 edge transition into the open state; `_record_success` logs DEBUG only when
 there was real breaker state to clear, to avoid a firehose on every healthy
