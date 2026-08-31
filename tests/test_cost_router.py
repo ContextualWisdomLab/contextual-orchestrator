@@ -24,6 +24,7 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     BatchDownloadError,
     BatchJob,
     BatchRequest,
+    BatchResultItem,
     LocalBatchBackend,
     PgLlmBatchBackend,
 )
@@ -673,6 +674,22 @@ def test_local_batch_malformed_usage_falls_back_without_coercion() -> None:
     )
 
 
+def test_custom_batch_backend_preserves_one_sided_zero_usage() -> None:
+    class _Backend:
+        name = "custom"
+        def submit(self, requests, metadata=None):
+            return BatchJob("custom-zero", self.name, request_count=len(requests))
+        def retrieve(self, job):
+            return [BatchResultItem("request-zero", "answer", 0, 5)]
+    coordinator = _coordinator()
+    coordinator.batch_backend = _Backend()
+    job = coordinator.complete([{"role": "user", "content": "zero prompt"}],
+                               hints={"channel": "batch"})
+    result = coordinator.retrieve_batch(job["job_id"])["results"][0]
+    assert result["measurement_status"] == "measured"
+    assert (result["prompt_tokens"], result["completion_tokens"]) == (0, 5)
+
+
 def test_local_batch_cache_hit_does_not_rebill_provider() -> None:
     coordinator = _coordinator()
     coordinator.batch_backend = LocalBatchBackend(lambda *_: {
@@ -753,6 +770,8 @@ def test_batch_mixed_currency_and_retrieval_idempotency() -> None:
     job = coordinator.complete([{"role": "user", "content": "mixed"}],
                                hints={"channel": "batch"})
     first = coordinator.retrieve_batch(job["job_id"])
+    prices.set_price(PriceEntry("alpha", "model-a", 99, 99, currency_code="USD"))
+    prices.set_price(PriceEntry("beta", "model-b", 99, 99, currency_code="EUR"))
     assert first == coordinator.retrieve_batch(job["job_id"])
     assert [part["currency_code"] for part in
             first["results"][0]["currency_components"]] == ["EUR", "USD"]

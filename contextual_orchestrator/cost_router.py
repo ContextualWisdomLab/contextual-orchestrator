@@ -127,6 +127,7 @@ class CostRoutingCoordinator:
         self._embedding_part_counts = registry.mapping("embedding_part_counts")
         self._embedding_part_limits = registry.mapping("embedding_part_limits")
         self._embedding_documents = registry.mapping("embedding_documents")
+        self._batch_documents = registry.mapping("batch_documents")
 
     def _run_local_batch(
         self, messages: List[Dict[str, str]], mode: str, model: str
@@ -748,6 +749,9 @@ class CostRoutingCoordinator:
         success -- see ``batch_routing.BatchDownloadError`` for why.
         """
         job = self._require_job(job_id, owner_id=owner_id)
+        cached = self._batch_documents.get(job_id)
+        if cached is not None:
+            return cached
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
         recorded: List[Dict[str, Any]] = []
         for item in items:
@@ -794,8 +798,7 @@ class CostRoutingCoordinator:
             if not records:
                 usage_valid = item.usage_valid is True or (
                     item.usage_valid is None
-                    and item.prompt_tokens > 0
-                    and item.completion_tokens > 0
+                    and (item.prompt_tokens > 0 or item.completion_tokens > 0)
                 )
                 records.append(
                     self._record_completion(
@@ -814,7 +817,18 @@ class CostRoutingCoordinator:
                         ),
                     )
                 )
-            currencies = {record.currency_code for record in records}
+            self.ledger.flush()
+            record_ids = {record.usage_record_id for record in records}
+            settled = {
+                row["usage_record_id"]: row
+                for row in self.ledger.records()
+                if row.get("usage_record_id") in record_ids
+            }
+            record_rows = [
+                settled.get(record.usage_record_id, record.as_dict())
+                for record in records
+            ]
+            currencies = {row["currency_code"] for row in record_rows}
             recorded.append(
                 {
                     "custom_id": item.custom_id,
@@ -822,22 +836,22 @@ class CostRoutingCoordinator:
                     "usage_record_id": records[-1].usage_record_id,
                     "usage_record_ids": [record.usage_record_id for record in records],
                     "cost_amount": (
-                        round(sum(record.cost_amount for record in records), 6)
+                        round(sum(row["cost_amount"] for row in record_rows), 6)
                         if len(currencies) == 1
                         else None
                     ),
                     "currency_code": (
                         next(iter(currencies)) if len(currencies) == 1 else "MIXED"
                     ),
-                    "prompt_tokens": sum(record.prompt_tokens for record in records),
+                    "prompt_tokens": sum(row["prompt_tokens"] for row in record_rows),
                     "completion_tokens": sum(
-                        record.completion_tokens for record in records
+                        row["completion_tokens"] for row in record_rows
                     ),
                     "measurement_status": (
                         "estimated"
                         if any(
-                            record.measurement_status == "estimated"
-                            for record in records
+                            row["measurement_status"] == "estimated"
+                            for row in record_rows
                         )
                         else "measured"
                     ),
@@ -845,20 +859,27 @@ class CostRoutingCoordinator:
                         {
                             "currency_code": currency,
                             "cost_amount": round(sum(
-                                record.cost_amount for record in records
-                                if record.currency_code == currency
+                                row["cost_amount"] for row in record_rows
+                                if row["currency_code"] == currency
                             ), 6),
                         }
                         for currency in sorted(currencies)
                     ]} if len(currencies) > 1 else {}),
                 }
             )
-        return {
+        document = {
             "job_id": job_id,
             "backend": job.backend,
             "result_count": len(recorded),
             "results": recorded,
         }
+        set_if_absent = getattr(self._batch_documents, "set_if_absent", None)
+        if callable(set_if_absent):
+            if not set_if_absent(job_id, document):
+                return self._batch_documents[job_id]
+        else:
+            document = self._batch_documents.setdefault(job_id, document)
+        return document
 
     @staticmethod
     def _batch_usage_record_id(job_id: str, custom_id: str, kind: str, index: int) -> str:
