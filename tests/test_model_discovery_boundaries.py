@@ -180,6 +180,39 @@ def test_fixed_provider_ca_failure_retries_with_certifi_verification() -> None:
     assert calls[1]["context"].check_hostname is True
 
 
+def test_fetch_json_rejects_oversized_response_body() -> None:
+    """An oversized provider body is rejected before JSON parsing, not buffered whole.
+
+    Regression for the unbounded ``response.read()`` in ``_fetch_json``: a
+    large or malicious/misbehaving provider response (an outage page dumped
+    as an unbounded body, or a compromised endpoint) must not be read fully
+    into memory. The bounded-read call must request at most
+    ``MAX_DISCOVERY_RESPONSE_BYTES + 1`` bytes -- exactly enough to detect an
+    overage -- never the full oversized body.
+    """
+    oversized = b"0" * (MAX_DISCOVERY_RESPONSE_BYTES + 1024)
+    reads: list[int | None] = []
+
+    class OversizedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, amt: int | None = None) -> bytes:
+            reads.append(amt)
+            return oversized if amt is None else oversized[:amt]
+
+    with patch(
+        "contextual_orchestrator.model_discovery._open_trusted_discovery_request",
+        return_value=OversizedResponse(),
+    ):
+        with pytest.raises(ValueError, match="model discovery response exceeds maximum size"):
+            _fetch_json("https://provider.example/v1/models", timeout=1)
+    assert reads == [MAX_DISCOVERY_RESPONSE_BYTES + 1]
+
+
 def test_malformed_json_maps_to_invalid_response_code() -> None:
     """A non-JSON provider body is invalid_response, not a crash."""
     register_credential("OPENAI_API_KEY", "sk-openai")
@@ -191,8 +224,11 @@ def test_malformed_json_maps_to_invalid_response_code() -> None:
         def __exit__(self, *_args):
             return False
 
-        def read(self) -> bytes:
-            return b"<html>not json</html>"
+        def read(self, amt: int | None = None) -> bytes:
+            # _fetch_json now caps its read (MAX_DISCOVERY_RESPONSE_BYTES + 1);
+            # accept the optional amt like http.client.HTTPResponse.read does.
+            body = b"<html>not json</html>"
+            return body if amt is None else body[:amt]
 
     with patch(
         "contextual_orchestrator.model_discovery._open_trusted_discovery_request",

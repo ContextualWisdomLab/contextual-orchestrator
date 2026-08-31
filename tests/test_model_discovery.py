@@ -523,10 +523,11 @@ class _Response:
         return False
 
     def read(self, amt: int | None = None) -> bytes:
-        # amt mirrors http.client.HTTPResponse.read(amt): _fetch_json reads the
-        # full body (amt=None) while _fetch_json_same_host_https caps it to
-        # enforce MAX_DISCOVERY_RESPONSE_BYTES -- both are exercised through
-        # this same fixture now that both share _open_trusted_discovery_request.
+        # amt mirrors http.client.HTTPResponse.read(amt): _fetch_json,
+        # _fetch_json_same_host_https, and _fetch_configured_gateway_json all
+        # cap their read at MAX_DISCOVERY_RESPONSE_BYTES + 1 to enforce the
+        # size bound -- all three are exercised through this same fixture now
+        # that they share _open_trusted_discovery_request.
         return self._body if amt is None else self._body[:amt]
 
 

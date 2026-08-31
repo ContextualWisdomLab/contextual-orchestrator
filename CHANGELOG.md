@@ -92,6 +92,35 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   JSON, so a key shaped like `"customer_note=<secret>"` with a throwaway
   numeric value would otherwise have sailed through the old numeric-only
   filter and reached DEBUG output verbatim (CWE-532).
+- (round 6) `model_discovery.py`'s `_fetch_json` read an authenticated
+  provider's entire response body into memory before parsing it as JSON
+  (`response.read()`, no size bound) -- unlike `_fetch_json_same_host_https`
+  and `_fetch_configured_gateway_json`, which already capped their reads at
+  `MAX_DISCOVERY_RESPONSE_BYTES` (8 MiB) and failed closed on an overage.
+  A large or malicious/misbehaving provider response (an outage page dumped
+  as an unbounded body, or a compromised endpoint) could exhaust worker
+  memory before JSON parsing ever ran (CWE-400). `_fetch_json` now shares
+  the identical bounded-read-then-check pattern: it reads at most
+  `MAX_DISCOVERY_RESPONSE_BYTES + 1` bytes and raises `ValueError` if the
+  body exceeds the cap, applied consistently everywhere
+  `_open_trusted_discovery_request`'s response body is consumed in this
+  module.
+- (round 6) `_log_retry_outcome`'s zero-retry-budget classification
+  conflated two different situations under the same `provider_no_retry_budget`
+  WARNING: an agent with a genuinely zero configured retry budget, and
+  `ModelClient.proxy_send_once`'s deliberate one-shot call
+  (`allow_transient_retries=False`, used so an already-failing-over
+  passthrough request cannot itself amplify load with a nested retry loop).
+  `_send_raw_with_retry` computes `retry_limit = self._retry_limit(agent) if
+  allow_transient_retries else 0`, so the forced-to-0 one-shot case looked
+  identical to a real zero-budget agent by the time it reached
+  `_log_retry_outcome`, producing a false "no retry budget" warning even
+  when the agent's real budget was non-zero. `_log_retry_outcome` now takes
+  `allow_transient_retries` explicitly and, when a caller forced the retry
+  count to zero rather than the agent's own configuration being zero, logs a
+  distinctly named `provider_one_shot_call_failed` WARNING instead of
+  `provider_no_retry_budget`. `_send_with_retry` has no such caller-forced
+  restriction and is unaffected.
 
 ### Added
 

@@ -310,6 +310,13 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
     uses the same :class:`_TrustedDiscoveryRedirectHandler` opener as
     :func:`_fetch_json_same_host_https` to reject any redirect that leaves
     the original host instead of silently forwarding the header.
+
+    The body read is capped at :data:`MAX_DISCOVERY_RESPONSE_BYTES` -- an
+    unbounded ``response.read()`` would let an outage page, a misbehaving
+    proxy, or a compromised provider endpoint stream an arbitrarily large
+    body into memory before JSON parsing ever runs. This mirrors the same
+    bounded-read-then-check pattern already used by
+    :func:`_fetch_json_same_host_https` and :func:`_fetch_configured_gateway_json`.
     """
     if not url.startswith("https://"):
         # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
@@ -335,7 +342,10 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
             request, trusted_host=parsed.hostname, timeout=timeout, context=context
         )
     with response:
-        return json.loads(response.read().decode("utf-8"))
+        raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+        raise ValueError("model discovery response exceeds maximum size")
+    return json.loads(raw.decode("utf-8"))
 
 
 def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:

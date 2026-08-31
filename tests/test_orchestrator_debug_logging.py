@@ -15,6 +15,7 @@ import urllib.error
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -293,6 +294,101 @@ def test_send_raw_with_retry_zero_retry_limit_with_non_transient_error_logs_no_r
     assert "provider_rejected_permanent" not in output
     assert "provider_no_retry_budget agent_id=worker_agent" in output
     assert "transient=False" in output
+
+
+def test_send_raw_with_retry_one_shot_call_does_not_log_no_retry_budget() -> None:
+    """`proxy_send_once`'s intentional single-attempt call must not claim `no_retry_budget`.
+
+    Regression: with a real, non-zero configured retry budget (`max_retries=2`),
+    calling `_send_raw_with_retry(..., allow_transient_retries=False)` -- the
+    exact policy `proxy_send_once` uses so an already-failing-over passthrough
+    request cannot itself amplify load with a nested retry loop -- forces
+    `retry_limit` to 0 for this one call. Before the fix, `_log_retry_outcome`
+    could not tell that apart from an agent that genuinely has no retry budget
+    configured at all, and always logged the misleading
+    `provider_no_retry_budget` event. It must now log a distinctly named
+    `provider_one_shot_call_failed` event instead.
+    """
+
+    class OneShotRawClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(503)  # transient -- would normally be retried
+
+    client = OneShotRawClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_raw_with_retry(
+                agent, "chat/completions", {}, allow_transient_retries=False
+            )
+        except Exception:
+            pass
+    assert client.attempts == 1  # forced to exactly one attempt despite max_retries=2
+    output = buffer.getvalue()
+    assert "provider_no_retry_budget" not in output
+    assert "provider_exhausted" not in output
+    assert "provider_rejected_permanent" not in output
+    assert "provider_one_shot_call_failed agent_id=worker_agent" in output
+    assert "attempts=1" in output
+    assert "transient=True" in output
+
+
+def test_send_raw_with_retry_one_shot_call_reports_transient_false_too() -> None:
+    """The one-shot event carries the real `transient` classification, not a fixed value."""
+
+    class OneShotRawUnauthorizedClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            self.attempts += 1
+            raise _http_error(401)  # non-transient
+
+    client = OneShotRawUnauthorizedClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with _captured_logs(logging.WARNING) as buffer:
+        try:
+            client._send_raw_with_retry(
+                agent, "chat/completions", {}, allow_transient_retries=False
+            )
+        except Exception:
+            pass
+    assert client.attempts == 1
+    output = buffer.getvalue()
+    assert "provider_no_retry_budget" not in output
+    assert "provider_one_shot_call_failed agent_id=worker_agent" in output
+    assert "transient=False" in output
+
+
+def test_proxy_send_once_one_shot_failure_does_not_log_no_retry_budget() -> None:
+    """End-to-end: `proxy_send_once` itself must not emit the misleading event."""
+
+    class OneShotProxyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=2, retry_backoff=0.0)
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            raise _http_error(503)
+
+    client = OneShotProxyClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+    with (
+        patch.object(client, "_validate_provider", return_value=(2, ("203.0.113.10", 443))),
+        _captured_logs(logging.WARNING) as buffer,
+    ):
+        try:
+            client.proxy_send_once(agent, "chat/completions", {"model": "gpt"})
+        except Exception:
+            pass
+    output = buffer.getvalue()
+    assert "provider_no_retry_budget" not in output
+    assert "provider_one_shot_call_failed agent_id=worker_agent" in output
 
 
 def test_circuit_opened_emits_warning_without_debug() -> None:

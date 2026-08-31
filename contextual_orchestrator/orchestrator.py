@@ -1231,6 +1231,37 @@ def _log_provider_no_retry_budget(
     )
 
 
+def _log_provider_one_shot_call_failed(
+    agent: ModelAgent, attempts: int, last_error: Exception, *, transient: bool
+) -> None:
+    """WARNING-log a provider call that failed under a caller-forced single-attempt policy.
+
+    Fires by default (no --verbose needed), mirroring
+    :func:`_log_provider_no_retry_budget`'s default visibility, but under a
+    distinct event name for a materially different situation: this call was
+    not made against an agent with no configured retry budget at all -- it
+    was ``ModelClient._send_raw_with_retry(..., allow_transient_retries=False)``
+    deliberately restricting *this one call* to exactly one attempt (e.g.
+    ``proxy_send_once``, used so an already-failing-over passthrough request
+    cannot itself amplify load with a nested retry loop). The agent's real
+    ``_retry_limit`` may well be non-zero; it simply was never consulted for
+    this call. Reusing :func:`_log_provider_no_retry_budget` here would tell
+    an operator the agent has no retry budget configured, which may be false
+    and is misleading either way -- the true reason this call did not retry
+    was the caller's one-shot policy, not the agent's configuration.
+    ``attempts`` is always exactly 1 by construction, mirroring
+    :func:`_log_provider_no_retry_budget`.
+    """
+    _LOGGER.warning(
+        "provider_one_shot_call_failed agent_id=%s model=%s attempts=%s final_error_type=%s transient=%s",
+        agent.id,
+        agent.model,
+        attempts,
+        type(last_error).__name__,
+        transient,
+    )
+
+
 def _log_provider_rejected_permanent(agent: ModelAgent, attempts: int, last_error: Exception) -> None:
     """WARNING-log a provider call that stopped on a non-transient failure with budget left.
 
@@ -1258,22 +1289,41 @@ def _log_retry_outcome(
     last_error: Exception,
     *,
     transient: bool,
+    allow_transient_retries: bool = True,
 ) -> None:
     """Log a terminated retry loop's outcome under its correct distinct event name.
 
     ``ModelClient._send_with_retry`` and ``ModelClient._send_raw_with_retry``
-    run this identical three-way classification (no retry budget at all /
-    budget exhausted / stopped early on a non-transient error) once their
-    retry loop ends. It used to be duplicated verbatim in both methods, and
-    that duplication already caused a real regression once -- a fix landed
-    in one copy but was missed in the other (see
-    ``tests/test_orchestrator_debug_logging.py``'s
+    run this identical classification (no retry budget at all / a caller-
+    forced single attempt / budget exhausted / stopped early on a
+    non-transient error) once their retry loop ends. It used to be
+    duplicated verbatim in both methods, and that duplication already caused
+    a real regression once -- a fix landed in one copy but was missed in the
+    other (see ``tests/test_orchestrator_debug_logging.py``'s
     ``test_send_raw_with_retry_*`` tests, which exist specifically to catch
     that class of drift). Extracting the shared logic here makes it
     impossible for the two call sites to diverge again.
+
+    ``allow_transient_retries`` distinguishes *why* ``retry_limit`` came out
+    as 0. ``_send_raw_with_retry`` computes
+    ``retry_limit = self._retry_limit(agent) if allow_transient_retries else 0``:
+    when the caller passed ``allow_transient_retries=False`` (``proxy_send_once``,
+    a deliberate one-shot call so an already-failing-over passthrough request
+    cannot itself amplify load with a nested retry loop), a zero here says
+    nothing about whether the agent actually has a configured retry budget --
+    it was simply never consulted. Logging that case as
+    :func:`_log_provider_no_retry_budget` would misreport a real,
+    possibly-non-zero budget as absent; :func:`_log_provider_one_shot_call_failed`
+    names the true reason instead. ``_send_with_retry`` has no such
+    caller-forced restriction and always passes the default ``True``, so its
+    zero-budget case is unaffected and still reaches
+    :func:`_log_provider_no_retry_budget`.
     """
     if retry_limit == 0:
-        _log_provider_no_retry_budget(agent, attempt + 1, last_error, transient=transient)
+        if allow_transient_retries:
+            _log_provider_no_retry_budget(agent, attempt + 1, last_error, transient=transient)
+        else:
+            _log_provider_one_shot_call_failed(agent, attempt + 1, last_error, transient=transient)
     elif attempt >= retry_limit:
         _log_provider_exhausted(agent, attempt + 1, last_error)
     else:
@@ -2317,7 +2367,14 @@ class ModelClient:
                 _log_provider_backoff(agent, attempt, delay)
                 self._sleep(delay)
         if last_error is not None:
-            _log_retry_outcome(agent, attempt, retry_limit, last_error, transient=transient)
+            _log_retry_outcome(
+                agent,
+                attempt,
+                retry_limit,
+                last_error,
+                transient=transient,
+                allow_transient_retries=allow_transient_retries,
+            )
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (

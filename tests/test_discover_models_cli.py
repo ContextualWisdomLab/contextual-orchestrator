@@ -34,8 +34,9 @@ class _Response:
     def read(self, amt: int | None = None) -> bytes:
         # amt mirrors http.client.HTTPResponse.read(amt): _fetch_json_same_host_https
         # (the always-invoked OpenRouter ZDR fetch inside discover_all_models)
-        # caps its read, unlike _fetch_json's uncapped read -- both now share
-        # this fixture via the same _open_trusted_discovery_request seam.
+        # and _fetch_json both cap their read at MAX_DISCOVERY_RESPONSE_BYTES + 1
+        # -- both share this fixture via the same _open_trusted_discovery_request
+        # seam.
         return self._body if amt is None else self._body[:amt]
 
 
