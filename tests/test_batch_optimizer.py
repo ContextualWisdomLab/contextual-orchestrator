@@ -256,10 +256,65 @@ def test_batch_route_rechecks_budget_before_each_judge_call() -> None:
         with pytest.raises(orchestrator_module.BudgetExceededError):
             orchestrator.batch_route(["task one", "task three"])
 
-    # The first item's judge call and persistence completed before the
-    # second item's pre-judge budget check stopped the batch -- proof the
-    # loop re-checks per item rather than only once before it starts.
-    assert len(orchestrator._workflow_runs) == 1
+    # The already-completed batch worker exactly exhausts the cap, so the
+    # first per-item checkpoint stops before another provider call.
+    assert len(orchestrator._workflow_runs) == 0
+
+
+def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None:
+    client = _CountingClient()
+
+    def varied_batch(_agent, requests, **_kwargs):
+        completion_tokens = {"task_0": 6, "task_1": 1}
+        return {
+            custom_id: {
+                "content": custom_id,
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": completion_tokens[custom_id],
+                    "total_tokens": 1 + completion_tokens[custom_id],
+                },
+            }
+            for custom_id in requests
+        }
+
+    client.batch_chat = varied_batch  # type: ignore[method-assign]
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
+        client=client,
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=10,
+    )
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        records = orchestrator.batch_route(["task one", "task three"])
+
+    assert len(records) == 2
+    assert orchestrator.budget_status()["spent_output_tokens"] == 7
+
+
+def test_batch_route_budget_meter_includes_reported_judge_usage() -> None:
+    class _UsageJudge(_ScriptedFastJudge):
+        def judge(self, **kwargs):
+            result = super().judge(**kwargs)
+            result.usage = {"completion_tokens": 2}
+            return result
+
+    components = replace(_scripted_fast_components(), judge_cls=_UsageJudge)
+    orchestrator = _orch(_CountingClient())
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=components,
+    ):
+        orchestrator.batch_route(["task one"])
+
+    assert orchestrator.budget_status()["spent_output_tokens"] == 8
 
 
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:

@@ -4722,20 +4722,8 @@ class TaskOrchestrator:
                 answers[index] = result
 
         records: list[dict[str, Any]] = []
-        rows_so_far: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
             result = answers[index]
-            # Each judge call below is its own bounded provider call (see
-            # _model_judge_verification), not covered by the one-time check
-            # above -- re-check against spend already recorded by this batch
-            # before starting another one, exactly like conduct()'s per-step
-            # budget checkpoint.
-            if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-                in_flight_tokens, in_flight_cost = self._trace_budget_spend(rows_so_far)
-                self._raise_if_spend_budget_exceeded(
-                    additional_output_tokens=in_flight_tokens,
-                    additional_cost_usd=in_flight_cost,
-                )
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
                 "model": agent.model,
@@ -4745,7 +4733,17 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
-            rows_so_far.append(row)
+            # Each judge call below is its own bounded provider call (see
+            # _model_judge_verification), not covered by the one-time check
+            # above -- re-check against spend already recorded by this batch
+            # before starting another one, exactly like conduct()'s per-step
+            # budget checkpoint.
+            if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+                in_flight_tokens, in_flight_cost = self._trace_budget_spend([row])
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
             # Judge each batched answer exactly like route_once: a genuine
             # fast-mlsirm verdict when policy.realtime_judge is on (the
             # default), or the same reviewed fallback shape when an operator
@@ -6974,8 +6972,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
-                verification["judge_agent_id"] = judge_adapter.served_agent_id
+            verification["judge_agent_id"] = judge_adapter.served_agent_id or judge.id
             if result.usage:
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
@@ -7307,6 +7304,20 @@ class TaskOrchestrator:
             )
             output_tokens, _reported = _step_output_tokens(step)
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
+        verification = record.get("verification")
+        if isinstance(verification, Mapping):
+            usage = verification.get("judge_usage")
+            judge_agent_id = verification.get("judge_agent_id")
+            completion_tokens = (
+                usage.get("completion_tokens", usage.get("output_tokens"))
+                if isinstance(usage, Mapping)
+                else None
+            )
+            if type(completion_tokens) is int and completion_tokens >= 0:
+                judge_model = model_by_agent.get(judge_agent_id, "unknown")
+                output_by_model[judge_model] = (
+                    output_by_model.get(judge_model, 0) + completion_tokens
+                )
         return output_by_model
 
     def _replace_workflow_run(self, record: dict[str, Any]) -> None:
