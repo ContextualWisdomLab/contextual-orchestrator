@@ -1455,7 +1455,8 @@ class CostLedger:
         bucket down by row ``measurement_status`` (``measured``, ``estimated``,
         ``unavailable``) so a caller can tell how much of a total is real
         provider-measured spend versus an estimate or an unpriced/unmeasured
-        row, without those being silently blended into one number.
+        row. The corresponding ``*_by_price_status`` fields distinguish known
+        prices from unknown-price fallback zeros.
         """
         column = _DIMENSION_TO_COLUMN.get(dimension)
         if column is None:
@@ -1481,9 +1482,14 @@ class CostLedger:
                         status: Decimal("0") for status in MEASUREMENT_STATUSES
                     },
                     "record_count_by_status": {status: 0 for status in MEASUREMENT_STATUSES},
+                    "cost_amount_by_price_status": {
+                        "known": Decimal("0"), "unknown": Decimal("0")
+                    },
+                    "record_count_by_price_status": {"known": 0, "unknown": 0},
                 },
             )
             status = _measurement_status_of(row)
+            price_status = "known" if row.get("price_known") else "unknown"
             row_cost = Decimal(str(row.get("cost_amount", 0)))
             bucket["record_count"] += 1
             bucket["prompt_tokens"] += int(row.get("prompt_tokens", 0))
@@ -1492,6 +1498,8 @@ class CostLedger:
             bucket["cost_amount"] += row_cost
             bucket["cost_amount_by_status"][status] += row_cost
             bucket["record_count_by_status"][status] += 1
+            bucket["cost_amount_by_price_status"][price_status] += row_cost
+            bucket["record_count_by_price_status"][price_status] += 1
         for bucket in buckets.values():
             bucket["cost_amount"] = float(
                 bucket["cost_amount"].quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
@@ -1499,6 +1507,10 @@ class CostLedger:
             bucket["cost_amount_by_status"] = {
                 status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
                 for status, amount in bucket["cost_amount_by_status"].items()
+            }
+            bucket["cost_amount_by_price_status"] = {
+                status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+                for status, amount in bucket["cost_amount_by_price_status"].items()
             }
         return buckets
 
@@ -1535,15 +1547,22 @@ class CostLedger:
         ``cost_amount_by_status``/``record_count_by_status``, the same total
         broken down by row ``measurement_status`` (``measured``, ``estimated``,
         ``unavailable``) so measured, estimated, and unavailable-priced spend
-        are never opaquely blended into one authoritative-looking number.
+        are never opaquely blended into one authoritative-looking number. The
+        corresponding ``*_by_price_status`` fields expose unknown-price rows.
         """
         rows = self.store.query(start, end)
         cost_amount_by_status = {status: Decimal("0") for status in MEASUREMENT_STATUSES}
         record_count_by_status = {status: 0 for status in MEASUREMENT_STATUSES}
+        cost_amount_by_price_status = {"known": Decimal("0"), "unknown": Decimal("0")}
+        record_count_by_price_status = {"known": 0, "unknown": 0}
         for row in rows:
             status = _measurement_status_of(row)
-            cost_amount_by_status[status] += Decimal(str(row.get("cost_amount", 0)))
+            price_status = "known" if row.get("price_known") else "unknown"
+            row_cost = Decimal(str(row.get("cost_amount", 0)))
+            cost_amount_by_status[status] += row_cost
             record_count_by_status[status] += 1
+            cost_amount_by_price_status[price_status] += row_cost
+            record_count_by_price_status[price_status] += 1
         total_cost = sum(cost_amount_by_status.values(), Decimal("0"))
         return {
             "record_count": len(rows),
@@ -1556,6 +1575,11 @@ class CostLedger:
                 for status, amount in cost_amount_by_status.items()
             },
             "record_count_by_status": record_count_by_status,
+            "cost_amount_by_price_status": {
+                status: float(amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+                for status, amount in cost_amount_by_price_status.items()
+            },
+            "record_count_by_price_status": record_count_by_price_status,
         }
 
     def records(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:

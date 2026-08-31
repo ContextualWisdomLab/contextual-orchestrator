@@ -143,6 +143,10 @@ def test_unpriced_model_costs_zero_and_still_records() -> None:
     # provider/model is unknown, never fabricated as $0.00.
     assert record.price_known is False
     assert len(ledger.records()) == 1
+    assert ledger.total()["record_count_by_price_status"] == {"known": 0, "unknown": 1}
+    assert ledger.rollup("provider")["mystery"]["record_count_by_price_status"] == {
+        "known": 0, "unknown": 1,
+    }
 
 
 def test_priced_model_marks_price_known_true() -> None:

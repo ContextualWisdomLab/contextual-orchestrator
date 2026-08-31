@@ -33,6 +33,13 @@ class _StaticPriceBook:
         return self._cost, "USD", True
 
 
+class _MixedPriceBook:
+    def compute_cost(
+        self, provider: str, model: str, prompt_tokens: int, completion_tokens: int
+    ) -> tuple[float, str, bool]:
+        return (2.0, "USD", True) if provider == "known" else (0.0, "USD", False)
+
+
 def test_cheapest_upstream_returns_none_for_no_candidates() -> None:
     assert cheapest_upstream([], _StaticPriceBook(1.0)) is None
 
@@ -42,6 +49,13 @@ def test_cheapest_upstream_tie_keeps_input_order() -> None:
     second = {"provider": "beta", "model": "model_two"}
     best = cheapest_upstream([first, second], _StaticPriceBook(0.5))
     assert best is first  # strict less-than keeps the earlier candidate on ties
+
+
+def test_cheapest_upstream_excludes_unknown_prices() -> None:
+    known = {"provider": "known", "model": "priced"}
+    unknown = {"provider": "unknown", "model": "unpriced"}
+    assert cheapest_upstream([unknown, known], _MixedPriceBook()) is known
+    assert cheapest_upstream([unknown], _MixedPriceBook()) is None
 
 
 def test_local_backend_rejects_invalid_concurrency() -> None:
