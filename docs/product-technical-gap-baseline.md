@@ -1,5 +1,42 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-31 OpenRouter blanket-excluded from serving on ZDR grounds (PR #951)
+
+Reported directly (product-loop session, Korean): `orchestrator/free` never surfaces an OpenRouter
+model, even with `OPENROUTER_API_KEY` registered and OpenRouter's own catalog carrying complete
+per-token pricing (unlike Bytez, which never reports pricing at all — a separate, already-tracked
+gap in [#940](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/940)). The
+report's own diagnosis was exactly right: "ZDR status is not grounds to ban the whole OpenRouter
+provider-account from serving — it must be per-route/model evidence."
+
+**Root cause, traced through the full commit history** (`721ae519` → `588aef3`/`984fe91`/`6dcfc07`
+→ `caab2ed` → `952996ec`): `PROVIDER_MODEL_SOURCES`'s `openrouter` entry has carried
+`evidence_only=True` since `952996ec` ("fix(discovery): keep OpenRouter catalog evidence-only",
+empty commit body, no linked issue). `evidence_only=True` means *no* OpenRouter model can ever
+become a serving agent (`agent_from_discovered` hard-refuses; `is_routable_discovered_model`
+excludes it), regardless of that model's own ZDR status. The genuinely real, well-documented
+security fix in this trail is `721ae519` — it fixed cross-provider ZDR evidence *contamination*
+(an earlier version suffix-matched OpenRouter's ZDR feed against every provider's models, so an
+unrelated model sharing a display name could inherit OpenRouter's attestation; fixed by requiring
+an exact canonical-id match). `952996ec` is a separate, later, much broader change with no
+independent rationale on record, and it made things worse: `_apply_discovered_model_evidence`'s
+`zdr_capable=not model.evidence_only and matches(model.model_id)` meant OpenRouter's own rows could
+never carry their own exact-match ZDR attestation into a serving decision at all.
+
+`ContextualWisdomLab/.github`'s own `scripts/ci/zdr_policy.py` (the central Strix/Noema/OpenCode
+review sidecar's policy layer) was already built correctly for this: `is_zdr_model()` evaluates
+OpenRouter per exact `"provider/model"` route against the same `/api/v1/endpoints/zdr` feed, with
+full `PROVIDER_ZDR_SCOPE`/`PROVIDER_CREDENTIAL_NAMES`/`PROVIDER_BASE_URLS` entries for `openrouter`
+already in place — it never depended on this blanket exclusion, it just never had anything to
+evaluate because this repo's own discovery layer never let an OpenRouter model become servable.
+
+**Fix**: [PR #951](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/951) removes
+`evidence_only=True` from OpenRouter's `PROVIDER_MODEL_SOURCES` entry (no other source ever set it;
+the `evidence_only` guard itself stays as general infrastructure for a genuinely evidence-only
+future source). New regression test proves a free, ZDR-attested OpenRouter model is now routable,
+serving-agent-eligible, and carries `privacy:zdr` — RED confirmed against the pre-fix source before
+restoring the fix. Full suite: `2824 passed, 1 skipped`; `interrogate`: 100%.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
