@@ -416,7 +416,10 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     chat_models = [
         model
         for model in discovered
-        if not model.evidence_only and is_discovered_chat_candidate(model)
+        if not model.evidence_only
+        and is_discovered_chat_candidate(
+            replace(model, supports_parallel_tool_calls=None)
+        )
     ]
     existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     agents = []

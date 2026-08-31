@@ -48,6 +48,35 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
     assert "bootstrap_agent" in result["updated"]
 
 
+def test_auto_discovery_disables_active_model_after_capability_downgrade(monkeypatch) -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        supports_parallel_tool_calls=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([discovered], []),
+    )
+    existing = ModelAgent(
+        "openai_chat_capable_model",
+        discovered.model_id,
+        base_url=discovered.chat_base_url,
+        provider_name=discovered.provider_name,
+        tags=("discovered", "chat", "tool_calls:parallel"),
+    )
+    orchestrator = TaskOrchestrator([existing])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": [existing.id]}
+    assert orchestrator.candidates[0].disabled is True
+
+
 def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(
     monkeypatch,
 ) -> None:
