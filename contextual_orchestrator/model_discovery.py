@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
@@ -33,7 +33,7 @@ from .chat_capability import (
     is_general_chat_candidate,
     requires_non_text_input,
 )
-from .credentials import get_credential
+from .credentials import NotConfigured, get_credential
 from .orchestrator import (
     AUTH_SCHEME_RAW_TOKEN,
     ModelAgent,
@@ -108,7 +108,14 @@ def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
     else:
         return None
     text = message.casefold()
-    if "single tool" in text or "one tool" in text or "parallel_tool_calls" in text:
+    if (
+        "single tool" in text
+        or "one tool" in text
+        or (
+            "parallel_tool_calls" in text
+            and any(phrase in text for phrase in ("not supported", "unsupported"))
+        )
+    ):
         return False
     return None
 
@@ -165,8 +172,31 @@ def probe_discovered_model_tool_call_capability(
     api_key = get_credential(discovered.credential_name)
     if not api_key:
         return None
+    parsed = urlsplit(discovered.chat_base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
     url = discovered.chat_base_url.rstrip("/") + "/chat/completions"
-    if not url.startswith("https://"):
+    client = ModelClient(
+        timeout=max(1, math.ceil(timeout)),
+        allowed_provider_hosts={parsed.hostname},
+    )
+    agent = ModelAgent(
+        "tool_call_capability_probe",
+        discovered.model_id,
+        base_url=discovered.chat_base_url,
+        credential_key=discovered.credential_name,
+        auth_scheme=discovered.auth_scheme,
+    )
+    try:
+        destination = client._validate_provider(agent)
+    except (NotConfigured, RuntimeError, ValueError):
         return None
     payload = {
         "model": discovered.model_id,
@@ -202,9 +232,7 @@ def probe_discovered_model_tool_call_capability(
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(  # noqa: S310 - scoped provider probe  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request, timeout=timeout
-        ) as response:
+        with client._open_provider(request, destination, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         if exc.code != 400:
@@ -922,11 +950,11 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             elif isinstance(params.get("supported_parameters"), list):
                 supported_parameters = params["supported_parameters"]
             deployment_supported_parameters.append(
-                tuple(
-                    value.strip()
+                tuple(sorted({
+                    value.strip().casefold()
                     for value in supported_parameters
                     if isinstance(value, str) and value.strip()
-                )
+                }))
                 if isinstance(supported_parameters, list)
                 else ()
             )

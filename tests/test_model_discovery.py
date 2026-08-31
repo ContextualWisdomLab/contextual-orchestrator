@@ -218,6 +218,19 @@ def test_configured_gateway_preserves_consensus_supported_parameters() -> None:
     ]
 
 
+def test_configured_gateway_parameter_consensus_ignores_order_and_case() -> None:
+    payload = {"data": [{"id": "tool-model"}]}
+    merged = _merge_configured_gateway_metadata(
+        payload,
+        {"data": [
+            {"model_name": "tool-model", "model_info": {"supported_parameters": ["tools", "PARALLEL_TOOL_CALLS"]}},
+            {"model_name": "tool-model", "model_info": {"supported_parameters": ["parallel_tool_calls", "tools"]}},
+        ]},
+    )
+
+    assert merged["data"][0]["supported_parameters"] == ["parallel_tool_calls", "tools"]
+
+
 def test_configured_gateway_withholds_conflicting_supported_parameters() -> None:
     payload = {"data": [{"id": "tool-model"}]}
     merged = _merge_configured_gateway_metadata(
@@ -2484,6 +2497,9 @@ def test_tool_call_parallelism_from_error_recognizes_single_tool_rejection() -> 
         _tool_call_parallelism_from_error({"error": {"message": "Invalid API key"}})
         is None
     )
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "parallel_tool_calls must be a boolean"}}
+    ) is None
     assert _tool_call_parallelism_from_error("only supports one tool call at a time.") is False
     assert _tool_call_parallelism_from_error({"error": {}}) is None
 
@@ -2519,7 +2535,9 @@ def test_probe_discovered_model_tool_call_capability_success_returns_true() -> N
     )
     response.code = 200
     with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
-        "urllib.request.urlopen", return_value=response
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", return_value=response
     ) as mocked:
         result = probe_discovered_model_tool_call_capability(discovered, timeout=5.0)
     assert result is True
@@ -2564,7 +2582,9 @@ def test_probe_discovered_model_tool_call_capability_success_without_two_calls_r
     )
     response.code = 200
     with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
-        "urllib.request.urlopen", return_value=response
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", return_value=response
     ):
         assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
 
@@ -2596,7 +2616,9 @@ def test_probe_discovered_model_tool_call_capability_single_tool_400_returns_fal
         discovered.chat_base_url, 400, "Bad Request", {}, BytesIO(body)
     )
     with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
-        "urllib.request.urlopen", side_effect=exc
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
     ):
         assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is False
 
@@ -2611,7 +2633,10 @@ def test_probe_returns_none_on_network_error() -> None:
     """Network failures are not evidence one way or the other."""
     discovered = _single_tool_discovered_model()
     with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
-        "urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider",
+        side_effect=urllib.error.URLError("timeout"),
     ):
         assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
 
@@ -2646,7 +2671,9 @@ def test_probe_returns_none_for_non_400_http_error() -> None:
         discovered.chat_base_url, 500, "Internal Error", {}, BytesIO(b"oops")
     )
     with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
-        "urllib.request.urlopen", side_effect=exc
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
     ):
         assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
 
@@ -2658,7 +2685,9 @@ def test_probe_reads_non_json_400_body_as_plain_message() -> None:
         discovered.chat_base_url, 400, "Bad Request", {}, BytesIO(b"only supports single tool-calls")
     )
     with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
-        "urllib.request.urlopen", side_effect=exc
+        "contextual_orchestrator.model_discovery.ModelClient._validate_provider", return_value=object()
+    ), patch(
+        "contextual_orchestrator.model_discovery.ModelClient._open_provider", side_effect=exc
     ):
         assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is False
 

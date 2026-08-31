@@ -14,6 +14,7 @@ from contextual_orchestrator.chat_capability import (  # noqa: E402
     is_general_chat_candidate,
     is_general_chat_agent_model_id,
 )
+from contextual_orchestrator.orchestrator import ModelAgent, _is_general_chat_agent  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -94,3 +95,14 @@ def test_unproven_tool_call_parallelism_keeps_existing_eligibility() -> None:
     """No tool-call evidence neither adds nor removes eligibility."""
     assert is_general_chat_candidate("vendor/model", supports_parallel_tool_calls=None) is True
     assert is_general_chat_candidate("vendor/model", supports_parallel_tool_calls=True) is True
+
+
+def test_conflicting_tool_call_tags_fail_closed() -> None:
+    """Malformed operator tags cannot override explicit single-call evidence."""
+    agent = ModelAgent(
+        "conflicting_tool_agent",
+        "vendor/model",
+        tags=("tool_call:multi", "tool_call:single"),
+    )
+
+    assert _is_general_chat_agent(agent) is False

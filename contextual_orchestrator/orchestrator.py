@@ -566,10 +566,10 @@ class ModelAgent:
 def _is_general_chat_agent(agent: ModelAgent) -> bool:
     """Apply persisted provider capability tags before model-name fallback."""
     supports_parallel_tool_calls: bool | None = None
-    if "tool_call:multi" in agent.tags:
-        supports_parallel_tool_calls = True
-    elif "tool_call:single" in agent.tags:
+    if "tool_call:single" in agent.tags:
         supports_parallel_tool_calls = False
+    elif "tool_call:multi" in agent.tags:
+        supports_parallel_tool_calls = True
     return is_general_chat_candidate(
         agent.model,
         capabilities=(
