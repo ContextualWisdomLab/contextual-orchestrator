@@ -323,8 +323,17 @@ def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> No
     assert selected == [router_cheapest, nim_model, openai_model]
 
 
-def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() -> None:
-    """Two NIM keys must not displace an independently hosted provider."""
+def test_bootstrap_selector_treats_nim_primary_and_sub_as_independent_providers() -> None:
+    """Two distinct KV credentials must never be assumed to share fate.
+
+    ``nvidia_nim`` and ``nvidia_nim_sub`` are two independent KV credentials
+    (independent provider-account/catalog boundaries), even though they hit
+    the same vendor endpoint. The bootstrap diversity selector must treat
+    each ``provider_name`` on its own terms, so both can occupy first-pass
+    diversity slots -- there is no "provider family" concept collapsing them
+    (removed org-wide; see docs/product-technical-gap-baseline.md's
+    2026-08-31 entry and PR #941).
+    """
     selector = getattr(
         model_discovery,
         "select_bootstrap_discovered_agents",
@@ -346,7 +355,7 @@ def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() ->
         2,
     )
 
-    assert selected == [nim_primary, openrouter]
+    assert selected == [nim_primary, nim_sub]
 
 
 def test_bootstrap_selector_is_deterministic_when_every_model_is_unpriced() -> None:
