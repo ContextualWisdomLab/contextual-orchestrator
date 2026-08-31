@@ -12,6 +12,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Removed the redundant `threading.local`-backed `commercial_*_report`
+  caching decorator (`_commercial_report_cached`), which an import-time
+  class-dict-scanning loop applied to every `commercial_*_report` method
+  *before* the still-current `ContextVar`-backed decorator
+  (`_cached_commercial_report`) ran its own later loop and re-wrapped the
+  already-wrapped methods. Because the `ContextVar` layer always ended up
+  outermost and only calls into the inner layer on its own cache miss, the
+  inner `threading.local` cache dict was reset on every call in real
+  (non-reentrant) usage and its own cache-hit branch was unreachable in the
+  composed call chain — real code that ran on every call with no caching
+  effect. Kept the `ContextVar` strategy (the layer that actually determined
+  behavior) and deleted its dead sibling along with the now-unused
+  `_commercial_report_cache_local` per-instance state and `_report_cache_token`
+  helper. No behavior change: the surviving decorator is unchanged and was
+  already the effective caching layer.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

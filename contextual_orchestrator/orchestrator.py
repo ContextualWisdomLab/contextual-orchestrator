@@ -3416,7 +3416,6 @@ class TaskOrchestrator:
             raise ValueError("pii_key_name must be a non-empty string")
         self._pii_key_name = pii_key_name
         self._pii_encryptors: dict[str, PiiFieldEncryptor] = {}
-        self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
 
@@ -13880,44 +13879,6 @@ class TaskOrchestrator:
             "warn": counts.get("warn", 0),
             "fail": counts.get("fail", 0),
         }
-
-
-def _report_cache_token(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool, type(None))):
-        return value
-    if isinstance(value, tuple):
-        return tuple(_report_cache_token(item) for item in value)
-    return ("id", id(value))
-
-
-def _commercial_report_cached(method: Any) -> Any:
-    @wraps(method)
-    def wrapper(self: TaskOrchestrator, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        local = self._commercial_report_cache_local
-        depth = getattr(local, "depth", 0)
-        if depth == 0:
-            local.cache = {}
-        local.depth = depth + 1
-        try:
-            key = (
-                method.__name__,
-                _report_cache_token(args),
-                tuple(sorted((name, _report_cache_token(value)) for name, value in kwargs.items())),
-            )
-            if key not in local.cache:
-                local.cache[key] = method(self, *args, **kwargs)
-            return local.cache[key]
-        finally:
-            local.depth -= 1
-            if depth == 0:
-                local.cache = {}
-
-    return wrapper
-
-
-for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
-    if _report_name.startswith("commercial_") and _report_name.endswith("_report"):
-        setattr(TaskOrchestrator, _report_name, _commercial_report_cached(_report_method))
 
 
 def redact_text(text: str) -> str:

@@ -13,6 +13,7 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.orchestrator import (
+    _COMMERCIAL_REPORT_CACHE,
     ModelAgent,
     TaskOrchestrator,
     WorkflowStep,
@@ -602,9 +603,7 @@ def test_policy_safety_counts_exclusion_misses_and_unknown_agents() -> None:
 def test_commercial_report_cache_hits_within_one_scope() -> None:
     """Nested sibling reports reuse cached results inside one cache scope."""
     orchestrator = build()
-    local = orchestrator._commercial_report_cache_local
-    local.cache = {}
-    local.depth = 1
+    token = _COMMERCIAL_REPORT_CACHE.set({})
     try:
         first = orchestrator.commercial_readiness_report(
             target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW
@@ -613,8 +612,7 @@ def test_commercial_report_cache_hits_within_one_scope() -> None:
             target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW
         )
     finally:
-        local.depth = 0
-        local.cache = {}
+        _COMMERCIAL_REPORT_CACHE.reset(token)
     assert first is second
 
 
