@@ -9,6 +9,8 @@
 
 Operators need one logical model name when several providers expose the same underlying model under unrelated identifiers. Groups are entirely operator-defined: discovery never infers equivalence from provider or model names, and no model family is built in. Model discovery remains provider-specific and retains the complete catalog; zero-cost entries are additionally classified so cost policy can distinguish free, priced, and unknown-price models.
 
+Every configured KV credential is a separate provider-account and catalog boundary. Discovery queries every registered credential independently and retains rows by `(provider_name, credential_name, model_id)`; it never assumes that two keys for the same vendor expose the same models, entitlements, price, privacy policy, availability, or failure state. NVIDIA's primary/sub keys are one example, not a special case. Provider-family inference is absent. Only an explicit operator-defined `model_group` may assert that deployments represent one logical model and may therefore share measured routing decisions.
+
 ## Decision and technical contract
 
 `ModelAgent.group_name` is persisted by the existing Agent Pool database, accepted by its create/PATCH APIs, and shown with measured routing evidence in the Admin web table. Static role/capability ranking chooses a logical model group before its members are ordered by observed successful responses per second. An explicit group alias resolves to the currently preferred enabled member. Failover and circuit-breaker behavior remain intact. Discovery never guesses that differently named provider models are equivalent; an operator or future verified canonical-identity feed must assert that relationship.

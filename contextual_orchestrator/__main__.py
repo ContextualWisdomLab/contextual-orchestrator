@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from dataclasses import replace
@@ -266,6 +267,11 @@ def _discover_models_command(argv: list[str]) -> None:
         description="Discover models from every provider with a KV-registered credential.",
     )
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Emit secret-free provider discovery diagnostics to stderr.",
+    )
+    parser.add_argument(
         "--agents-db",
         default=None,
         help="Persist discovered agents (added disabled; enable via the admin API) into this sqlite agent-pool file.",
@@ -298,6 +304,8 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
     )
     args = parser.parse_args(argv)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
@@ -458,6 +466,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Emit secret-free runtime and model-discovery diagnostics to stderr.",
+    )
+    parser.add_argument(
         "--release-authority-json",
         default=None,
         help="Path to a persisted exact-head release-authority snapshot collected by the governance CLI.",
@@ -546,6 +559,8 @@ def main(argv: list[str] | None = None) -> None:
         help="discover source-declared chat-capable models at startup and activate them",
     )
     args = parser.parse_args(arguments)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
