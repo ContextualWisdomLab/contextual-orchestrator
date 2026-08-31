@@ -12,6 +12,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `check-fast-mlsirm --help` now shows help and exits instead of running the
+  diagnostic: the subcommand took no arguments and ignored everything after
+  its own name, so `--help` was silently swallowed and the real diagnostic
+  ran anyway. It now gets its own `argparse` parser (declaring the shared
+  `--log-level`/`--verbose`/`--debug` flags, matching every other
+  subcommand), so `--help` documents them and exits cleanly, and an
+  unrecognized trailing option is rejected instead of being ignored.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

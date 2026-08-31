@@ -348,6 +348,53 @@ def test_leading_debug_flag_before_check_fast_mlsirm_still_dispatches() -> None:
     assert '"package": "fast-mlsirm"' in stdout.getvalue()
 
 
+def test_check_fast_mlsirm_help_shows_help_without_running_diagnostic() -> None:
+    """`check-fast-mlsirm --help` must show help and exit, not run the diagnostic.
+
+    Regression test: before this fix, `_check_fast_mlsirm_command` took no
+    arguments and ignored everything after the subcommand token, so
+    `--help` silently ran the real diagnostic (and its process-exit code)
+    instead of printing usage -- the one CLI subcommand where `--help`
+    did something other than show help.
+    """
+    stdout = StringIO()
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(sys, "argv", ["contextual-orchestrator", "check-fast-mlsirm", "--help"]),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 0
+        else:  # pragma: no cover
+            raise AssertionError("--help must exit")
+    help_text = stdout.getvalue()
+    assert "python -m contextual_orchestrator check-fast-mlsirm" in help_text
+    assert '"package": "fast-mlsirm"' not in help_text
+
+
+def test_check_fast_mlsirm_rejects_unknown_option() -> None:
+    """An unrecognized trailing option must fail closed, not be silently ignored."""
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "check-fast-mlsirm", "--not-a-real-option"],
+        ),
+        patch.object(sys, "stderr", StringIO()),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("an unrecognized option must exit non-zero")
+
+
 def test_leading_log_level_flag_before_serve_still_configures_and_serves() -> None:
     """`--serve` is a plain optional flag on the main parser, so it is unaffected by the
     subcommand-token bypass -- this locks that in as a regression guard.

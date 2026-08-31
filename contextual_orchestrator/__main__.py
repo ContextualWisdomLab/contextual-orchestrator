@@ -307,8 +307,22 @@ def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
     return status, available
 
 
-def _check_fast_mlsirm_command() -> None:
-    """Validate the same-interpreter fast-mlsirm integration boundary."""
+def _check_fast_mlsirm_command(argv: list[str]) -> None:
+    """Validate the same-interpreter fast-mlsirm integration boundary.
+
+    Takes its own parser (matching every other subcommand) so ``--help``
+    documents the shared logging flags and exits before running the
+    diagnostic, and an unrecognized trailing option is rejected instead of
+    being silently ignored.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator check-fast-mlsirm",
+        description="Validate the same-interpreter fast-mlsirm integration boundary.",
+        allow_abbrev=False,
+    )
+    _add_log_level_arguments(parser)
+    parser.parse_args(argv)
+
     status, available = _fast_mlsirm_runtime_status()
     print(json.dumps(status, ensure_ascii=False, sort_keys=True))
     if not available:
@@ -640,7 +654,7 @@ def main(argv: list[str] | None = None) -> None:
         _discover_models_command(arguments_after_subcommand)
         return
     if subcommand == "check-fast-mlsirm":
-        _check_fast_mlsirm_command()
+        _check_fast_mlsirm_command(arguments_after_subcommand)
         return
 
     parser = argparse.ArgumentParser(
