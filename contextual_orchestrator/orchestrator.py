@@ -72,6 +72,7 @@ from .tool_fallback import (
     ToolFailureKind,
     ToolFallbackAction,
     ToolFallbackStoppedError,
+    classify_provider_transport_failure,
     classify_tool_failure,
     downgrade_to_failover,
 )
@@ -6472,10 +6473,37 @@ class TaskOrchestrator:
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
+                        # Deliberately terminal, even inside a free/auto virtual
+                        # pool with untried candidates remaining: every path that
+                        # raises this (the provider's own explicit terminal
+                        # tool-execution-state signal via
+                        # _provider_tool_execution_stopped, or a FAIL_CLOSED
+                        # verdict from classify_tool_failure below) resolves to
+                        # ambiguous_outcome, permission_denied, policy_blocked, or
+                        # invalid_arguments -- the exact ADR 0001 safety invariants
+                        # ("permission and policy failures never fall through to
+                        # another agent"; "non-idempotent timeout or transport
+                        # uncertainty never replays automatically") that a
+                        # different candidate cannot make safer: an ambiguous
+                        # server-side outcome is ambiguous regardless of which
+                        # agent asks next, and authorization/policy denial must
+                        # not be worked around by trying a different one. Do not
+                        # convert this to failover without an explicit product
+                        # decision distinguishing which failure kinds that would
+                        # actually be safe for.
                         raise
                     if isinstance(exc, ProviderUpstreamError):
                         last_upstream_error = exc
-                    if isinstance(exc, ProviderResponseError):
+                        # The primary chat call is a bounded, side-effect-free
+                        # model request, not a tool invocation: classify from
+                        # the provider's own already-computed retryability
+                        # instead of classify_tool_failure's message-text
+                        # heuristics, so free/auto virtual-model failover can
+                        # never be accidentally downgraded to fail-closed by
+                        # incidental wording in an upstream error body (e.g. a
+                        # 400 that happens to mention "invalid arguments").
+                        decision = classify_provider_transport_failure(exc.retryable)
+                    elif isinstance(exc, ProviderResponseError):
                         if allowed_agent_ids is None:
                             raise
                         bounded_provider_response_failures += 1
@@ -6484,15 +6512,9 @@ class TaskOrchestrator:
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
                         break
-                    decision = classify_tool_failure(exc)
+                    else:
+                        decision = classify_tool_failure(exc)
                     action = decision.action
-                    if (
-                        isinstance(exc, ProviderUpstreamError)
-                        and not exc.retryable
-                        and action is ToolFallbackAction.RETRY_SAME_AGENT
-                    ):
-                        decision = downgrade_to_failover(decision)
-                        action = decision.action
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
                     if (
