@@ -355,7 +355,8 @@ def test_discovery_debug_log_identifies_account_without_secret(caplog) -> None:
     ):
         discover_provider_models(OPENAI_SOURCE, models_dev_metadata=None)
 
-    assert "provider=openai credential=OPENAI_API_KEY" in caplog.text
+    assert "account=openai" in caplog.text
+    assert "OPENAI_API_KEY" not in caplog.text
     assert "model_count=1" in caplog.text
     assert "secret-value-must-not-appear" not in caplog.text
 

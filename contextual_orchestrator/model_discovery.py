@@ -1113,15 +1113,13 @@ def discover_provider_models(
     api_key = get_credential(source.credential_name)
     if not api_key:
         _LOGGER.debug(
-            "model discovery skipped provider=%s credential=%s reason=credential_missing",
+            "model discovery skipped account=%s reason=key_missing",
             source.provider_name,
-            source.credential_name,
         )
         return []
     _LOGGER.debug(
-        "model discovery started provider=%s credential=%s",
+        "model discovery started account=%s",
         source.provider_name,
-        source.credential_name,
     )
     url = source.list_url
     if source.task_filter:
@@ -1145,9 +1143,8 @@ def discover_provider_models(
         # discovery boundary with provider text attached.
         error_code = _provider_discovery_error_code(exc)
         _LOGGER.debug(
-            "model discovery failed provider=%s credential=%s error_code=%s",
+            "model discovery failed account=%s error_code=%s",
             source.provider_name,
-            source.credential_name,
             error_code,
         )
         raise ProviderDiscoveryError(source.provider_name, error_code) from None
@@ -1196,9 +1193,8 @@ def discover_provider_models(
         discovered = _parse_openai_compatible(payload, source)
     result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
     _LOGGER.debug(
-        "model discovery completed provider=%s credential=%s model_count=%d",
+        "model discovery completed account=%s model_count=%d",
         source.provider_name,
-        source.credential_name,
         len(result),
     )
     return result
