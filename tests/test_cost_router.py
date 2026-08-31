@@ -782,7 +782,11 @@ def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -
     coordinator = CostRoutingCoordinator(
         orchestrator,
         embedding_batch_backend=backend,
-        embedding_token_counter=_SyntheticExactCounter(),
+        embedding_token_counter=type(
+            "ExactSyntheticCounter",
+            (),
+            {"count_text": lambda self, text, model="": len(text)},
+        )(),
     )
     document = coordinator.complete_embeddings_batch(
         ["private"], model=second.model, zdr_only=True, agent_id=second.id
@@ -813,6 +817,31 @@ def test_provider_embedding_runner_accepts_empty_direct_batch() -> None:
         time.sleep(0.01)
     assert backend.poll(job)["status"] == "completed"
     assert backend.retrieve(job) == []
+
+
+def test_virtual_embedding_model_binds_concrete_tokenizer_before_accounting() -> None:
+    """Default embedding traffic counts against the selected provider model."""
+    agent = ModelAgent(
+        "remote_embedding",
+        "text-embedding-3-small",
+        "https://provider.synthetic.invalid/v1",
+        tags=("embedding",),
+    )
+
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        embedding_token_counter=type(
+            "ExactSyntheticCounter",
+            (),
+            {"count_text": lambda self, text, model="": len(text)},
+        )(),
+    )
+
+    resolved = coordinator._resolve_embedding_target(
+        "contextual-orchestrator", False, None
+    )
+
+    assert resolved == ("text-embedding-3-small", "remote_embedding")
 
 
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:

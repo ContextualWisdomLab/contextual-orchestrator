@@ -101,6 +101,7 @@ class CostRoutingCoordinator:
         else:
             self.embedding_token_counter = build_embedding_token_counter(postgres_dsn)
         self.policy = routing_policy or RoutingPolicy(self.config)
+        self._resolve_virtual_embedding_target = embedding_batch_backend is None
         # Job registries live in Valkey when the credential registry carries
         # batch_job_registry_valkey_url, so submitted jobs survive a process
         # restart; otherwise they are the historical in-process dicts. Built
@@ -862,11 +863,19 @@ class CostRoutingCoordinator:
         self, model: str, zdr_only: bool, agent_id: Optional[str]
     ) -> tuple[str, Optional[str]]:
         """Resolve one embedding member without losing a caller's member choice."""
-        if agent_id is None and not zdr_only:
+        virtual_models = {
+            "contextual-orchestrator",
+            getattr(self.orchestrator, "AUTO_MODEL", ""),
+        }
+        if (
+            agent_id is None
+            and not zdr_only
+            and (model not in virtual_models or not self._resolve_virtual_embedding_target)
+        ):
             return model, None
         selection_model = (
             None
-            if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
+            if model in virtual_models
             else model
         )
         with self.orchestrator.request_policy(zdr_only):
