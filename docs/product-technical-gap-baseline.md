@@ -27,6 +27,13 @@ this entry's PR for exact counts). No other file was affected; `_provider_family
 anywhere in the source tree per #941, and a full-repo grep confirms no other test still references the
 removed collapsing behavior.
 
+**Update, same day**: PR #945 independently reached the same conclusion and merged an equivalent fix
+into `main` first (`bffbc72d`, merged via `0adca470`) — same corrected assertion, named
+`test_bootstrap_selector_keeps_nim_primary_and_sub_credential_accounts_independent` and citing ADR
+0032. The PR that first recorded this entry merged `main` and took #945's version rather than keeping
+both renames of the same test; #947 (which had ported the same fix under review, cited above) was
+closed as superseded.
+
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
 inventory mismatch: ['BYTEZ_API_KEY']`. Traced to `bootstrap_provider_catalog_runtime`
 (`contextual_orchestrator/provider_catalog_bootstrap.py`): it registers all provider credentials up
