@@ -597,7 +597,14 @@ def test_structured_repair_transport_failure_is_classified() -> None:
             {
                 "model": "model-x",
                 "messages": [{"role": "user", "content": "classify"}],
-                "response_format": {"type": "json_object"},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "result",
+                        "strict": True,
+                        "schema": {"type": "object"},
+                    },
+                },
             },
             single_agent=False,
         )
