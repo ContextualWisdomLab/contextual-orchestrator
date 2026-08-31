@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "chat_response_format_http_honesty_token"  # noqa: S105
@@ -155,6 +156,105 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
         assert len(calls) == 2
         assert set(calls) == {"stale_agent", "live_agent"}
         assert "other_agent" not in calls
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_virtual_structured_workflow_never_reuses_request_scoped_missing_model() -> None:
+    """A model missing in evidence work is excluded from every later role and synthesis."""
+    agents = [
+        ModelAgent("stale_agent", "stale-model", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("live_agent", "live-model", "mock://catalog", tags=("reasoning", "writing")),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    original_ranked = orchestrator._ranked_agents
+
+    def stale_first(*args, **kwargs):
+        ranked = original_ranked(*args, **kwargs)
+        return sorted(ranked, key=lambda candidate: candidate.id != "stale_agent")
+
+    orchestrator._ranked_agents = stale_first
+    chat_calls: list[str] = []
+    synthesis_calls: list[str] = []
+
+    def chat(agent, _messages, **_kwargs):
+        chat_calls.append(agent.id)
+        if agent.id == "stale_agent":
+            raise ProviderUpstreamError(
+                agent_id=agent.id,
+                model=agent.model,
+                error_code="model_not_found",
+                message="synthetic missing model",
+                client_status=404,
+                provider_status=404,
+                retryable=False,
+            )
+        return '{"status":"evidence"}'
+
+    def synthesize(agent, _endpoint, _payload):
+        synthesis_calls.append(agent.id)
+        return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
+
+    orchestrator.client.chat = chat
+    orchestrator.client.proxy_send_once = synthesize
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 200, body
+        assert chat_calls.count("stale_agent") == 1
+        assert synthesis_calls == ["live_agent"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_virtual_structured_workflow_exhausts_each_missing_model_once() -> None:
+    """A fully stale virtual pool terminates typed after one attempt per model."""
+    agents = [
+        ModelAgent("stale_a", "stale-a", "mock://catalog", tags=("reasoning", "writing")),
+        ModelAgent("stale_b", "stale-b", "mock://catalog", tags=("reasoning", "writing")),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    calls: list[str] = []
+
+    def missing(agent, _messages, **_kwargs):
+        calls.append(agent.id)
+        raise ProviderUpstreamError(
+            agent_id=agent.id,
+            model=agent.model,
+            error_code="model_not_found",
+            message="synthetic missing model",
+            client_status=404,
+            provider_status=404,
+            retryable=False,
+        )
+
+    orchestrator.client.chat = missing
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 404, body
+        assert body["error"]["code"] == "model_not_found"
+        assert sorted(calls) == ["stale_a", "stale_b"]
     finally:
         server.shutdown()
         thread.join(timeout=5)
