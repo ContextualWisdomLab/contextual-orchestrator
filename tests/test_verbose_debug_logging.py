@@ -134,12 +134,23 @@ def test_configure_logging_attaches_a_bounded_format_handler_to_each_leaf_logger
     ROOT (or a whole-package) logger's level would raise every child
     logger's EFFECTIVE level through inheritance, including loggers this
     change never audited. Attaching straight to each named leaf logger
-    (rather than installing anything on root) guarantees delivery
-    regardless of what root has -- see
+    (rather than installing anything on root) guarantees delivery when
+    nothing already covers it -- see
     ``test_configure_logging_still_emits_through_a_stricter_existing_root_handler``
-    for the concrete case this design choice defends against.
+    for the concrete case this design choice defends against, and
+    ``test_configure_logging_skips_its_own_handler_when_a_permissive_host_handler_exists``
+    for the mirror-image case (a handler is skipped, not duplicated, when
+    propagation already delivers).
+
+    Clears ``root.handlers`` first to simulate a genuinely bare process:
+    pytest's own logging-capture machinery attaches its own root handlers
+    (level ``NOTSET``, i.e. already permissive) regardless of anything this
+    test sets up, which would otherwise make ``_logger_already_delivers_debug``
+    correctly, but unhelpfully for this test, conclude propagation already
+    covers it.
     """
     root = logging.getLogger()
+    root.handlers.clear()
     level_before, handlers_before = root.level, root.handlers[:]
     _configure_logging(True)
     assert root.level == level_before
@@ -184,8 +195,15 @@ def test_configure_logging_still_emits_through_a_stricter_existing_root_handler(
     pytest's own internal handler construction (its live-log/caplog
     reporting), which made the assertion pass even against the pre-fix code
     for the wrong reason.
+
+    Also clears ``root.handlers`` before adding the INFO-level host handler:
+    pytest's own root handlers (level ``NOTSET``) would otherwise also sit
+    in the propagation chain and make ``_logger_already_delivers_debug``
+    correctly see a permissive handler -- just not the one this test means
+    to isolate.
     """
     root = logging.getLogger()
+    root.handlers.clear()
     hosted_records: list[logging.LogRecord] = []
     hosted_handler = logging.Handler()
     hosted_handler.setLevel(logging.INFO)
@@ -222,6 +240,59 @@ def test_configure_logging_still_emits_through_a_stricter_existing_root_handler(
         "contextual_orchestrator.model_discovery",
     ):
         assert logging.getLogger(logger_name).level == logging.DEBUG, logger_name
+
+
+def test_configure_logging_skips_its_own_handler_when_a_permissive_host_handler_exists(
+    restore_root_logger,
+) -> None:
+    """SEC/availability regression: a permissive host handler must not receive duplicate records.
+
+    Devin's sixth review round caught this mirror-image case to round 5's
+    fix: once the dedicated per-logger handler guarantees delivery past a
+    STRICT host handler (see the test above), a host whose own handler is
+    already PERMISSIVE (no level set, or set at/below DEBUG -- extremely
+    common, since a fresh ``logging.Handler()`` and ``StreamHandler()``
+    both default to ``NOTSET``) would otherwise see every matching record
+    twice: once via propagation to its own handler, once via the new
+    dedicated one. ``_logger_already_delivers_debug`` closes that by
+    skipping the dedicated handler precisely when propagation to an
+    existing handler already covers DEBUG.
+
+    Clears ``root.handlers`` first for the same reason as the two tests
+    above: pytest's own root handlers are themselves already permissive and
+    would otherwise make this pass for the wrong reason regardless of the
+    handler this test explicitly sets up.
+    """
+    root = logging.getLogger()
+    root.handlers.clear()
+    delivered: list[logging.LogRecord] = []
+    permissive_handler = logging.Handler()  # level defaults to NOTSET
+    permissive_handler.emit = delivered.append  # type: ignore[method-assign]
+    root.addHandler(permissive_handler)
+
+    _configure_logging(True)
+
+    orchestrator_logger = logging.getLogger("contextual_orchestrator.orchestrator")
+    own_handlers = [
+        h for h in orchestrator_logger.handlers if h.name == "contextual_orchestrator.verbose"
+    ]
+    assert own_handlers == [], (
+        "verbose mode must not attach a redundant handler when propagation "
+        "to an existing permissive handler already delivers DEBUG"
+    )
+
+    orchestrator_logger.debug(
+        "dispatch.decision mode=auto model=contextual-orchestrator path=route"
+    )
+
+    matching = [
+        record
+        for record in delivered
+        if record.getMessage()
+        == "dispatch.decision mode=auto model=contextual-orchestrator path=route"
+    ]
+    assert len(matching) == 1, f"record must be delivered exactly once via propagation, got {len(matching)}"
+    assert orchestrator_logger.level == logging.DEBUG
 
 
 def test_configure_logging_never_discards_an_existing_root_handler(

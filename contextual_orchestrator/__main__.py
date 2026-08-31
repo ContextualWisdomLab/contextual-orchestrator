@@ -83,6 +83,37 @@ def _env_flag(name: str) -> bool:
 _VERBOSE_HANDLER_NAME = "contextual_orchestrator.verbose"
 
 
+def _logger_already_delivers_debug(logger: logging.Logger) -> bool:
+    """Return whether a DEBUG record from ``logger`` already reaches a handler.
+
+    Walks from ``logger`` itself up through ``.parent``, stopping at the
+    first ancestor with ``propagate=False`` -- mirroring stdlib
+    ``Logger.callHandlers``'s own walk -- and returns ``True`` as soon as any
+    handler encountered along the way has a level at or below ``DEBUG``.
+
+    Used to decide whether ``_configure_logging`` needs to attach its own
+    dedicated handler at all: round 5 (Devin review) attached one
+    unconditionally so verbose output is never silently swallowed by a
+    stricter host handler (e.g. one at INFO); the mirror-image case (round
+    6, Devin review) is a host whose own handler is *already* permissive
+    (no level set, or set at/below DEBUG) -- attaching a second handler
+    there would duplicate every matching record, once via propagation to
+    the host's handler and once via the new dedicated one. This is
+    deliberately best-effort: a handler can carry its own ``Filter``s this
+    cannot introspect, so it only prevents the realistic, common case a
+    level check can see, not every theoretically possible one.
+    """
+    current: logging.Logger | None = logger
+    while current is not None:
+        for handler in current.handlers:
+            if handler.level <= logging.DEBUG:
+                return True
+        if not current.propagate:
+            break
+        current = current.parent
+    return False
+
+
 def _configure_logging(verbose: bool) -> None:
     """Turn on DEBUG-level logging for this package's audited loggers only.
 
@@ -93,30 +124,35 @@ def _configure_logging(verbose: bool) -> None:
     When true, this raises the level to DEBUG on exactly the loggers named in
     ``_VERBOSE_LOGGER_NAMES``, never the root logger and never a whole-package
     logger (see that constant's comment for why the distinction matters), and
-    attaches one bounded timestamp/level/logger-name handler directly to each
-    of those three loggers -- never to root.
+    -- unless a handler already in that logger's propagation chain would
+    already deliver a DEBUG record (see ``_logger_already_delivers_debug``)
+    -- attaches one bounded timestamp/level/logger-name handler directly to
+    the logger itself, never to root.
 
-    Two earlier bugs, both Devin review: (1) an early version called
-    ``logging.basicConfig(..., force=True)``, which unconditionally closes and
-    discards every existing root handler before installing its own -- in a
-    process that had already configured its own log delivery (a hosted
-    structured/JSON logging handler, a log shipper, a test harness's capture
-    handler), that silently destroyed it. (2) the fix for that -- leaving an
-    existing root handler alone and relying on propagation to it -- reopened a
-    different failure: a ``Handler`` filters independently of the logger
-    level check, so a pre-existing root handler with its own threshold above
-    DEBUG (very plausible for anything hosting this process with its own
-    logging setup, e.g. ``setLevel(logging.INFO)``) would silently swallow
-    every propagated DEBUG record, and verbose mode would produce zero output
-    with no error. A handler attached directly to the *logger itself* is
-    evaluated on its own merits (a fresh ``Handler``'s level defaults to
-    ``NOTSET`` -- accepts everything down to DEBUG) independent of any
-    ancestor's handler, so this guarantees verbose output is actually
-    delivered without ever touching, replacing, or being gated by whatever
-    the host process already configured on root. Propagation to root is left
-    untouched (never ``propagate = False``): these loggers' pre-existing
-    WARNING/ERROR call sites must keep reaching whatever the host already
-    listens to on root, exactly as before this feature existed.
+    Three rounds of the same real bug family, all Devin review: (1) an early
+    version called ``logging.basicConfig(..., force=True)``, which
+    unconditionally closes and discards every existing root handler before
+    installing its own -- in a process that had already configured its own
+    log delivery (a hosted structured/JSON logging handler, a log shipper, a
+    test harness's capture handler), that silently destroyed it. (2) the fix
+    for that -- leaving an existing root handler alone and relying on
+    propagation to it -- reopened a different failure: a ``Handler`` filters
+    independently of the logger level check, so a pre-existing root handler
+    with its own threshold above DEBUG (very plausible for anything hosting
+    this process with its own logging setup, e.g. ``setLevel(logging.INFO)``)
+    would silently swallow every propagated DEBUG record, and verbose mode
+    would produce zero output with no error. Attaching a handler directly to
+    the *logger itself* (a fresh ``Handler``'s level defaults to ``NOTSET`` --
+    accepts everything down to DEBUG, independent of any ancestor's handler)
+    fixed that, but (3) the mirror-image case: a host whose own handler is
+    *already* permissive enough to show DEBUG would then see every matching
+    record twice -- once via propagation to its own handler, once via the
+    new dedicated one. ``_logger_already_delivers_debug`` closes that by
+    skipping the dedicated handler precisely when propagation already
+    covers it. In every case, propagation to root is left untouched (never
+    ``propagate = False``): these loggers' pre-existing WARNING/ERROR call
+    sites must keep reaching whatever the host already listens to on root,
+    exactly as before this feature existed.
     """
     if not verbose:
         return
@@ -130,6 +166,8 @@ def _configure_logging(verbose: bool) -> None:
         )
         if previous is not None:
             logger.removeHandler(previous)
+        if _logger_already_delivers_debug(logger):
+            continue
         handler = logging.StreamHandler()
         handler.name = _VERBOSE_HANDLER_NAME
         handler.setFormatter(formatter)
