@@ -213,7 +213,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `test_batch_route_disabled_judging_never_strands_a_completed_answer_on_budget`
   (`realtime_judge=False`, budget exhausted by the one worker call; asserts
   `batch_route` still returns the completed, reviewed-fallback-verified
-  record instead of raising).
+  record instead of raising). (Devin review on #961) One more finding
+  combining the two above: `batch_route` defers all judging to a second
+  pass over every group, so the inter-group budget checkpoint could still
+  raise before that pass ever reached an already-completed earlier group
+  -- and with `realtime_judge` off, finalizing that group costs nothing,
+  so leaving its answers stuck `pending_verification` forever (with no
+  retry/resume path that would ever revisit them) served no purpose.
+  Extracted the per-row judge-and-persist logic from the judging pass into
+  a new `_finalize_batch_row()` helper; the inter-group checkpoint now
+  calls it for every already-persisted row before raising, whenever
+  `policy.realtime_judge` is off (real spend stays safe either way: only
+  already-completed groups' rows are finalized, and the raise still blocks
+  the next group's own not-yet-started `batch_chat()` call). New regression
+  test `test_batch_route_finalizes_completed_group_before_blocking_a_later_one_when_judging_is_free`:
+  two groups, `realtime_judge=False`, the first exhausts the cap; asserts
+  the second group's call is still blocked while the first group's run is
+  a finalized, visible result rather than a stuck pending row.
 
 ### Added
 

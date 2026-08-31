@@ -646,6 +646,54 @@ def test_batch_route_disabled_judging_never_strands_a_completed_answer_on_budget
     assert orchestrator.count_workflow_runs() == 1
 
 
+def test_batch_route_finalizes_completed_group_before_blocking_a_later_one_when_judging_is_free() -> None:
+    """An earlier group's completed rows must not stay pending forever just
+    because a later, unrelated group's own budget check blocks it.
+
+    Devin review on #961: batch_route persists each completed group as
+    pending but defers all judging to a second pass over every group. The
+    inter-group budget checkpoint can therefore raise before that second
+    pass ever reaches an already-completed earlier group -- and when
+    realtime_judge is off, finalizing that group costs nothing, so there is
+    no reason to leave its answers stuck invisible as pending_verification
+    indefinitely (batch_route never resumes/retries a specific pending row
+    on its own).
+    """
+    agent_a = ModelAgent("agent_a", "model-a", tags=("reasoning", "writing"))
+    agent_b = ModelAgent("agent_b", "model-b", tags=("reasoning", "writing"))
+    client = _CountingClient()  # every item reports completion_tokens=6
+    orchestrator = TaskOrchestrator(
+        [agent_a, agent_b],
+        client=client,
+        price_per_million={"model-a": 10.0, "model-b": 10.0},
+        budget_max_output_tokens=6,  # exactly agent_a's group's own spend
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    agent_by_prompt = {"task one": agent_a, "task two": agent_b}
+
+    with patch.object(
+        orchestrator,
+        "_select_agent",
+        side_effect=lambda text, role, **kwargs: agent_by_prompt[text],
+    ):
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task two"])
+
+    # agent_b's group never started a provider call (still correctly
+    # blocked), but agent_a's group -- already complete before the block --
+    # must be a finalized, visible run, not stuck pending.
+    assert client.batch_calls == 1
+    assert orchestrator.count_workflow_runs() == 1
+    [finalized] = orchestrator.list_recent_runs()
+    assert finalized["trace"][0]["agent_id"] == "agent_a"
+    assert finalized["verification"] == {
+        "accepted": True,
+        "reason": "single route path",
+        "verifier_output": finalized["answer"],
+        "judge": "model",
+    }
+
+
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
     client = ModelClient()
     agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")

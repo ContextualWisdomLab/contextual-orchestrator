@@ -4761,6 +4761,26 @@ class TaskOrchestrator:
             if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
                 budget = self.budget_status()
                 if budget["exceeded"]:
+                    if not self.policy.realtime_judge:
+                        # An earlier, already-completed group's rows would
+                        # otherwise stay pending_verification forever: this
+                        # raise means batch_route never reaches its normal
+                        # per-row judging pass for them, but finalizing them
+                        # is zero-cost when judging is disabled -- no reason
+                        # to leave already-done work stuck (Devin review on
+                        # #961). Real spend is never at risk: only rows
+                        # already persisted as pending by an earlier group
+                        # are finalized here, and this group's own
+                        # not-yet-started batch_chat() call is still blocked
+                        # by the raise below.
+                        for pending_index in prepared_rows:
+                            self._finalize_batch_row(
+                                prompt=selected[pending_index][0],
+                                agent=selected[pending_index][1],
+                                result=answers[pending_index],
+                                row=prepared_rows[pending_index],
+                                run_id=run_ids[pending_index],
+                            )
                     raise BudgetExceededError("spend budget exceeded", detail=budget)
             agent = agents_by_id[agent_id]
             effort_profile = self._role_effort_profile("worker")
@@ -4826,8 +4846,6 @@ class TaskOrchestrator:
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
-            result = answers[index]
-            row = prepared_rows[index]
             # Every row's worker spend is already reflected in the budget
             # meter by the pending persist above, so this checkpoint is the
             # same "block before the next not-yet-incurred provider call"
@@ -4846,57 +4864,88 @@ class TaskOrchestrator:
                 budget = self.budget_status()
                 if budget["exceeded"]:
                     raise BudgetExceededError("spend budget exceeded", detail=budget)
-            # Judge each batched answer exactly like route_once: a genuine
-            # fast-mlsirm verdict when policy.realtime_judge is on (the
-            # default), or the same reviewed fallback shape when an operator
-            # has explicitly turned it off. Never a fabricated, ungated pass.
-            # latency_seconds is None: batch_latency_ms_by_agent covers every
-            # prompt this provider batch call served together, so it is not
-            # one answer's honest wall-clock latency -- recording it into the
-            # synchronous-route quality EWMA would corrupt future route_once
-            # member ordering with async batch queueing time. The trace row's
-            # own latency_ms above keeps that shared timing visible as raw,
-            # honestly-labeled evidence.
-            verification = self._realtime_route_judge(
-                text=prompt,
-                answer=result["content"],
-                served_id=agent.id,
-                latency_seconds=None,
-                usage=result.get("usage"),
-                free_only=False,
+            records.append(
+                self._finalize_batch_row(
+                    prompt=prompt,
+                    agent=agent,
+                    result=answers[index],
+                    row=prepared_rows[index],
+                    run_id=run_ids[index],
+                )
             )
-            row["realtime_judge"] = {
-                "accepted": verification["accepted"],
-                "reason": verification["reason"],
-            }
-            record = self._with_effort_snapshot(
-                {
-                    "workflow_run_id": run_ids[index],
-                    "created_at": int(time.time()),
-                    "mode": "route",
-                    "policy_mode": "route",
-                    "prompt_text": prompt,
-                    "answer": result["content"],
-                    "trace": [row],
-                    "policy_snapshot": self.policy.as_dict(),
-                    "verification": verification,
-                }
-            )
-            self._replace_workflow_run(record)
-            self._run_order.appendleft(record["workflow_run_id"])
-            if self._store is not None:
-                self._store.save("workflow_run", record["workflow_run_id"], record)
-            self._append_audit_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-            )
-            self.record_analytics_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-            )
-            records.append(record)
         return records
+
+    def _finalize_batch_row(
+        self,
+        *,
+        prompt: str,
+        agent: ModelAgent,
+        result: dict[str, Any],
+        row: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        """Judge one already-persisted pending batch row and record it as complete.
+
+        Shared by ``batch_route``'s normal per-row judging pass and its
+        inter-group budget checkpoint's early-finalize path (Devin review on
+        #961): a later group's own budget check can raise before this normal
+        pass ever reaches an earlier, already-completed group's rows. When
+        ``policy.realtime_judge`` is off that finalization is zero-cost (the
+        same reviewed fallback ``_realtime_route_judge`` always returns for a
+        disabled judge, no provider call), so there is no reason to leave an
+        already-done row stuck ``pending_verification`` forever just because
+        a *different* group's spend exhausted the cap.
+        """
+        # Judge each batched answer exactly like route_once: a genuine
+        # fast-mlsirm verdict when policy.realtime_judge is on (the
+        # default), or the same reviewed fallback shape when an operator
+        # has explicitly turned it off. Never a fabricated, ungated pass.
+        # latency_seconds is None: the shared batch call's elapsed time
+        # already recorded on this row is not one answer's honest
+        # wall-clock latency -- recording it into the synchronous-route
+        # quality EWMA would corrupt future route_once member ordering
+        # with async batch queueing time. The trace row's own latency_ms
+        # keeps that shared timing visible as raw, honestly-labeled
+        # evidence.
+        verification = self._realtime_route_judge(
+            text=prompt,
+            answer=result["content"],
+            served_id=agent.id,
+            latency_seconds=None,
+            usage=result.get("usage"),
+            free_only=False,
+        )
+        row["realtime_judge"] = {
+            "accepted": verification["accepted"],
+            "reason": verification["reason"],
+        }
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": prompt,
+                "answer": result["content"],
+                "trace": [row],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": verification,
+            }
+        )
+        self._replace_workflow_run(record)
+        self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+        )
+        return record
 
     def run_evaluation(
         self, prompts: list[str], mode: str = "auto", owner_id: str | None = None
