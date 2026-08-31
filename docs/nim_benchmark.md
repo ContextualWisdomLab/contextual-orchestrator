@@ -25,7 +25,7 @@ python -m contextual_orchestrator nim-benchmark --dry-run \
 # resolves the credential by name.
 python -m contextual_orchestrator nim-benchmark \
   --max-total-requests 2000 \
-  --max-output-tokens 256 \
+  --max-output-tokens 264 \
   --git-sha "$GITHUB_SHA" \
   --workflow-run-id "$GITHUB_RUN_ID"
 ```
@@ -35,7 +35,7 @@ Artifact writing fails closed if the resolved secret appears in any output.
 
 `--max-output-tokens` is the per-provider-call output cap. The equal
 cell-wide prompt-plus-completion budget is five times that cap by default
-(`1,280` tokens), which leaves the fixed five-call conduct workflow enough room
+(`1,320` tokens), which leaves the fixed five-call conduct workflow enough room
 for its prompts while keeping the same cell budget for every policy.
 
 ## Provider-egress security boundary

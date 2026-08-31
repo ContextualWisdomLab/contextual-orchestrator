@@ -106,7 +106,7 @@ cheapest-worker cells receive the same per-task contract:
 
 - one locked task and scorer version;
 - one equal cell-wide prompt-plus-completion token allowance, set to five times
-  the per-provider-call output cap by default (`1,280` tokens);
+  the per-provider-call output cap by default (`1,320` tokens);
 - one five-call maximum envelope;
 - one timeout policy; and
 - one workflow-depth ceiling.

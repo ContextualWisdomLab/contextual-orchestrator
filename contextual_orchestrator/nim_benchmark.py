@@ -43,6 +43,7 @@ import base64
 import csv
 import dataclasses
 import datetime as datetime_module
+import decimal
 import hashlib
 import http.client
 import io
@@ -52,6 +53,7 @@ import os
 import random
 import re
 import socket
+import tempfile
 import ssl
 import struct
 import threading
@@ -123,7 +125,9 @@ ACTUAL_COST_EVIDENCE: dict[str, Any] = {
 
 # Transport seam: (method, url, headers, body_bytes_or_None) -> (status, body).
 # Network-level failures raise URLError/TimeoutError/ConnectionError/socket.timeout.
-ProviderTransport = Callable[[str, str, dict[str, str], bytes | None], tuple[int, bytes]]
+ProviderTransport = Callable[
+    [str, str, dict[str, str], bytes | None], tuple[int, bytes]
+]
 
 
 class BenchmarkContractError(ValueError):
@@ -264,7 +268,9 @@ def build_default_transport(timeout_seconds: float) -> ProviderTransport:
                 if response is not None:
                     response.close()
                 connection.close()
-        raise urllib.error.URLError(last_error or "benchmark provider connection failed")
+        raise urllib.error.URLError(
+            last_error or "benchmark provider connection failed"
+        )
 
     return transport
 
@@ -291,7 +297,9 @@ class RequestBudget:
             or not isinstance(max_total_requests, int)
             or max_total_requests < 1
         ):
-            raise BenchmarkContractError("max_total_requests must be a positive integer")
+            raise BenchmarkContractError(
+                "max_total_requests must be a positive integer"
+            )
         self.max_total_requests = max_total_requests
         self._spent = 0
         self._lock = threading.Lock()
@@ -432,6 +440,9 @@ class EqualBudgetModelClient:
         self.maximum_calls = maximum_calls
         self.observed_calls = 0
         self.observed_tokens = 0
+        self.observed_prompt_tokens = 0
+        self.attempted_models: list[dict[str, Any]] = []
+        self.estimated_usage_by_model: dict[str, dict[str, int]] = {}
         self._pending_estimated_tokens: int | None = None
         self._exceeded = False
 
@@ -496,6 +507,15 @@ class EqualBudgetModelClient:
 
         output_cap = min(int(self._delegate.max_output_tokens), output_allowance)
         self.observed_calls += 1
+        self.observed_prompt_tokens += prompt_tokens
+        self.observed_tokens += prompt_tokens
+        self.attempted_models.append(
+            {"role": "attempted", "agent_id": agent.id, "model_id": agent.model}
+        )
+        usage = self.estimated_usage_by_model.setdefault(
+            agent.model, {"prompt_tokens": 0, "completion_tokens": 0}
+        )
+        usage["prompt_tokens"] += prompt_tokens
         with self._delegate.request_settings(max_output_tokens=output_cap):
             answer = self._delegate.chat(
                 agent,
@@ -506,7 +526,9 @@ class EqualBudgetModelClient:
             )
 
         estimated_total = prompt_tokens + estimate_tokens(answer)
-        self.observed_tokens += estimated_total
+        completion_tokens = estimate_tokens(answer)
+        self.observed_tokens += completion_tokens
+        usage["completion_tokens"] += completion_tokens
         self._pending_estimated_tokens = estimated_total
         self._exceeded = self.observed_tokens > self.total_token_budget
         return answer
@@ -519,9 +541,7 @@ class EqualBudgetModelClient:
         if pending_estimate is None or not isinstance(usage, dict):
             return usage
         prompt_tokens = self._coerce_usage_count(usage.get("prompt_tokens"))
-        completion_tokens = self._coerce_usage_count(
-            usage.get("completion_tokens")
-        )
+        completion_tokens = self._coerce_usage_count(usage.get("completion_tokens"))
         if prompt_tokens is None or completion_tokens is None:
             return usage
         self.observed_tokens += prompt_tokens + completion_tokens - pending_estimate
@@ -545,25 +565,33 @@ def parse_model_catalog_body(body: bytes) -> dict[str, Any]:
     try:
         decoded = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as exc:
-        raise CatalogDiscoveryError(f"model catalog body is not valid JSON: {exc}") from exc
+        raise CatalogDiscoveryError(
+            f"model catalog body is not valid JSON: {exc}"
+        ) from exc
     if not isinstance(decoded, dict) or not isinstance(decoded.get("data"), list):
-        raise CatalogDiscoveryError("model catalog must be a JSON object with a 'data' list")
+        raise CatalogDiscoveryError(
+            "model catalog must be a JSON object with a 'data' list"
+        )
 
     models: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
-    duplicate_model_ids: list[str] = []
+    duplicate_model_ids: set[str] = set()
     invalid_entries: list[dict[str, Any]] = []
     for index, entry in enumerate(decoded["data"]):
         if not isinstance(entry, dict):
-            invalid_entries.append({"entry_index": index, "invalid_reason": "entry_not_an_object"})
+            invalid_entries.append(
+                {"entry_index": index, "invalid_reason": "entry_not_an_object"}
+            )
             continue
         model_id = entry.get("id")
         if not isinstance(model_id, str) or not model_id.strip():
-            invalid_entries.append({"entry_index": index, "invalid_reason": "missing_model_id"})
+            invalid_entries.append(
+                {"entry_index": index, "invalid_reason": "missing_model_id"}
+            )
             continue
         model_id = model_id.strip()
         if model_id in seen_ids:
-            duplicate_model_ids.append(model_id)
+            duplicate_model_ids.add(model_id)
             continue
         seen_ids.add(model_id)
         owned_by = entry.get("owned_by")
@@ -599,20 +627,32 @@ def discover_model_catalog(
         socket.timeout,
         socket.gaierror,
     ) as exc:
-        raise CatalogDiscoveryError(f"model catalog request failed: {type(exc).__name__}") from exc
+        raise CatalogDiscoveryError(
+            f"model catalog request failed: {type(exc).__name__}"
+        ) from exc
     if status in (401, 403):
-        raise BenchmarkAuthError(f"provider rejected the benchmark credential (HTTP {status})")
+        raise BenchmarkAuthError(
+            f"provider rejected the benchmark credential (HTTP {status})"
+        )
     if status != 200:
         raise CatalogDiscoveryError(f"model catalog request returned HTTP {status}")
     catalog = parse_model_catalog_body(body)
     if not catalog["models"]:
-        raise CatalogDiscoveryError("model catalog discovery returned zero usable models")
+        raise CatalogDiscoveryError(
+            "model catalog discovery returned zero usable models"
+        )
     return catalog
 
 
-def _auth_headers(api_key: str, content_type: str = "application/json") -> dict[str, str]:
+def _auth_headers(
+    api_key: str, content_type: str = "application/json"
+) -> dict[str, str]:
     """Standard provider headers; the bearer value never appears in artifacts."""
-    return {"authorization": f"Bearer {api_key}", "content-type": content_type, "accept": "application/json"}
+    return {
+        "authorization": f"Bearer {api_key}",
+        "content-type": content_type,
+        "accept": "application/json",
+    }
 
 
 # --------------------------------------------------------------------------
@@ -620,9 +660,7 @@ def _auth_headers(api_key: str, content_type: str = "application/json") -> dict[
 # --------------------------------------------------------------------------
 
 # 1x1 transparent PNG for vision probes.
-_TINY_PNG_BASE64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-)
+_TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 # Deterministic one-frame 16x16 H.264 MP4 generated once with bit-exact flags.
 _TINY_MP4_BASE64 = """AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAALzbW9vdgAAAGxtdmhkAAAAAAAAAAAA
 AAAAAAAD6AAAACgAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAA
@@ -651,7 +689,9 @@ ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWlnaHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNj
 ZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NjAgcmM9Y3JmIG1idHJlZT0x
 IGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0x
 LjQwIGFxPTE6MS4yMACAAAAAEGWIgQAG5z/+9vD+BTZWBME="""
-VIDEO_PROBE_FIXTURE_SHA256 = "777dda43b5a15162b68a39aa486d5c70c9994d7fe761742fd00d4e13508983c0"
+VIDEO_PROBE_FIXTURE_SHA256 = (
+    "777dda43b5a15162b68a39aa486d5c70c9994d7fe761742fd00d4e13508983c0"
+)
 _MULTIPART_BOUNDARY = "nim-benchmark-boundary-7f3a1c"
 _MP4_CONTAINER_BOX_TYPES = frozenset(
     {b"moov", b"trak", b"mdia", b"minf", b"dinf", b"stbl", b"edts", b"udta"}
@@ -686,13 +726,17 @@ def _iter_mp4_boxes(
         header_size = 8
         if box_size == 1:
             if sequence_end - offset < 16:
-                raise BenchmarkContractError("video probe MP4 has a truncated extended box")
+                raise BenchmarkContractError(
+                    "video probe MP4 has a truncated extended box"
+                )
             box_size = struct.unpack(">Q", data[offset + 8 : offset + 16])[0]
             header_size = 16
         elif box_size == 0:
             box_size = sequence_end - offset
         if box_size < header_size or offset + box_size > sequence_end:
-            raise BenchmarkContractError("video probe MP4 box exceeds its parent bounds")
+            raise BenchmarkContractError(
+                "video probe MP4 box exceeds its parent bounds"
+            )
         payload_start = offset + header_size
         box_end = offset + box_size
         yield box_type, payload_start, box_end
@@ -834,7 +878,13 @@ def _multipart_transcription_body(model_id: str) -> bytes:
 def _has_choice(payload: dict[str, Any]) -> bool:
     """True when an OpenAI chat/completions payload carries at least one choice."""
     choices = payload.get("choices")
-    return isinstance(choices, list) and len(choices) > 0
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return False
+    first = choices[0]
+    return isinstance(first.get("text"), str) or (
+        isinstance(first.get("message"), dict)
+        and isinstance(first["message"].get("content"), str)
+    )
 
 
 def _has_embedding(payload: dict[str, Any]) -> bool:
@@ -858,6 +908,15 @@ def _has_transcription_text(payload: dict[str, Any]) -> bool:
     return isinstance(payload.get("text"), str)
 
 
+def _has_audio_signature(body: bytes) -> bool:
+    """Return whether a bounded response starts with a common audio container."""
+    return (
+        body.startswith((b"ID3", b"OggS", b"fLaC"))
+        or (body.startswith(b"RIFF") and body[8:12] == b"WAVE")
+        or (len(body) >= 2 and body[0] == 0xFF and body[1] & 0xE0 == 0xE0)
+    )
+
+
 def _image_data_uri() -> str:
     """Data URI of the tiny PNG used by the image-understanding probe."""
     return f"data:image/png;base64,{_TINY_PNG_BASE64}"
@@ -865,7 +924,9 @@ def _image_data_uri() -> str:
 
 def _video_data_uri() -> str:
     """Return a data URI containing the validated one-frame MP4 fixture."""
-    return f"data:video/mp4;base64,{base64.b64encode(_tiny_mp4_bytes()).decode('ascii')}"
+    return (
+        f"data:video/mp4;base64,{base64.b64encode(_tiny_mp4_bytes()).decode('ascii')}"
+    )
 
 
 def _audio_probe_base64() -> str:
@@ -910,7 +971,9 @@ def _build_capability_probes() -> dict[str, dict[str, Any]]:
         "text_embedding": {
             "path": "/embeddings",
             "content_type": "application/json",
-            "body": lambda model_id: json.dumps({"model": model_id, "input": "probe"}).encode("utf-8"),
+            "body": lambda model_id: json.dumps(
+                {"model": model_id, "input": "probe"}
+            ).encode("utf-8"),
             "validate": _has_embedding,
             "binary_response": False,
         },
@@ -947,7 +1010,10 @@ def _build_capability_probes() -> dict[str, dict[str, Any]]:
                 model_id,
                 [
                     {"type": "text", "text": "Transcribe the audio."},
-                    {"type": "input_audio", "input_audio": {"data": _audio_probe_base64(), "format": "wav"}},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": _audio_probe_base64(), "format": "wav"},
+                    },
                 ],
             ),
             "validate": _has_choice,
@@ -1012,13 +1078,29 @@ def execute_capability_probe(
     try:
         status, body = transport("POST", url, headers, spec["body"](model_id))
     except (TimeoutError, socket.timeout) as exc:
-        return _probe_row(capability_name, "timeout", f"network_timeout:{type(exc).__name__}", None, started, timer)
+        return _probe_row(
+            capability_name,
+            "timeout",
+            f"network_timeout:{type(exc).__name__}",
+            None,
+            started,
+            timer,
+        )
     except (urllib.error.URLError, ConnectionError) as exc:
-        return _probe_row(capability_name, "failed", f"network_error:{type(exc).__name__}", None, started, timer)
+        return _probe_row(
+            capability_name,
+            "failed",
+            f"network_error:{type(exc).__name__}",
+            None,
+            started,
+            timer,
+        )
 
     outcome = classify_probe_status(status)
     if outcome == "auth_rejected":
-        raise BenchmarkAuthError(f"provider rejected the benchmark credential during probes (HTTP {status})")
+        raise BenchmarkAuthError(
+            f"provider rejected the benchmark credential during probes (HTTP {status})"
+        )
     reason = f"http_status:{status}"
     if outcome == "supported" and not spec["binary_response"]:
         try:
@@ -1026,9 +1108,16 @@ def execute_capability_probe(
         except (UnicodeDecodeError, ValueError):
             payload = None
         if not isinstance(payload, dict) or not spec["validate"](payload):
-            outcome, reason = "malformed_response", "http_200_with_unexpected_body_shape"
-    if outcome == "supported" and spec["binary_response"] and not body:
-        outcome, reason = "malformed_response", "http_200_with_empty_media_body"
+            outcome, reason = (
+                "malformed_response",
+                "http_200_with_unexpected_body_shape",
+            )
+    if (
+        outcome == "supported"
+        and spec["binary_response"]
+        and not _has_audio_signature(body)
+    ):
+        outcome, reason = "malformed_response", "http_200_without_audio_signature"
     return _probe_row(capability_name, outcome, reason, status, started, timer)
 
 
@@ -1050,7 +1139,9 @@ def _probe_row(
     }
 
 
-_CHAT_CLASSIFICATIONS = frozenset({"chat_capable", "vision_chat_capable", "omni_capable"})
+_CHAT_CLASSIFICATIONS = frozenset(
+    {"chat_capable", "vision_chat_capable", "omni_capable"}
+)
 
 
 def classify_model_capabilities(probe_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1062,7 +1153,9 @@ def classify_model_capabilities(probe_rows: list[dict[str, Any]]) -> dict[str, A
     model is never silently confused with an unsupported one.
     """
     outcomes = {row["capability_name"]: row["probe_outcome"] for row in probe_rows}
-    supported = sorted(name for name, outcome in outcomes.items() if outcome == "supported")
+    supported = sorted(
+        name for name, outcome in outcomes.items() if outcome == "supported"
+    )
     supported_set = set(supported)
     if "chat_completion" in supported_set:
         if {"image_understanding", "audio_understanding"} <= supported_set:
@@ -1186,8 +1279,12 @@ def score_exact_number_match(expected: dict[str, Any], answer_text: str) -> floa
     A trailing sentence period ("the answer is 21.") still matches; being part
     of a longer number ("210", "21.5", "121") never does.
     """
-    pattern = rf"(?<![\d.]){re.escape(str(expected['number']))}(?!\d)(?!\.\d)"
-    return 1.0 if re.search(pattern, answer_text) else 0.0
+    target = decimal.Decimal(str(expected["number"]))
+    candidates = re.findall(
+        r"(?<![\d.])[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?!\d)(?!\.\d)",
+        answer_text,
+    )
+    return 1.0 if any(decimal.Decimal(value) == target for value in candidates) else 0.0
 
 
 def _normalize_expected_text(value: str, *, case_sensitive: bool) -> str:
@@ -1212,7 +1309,10 @@ def expected_text_leaks(expected: dict[str, Any], prompt_text: str) -> bool:
     case_sensitive, candidates = _text_match_candidates(expected)
     haystack = _normalize_expected_text(prompt_text, case_sensitive=case_sensitive)
     for candidate in candidates:
-        if _normalize_expected_text(candidate, case_sensitive=case_sensitive) in haystack:
+        if (
+            _normalize_expected_text(candidate, case_sensitive=case_sensitive)
+            in haystack
+        ):
             return True
     return False
 
@@ -1220,7 +1320,9 @@ def expected_text_leaks(expected: dict[str, Any], prompt_text: str) -> bool:
 def score_substring_match(expected: dict[str, Any], answer_text: str) -> float:
     """Score declared text answers with optional case-sensitive exact matching."""
     case_sensitive, candidates = _text_match_candidates(expected)
-    normalized_answer = _normalize_expected_text(answer_text, case_sensitive=case_sensitive)
+    normalized_answer = _normalize_expected_text(
+        answer_text, case_sensitive=case_sensitive
+    )
     strict_texts = expected.get("strict_texts")
     if isinstance(strict_texts, list) and strict_texts:
         normalized_candidates = {
@@ -1228,7 +1330,9 @@ def score_substring_match(expected: dict[str, Any], answer_text: str) -> float:
             for candidate in candidates
         }
         return 1.0 if normalized_answer in normalized_candidates else 0.0
-    needle = _normalize_expected_text(str(expected["substring"]), case_sensitive=case_sensitive)
+    needle = _normalize_expected_text(
+        str(expected["substring"]), case_sensitive=case_sensitive
+    )
     return 1.0 if needle in normalized_answer else 0.0
 
 
@@ -1238,6 +1342,39 @@ SCORER_REGISTRY: dict[tuple[str, str], Callable[[dict[str, Any], str], float]] =
 }
 
 _VALID_TASK_SPLITS = frozenset({"locked", "exploratory"})
+
+
+def _validate_expected(
+    scorer_key: tuple[str, str], expected: dict[str, Any], task_id: str
+) -> None:
+    """Validate the scorer-specific expected-answer schema."""
+    if scorer_key == ("exact_number_match", "1"):
+        number = expected.get("number")
+        if isinstance(number, bool) or not isinstance(number, (str, int, float)):
+            raise BenchmarkContractError(
+                f"task {task_id!r} exact-number scorer requires a finite 'number'"
+            )
+        try:
+            if not decimal.Decimal(str(number)).is_finite():
+                raise decimal.InvalidOperation
+        except decimal.InvalidOperation as exc:
+            raise BenchmarkContractError(
+                f"task {task_id!r} exact-number scorer requires a finite 'number'"
+            ) from exc
+        return
+    strict_texts = expected.get("strict_texts")
+    substring = expected.get("substring")
+    if not (
+        isinstance(substring, str)
+        or (
+            isinstance(strict_texts, list)
+            and bool(strict_texts)
+            and all(isinstance(value, str) for value in strict_texts)
+        )
+    ):
+        raise BenchmarkContractError(
+            f"task {task_id!r} substring scorer requires 'substring' or non-empty string 'strict_texts'"
+        )
 
 
 def load_task_manifest(path: str) -> dict[str, Any]:
@@ -1251,36 +1388,55 @@ def load_task_manifest(path: str) -> dict[str, Any]:
         try:
             manifest = json.load(handle)
         except ValueError as exc:
-            raise BenchmarkContractError(f"task manifest is not valid JSON: {exc}") from exc
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("manifest_version"), str):
-        raise BenchmarkContractError("task manifest must be an object with a string 'manifest_version'")
+            raise BenchmarkContractError(
+                f"task manifest is not valid JSON: {exc}"
+            ) from exc
+    if not isinstance(manifest, dict) or not isinstance(
+        manifest.get("manifest_version"), str
+    ):
+        raise BenchmarkContractError(
+            "task manifest must be an object with a string 'manifest_version'"
+        )
     tasks = manifest.get("tasks")
     if not isinstance(tasks, list) or not tasks:
-        raise BenchmarkContractError("task manifest must carry a non-empty 'tasks' list")
+        raise BenchmarkContractError(
+            "task manifest must carry a non-empty 'tasks' list"
+        )
     seen_task_ids: set[str] = set()
     for task in tasks:
         if not isinstance(task, dict):
             raise BenchmarkContractError("every task manifest entry must be an object")
         task_id = task.get("task_id")
         if not isinstance(task_id, str) or not is_two_word_snake_case(task_id):
-            raise BenchmarkContractError(f"task_id must be two-plus-word snake_case: {task_id!r}")
+            raise BenchmarkContractError(
+                f"task_id must be two-plus-word snake_case: {task_id!r}"
+            )
         if task_id in seen_task_ids:
             raise BenchmarkContractError(f"duplicate task_id in manifest: {task_id!r}")
         seen_task_ids.add(task_id)
         if task.get("split") not in _VALID_TASK_SPLITS:
-            raise BenchmarkContractError(f"task {task_id!r} split must be 'locked' or 'exploratory'")
+            raise BenchmarkContractError(
+                f"task {task_id!r} split must be 'locked' or 'exploratory'"
+            )
         prompt = task.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
-            raise BenchmarkContractError(f"task {task_id!r} must carry a non-empty prompt")
+            raise BenchmarkContractError(
+                f"task {task_id!r} must carry a non-empty prompt"
+            )
         scorer = task.get("scorer")
         if not isinstance(scorer, dict):
             raise BenchmarkContractError(f"task {task_id!r} must carry a scorer object")
         scorer_key = (str(scorer.get("name")), str(scorer.get("version")))
         if scorer_key not in SCORER_REGISTRY:
-            raise BenchmarkContractError(f"task {task_id!r} names an unregistered scorer: {scorer_key}")
+            raise BenchmarkContractError(
+                f"task {task_id!r} names an unregistered scorer: {scorer_key}"
+            )
         expected = task.get("expected")
         if not isinstance(expected, dict) or not expected:
-            raise BenchmarkContractError(f"task {task_id!r} must carry a non-empty expected object")
+            raise BenchmarkContractError(
+                f"task {task_id!r} must carry a non-empty expected object"
+            )
+        _validate_expected(scorer_key, expected, task_id)
         # No-leakage rule, defined by the scorer itself: if the registered
         # scorer would award the prompt text a point, the expected answer has
         # leaked into the prompt and a prompt-echoing model would score.
@@ -1302,8 +1458,15 @@ def locked_evaluation_tasks(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _require_finite_rate(value: Any, label: str) -> float:
     """Validate one USD-per-million-token rate: a finite, non-negative number."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
-        raise BenchmarkContractError(f"pricing scenario rate {label} must be a finite non-negative number")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise BenchmarkContractError(
+            f"pricing scenario rate {label} must be a finite non-negative number"
+        )
     return float(value)
 
 
@@ -1546,7 +1709,12 @@ def _cell_usage(
                 f"trace references unknown agent {agent_id!r}"
             ) from exc
         models_used.append(
-            {"step_id": row["id"], "role": row["role"], "agent_id": agent_id, "model_id": model_id}
+            {
+                "step_id": row["id"],
+                "role": row["role"],
+                "agent_id": agent_id,
+                "model_id": model_id,
+            }
         )
         usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
         prompt_tokens = _coerce_token_count(usage.get("prompt_tokens"))
@@ -1557,11 +1725,15 @@ def _cell_usage(
         if completion_tokens is None:
             completion_tokens = estimate_tokens(row.get("output") or "")
             any_estimated = True
-        bucket = usage_by_model.setdefault(model_id, {"prompt_tokens": 0, "completion_tokens": 0})
+        bucket = usage_by_model.setdefault(
+            model_id, {"prompt_tokens": 0, "completion_tokens": 0}
+        )
         bucket["prompt_tokens"] += prompt_tokens
         bucket["completion_tokens"] += completion_tokens
     prompt_total = sum(bucket["prompt_tokens"] for bucket in usage_by_model.values())
-    completion_total = sum(bucket["completion_tokens"] for bucket in usage_by_model.values())
+    completion_total = sum(
+        bucket["completion_tokens"] for bucket in usage_by_model.values()
+    )
     summary = {
         "prompt_tokens": prompt_total,
         "completion_tokens": completion_total,
@@ -1587,6 +1759,7 @@ def run_policy_cell(
     agents_by_id: dict[str, str],
     pricing_scenario: dict[str, Any] | None,
     timer: Callable[[], float],
+    failure_evidence: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Execute one policy on one task and record the full evidence cell."""
     scorer = task["scorer"]
@@ -1598,6 +1771,7 @@ def run_policy_cell(
         # (fail closed), never degrade into one quietly failed cell.
         raise
     except Exception as exc:  # noqa: BLE001 - classified into the contract outcomes
+        incurred = failure_evidence() if failure_evidence is not None else {}
         return {
             "policy_name": policy_name,
             "task_id": task["task_id"],
@@ -1609,15 +1783,15 @@ def run_policy_cell(
             "outcome_reason": f"{type(exc).__name__}",
             "end_to_end_latency_ms": round((timer() - started) * 1000, 3),
             "provider_latency_ms": None,
-            "call_count": 0,
-            "workflow_depth": 0,
-            "prompt_tokens": 0,
+            "call_count": incurred.get("call_count", 0),
+            "workflow_depth": incurred.get("call_count", 0),
+            "prompt_tokens": incurred.get("prompt_tokens", 0),
             "completion_tokens": 0,
-            "total_tokens": 0,
-            "token_usage_source": "unavailable",
+            "total_tokens": incurred.get("prompt_tokens", 0),
+            "token_usage_source": "estimated" if incurred else "unavailable",
             "actual_cost_usd": 0.0,
             "hypothetical_cost_usd": "unknown",
-            "models_used": [],
+            "models_used": incurred.get("models_used", []),
             "response_sha256": None,
         }
     elapsed_ms = round((timer() - started) * 1000, 3)
@@ -1647,7 +1821,9 @@ def run_policy_cell(
         # Actual cost of the hosted NIM catalog to the caller is zero today;
         # hypothetical paid cost comes only from the explicit scenario.
         "actual_cost_usd": 0.0,
-        "hypothetical_cost_usd": hypothetical_cost_usd(pricing_scenario, usage_by_model),
+        "hypothetical_cost_usd": hypothetical_cost_usd(
+            pricing_scenario, usage_by_model
+        ),
         "models_used": usage_summary["models_used"],
         "response_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
     }
@@ -1723,12 +1899,10 @@ def plan_complete_request_budget(
     }
     for label, value in counts.items():
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            raise BenchmarkContractError(
-                f"{label} must be a positive integer"
-            )
+            raise BenchmarkContractError(f"{label} must be a positive integer")
     planned_worker_count = min(discovered_model_count, max_eval_models)
-    capability_probe_request_count = (
-        discovered_model_count * len(CAPABILITY_PROBE_ORDER)
+    capability_probe_request_count = discovered_model_count * len(
+        CAPABILITY_PROBE_ORDER
     )
     evaluation_reserve_request_count = planned_evaluation_requests(
         planned_worker_count,
@@ -1740,9 +1914,7 @@ def plan_complete_request_budget(
         "evaluation_reserve_request_count": evaluation_reserve_request_count,
         "planned_worker_count": planned_worker_count,
         "total_required_request_count": (
-            1
-            + capability_probe_request_count
-            + evaluation_reserve_request_count
+            1 + capability_probe_request_count + evaluation_reserve_request_count
         ),
     }
 
@@ -1866,6 +2038,11 @@ def evaluate_policies(
             agents_by_id,
             pricing_scenario,
             timer,
+            lambda: {
+                "call_count": cell_client.observed_calls,
+                "prompt_tokens": cell_client.observed_prompt_tokens,
+                "models_used": cell_client.attempted_models,
+            },
         )
         cell.update(
             {
@@ -1876,6 +2053,18 @@ def evaluate_policies(
                 "remaining_budget_tokens": cell_client.remaining_tokens,
             }
         )
+        if cell["token_usage_source"] == "estimated" and cell_client.observed_calls:
+            cell.update(
+                {
+                    "prompt_tokens": cell_client.observed_prompt_tokens,
+                    "completion_tokens": cell_client.observed_tokens
+                    - cell_client.observed_prompt_tokens,
+                    "total_tokens": cell_client.observed_tokens,
+                    "hypothetical_cost_usd": hypothetical_cost_usd(
+                        pricing_scenario, cell_client.estimated_usage_by_model
+                    ),
+                }
+            )
         if cell_client.exceeded:
             cell["run_outcome"] = "failure"
             cell["outcome_reason"] = "observed_usage_exceeded_equal_token_budget"
@@ -1936,11 +2125,14 @@ def paired_bootstrap_mean_difference(
 ) -> dict[str, Any]:
     """Paired bootstrap CI for mean(score_a - score_b) over shared tasks."""
     if not paired_scores:
-        raise BenchmarkContractError("paired bootstrap requires at least one score pair")
+        raise BenchmarkContractError(
+            "paired bootstrap requires at least one score pair"
+        )
     differences = [a - b for a, b in paired_scores]
     rng = random.Random(seed)
     resampled_means = sorted(
-        sum(rng.choice(differences) for _ in differences) / len(differences) for _ in range(iterations)
+        sum(rng.choice(differences) for _ in differences) / len(differences)
+        for _ in range(iterations)
     )
     lower_index = int(0.025 * (iterations - 1))
     upper_index = int(0.975 * (iterations - 1))
@@ -1982,35 +2174,56 @@ def summarize_policies(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for policy_name in sorted(grouped):
         policy_cells = grouped[policy_name]
         scored = [cell for cell in policy_cells if cell["run_outcome"] == "success"]
-        priced = [cell for cell in scored if isinstance(cell["hypothetical_cost_usd"], float)]
-        mean_score = round(sum(cell["task_score"] for cell in scored) / len(scored), 6) if scored else 0.0
+        priced = [
+            cell
+            for cell in policy_cells
+            if isinstance(cell["hypothetical_cost_usd"], float)
+        ]
+        mean_score = round(
+            sum(cell["task_score"] for cell in scored) / len(policy_cells), 6
+        )
         summaries.append(
             {
                 "policy_name": policy_name,
                 "cell_count": len(policy_cells),
                 "success_count": len(scored),
+                "completion_fraction": round(len(scored) / len(policy_cells), 6),
                 "mean_task_score": mean_score,
                 "mean_latency_ms": round(
-                    sum(cell["end_to_end_latency_ms"] for cell in policy_cells) / len(policy_cells), 3
+                    sum(cell["end_to_end_latency_ms"] for cell in policy_cells)
+                    / len(policy_cells),
+                    3,
                 ),
                 "total_call_count": sum(cell["call_count"] for cell in policy_cells),
-                "max_workflow_depth": max(cell["workflow_depth"] for cell in policy_cells),
+                "max_workflow_depth": max(
+                    cell["workflow_depth"] for cell in policy_cells
+                ),
                 "total_tokens": sum(cell["total_tokens"] for cell in policy_cells),
                 "actual_cost_usd": 0.0,
                 "mean_hypothetical_cost_usd": (
-                    round(sum(cell["hypothetical_cost_usd"] for cell in priced) / len(priced), 10)
-                    if priced
+                    round(
+                        sum(cell["hypothetical_cost_usd"] for cell in priced)
+                        / len(priced),
+                        10,
+                    )
+                    if len(priced) == len(policy_cells)
                     else "unknown"
                 ),
-                "unknown_hypothetical_cost_cells": len(scored) - len(priced),
+                "unknown_hypothetical_cost_cells": len(policy_cells) - len(priced),
             }
         )
     return summaries
 
 
-def best_single_worker_hindsight(summaries: list[dict[str, Any]]) -> dict[str, Any] | None:
+def best_single_worker_hindsight(
+    summaries: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     """The best direct single worker selected in hindsight on the locked split."""
-    direct = [row for row in summaries if row["policy_name"].startswith("direct_single_worker:")]
+    direct = [
+        row
+        for row in summaries
+        if row["policy_name"].startswith("direct_single_worker:")
+    ]
     if not direct:
         return None
     best = max(direct, key=lambda row: (row["mean_task_score"], row["policy_name"]))
@@ -2022,15 +2235,22 @@ def best_single_worker_hindsight(summaries: list[dict[str, Any]]) -> dict[str, A
     }
 
 
-def paired_policy_comparisons(cells: list[dict[str, Any]], seed: int) -> list[dict[str, Any]]:
+def paired_policy_comparisons(
+    cells: list[dict[str, Any]], seed: int
+) -> list[dict[str, Any]]:
     """Paired task-level bootstrap comparisons between the headline policies."""
     scores: dict[str, dict[str, float]] = {}
     for cell in cells:
         if cell["run_outcome"] == "success":
-            scores.setdefault(cell["policy_name"], {})[cell["task_id"]] = cell["task_score"]
+            scores.setdefault(cell["policy_name"], {})[cell["task_id"]] = cell[
+                "task_score"
+            ]
     summaries = summarize_policies(cells)
     hindsight = best_single_worker_hindsight(summaries)
-    comparison_pairs = [("conduct_bounded", "route_once"), ("cheapest_eligible_worker", "route_once")]
+    comparison_pairs = [
+        ("conduct_bounded", "route_once"),
+        ("cheapest_eligible_worker", "route_once"),
+    ]
     if hindsight is not None:
         comparison_pairs.append(("route_once", hindsight["policy_name"]))
         comparison_pairs.append(("conduct_bounded", hindsight["policy_name"]))
@@ -2055,7 +2275,9 @@ def paired_policy_comparisons(cells: list[dict[str, Any]], seed: int) -> list[di
 
 def _numeric_cost_rows(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Summaries whose mean hypothetical cost is numeric (unknowns excluded, labeled)."""
-    return [row for row in summaries if isinstance(row["mean_hypothetical_cost_usd"], float)]
+    return [
+        row for row in summaries if isinstance(row["mean_hypothetical_cost_usd"], float)
+    ]
 
 
 def build_pareto_frontiers(summaries: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2087,9 +2309,7 @@ def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
     """Require complete official provenance for the zero access-cost claim."""
     evidence = report.get("actual_cost_evidence")
     if not isinstance(evidence, dict):
-        raise BenchmarkContractError(
-            "benchmark report is missing actual_cost_evidence"
-        )
+        raise BenchmarkContractError("benchmark report is missing actual_cost_evidence")
     required_fields = (
         "evidence_schema_version",
         "source_title",
@@ -2152,9 +2372,14 @@ def _evaluation_evidence_summary(
     locked_task_count: int,
 ) -> dict[str, Any]:
     """Classify whether benchmark evidence can inform production review."""
-    successful_cells = [cell for cell in cells if cell["run_outcome"] == "success"]
+    headline_cells = [
+        cell for cell in cells if cell["policy_name"] != "cheapest_eligible_worker"
+    ]
+    successful_cells = [
+        cell for cell in headline_cells if cell["run_outcome"] == "success"
+    ]
     completion_fraction = (
-        round(len(successful_cells) / len(cells), 6) if cells else 0.0
+        round(len(successful_cells) / len(headline_cells), 6) if headline_cells else 0.0
     )
     successful_tasks_by_policy: dict[str, set[str]] = {}
     for cell in successful_cells:
@@ -2198,7 +2423,9 @@ def sha256_of_file(path: str) -> str:
 
 def sha256_of_json(value: Any) -> str:
     """Hex SHA-256 of a canonical JSON serialization (catalog snapshot hash)."""
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
 
 
 def build_provenance(
@@ -2212,7 +2439,9 @@ def build_provenance(
 ) -> dict[str, Any]:
     """Assemble the provenance block; live runs fail closed on missing identity."""
     if run_mode == "live" and (not git_sha or not workflow_run_id):
-        raise BenchmarkContractError("live runs require --git-sha and --workflow-run-id provenance")
+        raise BenchmarkContractError(
+            "live runs require --git-sha and --workflow-run-id provenance"
+        )
     return {
         "run_mode": run_mode,
         "git_sha": git_sha or DRY_RUN_PROVENANCE_PLACEHOLDER,
@@ -2276,7 +2505,9 @@ def validate_report_schema(report: dict[str, Any]) -> None:
                 break
             node = node[key]
     if missing:
-        raise BenchmarkContractError(f"benchmark report is missing required paths: {missing}")
+        raise BenchmarkContractError(
+            f"benchmark report is missing required paths: {missing}"
+        )
 
 
 _CSV_CELL_COLUMNS = (
@@ -2311,7 +2542,9 @@ def _ensure_secret_absent(serialized: str) -> None:
     """Refuse to write any artifact that contains the resolved provider secret."""
     secret = get_credential(NIM_CREDENTIAL_NAME)
     if secret and secret in serialized:
-        raise SecretLeakError("benchmark artifact would contain the provider credential; refusing to write")
+        raise SecretLeakError(
+            "benchmark artifact would contain the provider credential; refusing to write"
+        )
 
 
 def render_markdown_summary(report: dict[str, Any]) -> str:
@@ -2401,8 +2634,6 @@ def write_benchmark_artifacts(
     json_text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     _ensure_secret_absent(json_text)
     json_path = os.path.join(output_dir, "benchmark_report.json")
-    with open(json_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(json_text + "\n")
 
     csv_path = os.path.join(output_dir, "benchmark_cells.csv")
     csv_buffer = io.StringIO()
@@ -2416,14 +2647,32 @@ def write_benchmark_artifacts(
         writer.writerow(cell)
     csv_text = csv_buffer.getvalue()
     _ensure_secret_absent(csv_text)
-    with open(csv_path, "w", encoding="utf-8", newline="") as handle:
-        handle.write(csv_text)
 
     markdown_text = render_markdown_summary(report)
     _ensure_secret_absent(markdown_text)
     markdown_path = os.path.join(output_dir, "benchmark_summary.md")
-    with open(markdown_path, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(markdown_text)
+
+    staged: list[tuple[str, str]] = []
+    try:
+        for final_path, text, newline in (
+            (csv_path, csv_text, ""),
+            (markdown_path, markdown_text, "\n"),
+            # The report is the completion marker and is published last.
+            (json_path, json_text + "\n", "\n"),
+        ):
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", newline=newline, dir=output_dir, delete=False
+            ) as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+                staged.append((handle.name, final_path))
+        for staged_path, final_path in staged:
+            os.replace(staged_path, final_path)
+    finally:
+        for staged_path, _final_path in staged:
+            if os.path.exists(staged_path):
+                os.unlink(staged_path)
     return {
         "json_path": json_path,
         "csv_path": csv_path,
@@ -2484,9 +2733,7 @@ def assemble_benchmark_report(
             "best_single_worker_hindsight": best_single_worker_hindsight(summaries),
             "paired_comparisons": paired_policy_comparisons(cells, seed=seed),
             "pareto_frontiers": build_pareto_frontiers(summaries),
-            "cheapest_worker_skip_reason": evaluation[
-                "cheapest_worker_skip_reason"
-            ],
+            "cheapest_worker_skip_reason": evaluation["cheapest_worker_skip_reason"],
             "locked_task_count": evaluation["locked_task_count"],
             "worker_count": evaluation["worker_count"],
             **evidence_summary,
@@ -2517,9 +2764,7 @@ def assemble_benchmark_report(
                 if run_mode == "dry_run"
                 else "reviewed_nvidia_developer_program_hosted_endpoint_access"
             ),
-            "provider_latency_source": (
-                "not_observable_via_openai_compatible_body"
-            ),
+            "provider_latency_source": ("not_observable_via_openai_compatible_body"),
             "hypothetical_cost_source": (
                 "explicit_versioned_pricing_scenario_or_unknown"
             ),
@@ -2562,7 +2807,9 @@ _DRY_RUN_MODEL_BEHAVIOR = {
 
 def _dry_run_catalog_body() -> bytes:
     """Serialized synthetic /v1/models body, including hygiene edge cases."""
-    data = [{"id": model_id, "owned_by": "dryrun"} for model_id in _DRY_RUN_MODEL_BEHAVIOR]
+    data = [
+        {"id": model_id, "owned_by": "dryrun"} for model_id in _DRY_RUN_MODEL_BEHAVIOR
+    ]
     data.append({"id": "dryrun/chat-basic", "owned_by": "dryrun"})  # duplicate id
     data.append({"owned_by": "dryrun"})  # missing model id
     return json.dumps({"object": "list", "data": data}).encode("utf-8")
@@ -2577,7 +2824,7 @@ def _dry_run_success_body(path: str) -> bytes:
     if path.endswith("/audio/transcriptions"):
         return json.dumps({"text": "ok"}).encode("utf-8")
     if path.endswith("/audio/speech"):
-        return b"RIFFdryrunaudio"
+        return b"RIFF\x00\x00\x00\x00WAVEdryrunaudio"
     return json.dumps({"choices": [{"message": {"content": "OK"}}]}).encode("utf-8")
 
 
@@ -2595,13 +2842,17 @@ def _dry_run_probe_capability(path: str, body: bytes | None) -> str:
     for capability_name, spec in CAPABILITY_PROBES.items():
         if path.endswith(spec["path"]) and capability_name != "chat_completion":
             return capability_name
-    raise CatalogDiscoveryError(f"dry-run transport received an unexpected path: {path}")
+    raise CatalogDiscoveryError(
+        f"dry-run transport received an unexpected path: {path}"
+    )
 
 
 def build_dry_run_transport() -> ProviderTransport:
     """In-process provider fake serving the synthetic all-modality catalog."""
 
-    def transport(method: str, url: str, headers: dict[str, str], body: bytes | None) -> tuple[int, bytes]:
+    def transport(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, bytes]:
         """Serve catalog and probe requests deterministically without network."""
         path = urllib.parse.urlparse(url).path
         if method == "GET" and path.endswith("/models"):
@@ -2695,6 +2946,12 @@ def run_benchmark(
         raise BenchmarkContractError(
             f"run_mode must be 'dry_run' or 'live', not {run_mode!r}"
         )
+    if (
+        isinstance(max_output_tokens, bool)
+        or not isinstance(max_output_tokens, int)
+        or max_output_tokens < 1
+    ):
+        raise BenchmarkContractError("max_output_tokens must be a positive integer")
     manifest = load_task_manifest(task_manifest_path)
     pricing_scenario = load_pricing_scenario(pricing_scenario_path)
     if run_mode == "live":
@@ -2779,10 +3036,7 @@ def run_benchmark(
         max_eval_models=max_eval_models,
         locked_task_count=len(locked_evaluation_tasks(manifest)),
     )
-    if (
-        request_plan["total_required_request_count"]
-        > request_budget.max_total_requests
-    ):
+    if request_plan["total_required_request_count"] > request_budget.max_total_requests:
         raise BenchmarkBudgetError(
             "complete benchmark needs "
             f"{request_plan['total_required_request_count']} requests but "
@@ -2853,7 +3107,9 @@ def _bootstrap_live_credential() -> None:
     ``register-credential --from-env``); runtime reads then resolve the key
     through :func:`get_credential` only.
     """
-    if get_credential(NIM_CREDENTIAL_NAME) is None and os.environ.get(NIM_CREDENTIAL_NAME):
+    if get_credential(NIM_CREDENTIAL_NAME) is None and os.environ.get(
+        NIM_CREDENTIAL_NAME
+    ):
         register_credential(NIM_CREDENTIAL_NAME, os.environ[NIM_CREDENTIAL_NAME])
 
 
@@ -2867,20 +3123,37 @@ def run_benchmark_cli(argv: list[str]) -> int:
         prog="python -m contextual_orchestrator nim-benchmark",
         description="Evidence-grade NVIDIA NIM model discovery and cost-quality benchmark.",
     )
-    parser.add_argument("--dry-run", action="store_true", help="Validate everything without contacting NVIDIA.")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate everything without contacting NVIDIA.",
+    )
     parser.add_argument("--task-manifest", default="examples/nim_task_manifest.json")
-    parser.add_argument("--pricing-scenario", default=None,
-                        help="Versioned hypothetical price-assumption JSON (omit => costs stay 'unknown').")
+    parser.add_argument(
+        "--pricing-scenario",
+        default=None,
+        help="Versioned hypothetical price-assumption JSON (omit => costs stay 'unknown').",
+    )
     parser.add_argument("--output-dir", default="benchmark_artifacts")
     parser.add_argument("--endpoint", default=NIM_DEFAULT_ENDPOINT)
     parser.add_argument("--max-total-requests", type=int, default=2000)
     parser.add_argument("--probe-concurrency", type=int, default=4)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
-    parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
+    parser.add_argument(
+        "--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS
+    )
     parser.add_argument("--max-eval-models", type=int, default=7)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--git-sha", default="", help="Provenance: the exact commit under benchmark (required live).")
-    parser.add_argument("--workflow-run-id", default="", help="Provenance: the CI run id (required live).")
+    parser.add_argument(
+        "--git-sha",
+        default="",
+        help="Provenance: the exact commit under benchmark (required live).",
+    )
+    parser.add_argument(
+        "--workflow-run-id",
+        default="",
+        help="Provenance: the CI run id (required live).",
+    )
     args = parser.parse_args(argv)
 
     run_mode = "dry_run" if args.dry_run else "live"
@@ -2902,20 +3175,39 @@ def run_benchmark_cli(argv: list[str]) -> int:
             git_sha=args.git_sha,
             workflow_run_id=args.workflow_run_id,
         )
-    except (BenchmarkContractError, CatalogDiscoveryError, BenchmarkAuthError,
-            BenchmarkBudgetError, SecretLeakError, NotConfigured, OSError) as exc:
-        print(json.dumps({"benchmark_failed_closed": True, "error_class": type(exc).__name__,
-                          "error_message": str(exc)}, ensure_ascii=False))
+    except (
+        BenchmarkContractError,
+        CatalogDiscoveryError,
+        BenchmarkAuthError,
+        BenchmarkBudgetError,
+        SecretLeakError,
+        NotConfigured,
+        OSError,
+    ) as exc:
+        print(
+            json.dumps(
+                {
+                    "benchmark_failed_closed": True,
+                    "error_class": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+                ensure_ascii=False,
+            )
+        )
         return 1
-    print(json.dumps(
-        {
-            "run_mode": report["provenance"]["run_mode"],
-            "discovered_model_count": report["catalog_snapshot"]["discovered_model_count"],
-            "capability_summary": report["capability_summary"],
-            "requests_spent": report["request_budget"]["requests_spent"],
-            "artifact_paths": report["artifact_paths"],
-        },
-        ensure_ascii=False,
-        indent=2,
-    ))
+    print(
+        json.dumps(
+            {
+                "run_mode": report["provenance"]["run_mode"],
+                "discovered_model_count": report["catalog_snapshot"][
+                    "discovered_model_count"
+                ],
+                "capability_summary": report["capability_summary"],
+                "requests_spent": report["request_budget"]["requests_spent"],
+                "artifact_paths": report["artifact_paths"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0

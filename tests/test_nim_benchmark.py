@@ -107,7 +107,9 @@ def test_endpoint_guard_rejects_missing_host() -> None:
 
 
 def _patched_getaddrinfo(ip_address: str):
-    return lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip_address, 443))]
+    return lambda *args, **kwargs: [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip_address, 443))
+    ]
 
 
 def test_endpoint_guard_rejects_private_address() -> None:
@@ -196,7 +198,9 @@ def _install_direct_transport_fakes(monkeypatch, plans, addresses=("93.184.216.3
     return resolution_calls
 
 
-def test_default_transport_returns_status_and_revalidates_each_request(monkeypatch) -> None:
+def test_default_transport_returns_status_and_revalidates_each_request(
+    monkeypatch,
+) -> None:
     first_response = _FakeDirectResponse(200, b"body-one")
     second_response = _FakeDirectResponse(200, b"body-two")
     resolution_calls = _install_direct_transport_fakes(
@@ -218,7 +222,9 @@ def test_default_transport_returns_status_and_revalidates_each_request(monkeypat
     assert all(connection.closed for connection in _FakeDirectConnection.instances)
     assert _FakeDirectConnection.instances[0].server_hostname == "nim.example.test"
     assert _FakeDirectConnection.instances[0].pinned_ip == "93.184.216.34"
-    assert _FakeDirectConnection.instances[1].target == "/v1/models;format=json?second=1"
+    assert (
+        _FakeDirectConnection.instances[1].target == "/v1/models;format=json?second=1"
+    )
 
 
 def test_default_transport_returns_http_error_status_with_body(monkeypatch) -> None:
@@ -238,9 +244,7 @@ def test_default_transport_rejects_oversized_response_and_closes_resources(
     _install_direct_transport_fakes(monkeypatch, [response])
 
     with pytest.raises(nb.BenchmarkContractError, match="response exceeds"):
-        nb.build_default_transport(5.0)(
-            "GET", f"{FAKE_ENDPOINT}/models", {}, None
-        )
+        nb.build_default_transport(5.0)("GET", f"{FAKE_ENDPOINT}/models", {}, None)
 
     assert response.closed is True
     assert _FakeDirectConnection.instances[0].closed is True
@@ -256,16 +260,16 @@ def test_default_transport_rejects_redirect_without_following(monkeypatch) -> No
     assert response.closed is True
 
 
-def test_default_transport_falls_back_only_to_another_validated_address(monkeypatch) -> None:
+def test_default_transport_falls_back_only_to_another_validated_address(
+    monkeypatch,
+) -> None:
     response = _FakeDirectResponse(200, b"catalog")
     _install_direct_transport_fakes(
         monkeypatch,
         [OSError("first pin failed"), response],
         addresses=("93.184.216.34", "93.184.216.35"),
     )
-    result = nb.build_default_transport(5.0)(
-        "GET", f"{FAKE_ENDPOINT}/models", {}, None
-    )
+    result = nb.build_default_transport(5.0)("GET", f"{FAKE_ENDPOINT}/models", {}, None)
     assert result == (200, b"catalog")
     assert [item.pinned_ip for item in _FakeDirectConnection.instances] == [
         "93.184.216.34",
@@ -280,9 +284,7 @@ def test_default_transport_reports_failure_after_every_pin_fails(monkeypatch) ->
         addresses=("93.184.216.34", "93.184.216.35"),
     )
     with pytest.raises(urllib.error.URLError, match="second pin failed"):
-        nb.build_default_transport(5.0)(
-            "GET", f"{FAKE_ENDPOINT}/models", {}, None
-        )
+        nb.build_default_transport(5.0)("GET", f"{FAKE_ENDPOINT}/models", {}, None)
 
 
 # --------------------------------------------------------------------------
@@ -316,7 +318,9 @@ def test_budgeted_client_charges_each_chat_call() -> None:
 
 def test_equal_budget_client_forwards_delegate_controls() -> None:
     delegate = ModelClient(max_output_tokens=32)
-    client = nb.EqualBudgetModelClient(delegate, total_token_budget=128, maximum_calls=2)
+    client = nb.EqualBudgetModelClient(
+        delegate, total_token_budget=128, maximum_calls=2
+    )
     assert client.temperature == delegate.temperature
     assert client.timeout == delegate.timeout
     assert client.request_settings_snapshot() == delegate.request_settings_snapshot()
@@ -325,12 +329,20 @@ def test_equal_budget_client_forwards_delegate_controls() -> None:
 
 
 def test_equal_budget_client_fails_closed_on_call_and_prompt_limits() -> None:
-    client = nb.EqualBudgetModelClient(ModelClient(), total_token_budget=20, maximum_calls=1)
-    client.chat(_mock_agents("dryrun/chat-basic")[0], [{"role": "user", "content": "hi"}])
+    client = nb.EqualBudgetModelClient(
+        ModelClient(), total_token_budget=20, maximum_calls=1
+    )
+    client.chat(
+        _mock_agents("dryrun/chat-basic")[0], [{"role": "user", "content": "hi"}]
+    )
     with pytest.raises(nb.PolicyTokenBudgetExceeded, match="maximum-call"):
-        client.chat(_mock_agents("dryrun/chat-basic")[0], [{"role": "user", "content": "again"}])
+        client.chat(
+            _mock_agents("dryrun/chat-basic")[0], [{"role": "user", "content": "again"}]
+        )
 
-    tight = nb.EqualBudgetModelClient(ModelClient(), total_token_budget=1, maximum_calls=1)
+    tight = nb.EqualBudgetModelClient(
+        ModelClient(), total_token_budget=1, maximum_calls=1
+    )
     with pytest.raises(nb.PolicyTokenBudgetExceeded, match="total-token"):
         tight.chat(
             _mock_agents("dryrun/chat-basic")[0],
@@ -365,6 +377,7 @@ def test_catalog_parse_records_invalid_and_duplicate_entries() -> None:
         {
             "data": [
                 {"id": "vendor/model-b", "owned_by": "vendor"},
+                {"id": "vendor/model-b", "owned_by": "vendor"},
                 "not-an-object",
                 {"owned_by": "vendor"},
                 {"id": "   ", "owned_by": "vendor"},
@@ -376,7 +389,10 @@ def test_catalog_parse_records_invalid_and_duplicate_entries() -> None:
     ).encode("utf-8")
     catalog = nb.parse_model_catalog_body(body)
     # Sorted output guards against provider response-order drift.
-    assert [row["model_id"] for row in catalog["models"]] == ["vendor/model-a", "vendor/model-b"]
+    assert [row["model_id"] for row in catalog["models"]] == [
+        "vendor/model-a",
+        "vendor/model-b",
+    ]
     assert catalog["models"][0]["owned_by"] == ""  # non-string owner coerced
     assert catalog["duplicate_model_ids"] == ["vendor/model-b"]
     reasons = {entry["invalid_reason"] for entry in catalog["invalid_entries"]}
@@ -385,15 +401,25 @@ def test_catalog_parse_records_invalid_and_duplicate_entries() -> None:
 
 
 def test_catalog_order_drift_never_reorders_models() -> None:
-    forward = json.dumps({"data": [{"id": "a/model-one"}, {"id": "b/model-two"}]}).encode("utf-8")
-    reverse = json.dumps({"data": [{"id": "b/model-two"}, {"id": "a/model-one"}]}).encode("utf-8")
-    assert nb.parse_model_catalog_body(forward)["models"] == nb.parse_model_catalog_body(reverse)["models"]
+    forward = json.dumps(
+        {"data": [{"id": "a/model-one"}, {"id": "b/model-two"}]}
+    ).encode("utf-8")
+    reverse = json.dumps(
+        {"data": [{"id": "b/model-two"}, {"id": "a/model-one"}]}
+    ).encode("utf-8")
+    assert (
+        nb.parse_model_catalog_body(forward)["models"]
+        == nb.parse_model_catalog_body(reverse)["models"]
+    )
 
 
 def test_discover_catalog_success_and_budget_charge() -> None:
     budget = nb.RequestBudget(3)
     catalog = nb.discover_model_catalog(
-        _fixed_transport(*_ok_json({"data": [{"id": "vendor/model-a"}]})), FAKE_ENDPOINT, "key", budget
+        _fixed_transport(*_ok_json({"data": [{"id": "vendor/model-a"}]})),
+        FAKE_ENDPOINT,
+        "key",
+        budget,
     )
     assert catalog["models"][0]["model_id"] == "vendor/model-a"
     assert budget.requests_spent == 1
@@ -402,12 +428,19 @@ def test_discover_catalog_success_and_budget_charge() -> None:
 def test_discover_catalog_fails_closed_on_auth_rejection() -> None:
     for status in (401, 403):
         with pytest.raises(nb.BenchmarkAuthError):
-            nb.discover_model_catalog(_fixed_transport(status, b"{}"), FAKE_ENDPOINT, "key", nb.RequestBudget(3))
+            nb.discover_model_catalog(
+                _fixed_transport(status, b"{}"),
+                FAKE_ENDPOINT,
+                "key",
+                nb.RequestBudget(3),
+            )
 
 
 def test_discover_catalog_fails_closed_on_http_error() -> None:
     with pytest.raises(nb.CatalogDiscoveryError):
-        nb.discover_model_catalog(_fixed_transport(500, b"{}"), FAKE_ENDPOINT, "key", nb.RequestBudget(3))
+        nb.discover_model_catalog(
+            _fixed_transport(500, b"{}"), FAKE_ENDPOINT, "key", nb.RequestBudget(3)
+        )
 
 
 def test_discover_catalog_fails_closed_on_network_error() -> None:
@@ -428,7 +461,12 @@ def test_discover_catalog_fails_closed_on_dns_error() -> None:
 
 def test_discover_catalog_fails_closed_on_empty_inventory() -> None:
     with pytest.raises(nb.CatalogDiscoveryError):
-        nb.discover_model_catalog(_fixed_transport(*_ok_json({"data": []})), FAKE_ENDPOINT, "key", nb.RequestBudget(3))
+        nb.discover_model_catalog(
+            _fixed_transport(*_ok_json({"data": []})),
+            FAKE_ENDPOINT,
+            "key",
+            nb.RequestBudget(3),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -487,11 +525,15 @@ def test_probe_status_classification_table() -> None:
 
 
 def _probe(transport, capability_name="chat_completion"):
-    return nb.execute_capability_probe(transport, FAKE_ENDPOINT, "key", "vendor/model-a", capability_name)
+    return nb.execute_capability_probe(
+        transport, FAKE_ENDPOINT, "key", "vendor/model-a", capability_name
+    )
 
 
 def test_probe_supported_chat() -> None:
-    row = _probe(_fixed_transport(*_ok_json({"choices": [{"message": {"content": "OK"}}]})))
+    row = _probe(
+        _fixed_transport(*_ok_json({"choices": [{"message": {"content": "OK"}}]}))
+    )
     assert row["probe_outcome"] == "supported"
     assert row["http_status"] == 200
 
@@ -521,17 +563,35 @@ def test_probe_unsupported_and_rate_limited() -> None:
 
 
 def test_probe_malformed_success_bodies() -> None:
-    assert _probe(_fixed_transport(200, b"not json"))["probe_outcome"] == "malformed_response"
+    assert (
+        _probe(_fixed_transport(200, b"not json"))["probe_outcome"]
+        == "malformed_response"
+    )
     assert _probe(_fixed_transport(200, b"[]"))["probe_outcome"] == "malformed_response"
-    assert _probe(_fixed_transport(*_ok_json({"choices": []})))["probe_outcome"] == "malformed_response"
+    assert (
+        _probe(_fixed_transport(*_ok_json({"choices": []})))["probe_outcome"]
+        == "malformed_response"
+    )
+    assert (
+        _probe(_fixed_transport(*_ok_json({"choices": [{}]})))["probe_outcome"]
+        == "malformed_response"
+    )
 
 
 def test_probe_binary_speech_contract() -> None:
-    supported = _probe(_fixed_transport(200, b"RIFFaudio"), "audio_speech")
+    supported = _probe(
+        _fixed_transport(200, b"RIFF\x00\x00\x00\x00WAVEaudio"), "audio_speech"
+    )
     assert supported["probe_outcome"] == "supported"
     empty = _probe(_fixed_transport(200, b""), "audio_speech")
     assert empty["probe_outcome"] == "malformed_response"
-    assert empty["outcome_reason"] == "http_200_with_empty_media_body"
+    assert empty["outcome_reason"] == "http_200_without_audio_signature"
+    assert (
+        _probe(_fixed_transport(200, b'{"error":"not audio"}'), "audio_speech")[
+            "probe_outcome"
+        ]
+        == "malformed_response"
+    )
 
 
 def _rows(**outcome_by_capability: str) -> list[dict]:
@@ -542,51 +602,124 @@ def _rows(**outcome_by_capability: str) -> list[dict]:
 
 
 def test_classification_covers_every_modality_class() -> None:
-    assert nb.classify_model_capabilities(
-        _rows(chat_completion="supported", image_understanding="supported", audio_understanding="supported")
-    )["model_classification"] == "omni_capable"
-    assert nb.classify_model_capabilities(
-        _rows(chat_completion="supported", image_understanding="supported")
-    )["model_classification"] == "vision_chat_capable"
-    assert nb.classify_model_capabilities(
-        _rows(chat_completion="supported", video_understanding="supported")
-    )["model_classification"] == "vision_chat_capable"
-    assert nb.classify_model_capabilities(_rows(chat_completion="supported"))["model_classification"] == "chat_capable"
-    assert nb.classify_model_capabilities(_rows(text_embedding="supported"))["model_classification"] == "embedding_only"
-    assert nb.classify_model_capabilities(_rows(text_completion="supported"))["model_classification"] == "completion_only"
-    assert nb.classify_model_capabilities(
-        _rows(response_generation="supported")
-    )["model_classification"] == "responses_only"
-    assert nb.classify_model_capabilities(_rows(audio_transcription="supported"))["model_classification"] == "audio_only"
-    assert nb.classify_model_capabilities(_rows(audio_speech="supported"))["model_classification"] == "audio_only"
-    assert nb.classify_model_capabilities(_rows(chat_completion="skipped"))["model_classification"] == "skipped"
-    assert nb.classify_model_capabilities(
-        _rows(chat_completion="rate_limited", text_embedding="unsupported")
-    )["model_classification"] == "rate_limited"
-    assert nb.classify_model_capabilities(
-        _rows(chat_completion="unavailable", text_embedding="unsupported")
-    )["model_classification"] == "unavailable"
-    assert nb.classify_model_capabilities(
-        _rows(chat_completion="timeout", text_embedding="unsupported")
-    )["model_classification"] == "failed"
-    assert nb.classify_model_capabilities(
-        _rows(chat_completion="unsupported", text_embedding="unsupported")
-    )["model_classification"] == "unsupported_for_contract"
+    assert (
+        nb.classify_model_capabilities(
+            _rows(
+                chat_completion="supported",
+                image_understanding="supported",
+                audio_understanding="supported",
+            )
+        )["model_classification"]
+        == "omni_capable"
+    )
+    assert (
+        nb.classify_model_capabilities(
+            _rows(chat_completion="supported", image_understanding="supported")
+        )["model_classification"]
+        == "vision_chat_capable"
+    )
+    assert (
+        nb.classify_model_capabilities(
+            _rows(chat_completion="supported", video_understanding="supported")
+        )["model_classification"]
+        == "vision_chat_capable"
+    )
+    assert (
+        nb.classify_model_capabilities(_rows(chat_completion="supported"))[
+            "model_classification"
+        ]
+        == "chat_capable"
+    )
+    assert (
+        nb.classify_model_capabilities(_rows(text_embedding="supported"))[
+            "model_classification"
+        ]
+        == "embedding_only"
+    )
+    assert (
+        nb.classify_model_capabilities(_rows(text_completion="supported"))[
+            "model_classification"
+        ]
+        == "completion_only"
+    )
+    assert (
+        nb.classify_model_capabilities(_rows(response_generation="supported"))[
+            "model_classification"
+        ]
+        == "responses_only"
+    )
+    assert (
+        nb.classify_model_capabilities(_rows(audio_transcription="supported"))[
+            "model_classification"
+        ]
+        == "audio_only"
+    )
+    assert (
+        nb.classify_model_capabilities(_rows(audio_speech="supported"))[
+            "model_classification"
+        ]
+        == "audio_only"
+    )
+    assert (
+        nb.classify_model_capabilities(_rows(chat_completion="skipped"))[
+            "model_classification"
+        ]
+        == "skipped"
+    )
+    assert (
+        nb.classify_model_capabilities(
+            _rows(chat_completion="rate_limited", text_embedding="unsupported")
+        )["model_classification"]
+        == "rate_limited"
+    )
+    assert (
+        nb.classify_model_capabilities(
+            _rows(chat_completion="unavailable", text_embedding="unsupported")
+        )["model_classification"]
+        == "unavailable"
+    )
+    assert (
+        nb.classify_model_capabilities(
+            _rows(chat_completion="timeout", text_embedding="unsupported")
+        )["model_classification"]
+        == "failed"
+    )
+    assert (
+        nb.classify_model_capabilities(
+            _rows(chat_completion="unsupported", text_embedding="unsupported")
+        )["model_classification"]
+        == "unsupported_for_contract"
+    )
 
 
 def test_classification_reports_chat_eligibility() -> None:
-    assert nb.classify_model_capabilities(_rows(chat_completion="supported"))["chat_eligible"]
-    assert not nb.classify_model_capabilities(_rows(text_embedding="supported"))["chat_eligible"]
+    assert nb.classify_model_capabilities(_rows(chat_completion="supported"))[
+        "chat_eligible"
+    ]
+    assert not nb.classify_model_capabilities(_rows(text_embedding="supported"))[
+        "chat_eligible"
+    ]
 
 
 def test_probe_models_rejects_bad_concurrency() -> None:
     with pytest.raises(nb.BenchmarkContractError):
-        nb.probe_discovered_models([], _fixed_transport(200, b"{}"), FAKE_ENDPOINT, "key", nb.RequestBudget(1), 0, lambda: 0.0)
+        nb.probe_discovered_models(
+            [],
+            _fixed_transport(200, b"{}"),
+            FAKE_ENDPOINT,
+            "key",
+            nb.RequestBudget(1),
+            0,
+            lambda: 0.0,
+        )
 
 
 def test_probe_models_sorted_despite_input_order_drift() -> None:
     # Models arrive in reverse order; the snapshot must still come out sorted.
-    models = [{"model_id": "b/model-two", "owned_by": ""}, {"model_id": "a/model-one", "owned_by": ""}]
+    models = [
+        {"model_id": "b/model-two", "owned_by": ""},
+        {"model_id": "a/model-one", "owned_by": ""},
+    ]
     results = nb.probe_discovered_models(
         models,
         _fixed_transport(*_ok_json({"choices": [{"message": {"content": "OK"}}]})),
@@ -648,7 +781,11 @@ def test_scorers_match_and_miss() -> None:
     assert nb.score_exact_number_match({"number": "21"}, "the answer is 210") == 0.0
     assert nb.score_exact_number_match({"number": "21"}, "the answer is 21.5") == 0.0
     assert nb.score_exact_number_match({"number": "21"}, "the answer is 121") == 0.0
-    assert nb.score_exact_number_match({"number": "0.05"}, "It costs $0.05 total") == 1.0
+    assert (
+        nb.score_exact_number_match({"number": "0.05"}, "It costs $0.05 total") == 1.0
+    )
+    assert nb.score_exact_number_match({"number": "21"}, "the answer is -21") == 0.0
+    assert nb.score_exact_number_match({"number": "-21"}, "the answer is -21") == 1.0
     assert nb.score_substring_match({"substring": "Paris"}, "It is PARIS indeed") == 1.0
     assert nb.score_substring_match({"substring": "Paris"}, "It is Lyon") == 0.0
     assert (
@@ -692,7 +829,9 @@ def test_example_task_manifest_is_valid_and_split() -> None:
     manifest = nb.load_task_manifest(TASK_MANIFEST_PATH)
     locked = nb.locked_evaluation_tasks(manifest)
     assert len(locked) == 30
-    assert len(manifest["tasks"]) - len(locked) == 2  # exploratory tuning split stays out
+    assert (
+        len(manifest["tasks"]) - len(locked) == 2
+    )  # exploratory tuning split stays out
 
 
 def test_manifest_rejects_each_contract_violation() -> None:
@@ -704,8 +843,18 @@ def test_manifest_rejects_each_contract_violation() -> None:
             (bad_json, None),
             (_write_json(tmp, "list.json", [1]), None),
             (_write_json(tmp, "nover.json", {"tasks": []}), None),
-            (_write_json(tmp, "notasks.json", {"manifest_version": "1", "tasks": []}), None),
-            (_write_json(tmp, "taskstr.json", {"manifest_version": "1", "tasks": ["x"]}), None),
+            (
+                _write_json(
+                    tmp, "notasks.json", {"manifest_version": "1", "tasks": []}
+                ),
+                None,
+            ),
+            (
+                _write_json(
+                    tmp, "taskstr.json", {"manifest_version": "1", "tasks": ["x"]}
+                ),
+                None,
+            ),
         ]
         for path, _ in cases:
             with pytest.raises(nb.BenchmarkContractError):
@@ -732,6 +881,11 @@ def test_manifest_rejects_each_contract_violation() -> None:
             manifest_with(scorer={"name": "unknown_scorer", "version": "9"}),
             manifest_with(expected={}),
             manifest_with(expected="blue"),
+            manifest_with(
+                scorer={"name": "exact_number_match", "version": "1"},
+                expected={"wrong": 21},
+            ),
+            manifest_with(expected={"wrong": "blue"}),
             # Leakage: the scorer would award the prompt itself a point.
             manifest_with(prompt="Answer blue if the sky is blue."),
             manifest_with(
@@ -775,11 +929,36 @@ def test_pricing_scenario_rejects_each_contract_violation() -> None:
             dict(base, scenario_status="draft"),
             dict(base, usd_per_million_tokens=[1]),
             dict(base, usd_per_million_tokens={"vendor/model-a": "cheap"}),
-            dict(base, usd_per_million_tokens={"vendor/model-a": {"input": True, "output": 2.0}}),
-            dict(base, usd_per_million_tokens={"vendor/model-a": {"input": 1.0, "output": "two"}}),
-            dict(base, usd_per_million_tokens={"vendor/model-a": {"input": float("nan"), "output": 2.0}}),
-            dict(base, usd_per_million_tokens={"vendor/model-a": {"input": float("inf"), "output": 2.0}}),
-            dict(base, usd_per_million_tokens={"vendor/model-a": {"input": -0.1, "output": 2.0}}),
+            dict(
+                base,
+                usd_per_million_tokens={
+                    "vendor/model-a": {"input": True, "output": 2.0}
+                },
+            ),
+            dict(
+                base,
+                usd_per_million_tokens={
+                    "vendor/model-a": {"input": 1.0, "output": "two"}
+                },
+            ),
+            dict(
+                base,
+                usd_per_million_tokens={
+                    "vendor/model-a": {"input": float("nan"), "output": 2.0}
+                },
+            ),
+            dict(
+                base,
+                usd_per_million_tokens={
+                    "vendor/model-a": {"input": float("inf"), "output": 2.0}
+                },
+            ),
+            dict(
+                base,
+                usd_per_million_tokens={
+                    "vendor/model-a": {"input": -0.1, "output": 2.0}
+                },
+            ),
             dict(base, usd_per_million_tokens={"vendor/model-a": {"output": 2.0}}),
         ]
         with pytest.raises(nb.BenchmarkContractError):
@@ -796,7 +975,9 @@ def test_hypothetical_cost_paths() -> None:
         "scenario_status": "reviewed",
         "usd_per_million_tokens": {"vendor/model-a": {"input": 1.0, "output": 2.0}},
     }
-    usage = {"vendor/model-a": {"prompt_tokens": 1_000_000, "completion_tokens": 500_000}}
+    usage = {
+        "vendor/model-a": {"prompt_tokens": 1_000_000, "completion_tokens": 500_000}
+    }
     assert nb.hypothetical_cost_usd(scenario, usage) == 2.0
     assert nb.hypothetical_cost_usd(None, usage) == "unknown"
     unpriced = {"vendor/other-model": {"prompt_tokens": 10, "completion_tokens": 10}}
@@ -810,9 +991,15 @@ def test_hypothetical_cost_paths() -> None:
 
 def test_sanitize_worker_agent_id_paths() -> None:
     taken: set[str] = set()
-    assert nb.sanitize_worker_agent_id("meta/llama-3.1-8b", taken) == "meta_llama_3_1_8b"
-    assert nb.sanitize_worker_agent_id("meta/llama-3.1-8b", taken) == "meta_llama_3_1_8b_2"
-    assert nb.sanitize_worker_agent_id("meta/llama-3.1-8b", taken) == "meta_llama_3_1_8b_3"
+    assert (
+        nb.sanitize_worker_agent_id("meta/llama-3.1-8b", taken) == "meta_llama_3_1_8b"
+    )
+    assert (
+        nb.sanitize_worker_agent_id("meta/llama-3.1-8b", taken) == "meta_llama_3_1_8b_2"
+    )
+    assert (
+        nb.sanitize_worker_agent_id("meta/llama-3.1-8b", taken) == "meta_llama_3_1_8b_3"
+    )
     assert nb.sanitize_worker_agent_id("gpt", taken) == "nim_gpt"
     assert nb.sanitize_worker_agent_id("///", taken) == "unnamed_model"
 
@@ -829,7 +1016,12 @@ def _probed(model_id: str, chat_eligible: bool = True) -> dict:
 def test_build_worker_agents_filters_caps_and_validates() -> None:
     with pytest.raises(nb.BenchmarkContractError):
         nb.build_worker_agents([], "mock://x", 0)
-    probed = [_probed("a/chat-one"), _probed("b/embed-only", chat_eligible=False), _probed("c/chat-two"), _probed("d/chat-three")]
+    probed = [
+        _probed("a/chat-one"),
+        _probed("b/embed-only", chat_eligible=False),
+        _probed("c/chat-two"),
+        _probed("d/chat-three"),
+    ]
     agents = nb.build_worker_agents(probed, "mock://x", 2)
     assert [agent.model for agent in agents] == ["a/chat-one", "c/chat-two"]
     assert all(agent.credential_key == nb.NIM_CREDENTIAL_NAME for agent in agents)
@@ -849,22 +1041,52 @@ def test_token_count_coercion_guards_non_finite_values() -> None:
 def test_cell_usage_reported_vs_estimated_and_failover() -> None:
     agents_by_id = {"worker_one": "vendor/model-a", "worker_two": "vendor/model-b"}
     reported_trace = [
-        {"id": 0, "role": "worker", "agent_id": "worker_one", "output": "x",
-         "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
-        {"id": 1, "role": "verifier", "agent_id": "worker_one", "served_agent_id": "worker_two", "output": "y",
-         "usage": {"prompt_tokens": 3, "completion_tokens": 2}},
+        {
+            "id": 0,
+            "role": "worker",
+            "agent_id": "worker_one",
+            "output": "x",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        },
+        {
+            "id": 1,
+            "role": "verifier",
+            "agent_id": "worker_one",
+            "served_agent_id": "worker_two",
+            "output": "y",
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        },
     ]
-    usage_by_model, summary = nb._cell_usage(reported_trace, agents_by_id, "prompt text")
+    usage_by_model, summary = nb._cell_usage(
+        reported_trace, agents_by_id, "prompt text"
+    )
     assert summary["token_usage_source"] == "reported"
-    assert usage_by_model["vendor/model-a"] == {"prompt_tokens": 10, "completion_tokens": 5}
-    assert usage_by_model["vendor/model-b"] == {"prompt_tokens": 3, "completion_tokens": 2}
+    assert usage_by_model["vendor/model-a"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+    }
+    assert usage_by_model["vendor/model-b"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+    }
     assert summary["total_tokens"] == 20
     assert summary["models_used"][1]["agent_id"] == "worker_two"
 
     adversarial_trace = [
-        {"id": 0, "role": "worker", "agent_id": "worker_one", "output": "answer text",
-         "usage": {"prompt_tokens": float("nan"), "completion_tokens": float("inf")}},
-        {"id": 1, "role": "worker", "agent_id": "worker_one", "output": None, "usage": "corrupted"},
+        {
+            "id": 0,
+            "role": "worker",
+            "agent_id": "worker_one",
+            "output": "answer text",
+            "usage": {"prompt_tokens": float("nan"), "completion_tokens": float("inf")},
+        },
+        {
+            "id": 1,
+            "role": "worker",
+            "agent_id": "worker_one",
+            "output": None,
+            "usage": "corrupted",
+        },
     ]
     _usage, summary = nb._cell_usage(adversarial_trace, agents_by_id, "prompt text")
     assert summary["token_usage_source"] == "estimated"
@@ -907,7 +1129,17 @@ def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
     ok = nb.run_policy_cell(
         "route_once",
         _task(),
-        lambda: {"answer": "a zebra appears", "trace": [{"id": 0, "role": "worker", "agent_id": "worker_one", "output": "a zebra appears"}]},
+        lambda: {
+            "answer": "a zebra appears",
+            "trace": [
+                {
+                    "id": 0,
+                    "role": "worker",
+                    "agent_id": "worker_one",
+                    "output": "a zebra appears",
+                }
+            ],
+        },
         agents_by_id,
         None,
         nb._deterministic_timer(),
@@ -919,20 +1151,47 @@ def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
     def fail() -> dict:
         raise RuntimeError("boom")
 
-    failed = nb.run_policy_cell("route_once", _task(), fail, agents_by_id, None, nb._deterministic_timer())
+    failed = nb.run_policy_cell(
+        "route_once", _task(), fail, agents_by_id, None, nb._deterministic_timer()
+    )
     assert failed["run_outcome"] == "failure" and failed["task_score"] is None
+
+    incurred = nb.run_policy_cell(
+        "route_once",
+        _task(),
+        fail,
+        agents_by_id,
+        None,
+        nb._deterministic_timer(),
+        lambda: {
+            "call_count": 1,
+            "prompt_tokens": 7,
+            "models_used": [{"model_id": "vendor/model-a"}],
+        },
+    )
+    assert incurred["call_count"] == 1 and incurred["total_tokens"] == 7
+    assert incurred["models_used"] == [{"model_id": "vendor/model-a"}]
 
     def slow() -> dict:
         raise TimeoutError("deadline")
 
-    timed_out = nb.run_policy_cell("route_once", _task(), slow, agents_by_id, None, nb._deterministic_timer())
+    timed_out = nb.run_policy_cell(
+        "route_once", _task(), slow, agents_by_id, None, nb._deterministic_timer()
+    )
     assert timed_out["run_outcome"] == "timeout"
 
     def out_of_budget() -> dict:
         raise nb.BenchmarkBudgetError("exhausted")
 
     with pytest.raises(nb.BenchmarkBudgetError):
-        nb.run_policy_cell("route_once", _task(), out_of_budget, agents_by_id, None, nb._deterministic_timer())
+        nb.run_policy_cell(
+            "route_once",
+            _task(),
+            out_of_budget,
+            agents_by_id,
+            None,
+            nb._deterministic_timer(),
+        )
 
 
 def test_cheapest_priced_agent_selection() -> None:
@@ -946,7 +1205,17 @@ def test_cheapest_priced_agent_selection() -> None:
         },
     }
     assert nb.cheapest_priced_agent(agents, None) is None
-    assert nb.cheapest_priced_agent(agents, {"scenario_version": "1", "scenario_status": "reviewed", "usd_per_million_tokens": {}}) is None
+    assert (
+        nb.cheapest_priced_agent(
+            agents,
+            {
+                "scenario_version": "1",
+                "scenario_status": "reviewed",
+                "usd_per_million_tokens": {},
+            },
+        )
+        is None
+    )
     # Deterministic tiebreak: equal combined rate resolves by model id.
     assert nb.cheapest_priced_agent(agents, scenario).model == "vendor/model-b"
 
@@ -962,11 +1231,18 @@ def test_evaluate_policies_contract_failures() -> None:
     with pytest.raises(nb.BenchmarkContractError):
         nb.evaluate_policies([], _mini_manifest(), None, client, nb.RequestBudget(100))
     agents = _mock_agents("vendor/model-a")
-    exploratory_only = {"manifest_version": "1", "tasks": [dict(_task(), split="exploratory")]}
+    exploratory_only = {
+        "manifest_version": "1",
+        "tasks": [dict(_task(), split="exploratory")],
+    }
     with pytest.raises(nb.BenchmarkContractError):
-        nb.evaluate_policies(agents, exploratory_only, None, client, nb.RequestBudget(100))
+        nb.evaluate_policies(
+            agents, exploratory_only, None, client, nb.RequestBudget(100)
+        )
     with pytest.raises(nb.BenchmarkBudgetError):
-        nb.evaluate_policies(agents, _mini_manifest(), None, client, nb.RequestBudget(2))
+        nb.evaluate_policies(
+            agents, _mini_manifest(), None, client, nb.RequestBudget(2)
+        )
 
 
 def test_evaluate_policies_all_arms_with_pricing() -> None:
@@ -974,7 +1250,12 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     scenario = nb.load_pricing_scenario(PRICING_SCENARIO_PATH)
     budget = nb.RequestBudget(200)
     evaluation = nb.evaluate_policies(
-        agents, _mini_manifest(3), scenario, nb._BudgetedModelClient(budget), budget, nb._deterministic_timer()
+        agents,
+        _mini_manifest(3),
+        scenario,
+        nb._BudgetedModelClient(budget),
+        budget,
+        nb._deterministic_timer(),
     )
     cells = evaluation["evaluation_cells"]
     policies = {cell["policy_name"] for cell in cells}
@@ -987,16 +1268,24 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
     }
     assert evaluation["cheapest_worker_skip_reason"] is None
     conduct_cells = [cell for cell in cells if cell["policy_name"] == "conduct_bounded"]
-    assert all(cell["workflow_depth"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
     assert all(
-        cell["configured_total_token_budget"]
-        == nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
+        cell["workflow_depth"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells
+    )
+    assert all(
+        cell["configured_total_token_budget"] == nb.DEFAULT_POLICY_TOTAL_TOKEN_BUDGET
         for cell in conduct_cells
     )
-    assert all(cell["configured_maximum_calls"] == nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
-    assert all(cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells)
+    assert all(
+        cell["configured_maximum_calls"] == nb.MAX_WORKFLOW_DEPTH
+        for cell in conduct_cells
+    )
+    assert all(
+        cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH for cell in conduct_cells
+    )
     assert all(cell["run_outcome"] == "success" for cell in conduct_cells)
-    assert cells == sorted(cells, key=lambda cell: (cell["policy_name"], cell["task_id"]))
+    assert cells == sorted(
+        cells, key=lambda cell: (cell["policy_name"], cell["task_id"])
+    )
     assert budget.requests_spent > 0
 
 
@@ -1025,14 +1314,22 @@ def test_evaluate_policies_records_observed_budget_overflow() -> None:
 def test_evaluate_policies_skip_reasons_without_pricing() -> None:
     agents = _mock_agents("vendor/model-a")
     budget = nb.RequestBudget(200)
-    evaluation = nb.evaluate_policies(agents, _mini_manifest(), None, ModelClient(), budget)
+    evaluation = nb.evaluate_policies(
+        agents, _mini_manifest(), None, ModelClient(), budget
+    )
     assert evaluation["cheapest_worker_skip_reason"] == "no_pricing_scenario_supplied"
     unpriced_scenario = {
         "scenario_version": "1",
         "scenario_status": "reviewed",
         "usd_per_million_tokens": {"vendor/other": {"input": 1.0, "output": 1.0}},
     }
-    evaluation = nb.evaluate_policies(agents, _mini_manifest(), unpriced_scenario, ModelClient(), nb.RequestBudget(200))
+    evaluation = nb.evaluate_policies(
+        agents,
+        _mini_manifest(),
+        unpriced_scenario,
+        ModelClient(),
+        nb.RequestBudget(200),
+    )
     assert evaluation["cheapest_worker_skip_reason"] == "no_worker_priced_by_scenario"
 
 
@@ -1044,8 +1341,12 @@ def test_evaluate_policies_skip_reasons_without_pricing() -> None:
 def test_paired_bootstrap_requires_pairs_and_is_deterministic() -> None:
     with pytest.raises(nb.BenchmarkContractError):
         nb.paired_bootstrap_mean_difference([])
-    first = nb.paired_bootstrap_mean_difference([(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)], seed=11)
-    second = nb.paired_bootstrap_mean_difference([(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)], seed=11)
+    first = nb.paired_bootstrap_mean_difference(
+        [(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)], seed=11
+    )
+    second = nb.paired_bootstrap_mean_difference(
+        [(1.0, 0.0), (0.5, 0.5), (1.0, 0.5)], seed=11
+    )
     assert first == second
     assert first["ci_low"] <= first["mean_difference"] <= first["ci_high"]
     assert first["pair_count"] == 3
@@ -1062,7 +1363,9 @@ def test_pareto_frontier_excludes_dominated_rows() -> None:
     assert [row["name"] for row in frontier] == ["good_cheap", "bad_cheap"]
 
 
-def _synthetic_cell(policy: str, task_id: str, score, outcome: str = "success", cost=0.5) -> dict:
+def _synthetic_cell(
+    policy: str, task_id: str, score, outcome: str = "success", cost=0.5
+) -> dict:
     return {
         "policy_name": policy,
         "task_id": task_id,
@@ -1091,19 +1394,53 @@ def test_summaries_label_unknown_costs_and_all_failure_policies() -> None:
     cells = [
         _synthetic_cell("route_once", "task_one", 1.0, cost=0.5),
         _synthetic_cell("route_once", "task_two", 0.0, cost="unknown"),
-        _synthetic_cell("broken_policy", "task_one", None, outcome="failure", cost="unknown"),
+        _synthetic_cell(
+            "broken_policy", "task_one", None, outcome="failure", cost="unknown"
+        ),
     ]
     summaries = {row["policy_name"]: row for row in nb.summarize_policies(cells)}
     assert summaries["route_once"]["mean_task_score"] == 0.5
-    assert summaries["route_once"]["mean_hypothetical_cost_usd"] == 0.5
+    assert summaries["route_once"]["mean_hypothetical_cost_usd"] == "unknown"
     assert summaries["route_once"]["unknown_hypothetical_cost_cells"] == 1
     assert summaries["broken_policy"]["mean_task_score"] == 0.0
     assert summaries["broken_policy"]["mean_hypothetical_cost_usd"] == "unknown"
     assert summaries["broken_policy"]["success_count"] == 0
+    assert summaries["broken_policy"]["completion_fraction"] == 0.0
+
+
+def test_summaries_count_failures_as_zero_quality() -> None:
+    summaries = nb.summarize_policies(
+        [
+            _synthetic_cell("flaky_policy", "task_one", 1.0),
+            _synthetic_cell(
+                "flaky_policy", "task_two", None, outcome="failure", cost="unknown"
+            ),
+        ]
+    )
+    assert summaries[0]["mean_task_score"] == 0.5
+    assert summaries[0]["completion_fraction"] == 0.5
+    assert nb.build_pareto_frontiers(summaries)["quality_vs_hypothetical_cost"] == []
+
+
+def test_optional_cheapest_policy_does_not_change_evidence_completion() -> None:
+    cells = [
+        _synthetic_cell("route_once", "task_one", 1.0),
+        _synthetic_cell("conduct_bounded", "task_one", 1.0),
+        _synthetic_cell(
+            "cheapest_eligible_worker", "task_one", None, outcome="failure"
+        ),
+    ]
+    summary = nb._evaluation_evidence_summary(cells, nb.MINIMUM_PAIRED_TASK_COUNT)
+    assert summary["observed_completion_fraction"] == 1.0
 
 
 def test_best_single_worker_hindsight_selection() -> None:
-    assert nb.best_single_worker_hindsight([{"policy_name": "route_once", "mean_task_score": 1.0}]) is None
+    assert (
+        nb.best_single_worker_hindsight(
+            [{"policy_name": "route_once", "mean_task_score": 1.0}]
+        )
+        is None
+    )
     summaries = nb.summarize_policies(
         [
             _synthetic_cell("direct_single_worker:vendor/model-a", "task_one", 0.0),
@@ -1142,7 +1479,9 @@ def test_pareto_frontiers_exclude_unknown_cost_policies() -> None:
         ]
     )
     frontiers = nb.build_pareto_frontiers(summaries)
-    assert [row["policy_name"] for row in frontiers["quality_vs_hypothetical_cost"]] == ["route_once"]
+    assert [
+        row["policy_name"] for row in frontiers["quality_vs_hypothetical_cost"]
+    ] == ["route_once"]
     assert frontiers["excluded_unknown_cost_policies"] == ["conduct_bounded"]
     assert len(frontiers["quality_vs_latency"]) >= 1
 
@@ -1160,7 +1499,15 @@ def test_hash_helpers_are_stable() -> None:
 def test_provenance_fails_closed_for_live_without_identity() -> None:
     with pytest.raises(nb.BenchmarkContractError):
         nb.build_provenance("live", "", "", {}, TASK_MANIFEST_PATH, None, {})
-    live = nb.build_provenance("live", "abc123", "run-9", {}, TASK_MANIFEST_PATH, PRICING_SCENARIO_PATH, {"seed": 7})
+    live = nb.build_provenance(
+        "live",
+        "abc123",
+        "run-9",
+        {},
+        TASK_MANIFEST_PATH,
+        PRICING_SCENARIO_PATH,
+        {"seed": 7},
+    )
     assert live["pricing_scenario_sha256"] is not None
     dry = nb.build_provenance("dry_run", "", "", {}, TASK_MANIFEST_PATH, None, {})
     assert dry["git_sha"] == nb.DRY_RUN_PROVENANCE_PLACEHOLDER
@@ -1191,9 +1538,32 @@ def test_artifact_writer_refuses_secret_leak() -> None:
         serialized = json.dumps(report)
         assert "nvapi-super-secret-value" not in serialized
         # ...and a poisoned report is refused outright.
-        report["catalog_snapshot"]["probed_models"][0]["owned_by"] = "nvapi-super-secret-value"
+        report["catalog_snapshot"]["probed_models"][0]["owned_by"] = (
+            "nvapi-super-secret-value"
+        )
         with pytest.raises(nb.SecretLeakError):
             nb.write_benchmark_artifacts(report, os.path.join(tmp, "leaky"))
+
+
+def test_artifact_report_is_published_last(monkeypatch: pytest.MonkeyPatch) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        source = os.path.join(tmp, "source")
+        report = _dry_report(source)
+        target = os.path.join(tmp, "target")
+        real_replace = os.replace
+        calls = 0
+
+        def fail_before_report(staged: str, final: str) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise OSError("interrupted")
+            real_replace(staged, final)
+
+        monkeypatch.setattr(os, "replace", fail_before_report)
+        with pytest.raises(OSError, match="interrupted"):
+            nb.write_benchmark_artifacts(report, target)
+        assert not os.path.exists(os.path.join(target, "benchmark_report.json"))
 
 
 def test_secret_guard_passes_when_no_secret_registered() -> None:
@@ -1209,29 +1579,69 @@ def test_dry_run_transport_serves_all_paths() -> None:
     transport = nb.build_dry_run_transport()
     status, body = transport("GET", f"{FAKE_ENDPOINT}/models", {}, None)
     assert status == 200 and b"dryrun/chat-omni" in body
-    status, _ = transport("POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b'{"model": "dryrun/unknown-model"}')
+    status, _ = transport(
+        "POST",
+        f"{FAKE_ENDPOINT}/chat/completions",
+        {},
+        b'{"model": "dryrun/unknown-model"}',
+    )
     assert status == 404
-    status, _ = transport("POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b"no model marker at all")
+    status, _ = transport(
+        "POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b"no model marker at all"
+    )
     assert status == 404
-    status, _ = transport("POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b'{"model": "dryrun/throttled-model"}')
+    status, _ = transport(
+        "POST",
+        f"{FAKE_ENDPOINT}/chat/completions",
+        {},
+        b'{"model": "dryrun/throttled-model"}',
+    )
     assert status == 429
-    status, _ = transport("POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b'{"model": "dryrun/outage-model"}')
+    status, _ = transport(
+        "POST",
+        f"{FAKE_ENDPOINT}/chat/completions",
+        {},
+        b'{"model": "dryrun/outage-model"}',
+    )
     assert status == 503
-    status, _ = transport("POST", f"{FAKE_ENDPOINT}/chat/completions", {}, b'{"model": "dryrun/legacy-unsupported"}')
+    status, _ = transport(
+        "POST",
+        f"{FAKE_ENDPOINT}/chat/completions",
+        {},
+        b'{"model": "dryrun/legacy-unsupported"}',
+    )
     assert status == 404
-    status, _ = transport("POST", f"{FAKE_ENDPOINT}/embeddings", {}, b'{"model": "dryrun/chat-basic"}')
+    status, _ = transport(
+        "POST", f"{FAKE_ENDPOINT}/embeddings", {}, b'{"model": "dryrun/chat-basic"}'
+    )
     assert status == 400
-    status, body = transport("POST", f"{FAKE_ENDPOINT}/embeddings", {}, b'{"model": "dryrun/embed-basic"}')
+    status, body = transport(
+        "POST", f"{FAKE_ENDPOINT}/embeddings", {}, b'{"model": "dryrun/embed-basic"}'
+    )
     assert status == 200 and b"embedding" in body
-    status, body = transport("POST", f"{FAKE_ENDPOINT}/responses", {}, b'{"model": "dryrun/responses-native"}')
+    status, body = transport(
+        "POST",
+        f"{FAKE_ENDPOINT}/responses",
+        {},
+        b'{"model": "dryrun/responses-native"}',
+    )
     assert status == 200 and b"output_text" in body
     multipart = nb._multipart_transcription_body("dryrun/audio-transcribe")
-    status, body = transport("POST", f"{FAKE_ENDPOINT}/audio/transcriptions", {}, multipart)
+    status, body = transport(
+        "POST", f"{FAKE_ENDPOINT}/audio/transcriptions", {}, multipart
+    )
     assert status == 200 and b"text" in body
-    status, body = transport("POST", f"{FAKE_ENDPOINT}/audio/speech", {}, b'{"model": "dryrun/audio-speech"}')
+    status, body = transport(
+        "POST", f"{FAKE_ENDPOINT}/audio/speech", {}, b'{"model": "dryrun/audio-speech"}'
+    )
     assert status == 200 and body.startswith(b"RIFF")
     with pytest.raises(nb.CatalogDiscoveryError):
-        transport("POST", f"{FAKE_ENDPOINT}/never/heard-of-it", {}, b'{"model": "dryrun/chat-basic"}')
+        transport(
+            "POST",
+            f"{FAKE_ENDPOINT}/never/heard-of-it",
+            {},
+            b'{"model": "dryrun/chat-basic"}',
+        )
 
 
 def test_dry_run_success_bodies_per_endpoint() -> None:
@@ -1252,6 +1662,26 @@ def test_run_benchmark_rejects_unknown_mode() -> None:
         nb.run_benchmark("test", TASK_MANIFEST_PATH, None, "unused")
 
 
+def test_run_benchmark_rejects_output_cap_before_egress() -> None:
+    calls = 0
+
+    def transport(*_args) -> tuple[int, bytes]:
+        nonlocal calls
+        calls += 1
+        return 200, b"{}"
+
+    with pytest.raises(nb.BenchmarkContractError, match="max_output_tokens"):
+        nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            "unused",
+            max_output_tokens=0,
+            transport=transport,
+        )
+    assert calls == 0
+
+
 def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         first = _dry_report(os.path.join(tmp, "one"))
@@ -1268,7 +1698,9 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
             "unsupported_for_contract": 1,
             "vision_chat_capable": 2,
         }
-        by_model = {row["model_id"]: row for row in first["catalog_snapshot"]["probed_models"]}
+        by_model = {
+            row["model_id"]: row for row in first["catalog_snapshot"]["probed_models"]
+        }
         assert by_model["dryrun/chat-omni"]["model_classification"] == "omni_capable"
         assert set(by_model["dryrun/chat-omni"]["supported_capabilities"]) >= {
             "chat_completion",
@@ -1276,13 +1708,25 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
             "video_understanding",
             "audio_understanding",
         }
-        assert by_model["dryrun/audio-transcribe"]["supported_capabilities"] == ["audio_transcription"]
-        assert by_model["dryrun/audio-speech"]["supported_capabilities"] == ["audio_speech"]
-        assert by_model["dryrun/embed-basic"]["model_classification"] == "embedding_only"
-        assert by_model["dryrun/chat-video"]["model_classification"] == "vision_chat_capable"
+        assert by_model["dryrun/audio-transcribe"]["supported_capabilities"] == [
+            "audio_transcription"
+        ]
+        assert by_model["dryrun/audio-speech"]["supported_capabilities"] == [
+            "audio_speech"
+        ]
+        assert (
+            by_model["dryrun/embed-basic"]["model_classification"] == "embedding_only"
+        )
+        assert (
+            by_model["dryrun/chat-video"]["model_classification"]
+            == "vision_chat_capable"
+        )
         # Catalog hygiene lists survive into the snapshot.
         assert first["catalog_snapshot"]["duplicate_model_ids"] == ["dryrun/chat-basic"]
-        assert first["catalog_snapshot"]["invalid_entries"][0]["invalid_reason"] == "missing_model_id"
+        assert (
+            first["catalog_snapshot"]["invalid_entries"][0]["invalid_reason"]
+            == "missing_model_id"
+        )
         # The evaluation compares every required system.
         assert first["evaluation"]["best_single_worker_hindsight"] is not None
         assert first["evaluation"]["pareto_frontiers"]["quality_vs_latency"]
@@ -1293,8 +1737,15 @@ def test_dry_run_pipeline_covers_every_modality_and_is_deterministic() -> None:
         with open(os.path.join(tmp, "two", "benchmark_report.json"), "rb") as handle:
             second_bytes = handle.read()
         assert first_bytes == second_bytes
-        assert first["provenance"]["catalog_snapshot_sha256"] == second["provenance"]["catalog_snapshot_sha256"]
-        for artifact in ("benchmark_report.json", "benchmark_cells.csv", "benchmark_summary.md"):
+        assert (
+            first["provenance"]["catalog_snapshot_sha256"]
+            == second["provenance"]["catalog_snapshot_sha256"]
+        )
+        for artifact in (
+            "benchmark_report.json",
+            "benchmark_cells.csv",
+            "benchmark_summary.md",
+        ):
             assert os.path.exists(os.path.join(tmp, "one", artifact))
 
 
@@ -1309,13 +1760,23 @@ def test_dry_run_accepts_explicit_transport() -> None:
             transport=nb.build_dry_run_transport(),
         )
         assert report["provenance"]["pricing_scenario_sha256"] is None
-        assert report["evaluation"]["cheapest_worker_skip_reason"] == "no_pricing_scenario_supplied"
+        assert (
+            report["evaluation"]["cheapest_worker_skip_reason"]
+            == "no_pricing_scenario_supplied"
+        )
 
 
 def test_live_run_fails_closed_without_credential() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with pytest.raises(NotConfigured):
-            nb.run_benchmark("live", TASK_MANIFEST_PATH, None, tmp, git_sha="abc", workflow_run_id="run-1")
+            nb.run_benchmark(
+                "live",
+                TASK_MANIFEST_PATH,
+                None,
+                tmp,
+                git_sha="abc",
+                workflow_run_id="run-1",
+            )
 
 
 def test_live_run_end_to_end_offline() -> None:
@@ -1359,8 +1820,13 @@ def test_live_run_uses_default_transport_builder_when_none_given() -> None:
     try:
         with tempfile.TemporaryDirectory() as tmp:
             report = nb.run_benchmark(
-                "live", TASK_MANIFEST_PATH, None, tmp,
-                max_total_requests=900, git_sha="abc123", workflow_run_id="run-43",
+                "live",
+                TASK_MANIFEST_PATH,
+                None,
+                tmp,
+                max_total_requests=900,
+                git_sha="abc123",
+                workflow_run_id="run-43",
             )
     finally:
         nb.build_default_transport = original_builder
@@ -1397,10 +1863,14 @@ def test_cli_dry_run_succeeds() -> None:
             exit_code = nb.run_benchmark_cli(
                 [
                     "--dry-run",
-                    "--task-manifest", TASK_MANIFEST_PATH,
-                    "--pricing-scenario", PRICING_SCENARIO_PATH,
-                    "--output-dir", tmp,
-                    "--max-total-requests", "900",
+                    "--task-manifest",
+                    TASK_MANIFEST_PATH,
+                    "--pricing-scenario",
+                    PRICING_SCENARIO_PATH,
+                    "--output-dir",
+                    tmp,
+                    "--max-total-requests",
+                    "900",
                 ]
             )
         assert exit_code == 0
@@ -1412,7 +1882,9 @@ def test_cli_dry_run_succeeds() -> None:
 def test_cli_fails_closed_on_missing_manifest() -> None:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
-        exit_code = nb.run_benchmark_cli(["--dry-run", "--task-manifest", "does/not/exist.json"])
+        exit_code = nb.run_benchmark_cli(
+            ["--dry-run", "--task-manifest", "does/not/exist.json"]
+        )
     assert exit_code == 1
     assert json.loads(stdout.getvalue())["benchmark_failed_closed"] is True
 
@@ -1421,7 +1893,14 @@ def test_cli_live_fails_closed_without_secret() -> None:
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exit_code = nb.run_benchmark_cli(
-            ["--task-manifest", TASK_MANIFEST_PATH, "--git-sha", "abc", "--workflow-run-id", "run-1"]
+            [
+                "--task-manifest",
+                TASK_MANIFEST_PATH,
+                "--git-sha",
+                "abc",
+                "--workflow-run-id",
+                "run-1",
+            ]
         )
     assert exit_code == 1
     assert json.loads(stdout.getvalue())["error_class"] == "NotConfigured"
