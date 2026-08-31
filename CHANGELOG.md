@@ -12,6 +12,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `route_once(..., deadline_seconds=...)` now raises `RouteDeadlineExceededError`
+  (a `RuntimeError` subclass, so existing callers are unaffected) instead of a
+  bare `RuntimeError` when its own deadline check fires, and carries the trace
+  rows already recorded (including a worker completion that landed just
+  before the deadline, and so already incurred real, billable provider cost)
+  on `.trace` -- previously that record was discarded silently along with the
+  exception. `_invoke`'s own deeper cross-candidate/same-agent-retry deadline
+  failures remain plain `RuntimeError`, shared by every other caller of
+  `_invoke` and out of scope for this deadline-scoped, opt-in feature.
 - `route_once(..., deadline_seconds=...)`'s combined deadline now caps every
   provider attempt at `ModelClient.timeout` even when the deadline itself is
   longer, bounds the local-provider execution-slot wait by the same

@@ -140,6 +140,22 @@ class BudgetExceededError(RuntimeError):
         self.detail = detail or {}
 
 
+class RouteDeadlineExceededError(RuntimeError):
+    """Raised when ``TaskOrchestrator.route_once``'s ``deadline_seconds`` is exceeded.
+
+    A ``RuntimeError`` subclass so existing callers catching ``RuntimeError``
+    for this case are unaffected. Carries ``trace`` -- the same trace-row
+    list ``route_once`` would otherwise have returned -- so a caller can
+    still account for a provider completion that landed just before the
+    deadline (and so incurred real, billable cost) instead of that record
+    disappearing silently along with the raised exception.
+    """
+
+    def __init__(self, message: str, *, trace: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message)
+        self.trace = trace if trace is not None else []
+
+
 class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
 
@@ -5297,6 +5313,21 @@ class TaskOrchestrator:
         clear, bounded error instead of the external caller aborting the
         connection first while this call is still working through retries
         the external caller can no longer see the result of.
+
+        When the deadline is exceeded, this method raises
+        ``RouteDeadlineExceededError`` (a ``RuntimeError`` subclass, so
+        existing ``except RuntimeError`` callers are unaffected) rather than
+        the bare ``RuntimeError`` an earlier version of this feature raised.
+        Its ``.trace`` attribute carries whatever trace rows this call had
+        already recorded before the deadline hit -- in particular, a worker
+        completion that landed just before the deadline (and so already
+        incurred real, billable provider cost) is preserved there for the
+        caller to account for, even though this method itself cannot return
+        it as a normal result. ``_invoke``'s own deeper cross-candidate and
+        same-agent-retry deadline failures (surfaced through this method
+        unwrapped) remain plain ``RuntimeError`` -- unifying those as well
+        would touch every other caller of ``_invoke``, not just this
+        deadline-scoped, opt-in feature, and is out of scope here.
         """
         if deadline_seconds is not None and (
             isinstance(deadline_seconds, bool)
@@ -5350,8 +5381,12 @@ class TaskOrchestrator:
                 allowed_agent_ids=allowed_agent_ids,
                 deadline=deadline,
             )
-            if deadline is not None and time.monotonic() >= deadline:
-                raise RuntimeError("request deadline exceeded during provider invocation")
+            # Record this attempt's trace/usage before checking the deadline: a
+            # completion that actually landed already incurred real, billable
+            # provider cost, and previously raising here before appending `row`
+            # discarded that usage from the caller-facing trace entirely. The
+            # deadline still correctly prevents starting the *next* provider
+            # call (real-time judging) below.
             latency_seconds = time.perf_counter() - start
             row = {
                 "id": attempt_index,
@@ -5370,6 +5405,12 @@ class TaskOrchestrator:
                 row["served_agent_id"] = attempt_served_id
                 row["failover_from"] = candidate.id
             answer, served_id = attempt_answer, attempt_served_id
+            trace_rows.append(row)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise RouteDeadlineExceededError(
+                    "request deadline exceeded during provider invocation",
+                    trace=trace_rows,
+                )
             verification = self._realtime_route_judge(
                 text=text,
                 answer=answer,
@@ -5381,12 +5422,14 @@ class TaskOrchestrator:
                 deadline=deadline,
             )
             if deadline is not None and time.monotonic() >= deadline:
-                raise RuntimeError("request deadline exceeded during real-time judging")
+                raise RouteDeadlineExceededError(
+                    "request deadline exceeded during real-time judging",
+                    trace=trace_rows,
+                )
             row["realtime_judge"] = {
                 "accepted": verification["accepted"],
                 "reason": verification["reason"],
             }
-            trace_rows.append(row)
             if verification["accepted"]:
                 break
             # Rejected answers already recorded a quality-ledger failure in
@@ -5401,9 +5444,10 @@ class TaskOrchestrator:
             # closed with the same explicit signal _invoke uses instead of
             # silently returning the empty, nominally-"accepted": False
             # default payload below as if a candidate had actually been tried.
-            raise RuntimeError(
+            raise RouteDeadlineExceededError(
                 "request deadline exceeded before any candidate agent could be "
-                "attempted for route_once"
+                "attempted for route_once",
+                trace=trace_rows,
             )
 
         final_row = trace_rows[-1] if trace_rows else {

@@ -121,7 +121,13 @@ retry and fail-closed rules; they do not require a different action table.
   separately-gated `immediate_race` hedged-request mechanism
   (`docs/doctoring/equivalent-endpoint-racing.md`); their evidence motivates
   bounding combined latency here in the same way, without implying this
-  amendment performs any hedging or duplicate work of its own.
+  amendment performs any hedging or duplicate work of its own. Cited and
+  summarized rather than vendored as a PDF under `docs/papers/`: it is an
+  ACM *Communications of the ACM* article, not an arXiv preprint, and ACM
+  retains copyright over the published version, so redistribution is
+  unclear -- the same "PDFs are cited rather than vendored when
+  redistribution is unclear" policy `docs/papers/README.md` already states
+  for its role-reasoning-effort citations.
 
 ## References
 

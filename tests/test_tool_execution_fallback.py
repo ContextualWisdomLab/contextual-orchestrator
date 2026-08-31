@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 import contextual_orchestrator.orchestrator as orchestrator_module
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import ModelClient, RouteDeadlineExceededError
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
@@ -1250,6 +1250,49 @@ def test_route_once_raises_when_ranking_alone_exhausts_the_deadline(
             deadline_seconds=0.01,
         )
     assert client.calls == []
+
+
+def test_route_once_deadline_exceeded_error_preserves_completed_worker_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker completion landing just past the deadline is not lost on raise.
+
+    Regression test (Devin review, contextual-orchestrator#974): route_once
+    raised a bare RuntimeError immediately after a successful _invoke() once
+    the deadline had passed, discarding that already-billable completion's
+    trace entry (usage, output, served agent) entirely -- a caller catching
+    the exception had no way to recover it. RouteDeadlineExceededError.trace
+    now carries the trace rows recorded before the deadline was hit.
+
+    _invoke itself is mocked (rather than exercised through a slow client)
+    because _invoke's own internal deadline check would otherwise almost
+    always fire first and raise its own, differently-worded RuntimeError
+    before returning control to route_once at all -- the real race between
+    the two checks is a microsecond-scale window that a slow real client
+    cannot deterministically land inside.
+    """
+    client = _ScriptedToolClient({"primary_worker": ["unused"]})
+    orchestrator = _orchestrator(client)
+
+    def slow_but_successful_invoke(*args: object, **kwargs: object) -> tuple[str, str, None]:
+        del args, kwargs
+        time.sleep(0.05)
+        return "completed just past the deadline", "primary_worker", None
+
+    monkeypatch.setattr(orchestrator, "_invoke", slow_but_successful_invoke)
+
+    with pytest.raises(
+        RouteDeadlineExceededError, match="deadline exceeded during provider invocation"
+    ) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.02,
+        )
+
+    assert isinstance(excinfo.value, RuntimeError)
+    assert len(excinfo.value.trace) == 1
+    assert excinfo.value.trace[0]["agent_id"] == "primary_worker"
+    assert excinfo.value.trace[0]["output"] == "completed just past the deadline"
 
 
 if __name__ == "__main__":
