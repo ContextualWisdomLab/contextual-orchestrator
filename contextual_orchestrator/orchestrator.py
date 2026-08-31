@@ -4139,6 +4139,15 @@ class TaskOrchestrator:
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)
+            if not isinstance(
+                exc, (ProviderRequestTooLargeError, ProviderUpstreamError)
+            ):
+                raise classify_provider_failure(
+                    exc,
+                    agent_id=final_agent.id,
+                    model=final_agent.model,
+                    transport=endpoint,
+                ) from None
             raise
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:

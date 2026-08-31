@@ -540,7 +540,7 @@ def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> No
         "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
     }
 
-    with pytest.raises(RuntimeError, match="fallback unavailable"):
+    with pytest.raises(ProviderUpstreamError) as exc_info:
         orchestrator.proxy_completion(
             {
                 "model": TaskOrchestrator.AUTO_MODEL,
@@ -550,6 +550,9 @@ def test_structured_synthesis_records_non_413_failure_on_actual_provider() -> No
             single_agent=False,
         )
 
+    assert exc_info.value.agent_id == "fallback_agent"
+    assert exc_info.value.error_code == "api_error"
+    assert "fallback unavailable" not in str(exc_info.value)
     assert orchestrator._circuit["fallback_agent"]["failures"] == 1.0
     assert "primary_agent" not in orchestrator._circuit
 
