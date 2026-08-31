@@ -5512,9 +5512,19 @@ def build_server(
             arrived), and a call that reads nothing at all (a closed
             keep-alive connection) never reaches that point -- exactly the
             case ``_log_request_summary``'s own guard already skips.
+
+            ``_response_headers_sent`` is reset to ``False`` here too: it is
+            the per-request marker ``_write_response`` reads to decide
+            whether a caught disconnect happened before or after the status
+            line/headers were actually flushed to the client (see
+            ``_write_response``'s docstring). Resetting it per request keeps
+            a prior request's successful delivery from leaking into this
+            one's disconnect classification on a reused keep-alive
+            connection.
             """
             self._request_body_consumed = False
             self._last_status = None
+            self._response_headers_sent = False
             self.command = None
             self.path = None
             self._request_started = None
@@ -8021,6 +8031,25 @@ def build_server(
             socket and raises again -- uncaught this time, crashing the
             request-handling thread (visible as a second, unhandled
             BrokenPipeError in server logs after the first).
+
+            A caught disconnect can strike in two different places, and only
+            one of them means the client received nothing:
+
+            * Before the status line/headers were flushed (``end_headers()``
+              itself raises, or an earlier ``send_response``/``send_header``
+              call does). The client has no real response at all.
+            * After ``end_headers()`` already completed -- a later body
+              write in the same call, or a later ``_write_sse`` frame on an
+              SSE stream ``_begin_sse`` already opened successfully. The
+              client DID receive the real status line and headers; only the
+              body (or a later chunk of it) was cut short.
+
+            Every ``_send*``/``_begin_sse`` writer sets
+            ``self._response_headers_sent = True`` immediately after its own
+            ``end_headers()`` call returns, so that flag -- reset to
+            ``False`` once per request by ``handle_one_request`` -- tells
+            this shared choke point which of the two cases just happened,
+            without each writer needing its own disconnect-handling logic.
             """
             # A rejection can happen before _read_json (authentication, rate
             # limiting, or media type). Reusing that HTTP/1.1 connection would
@@ -8037,23 +8066,26 @@ def build_server(
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
                 _LOGGER.debug("client_disconnected")
-                # Every `_send*`/`_begin_sse` writer records its *intended*
+                # `_send*`/`_begin_sse` writers record their *intended*
                 # status in `self._last_status` before calling this method
                 # (and `send_response`'s override above does the same for
                 # whatever status the writer itself sends) -- but a dead
-                # peer means that status was never actually delivered.
-                # Left uncorrected, `_log_request_summary` reads
-                # `_last_status` straight into the per-request INFO summary,
-                # falsely reporting a completed 200/4xx/5xx response for a
-                # request whose write failed. This is the single choke
-                # point every writer already routes through, so clearing it
-                # here -- back to the same `None` this module already uses
-                # for "a response was never sent" -- covers all of them
-                # uniformly instead of patching each writer individually.
-                # Guarded with `hasattr` because some tests call this method
-                # directly against a bare `object()` stand-in for `self`,
-                # which has no instance `__dict__` to assign into.
-                if hasattr(self, "_last_status"):
+                # peer before headers were ever flushed means that status
+                # was never actually delivered. Left uncorrected in that
+                # case, `_log_request_summary` reads `_last_status` straight
+                # into the per-request INFO summary, falsely reporting a
+                # completed 200/4xx/5xx response for a request whose write
+                # failed before anything reached the client. Clear it back
+                # to the same `None` this module already uses for "a
+                # response was never sent" ONLY then -- a disconnect that
+                # struck after `_response_headers_sent` was already set
+                # means the client genuinely received that status, so
+                # clearing it here would instead falsely report "no status"
+                # for a request that was, in fact, answered.
+                # `hasattr`/`getattr` guard against tests that call this
+                # method directly against a bare `object()` stand-in for
+                # `self`, which has no instance `__dict__` to assign into.
+                if hasattr(self, "_last_status") and not getattr(self, "_response_headers_sent", False):
                     self._last_status = None
                 return False
 
@@ -8075,6 +8107,11 @@ def build_server(
                 for name, value in (extra_headers or {}).items():
                     self.send_header(name, value)
                 self.end_headers()
+                # Marks that the status line/headers were actually flushed
+                # to the client -- see `_write_response`'s docstring. Must
+                # be set only after `end_headers()` returns without raising,
+                # and only before the body write that might still fail.
+                self._response_headers_sent = True
                 self.wfile.write(raw)
 
             self._write_response(_write)
@@ -8089,6 +8126,7 @@ def build_server(
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(raw)
 
             self._write_response(_write)
@@ -8102,6 +8140,7 @@ def build_server(
                 self.send_header("content-length", str(len(payload)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(payload)
 
             self._write_response(_write)
@@ -8117,6 +8156,7 @@ def build_server(
                 self.send_header("content-length", str(len(raw)))
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
                 self.wfile.write(raw)
 
             self._write_response(_write)
@@ -8132,10 +8172,21 @@ def build_server(
                 self.send_header("cache-control", "no-cache")
                 self._send_security_headers()
                 self.end_headers()
+                self._response_headers_sent = True  # see _write_response
 
             return self._write_response(_write)
 
         def _write_sse(self, frame: str) -> bool:
+            """Write one SSE frame; relies on a prior successful `_begin_sse`.
+
+            Never touches `self._response_headers_sent` itself: a caller
+            only ever reaches this after `_begin_sse` already returned
+            `True`, so that flag is already set from the initial headers
+            flush. If a *later* frame's write fails here, `_write_response`
+            correctly sees the flag still set and preserves the 200 that was
+            genuinely already delivered, instead of erasing it.
+            """
+
             def _write() -> None:
                 self.wfile.write(frame.encode("utf-8"))
                 self.wfile.flush()

@@ -154,6 +154,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   bandit/ruff) as a deliberate test fixture -- one proving `redact_text`
   masks it, the other (the negative control) proving the same literal
   leaks with no redactor, which is exactly what the test exists to show.
+- (round 8) Follow-up correction to round 7's `_write_response` fix: clearing
+  `_last_status` on *every* caught disconnect was too broad. A write failure
+  can strike either before the status line/headers were ever flushed (the
+  client received nothing -- clearing is correct) or after `end_headers()`
+  already completed (a later body-write chunk, or a later `_write_sse` frame
+  on a stream `_begin_sse` already opened -- the client genuinely received
+  the real status, so clearing it would falsely report "no status" for a
+  request that was, in fact, answered). Every `_send*`/`_begin_sse` writer
+  now sets a new `self._response_headers_sent` marker immediately after its
+  own `end_headers()` call returns (reset to `False` once per request by
+  `handle_one_request`); `_write_response`'s disconnect handler now clears
+  `_last_status` only when that marker is still unset, preserving it
+  otherwise. `_write_sse` relies on `_begin_sse`'s already-set marker rather
+  than touching it itself, since it is only ever called after a prior
+  successful header flush.
 
 ### Added
 
