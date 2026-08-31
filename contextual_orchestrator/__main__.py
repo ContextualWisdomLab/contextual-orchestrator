@@ -704,7 +704,11 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     if args.auto_discover_model_agents:
-        _auto_discover_runtime_agents(orchestrator)
+        try:
+            _auto_discover_runtime_agents(orchestrator)
+        except ValueError as exc:
+            orchestrator.close()
+            parser.error(str(exc))
 
     if args.role_effort_catalog is not None:
         _require_eligible_role_effort_agents(orchestrator, parser, args.agents)

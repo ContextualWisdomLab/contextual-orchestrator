@@ -5200,6 +5200,7 @@ class TaskOrchestrator:
         """
         existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
         updated_candidates = list(self.candidates)
+        effective_discovered_agents: list[ModelAgent] = []
         added: list[str] = []
         updated: list[str] = []
         for agent in discovered_agents:
@@ -5215,9 +5216,10 @@ class TaskOrchestrator:
                 )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
+            effective_discovered_agents.append(agent)
         self._require_role_effort_pool(updated_candidates)
         if self._pool_store is not None:
-            for agent in discovered_agents:
+            for agent in effective_discovered_agents:
                 self._pool_store.save(agent)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]

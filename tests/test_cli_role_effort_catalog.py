@@ -177,6 +177,35 @@ def test_role_effort_catalog_default_rejects_unproven_pool_before_serving() -> N
     assert not serve.called
 
 
+def test_auto_discovery_startup_rejection_closes_orchestrator() -> None:
+    """A discovery-time invariant failure must not leak embedded resources."""
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--role-effort-catalog",
+                "default",
+                "--auto-discover-model-agents",
+                "hi",
+            ],
+        ),
+        patch("contextual_orchestrator.__main__.TaskOrchestrator") as orchestrator_cls,
+        patch(
+            "contextual_orchestrator.__main__._auto_discover_runtime_agents",
+            side_effect=ValueError("unsupported discovered pool"),
+        ),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError("a rejected discovery must exit through argparse")
+    orchestrator_cls.return_value.close.assert_called_once_with()
+
+
 def test_role_effort_catalog_default_allows_pool_with_explicit_support(tmp_path: Path) -> None:
     """A non-mock agent that explicitly declares support is enough to unlock the flag."""
     config_path = _write_real_provider_agent_config(tmp_path, reasoning_effort_supported=True)
