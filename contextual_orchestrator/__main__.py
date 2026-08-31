@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import sys
 from dataclasses import replace
@@ -46,13 +45,6 @@ DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
 
-#: Bootstrap-transport env var read once at process start to default the
-#: effective log level (see docs/planning/adrs, ADR "verbose debug logging").
-#: Never read again at request time -- this is a CLI/process-start knob, not
-#: runtime config sourced from the KV.
-LOG_LEVEL_ENVIRONMENT_VARIABLE = "CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL"
-
-
 def _log_level(value: str) -> str:
     """Parse a case-insensitive stdlib logging level name for an argparse option."""
     try:
@@ -76,7 +68,7 @@ def _add_log_level_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar="{DEBUG,INFO,WARNING,ERROR,CRITICAL}",
         help="Set the effective log level explicitly (case-insensitive; overrides "
-        "--verbose/--debug and " + LOG_LEVEL_ENVIRONMENT_VARIABLE + "; default: WARNING).",
+        "--verbose/--debug; default: WARNING).",
     )
     parser.add_argument(
         "--verbose",
@@ -103,12 +95,12 @@ def _configure_logging_from_cli(arguments: list[str]) -> None:
     -- it falls out of using stdlib ``argparse`` as intended).
 
     Precedence: explicit ``--log-level`` > ``--verbose``/``--debug`` >
-    ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` > default ``WARNING``.
+    default ``WARNING``.
 
     Raises:
         SystemExit: With status 2 and an argparse-style message on stderr, if
-            an explicit ``--log-level`` or the env var names an unrecognized
-            level. The level is never silently ignored.
+            an explicit ``--log-level`` names an unrecognized level. The level
+            is never silently ignored.
     """
     # allow_abbrev=False: an abbreviated flag (e.g. "--log-l" for
     # "--log-level") would otherwise be silently accepted by this pre-scan's
@@ -127,12 +119,7 @@ def _configure_logging_from_cli(arguments: list[str]) -> None:
     elif known.verbose:
         effective_level = "DEBUG"
     else:
-        raw_env = os.environ.get(LOG_LEVEL_ENVIRONMENT_VARIABLE, "").strip()
-        try:
-            effective_level = _log_level(raw_env) if raw_env else "WARNING"
-        except argparse.ArgumentTypeError as exc:
-            pre_scan.error(str(exc))
-            return  # pragma: no cover - pre_scan.error() always raises SystemExit
+        effective_level = "WARNING"
     configure_logging(effective_level, redactor=redact_text)
 
 

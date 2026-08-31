@@ -181,9 +181,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Verbose/debug logging (ADR 0005): a new stdlib-only `debug_logging.py`
   module, a `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` CLI flag with a
-  `--verbose`/`--debug` shorthand and a `CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`
-  env-var default (default unchanged: `WARNING`), and new instrumentation at
-  the provider retry loop, per-agent circuit breaker, evidence-based ranking
+  `--verbose`/`--debug` shorthand (default unchanged: `WARNING`), and new
+  instrumentation at the provider retry loop, per-agent circuit breaker, evidence-based ranking
   (`_ranked_agents`/`_select_agent`), model discovery, and one body-free
   per-request summary line in `server.py`. The DEBUG response-body summary
   logs only an allowlisted metadata shape (`debug_logging.response_metadata_for_log`:

@@ -42,10 +42,9 @@ whatever level the first call configured.
 before subcommand dispatch. This one call site covers
 `register-credential`, `discover-models`, `check-fast-mlsirm`, one-shot
 completion, and `--serve` uniformly. Precedence: explicit `--log-level` >
-`--verbose`/`--debug` > `CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL` > default
-`WARNING` (the existing de facto stdlib default, kept unchanged so an
-upgrade does not change anyone's stderr output by default). An invalid level
-from either the flag or the env var fails closed with an argparse-style
+`--verbose`/`--debug` > default `WARNING` (the existing de facto stdlib
+default, kept unchanged so an upgrade does not change anyone's stderr output
+by default). An invalid flag value fails closed with an argparse-style
 `SystemExit(2)`; it is never silently ignored. Subcommand dispatch itself is
 resolved by `_subcommand_token_index`, which skips past any recognized
 leading `--log-level`/`--verbose`/`--debug` tokens (without removing them
