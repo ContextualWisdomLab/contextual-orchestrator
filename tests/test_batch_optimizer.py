@@ -208,6 +208,60 @@ def test_batch_route_realtime_judge_disabled_uses_reviewed_fallback() -> None:
         assert verification["verifier_output"] != ""
 
 
+def test_batch_route_does_not_corrupt_sync_route_quality_latency() -> None:
+    """A shared Batch API call's total elapsed time must never become one
+    answer's latency sample in the synchronous-route quality EWMA -- doing
+    so would let one slow/large batch demote a fast model in later
+    route_once ranking (Devin review, PR #961). The judge's accept/reject
+    signal is still recorded as stability evidence.
+    """
+    client = _CountingClient()
+    orchestrator = _orch(client)
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        records = orchestrator.batch_route(["task one", "task three"])
+
+    assert len(records) == 2
+    assert all(record["verification"]["accepted"] is True for record in records)
+    report = orchestrator._quality_router.member_report("general_agent")
+    assert report["ewma_latency_seconds"] is None
+    assert orchestrator._quality_router.member_observation_count("general_agent") == 2
+    # The shared batch timing itself stays honestly visible on each trace row.
+    assert all(record["trace"][0]["latency_ms"] is not None for record in records)
+
+
+def test_batch_route_rechecks_budget_before_each_judge_call() -> None:
+    """batch_route's one-time budget check at entry does not cover the N
+    additional judge provider calls the loop makes afterward. A large batch
+    must not silently blow through the spend cap while every judge call
+    keeps running unchecked (Devin review, PR #961).
+    """
+    client = _CountingClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
+        client=client,
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=6,  # exactly one item's reported completion_tokens
+    )
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task three"])
+
+    # The first item's judge call and persistence completed before the
+    # second item's pre-judge budget check stopped the batch -- proof the
+    # loop re-checks per item rather than only once before it starts.
+    assert len(orchestrator._workflow_runs) == 1
+
+
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
     client = ModelClient()
     agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")

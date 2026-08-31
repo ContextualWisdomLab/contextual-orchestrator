@@ -4722,9 +4722,20 @@ class TaskOrchestrator:
                 answers[index] = result
 
         records: list[dict[str, Any]] = []
+        rows_so_far: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
             result = answers[index]
-            latency_seconds = batch_latency_ms_by_agent[agent.id] / 1000.0
+            # Each judge call below is its own bounded provider call (see
+            # _model_judge_verification), not covered by the one-time check
+            # above -- re-check against spend already recorded by this batch
+            # before starting another one, exactly like conduct()'s per-step
+            # budget checkpoint.
+            if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+                in_flight_tokens, in_flight_cost = self._trace_budget_spend(rows_so_far)
+                self._raise_if_spend_budget_exceeded(
+                    additional_output_tokens=in_flight_tokens,
+                    additional_cost_usd=in_flight_cost,
+                )
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
                 "model": agent.model,
@@ -4734,15 +4745,23 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
+            rows_so_far.append(row)
             # Judge each batched answer exactly like route_once: a genuine
             # fast-mlsirm verdict when policy.realtime_judge is on (the
             # default), or the same reviewed fallback shape when an operator
             # has explicitly turned it off. Never a fabricated, ungated pass.
+            # latency_seconds is None: batch_latency_ms_by_agent covers every
+            # prompt this provider batch call served together, so it is not
+            # one answer's honest wall-clock latency -- recording it into the
+            # synchronous-route quality EWMA would corrupt future route_once
+            # member ordering with async batch queueing time. The trace row's
+            # own latency_ms above keeps that shared timing visible as raw,
+            # honestly-labeled evidence.
             verification = self._realtime_route_judge(
                 text=prompt,
                 answer=result["content"],
                 served_id=agent.id,
-                latency_seconds=latency_seconds,
+                latency_seconds=None,
                 usage=result.get("usage"),
                 free_only=False,
             )
@@ -5324,7 +5343,7 @@ class TaskOrchestrator:
         text: str,
         answer: str,
         served_id: str,
-        latency_seconds: float,
+        latency_seconds: float | None,
         usage: dict[str, Any] | None,
         free_only: bool,
         prompt_context: str | None = None,
@@ -5334,7 +5353,11 @@ class TaskOrchestrator:
         Accepted answers record one success observation (with provider token
         counts when reported); rejected or unjudgeable answers record one
         failure, so measured accuracy -- not just transport success -- steers
-        subsequent member ordering inside model groups.
+        subsequent member ordering inside model groups. ``latency_seconds`` is
+        ``None`` when the caller has no single-attempt wall-clock timing to
+        honestly attribute to this one answer (see
+        ``ModelGroupRouter.observe_success``); the success/failure signal is
+        still recorded, just not a misleading latency sample.
         """
         output_tokens = self._usage_completion_tokens(usage)
 
@@ -5870,7 +5893,7 @@ class TaskOrchestrator:
         served_id: str,
         *,
         accepted: bool,
-        latency_seconds: float,
+        latency_seconds: float | None,
         output_tokens: int | None,
         irt_row: tuple[int, ...] = (),
     ) -> None:

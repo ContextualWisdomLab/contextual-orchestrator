@@ -52,6 +52,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   fallback when an operator has explicitly turned `realtime_judge` off —
   closing the gap between the function's docstring claim of route_once parity
   and its actual (previously unguarded) behavior.
+- (Devin review on #961) `batch_route` no longer feeds one shared Batch API
+  call's total elapsed time into every one of its answers' synchronous-route
+  quality latency EWMA. That elapsed time covers every prompt the provider
+  batched together, not any single answer's honest wall-clock latency — doing
+  so let one slow or large batch demote a fast model in later interactive
+  `route_once` ranking. `ModelGroupRouter.observe_success` now accepts
+  `latency_seconds=None` for exactly this case: stability/rate evidence (the
+  judge's accept/reject verdict, request-rate tracking) is still recorded,
+  but neither the latency nor tokens-per-second EWMA are updated from a
+  duration that would not honestly describe one attempt. The trace row's own
+  `latency_ms` keeps the real shared batch timing visible as raw evidence.
+- (Devin review on #961) `batch_route`'s one-time spend-budget check at entry
+  did not cover the N additional judge provider calls its loop makes
+  afterward, so a large batch under a configured `budget_max_output_tokens`/
+  `budget_max_cost_usd` cap could keep issuing judge calls well past the
+  cap before the whole batch finally returned. The loop now re-checks
+  accumulated in-batch spend before each item's judge call, the same
+  per-step budget checkpoint `conduct()` already uses via
+  `_trace_budget_spend`, so a batch fails closed mid-loop instead of only
+  after every item has already run.
 
 ### Added
 
