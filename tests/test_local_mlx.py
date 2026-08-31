@@ -152,7 +152,7 @@ def test_local_gateway_credential_cannot_be_attached_to_mlx_worker() -> None:
         )
 
 
-def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_without_retry() -> None:
+def test_provider_probe_bounds_registry_but_not_model_inference() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=2, local_max_retries=2, chat_template_args={"enable_thinking": False})
     seen: list[tuple[object, float | None]] = []
@@ -175,7 +175,7 @@ def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_witho
     assert seen[0][0].get_method() == "GET"
     assert seen[0][0].full_url == "http://127.0.0.1:8080/v1/models"
     assert seen[1][0].get_method() == "POST"
-    assert seen[1][1] == 1.25
+    assert seen[1][1] is None
     import json
 
     payload = json.loads(seen[1][0].data)

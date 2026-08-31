@@ -7,9 +7,9 @@
 
 ## Product requirement
 
-Operators need one logical model name when several providers expose the same underlying model under unrelated identifiers. Groups are entirely operator-defined: discovery never infers equivalence from provider or model names, and no model family is built in. Model discovery remains provider-specific and retains the complete catalog; zero-cost entries are additionally classified so cost policy can distinguish free, priced, and unknown-price models.
+Operators need one logical model name when several provider accounts expose the same underlying model. Discovery assigns rows with the same provider-declared exact model identifier to one `model_group`; operators may explicitly group differently named deployments. It never infers equivalence from provider names or fuzzy model-name similarity. Model discovery remains account-specific and retains the complete catalog; zero-cost entries are additionally classified so cost policy can distinguish free, priced, and unknown-price models.
 
-Every configured KV credential is a separate provider-account and catalog boundary. Discovery queries every registered credential independently and retains rows by `(provider_name, credential_name, model_id)`; it never assumes that two keys for the same vendor expose the same models, entitlements, price, privacy policy, availability, or failure state. NVIDIA's primary/sub keys are one example, not a special case. Provider-family inference is absent. Only an explicit operator-defined `model_group` may assert that deployments represent one logical model and may therefore share measured routing decisions.
+Every configured KV credential is a separate provider-account and catalog boundary. Discovery queries every registered credential independently and retains rows by `(provider_name, credential_name, model_id)`; it never assumes that two keys for the same vendor expose the same models, entitlements, price, privacy policy, availability, or failure state. NVIDIA's primary/sub keys are one example, not a special case. Provider-family grouping is absent. Only exact provider-declared model identity or an explicit operator-defined `model_group` may assert that deployments represent one logical model and may therefore share measured routing decisions.
 
 ## Decision and technical contract
 
@@ -42,6 +42,21 @@ requires ZDR; it does not make the entire OpenRouter account evidence-only and
 does not exclude non-ZDR routes from ordinary requests. Missing or failed ZDR
 evidence therefore fails closed only for `zdr_only` selection, not for general
 inference.
+
+OpenRouter discovery retains the concrete free-model list returned by its model
+catalog, including exact `vendor/model:free` identifiers and any row whose
+complete structured monetary price is zero. The aggregate `openrouter/free`
+Free Models Router is not a serving candidate: contextual-orchestrator is the
+router and must select, measure, and report the concrete model group itself.
+Unknown or incomplete prices remain unknown rather than free.
+
+Model inference has no fixed wall-clock timeout. This applies to ordinary
+generation, the initial completion ping, warm-up, readiness probes, retries,
+and repair attempts; a slow model such as DeepSeek is not declared unavailable
+merely because it takes minutes or hours. Operators may cancel work, and a
+superseded request may be cancelled. Bounded DNS/TLS connection establishment,
+health checks, and model-list discovery remain allowed because they do not cap
+model generation time.
 
 OpenAI catalog rows also retain OpenAI's official data-controls documentation
 as policy evidence. Because approval and enablement are organization/project

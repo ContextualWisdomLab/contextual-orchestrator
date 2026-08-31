@@ -20,7 +20,7 @@ from contextual_orchestrator.provider_bootstrap import (
     ProviderBootstrapError,
     collect_provider_credentials,
     register_provider_credentials_atomically,
-    select_provider_diverse_models,
+    select_model_group_diverse_models,
 )
 
 
@@ -166,12 +166,12 @@ def test_register_requires_atomic_builtin_backend() -> None:
         set_backend(None)
 
 
-# --- select_provider_diverse_models -------------------------------------------------
+# --- select_model_group_diverse_models ---------------------------------------------
 
 
 def test_select_rejects_non_positive_limit() -> None:
     with pytest.raises(ValueError, match="must be positive"):
-        select_provider_diverse_models([_model("openai", "OPENAI_API_KEY", "gpt-x")], limit=0)
+        select_model_group_diverse_models([_model("openai", "OPENAI_API_KEY", "gpt-x")], limit=0)
 
 
 def test_select_unpriced_and_foreign_currency_models_sort_last_but_still_fill() -> None:
@@ -179,7 +179,7 @@ def test_select_unpriced_and_foreign_currency_models_sort_last_but_still_fill() 
     unpriced = _model("openrouter", "OPENROUTER_API_KEY", "qwen-free", prompt=None)
     eur = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "nim-eur", prompt=0.01, currency="EUR")
 
-    selected = select_provider_diverse_models(
+    selected = select_model_group_diverse_models(
         [unpriced, eur, priced], limit=3
     )
     # Known USD pricing wins the diversity slot; unknown/incomparable fill after.
@@ -194,7 +194,7 @@ def test_select_keeps_independent_credential_accounts() -> None:
     same_family_sub = _model(
         "nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "nim-delta", prompt=4.0
     )
-    selected = select_provider_diverse_models([primary, same_family_sub], limit=2)
+    selected = select_model_group_diverse_models([primary, same_family_sub], limit=2)
     # A shared vendor endpoint does not collapse independent credential accounts.
     assert [m.model_id for m in selected] == ["nim-gamma", "nim-delta"]
 
@@ -202,7 +202,7 @@ def test_select_keeps_independent_credential_accounts() -> None:
 def test_select_skips_non_chat_candidates_entirely() -> None:
     guard = _model("openai", "OPENAI_API_KEY", "llama-guard-4b", prompt=0.1)
     chat = _model("openrouter", "OPENROUTER_API_KEY", "qwen-chat", prompt=9.0)
-    selected = select_provider_diverse_models([guard, chat], limit=5)
+    selected = select_model_group_diverse_models([guard, chat], limit=5)
     assert [m.model_id for m in selected] == ["qwen-chat"]
 
 
@@ -267,7 +267,7 @@ def test_select_returns_partial_pool_when_family_exhausted_below_limit() -> None
     )
     # Only one outage family exists, so diversity yields one slot, the filler
     # adds the second, and the pool legitimately ends below ``limit``.
-    selected = select_provider_diverse_models([primary, sibling], limit=5)
+    selected = select_model_group_diverse_models([primary, sibling], limit=5)
     assert [m.model_id for m in selected] == ["nim-primary", "nim-sibling"]
 
 

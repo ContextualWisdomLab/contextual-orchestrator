@@ -135,11 +135,11 @@ def test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free()
         _model("openrouter", "OPENROUTER_API_KEY", "mistral-router", 2.0),
         _model("bytez", "BYTEZ_API_KEY", "llama-unknown", None),
     ]
-    selected = provider_bootstrap.select_provider_diverse_models(models, limit=3)
+    selected = provider_bootstrap.select_model_group_diverse_models(models, limit=3)
     assert [(item.provider_name, item.model_id) for item in selected] == [
         ("openai", "gpt-cheap"),
         ("openrouter", "mistral-router"),
-        ("bytez", "llama-unknown"),
+        ("openai", "gpt-expensive"),
     ]
 
 
@@ -151,7 +151,7 @@ def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
     )
     complete = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "complete-model", 1.0)
 
-    selected = provider_bootstrap.select_provider_diverse_models(
+    selected = provider_bootstrap.select_model_group_diverse_models(
         [partial, complete], limit=2
     )
 
@@ -169,7 +169,7 @@ def test_non_usd_price_cannot_outrank_a_comparable_usd_price():
     )
     priced_usd = _model("openai", "OPENAI_API_KEY", "priced-usd", 1.0)
 
-    selected = provider_bootstrap.select_provider_diverse_models(
+    selected = provider_bootstrap.select_model_group_diverse_models(
         [cheap_foreign, priced_usd], limit=2
     )
 
@@ -197,20 +197,35 @@ def test_provider_bootstrap_reuses_shared_chat_capability_policy(model_id, eligi
     assert eligible is is_general_chat_agent_model_id(model_id)
 
 
-def test_provider_bootstrap_keeps_nim_credentials_as_independent_accounts():
-    """Each credential account competes independently, even at the same vendor."""
-    nim_primary = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "primary-model", 0.01)
-    nim_secondary = _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "secondary-model", 0.02)
-    independent = _model("bytez", "BYTEZ_API_KEY", "independent-model", 0.5)
+def test_provider_bootstrap_first_pass_is_model_group_diverse():
+    nim_primary = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "deepseek/shared", 0.01)
+    nim_secondary = _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "deepseek/shared", 0.02)
+    independent = _model("openrouter", "OPENROUTER_API_KEY", "qwen/concrete:free", 0.0)
 
-    selected = provider_bootstrap.select_provider_diverse_models(
+    selected = provider_bootstrap.select_model_group_diverse_models(
         [nim_secondary, independent, nim_primary], limit=2
     )
 
     assert [(item.provider_name, item.model_id) for item in selected] == [
-        ("nvidia_nim", "primary-model"),
-        ("nvidia_nim_sub", "secondary-model"),
+        ("openrouter", "qwen/concrete:free"),
+        ("nvidia_nim", "deepseek/shared"),
     ]
+
+
+def test_openrouter_discovery_keeps_concrete_free_models_not_free_meta_router():
+    concrete = replace(
+        _model("openrouter", "OPENROUTER_API_KEY", "qwen/concrete:free", 0.0),
+        is_free=True,
+    )
+    meta_router = replace(
+        _model("openrouter", "OPENROUTER_API_KEY", "openrouter/free", 0.0),
+        is_free=True,
+    )
+
+    assert provider_bootstrap.select_model_group_diverse_models(
+        [meta_router, concrete], limit=2
+    ) == [concrete]
+    assert agent_from_discovered(concrete).group_name == "model_qwen_concrete_free"
 
 
 def test_non_chat_catalog_rows_are_never_selected_for_chat_service():
@@ -233,7 +248,7 @@ def test_non_chat_catalog_rows_are_never_selected_for_chat_service():
             2.0,
         ),
     ]
-    selected = provider_bootstrap.select_provider_diverse_models(models, limit=10)
+    selected = provider_bootstrap.select_model_group_diverse_models(models, limit=10)
     assert [(item.provider_name, item.model_id) for item in selected] == [
         ("openai", "openai/gpt-4.1-mini")
     ]

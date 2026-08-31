@@ -252,7 +252,7 @@ def test_generic_media_catalog_rows_stay_out_of_bootstrap_and_review_chat_pool(
     ] == ["text-free-model"]
     assert [
         model.model_id
-        for model in provider_bootstrap.select_provider_diverse_models(
+        for model in provider_bootstrap.select_model_group_diverse_models(
             discovered, limit=10
         )
     ] == ["text-free-model"]

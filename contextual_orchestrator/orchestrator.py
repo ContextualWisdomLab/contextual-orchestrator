@@ -835,7 +835,7 @@ def _local_provider_state(base_url: str) -> _LocalProviderState:
 def _local_provider_slot(
     agent: ModelAgent,
     capacity: int,
-    timeout: float,
+    timeout: float | None,
 ):
     """Bound local requests and serialize model switches on a shared endpoint."""
     if not _is_local_provider_url(agent.base_url):
@@ -843,7 +843,7 @@ def _local_provider_slot(
         return
 
     state = _local_provider_state(agent.base_url)
-    deadline = time.monotonic() + max(float(timeout), 0.0)
+    deadline = None if timeout is None else time.monotonic() + max(float(timeout), 0.0)
     with state.condition:
         while True:
             if state.active == 0:
@@ -856,6 +856,9 @@ def _local_provider_slot(
                 state.active += 1
                 break
 
+            if deadline is None:
+                state.condition.wait()
+                continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("local provider endpoint is busy past its request deadline")
@@ -1268,7 +1271,7 @@ class ModelClient:
 
     def __init__(
         self,
-        timeout: int = 90,
+        timeout: float | None = None,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
         local_max_retries: int = 0,
@@ -1521,12 +1524,13 @@ class ModelClient:
         return applied
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
-        """Verify a local model registry, then run one bounded completion probe.
+        """Verify a local model registry, then run one unbounded completion probe.
 
         ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
         this verifies the configured local model and deliberately exercises the
-        chat path with one output token. It never retries, so a stuck local queue
-        cannot be multiplied by the readiness check.
+        chat path with one output token. The timeout bounds only the non-generating
+        local registry lookup; model inference is allowed to complete regardless of
+        wall-clock duration and is cancelled only by an explicit caller action.
         """
         probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
@@ -1577,8 +1581,8 @@ class ModelClient:
                 }
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
-                    content = self._send(agent, payload, destination, timeout=probe_timeout)
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    content = self._send(agent, payload, destination)
                 usage = self.take_usage()
             if not content.strip():
                 failure_code = "provider_empty_probe_response"

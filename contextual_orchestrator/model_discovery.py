@@ -1414,6 +1414,11 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
     return f"{discovered.provider_name}_{_slug(discovered.model_id)}"
 
 
+def model_group_name_for(discovered: DiscoveredModel) -> str:
+    """Use the provider-declared exact model identity as the logical group."""
+    return f"model_{_slug(discovered.model_id)}"
+
+
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
@@ -1450,6 +1455,10 @@ def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
     return (
         not discovered.evidence_only
         and discovered.spend_admitted
+        and not (
+            discovered.provider_name == "openrouter"
+            and discovered.model_id.casefold() == "openrouter/free"
+        )
         and is_discovered_chat_candidate(discovered)
     )
 
@@ -1472,6 +1481,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         credential_key=discovered.credential_name,
         auth_scheme=discovered.auth_scheme,
         provider_name=discovered.provider_name,
+        group_name=model_group_name_for(discovered),
         tags=(
             "discovered",
             *(("cost:free",) if discovered.is_free else ()),
@@ -1783,10 +1793,10 @@ def select_bootstrap_discovered_agents(
     price_book: "PriceBook",
     limit: int,
 ) -> list[DiscoveredModel]:
-    """Build a deterministic, price-honest, provider-diverse initial pool.
+    """Build a deterministic, price-honest, model-group-diverse initial pool.
 
     Candidates retain the known-price-first ordering above, but the first pass
-    takes at most one model from each independently discovered provider account.
+    takes at most one endpoint for each provider-declared exact model identity.
     Remaining capacity is filled in the same deterministic cost order. No vendor
     or endpoint name is used to infer a shared family or collapse credential state.
     Duplicate serving identities never consume capacity twice.
@@ -1807,13 +1817,14 @@ def select_bootstrap_discovered_agents(
     )
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
-    providers: set[str] = set()
+    model_groups: set[str] = set()
 
     for model in ranked:
-        if model.provider_name in providers:
+        model_group = model_group_name_for(model)
+        if model_group in model_groups:
             deferred.append(model)
             continue
-        providers.add(model.provider_name)
+        model_groups.add(model_group)
         selected.append(model)
         if len(selected) == limit:
             return selected
