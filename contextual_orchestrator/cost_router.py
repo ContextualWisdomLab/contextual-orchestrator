@@ -51,6 +51,7 @@ _RACE_USAGE_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
+_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS = 1.0
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
@@ -753,7 +754,7 @@ class CostRoutingCoordinator:
         if cached is not None:
             return cached
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
-        recorded: List[Dict[str, Any]] = []
+        item_records = []
         for item in items:
             # Prefer the real request prompt the batch item carries (e.g. from
             # LocalBatchBackend) over a blank placeholder when the estimate
@@ -796,9 +797,16 @@ class CostRoutingCoordinator:
                     )
                 )
             if not records:
-                usage_valid = item.usage_valid is True or (
-                    item.usage_valid is None
-                    and (item.prompt_tokens > 0 or item.completion_tokens > 0)
+                usage_valid = (
+                    item.prompt_tokens >= 0
+                    and item.completion_tokens >= 0
+                    and (
+                        item.usage_valid is True
+                        or (
+                            item.usage_valid is None
+                            and (item.prompt_tokens > 0 or item.completion_tokens > 0)
+                        )
+                    )
                 )
                 records.append(
                     self._record_completion(
@@ -817,13 +825,23 @@ class CostRoutingCoordinator:
                         ),
                     )
                 )
-            self.ledger.flush()
-            record_ids = {record.usage_record_id for record in records}
-            settled = {
-                row["usage_record_id"]: row
-                for row in self.ledger.records()
-                if row.get("usage_record_id") in record_ids
-            }
+            item_records.append((item, records))
+
+        persistence_settled = self.ledger.flush(
+            timeout=_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS
+        )
+        record_ids = {
+            record.usage_record_id
+            for _item, records in item_records
+            for record in records
+        }
+        settled = {
+            row["usage_record_id"]: row
+            for row in self.ledger.records()
+            if row.get("usage_record_id") in record_ids
+        } if persistence_settled else {}
+        recorded: List[Dict[str, Any]] = []
+        for item, records in item_records:
             record_rows = [
                 settled.get(record.usage_record_id, record.as_dict())
                 for record in records
@@ -872,7 +890,12 @@ class CostRoutingCoordinator:
             "backend": job.backend,
             "result_count": len(recorded),
             "results": recorded,
+            "usage_persistence_status": (
+                "settled" if persistence_settled else "pending"
+            ),
         }
+        if not persistence_settled:
+            return document
         set_if_absent = getattr(self._batch_documents, "set_if_absent", None)
         if callable(set_if_absent):
             if not set_if_absent(job_id, document):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -688,6 +689,102 @@ def test_custom_batch_backend_preserves_one_sided_zero_usage() -> None:
     result = coordinator.retrieve_batch(job["job_id"])["results"][0]
     assert result["measurement_status"] == "measured"
     assert (result["prompt_tokens"], result["completion_tokens"]) == (0, 5)
+
+
+def test_custom_batch_backend_rejects_negative_reported_usage() -> None:
+    class _Backend:
+        name = "custom"
+        def submit(self, requests, metadata=None):
+            return BatchJob("custom-negative", self.name, request_count=len(requests))
+        def retrieve(self, job):
+            return [BatchResultItem(
+                "request-negative", "answer", -1, 5, usage_valid=True,
+                messages=[{"role": "user", "content": "real prompt"}],
+            )]
+    coordinator = _coordinator()
+    coordinator.batch_backend = _Backend()
+    job = coordinator.complete(
+        [{"role": "user", "content": "real prompt"}], hints={"channel": "batch"}
+    )
+
+    result = coordinator.retrieve_batch(job["job_id"])["results"][0]
+
+    assert result["measurement_status"] == "estimated"
+    assert result["prompt_tokens"] >= 0
+    assert result["completion_tokens"] >= 0
+
+
+def test_multi_item_batch_settlement_queries_ledger_once(monkeypatch) -> None:
+    class _Backend:
+        name = "custom"
+        def submit(self, requests, metadata=None):
+            return BatchJob("custom-multi", self.name, request_count=len(requests))
+        def retrieve(self, job):
+            return [
+                BatchResultItem("request-one", "one", 1, 1),
+                BatchResultItem("request-two", "two", 2, 2),
+            ]
+    coordinator = _coordinator()
+    coordinator.batch_backend = _Backend()
+    calls = 0
+    records = coordinator.ledger.records
+
+    def counted_records(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return records(*args, **kwargs)
+
+    monkeypatch.setattr(coordinator.ledger, "records", counted_records)
+    job = coordinator.submit_batch([
+        BatchRequest("request-one", [{"role": "user", "content": "one"}]),
+        BatchRequest("request-two", [{"role": "user", "content": "two"}]),
+    ])
+
+    document = coordinator.retrieve_batch(job.job_id)
+
+    assert document["result_count"] == 2
+    assert document["usage_persistence_status"] == "settled"
+    assert calls == 1
+
+
+def test_batch_retrieval_does_not_wait_forever_for_ledger_storage(monkeypatch) -> None:
+    release = threading.Event()
+
+    class _BlockedStore:
+        def __init__(self):
+            self.rows = []
+        def append(self, record):
+            release.wait(timeout=2)
+            self.rows.append(record.as_dict())
+        def query(self, start=None, end=None):
+            return list(self.rows)
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    ledger = CostLedger(
+        price_book,
+        store=NonBlockingLedgerStore(_BlockedStore()),
+    )
+    coordinator = _coordinator(ledger=ledger)
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router._BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS",
+        0.01,
+    )
+    job = coordinator.complete(
+        [{"role": "user", "content": "blocked ledger"}], hints={"channel": "batch"}
+    )
+    try:
+        document = coordinator.retrieve_batch(job["job_id"])
+    finally:
+        release.set()
+
+    assert document["usage_persistence_status"] == "pending"
+    assert document["result_count"] == 1
+    assert document["results"][0]["measurement_status"] == "estimated"
+    assert ledger.flush(timeout=1.0)
+    settled = coordinator.retrieve_batch(job["job_id"])
+    assert settled["usage_persistence_status"] == "settled"
+    assert settled["results"] == document["results"]
 
 
 def test_local_batch_cache_hit_does_not_rebill_provider() -> None:
