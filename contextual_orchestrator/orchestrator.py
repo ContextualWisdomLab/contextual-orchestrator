@@ -1105,11 +1105,28 @@ def is_transient_error(exc: BaseException) -> bool:
         if _is_tool_execution_stopped(exc):
             return False
         return exc.code in TRANSIENT_HTTP_STATUS
+    # urlopen wraps a TLS handshake's ssl.SSLCertVerificationError as
+    # URLError(reason=...), not as a bare ssl.SSLError -- unwrap it here so a
+    # bad trust boundary is never retried as if it were a network fault. The
+    # isinstance(exc, ssl.SSLError) check further below never reaches this
+    # case, since it never sees the wrapping URLError.
+    if isinstance(exc, urllib.error.URLError) and isinstance(
+        exc.reason, ssl.SSLCertVerificationError
+    ):
+        return False
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True
     if isinstance(exc, socket.gaierror):
         return exc.errno == socket.EAI_AGAIN
+    # ModelClient._resolve_addresses wraps a DNS resolution failure as plain
+    # RuntimeError (not a socket.gaierror subclass) with the original
+    # exception chained as __cause__, so a temporary DNS hiccup (EAI_AGAIN)
+    # is still worth retrying through that wrapper. Any other RuntimeError
+    # (a malformed URL, no resolvable stream address) has no such cause and
+    # falls through to the non-transient default below.
+    if isinstance(exc, RuntimeError) and isinstance(exc.__cause__, socket.gaierror):
+        return exc.__cause__.errno == socket.EAI_AGAIN
     # A VPN/socket path can surface as an SSL EOF or SSL_ERROR_SYSCALL. Keep
     # certificate verification failures non-transient so a bad trust boundary
     # is never retried as if it were a network fault.

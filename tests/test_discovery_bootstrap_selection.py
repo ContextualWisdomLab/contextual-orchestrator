@@ -323,8 +323,16 @@ def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> No
     assert selected == [router_cheapest, nim_model, openai_model]
 
 
-def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() -> None:
-    """Two NIM keys must not displace an independently hosted provider."""
+def test_bootstrap_selector_keeps_nim_primary_and_sub_credential_accounts_independent() -> None:
+    """Two NIM keys are independent credential accounts, not one collapsed family.
+
+    Superseded 2026-08-31 (see ``docs/product-technical-gap-baseline.md`` and
+    ADR 0032): treating ``nvidia_nim``/``nvidia_nim_sub`` as one outage domain
+    assumed the two credentials expose the same model catalog. They may not --
+    each API key can be entitled to different models -- so the selector must
+    not collapse them by provider-name family. Only an explicit ``model_group``
+    establishes logical equivalence between discovered models.
+    """
     selector = getattr(
         model_discovery,
         "select_bootstrap_discovered_agents",
@@ -346,7 +354,7 @@ def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() ->
         2,
     )
 
-    assert selected == [nim_primary, openrouter]
+    assert selected == [nim_primary, nim_sub]
 
 
 def test_bootstrap_selector_is_deterministic_when_every_model_is_unpriced() -> None:
