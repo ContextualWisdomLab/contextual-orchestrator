@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.debug_logging import summarize_request_for_log  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "http_response_write_disconnect_safety_token"  # noqa: S105
@@ -302,7 +303,67 @@ def test_binary_response_swallows_a_disconnect() -> None:
         server.server_close()
 
 
+def test_disconnected_write_does_not_report_intended_status_as_delivered() -> None:
+    """A dead-peer write must not leave `_last_status` claiming success.
+
+    Regression for: `_send`/`_send_text`/`_send_bytes`/`_send_sse` all set
+    `self._last_status = status` *before* calling `_write_response`, and
+    ignored its boolean return value. `_write_response` deliberately
+    swallows `BrokenPipeError`/`ConnectionError`/`OSError` from a
+    disconnected peer -- but the caller's pre-set `_last_status` survived
+    that failure untouched, so `_log_request_summary` (via
+    `summarize_request_for_log`) went on to log the *intended* status
+    (e.g. 200) as if delivery had actually completed. `_write_response`
+    now clears `_last_status` back to `None` -- this module's existing
+    "response was never sent" value -- whenever it catches a disconnect.
+    """
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    handler_cls = server.RequestHandlerClass
+
+    class DisconnectedHandler:
+        wfile = None
+        _last_status = "unset-before-send"
+        _request_body_consumed = True
+
+        def send_response(self, _status):
+            return None
+
+        def send_header(self, _name, _value):
+            return None
+
+        def _send_security_headers(self):
+            return None
+
+        def end_headers(self):
+            return None
+
+        def write(self, _payload):
+            raise BrokenPipeError("simulated client disconnect mid-write")
+
+        _write_response = handler_cls._write_response
+
+    try:
+        handler = DisconnectedHandler()
+        handler.wfile = handler
+        handler_cls._send_bytes(handler, b"audio", "audio/mpeg")
+
+        assert handler._last_status != 200
+        assert handler._last_status is None
+
+        summary = summarize_request_for_log(
+            method="POST",
+            path="/v1/audio/speech",
+            status=handler._last_status,
+            latency_ms=1.0,
+        )
+        assert "status=200" not in summary
+        assert "status=-" in summary
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":
     test_write_response_swallows_a_broken_pipe_from_a_disconnected_client()
     test_write_response_still_propagates_unrelated_errors()
+    test_disconnected_write_does_not_report_intended_status_as_delivered()
     print("ok")

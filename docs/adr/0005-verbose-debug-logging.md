@@ -1,4 +1,4 @@
-# ADR 0007: Verbose/debug logging with a redaction safety net
+# ADR 0005: Verbose/debug logging with a redaction safety net
 
 ## Status
 

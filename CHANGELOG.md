@@ -121,10 +121,43 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   distinctly named `provider_one_shot_call_failed` WARNING instead of
   `provider_no_retry_budget`. `_send_with_retry` has no such caller-forced
   restriction and is unaffected.
+- (round 7) `server.py`'s `_send`/`_send_text`/`_send_bytes`/`_send_sse`/
+  `_begin_sse` all set `self._last_status` to the *intended* status before
+  handing off to `_write_response`, then ignored its boolean return value.
+  `_write_response` deliberately swallows a dead peer's
+  `BrokenPipeError`/`ConnectionError`/`OSError` (so a disconnected client
+  cannot crash the handler thread), but that left `_last_status` claiming a
+  status the client never actually received, so the per-request INFO
+  summary (`_log_request_summary`) logged a false "200 delivered" for a
+  request that was really cut short mid-write. `_write_response` now resets
+  `_last_status` back to `None` -- this module's existing "response was
+  never sent" value -- whenever it catches a disconnect, fixing every
+  current and future writer uniformly at their one shared choke point
+  instead of patching each writer individually.
+- (round 7) `_log_request_summary` also silently dropped a request that
+  *did* deliver bytes but whose request line `parse_request` rejected as
+  malformed (or that stdlib's `handle_one_request` rejected outright as too
+  long): a real 400/414 was sent and captured into `_last_status` via the
+  `send_response` override, but `command`/`path` stay unset for these
+  cases (stdlib's own `parse_request` resets `self.command` to `None` "in
+  case of error on the first line" and never reaches the assignment that
+  would set `path`), so the old "nothing to report" guard -- checking only
+  method/path -- skipped logging it, indistinguishable from a keep-alive
+  connection closing with zero bytes. The guard now also logs when
+  `_last_status` was actually recorded, while still skipping the true
+  no-bytes-at-all case.
+- (round 7) Two CodeQL `py/clear-text-logging-sensitive-data` HIGH alerts on
+  `tests/test_debug_logging.py`'s redaction positive/negative-control pair
+  (lines 144 and 167) are precise, per-line `# codeql[...]` inline
+  suppressions with an explanatory comment, not a code change: both lines
+  log a hardcoded, non-functional fake secret (`# noqa: S105`'d against
+  bandit/ruff) as a deliberate test fixture -- one proving `redact_text`
+  masks it, the other (the negative control) proving the same literal
+  leaks with no redactor, which is exactly what the test exists to show.
 
 ### Added
 
-- Verbose/debug logging (ADR 0007): a new stdlib-only `debug_logging.py`
+- Verbose/debug logging (ADR 0005): a new stdlib-only `debug_logging.py`
   module, a `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}` CLI flag with a
   `--verbose`/`--debug` shorthand and a `CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`
   env-var default (default unchanged: `WARNING`), and new instrumentation at

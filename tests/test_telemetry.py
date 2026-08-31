@@ -694,6 +694,64 @@ def test_framework_generated_error_status_is_captured_in_log(caplog):
     assert "status=501" in caplog.text
 
 
+def test_malformed_request_line_is_captured_in_log(caplog):
+    """A malformed request line that still got a real response is not silently skipped.
+
+    ``BaseHTTPRequestHandler.parse_request`` rejects an unparsable request
+    line via ``send_error`` -- captured by the ``send_response`` override
+    into ``_last_status`` -- *before* ``self.command``/``self.path`` are
+    ever assigned: stdlib's own ``parse_request`` explicitly resets
+    ``self.command`` to ``None`` "in case of error on the first line" and
+    only reaches the later assignment that would set ``path`` once parsing
+    succeeds. The per-request summary's old "nothing to report" guard only
+    checked method/path, so a connection that *did* deliver real bytes and
+    *did* get a real 400 response left no log trace at all -- indistinguishable,
+    from the log's perspective, from a keep-alive connection closing with
+    zero bytes (see ``test_keep_alive_close_does_not_log_phantom_request``,
+    which must stay silent).
+    """
+    import socket
+    import threading
+    import time
+
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+                # A single-token request line: too few words for
+                # parse_request's `2 <= len(words) <= 3` shape check, so it
+                # calls send_error(400, ...) without ever assigning
+                # self.command/self.path. A request line this malformed never
+                # reaches the branch that promotes `self.request_version`
+                # past stdlib's own "HTTP/0.9" default, so `send_error`'s
+                # underlying `send_response_only`/`send_header` calls
+                # deliberately write no status line or headers at all (a
+                # documented stdlib quirk for an unparsable first line) --
+                # only the HTML error body reaches the wire. The 400 is still
+                # real: it is what `send_response` records into
+                # `_last_status`, which is what this test is actually about.
+                connection.sendall(b"GARBAGE\r\n\r\n")
+                response = b""
+                while True:
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+            assert b"400" in response
+            _wait_for_caplog(caplog, lambda text: "http_request" in text)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+        time.sleep(0.2)  # see test_per_request_info_summary_reports_method_path_and_status
+
+    assert "http_request" in caplog.text
+    assert "status=400" in caplog.text
+
+
 def test_per_request_info_summary_absent_below_info(caplog):
     import threading
     import time

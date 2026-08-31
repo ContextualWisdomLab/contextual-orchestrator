@@ -5541,28 +5541,49 @@ def build_server(
 
             Carries method, path, status, latency, and the bounded ADR 0122
             correlation hash only -- never headers, a query string beyond the
-            raw path, or a request/response body. A request that never got far
-            enough to be parsed (e.g. a malformed request line on a reused
-            connection) has no method/path to report and is skipped.
+            raw path, or a request/response body. A connection that never
+            delivered any request bytes at all (the client simply closed a
+            reused keep-alive connection) has no method, no path, AND no
+            status, and is skipped -- there is nothing to report.
 
-            ``started`` is only ever ``None`` when ``command``/``path`` are
-            also unset (``parse_request`` is the sole place that sets any of
-            the three), so the guard below already skips that case before
-            ``started`` is used; the ``or time.monotonic()`` fallback is
-            defensive only, to keep this from ever raising on a future
-            stdlib change rather than to be exercised today.
+            A request that *did* deliver bytes but whose request line
+            ``parse_request`` rejected as malformed (or that stdlib's
+            ``handle_one_request`` rejected outright as too long, before
+            ever calling our ``parse_request`` override) still gets a real
+            status sent to the client -- 400 or 414 -- via ``send_error``,
+            which flows through the ``send_response`` override above into
+            ``_last_status``, even though ``command``/``path`` stay unset
+            (stdlib's own ``parse_request`` explicitly resets ``self.command``
+            to ``None`` "in case of error on the first line" and never
+            reaches the later assignment that would set ``path``). Skipping
+            on method/path alone, as this used to, silently dropped that
+            entry even though a real response was sent. ``_last_status`` is
+            reset to ``None`` at the top of every ``handle_one_request`` call
+            and only ever (re)populated by ``send_response`` during this
+            call's own processing, so treating "some status was recorded"
+            as an equally valid reason to log -- not just "some
+            method/path was recorded" -- captures every request that
+            actually produced a response while still skipping a truly
+            byte-free keep-alive close.
+
+            ``started`` being ``None`` still means ``parse_request`` was
+            never entered (true of both the byte-free close above and the
+            too-long-request-line case, which stdlib rejects before ever
+            calling it); the ``or time.monotonic()`` fallback below keeps
+            that from ever raising on a future stdlib change.
             """
             if not _LOGGER.isEnabledFor(logging.INFO):
                 return
             method = getattr(self, "command", None)
             path = getattr(self, "path", None)
-            if not method and not path:
+            status = getattr(self, "_last_status", None)
+            if not method and not path and status is None:
                 return
             _LOGGER.info(
                 summarize_request_for_log(
                     method=method or "-",
                     path=path or "-",
-                    status=getattr(self, "_last_status", None),
+                    status=status,
                     latency_ms=(time.monotonic() - (started or time.monotonic())) * 1000.0,
                     session_id_hash=session_id_hash(),
                 )
@@ -8016,6 +8037,24 @@ def build_server(
                 return True
             except (BrokenPipeError, ConnectionError, OSError):
                 _LOGGER.debug("client_disconnected")
+                # Every `_send*`/`_begin_sse` writer records its *intended*
+                # status in `self._last_status` before calling this method
+                # (and `send_response`'s override above does the same for
+                # whatever status the writer itself sends) -- but a dead
+                # peer means that status was never actually delivered.
+                # Left uncorrected, `_log_request_summary` reads
+                # `_last_status` straight into the per-request INFO summary,
+                # falsely reporting a completed 200/4xx/5xx response for a
+                # request whose write failed. This is the single choke
+                # point every writer already routes through, so clearing it
+                # here -- back to the same `None` this module already uses
+                # for "a response was never sent" -- covers all of them
+                # uniformly instead of patching each writer individually.
+                # Guarded with `hasattr` because some tests call this method
+                # directly against a bare `object()` stand-in for `self`,
+                # which has no instance `__dict__` to assign into.
+                if hasattr(self, "_last_status"):
+                    self._last_status = None
                 return False
 
         def _send(

@@ -140,6 +140,12 @@ def test_configure_logging_redactor_masks_secret_shaped_content_in_captured_outp
     try:
         with _restored_root_logger():
             configure_logging("DEBUG", redactor=redact_text)
+            # codeql[py/clear-text-logging-sensitive-data] Intentional positive-control
+            # fixture: `fake_secret` (defined above, already `# noqa: S105`'d) is a
+            # hardcoded, non-functional literal, and this test's entire purpose is
+            # proving `configure_logging(..., redactor=redact_text)` masks exactly this
+            # shape before it reaches captured output -- see the assertions below and the
+            # paired negative control immediately after this test.
             logging.getLogger("contextual_orchestrator.test.leak").debug(
                 "provider payload leaked: %s", json.dumps({"api_key": fake_secret})
             )
@@ -163,6 +169,12 @@ def test_configure_logging_redactor_none_still_leaves_secret_unmasked() -> None:
     try:
         with _restored_root_logger():
             configure_logging("DEBUG")  # no redactor at all
+            # codeql[py/clear-text-logging-sensitive-data] Intentional negative-control
+            # fixture: `fake_secret` (defined above, already `# noqa: S105`'d) is a
+            # hardcoded, non-functional literal. This test deliberately logs it with NO
+            # redactor to prove the positive-control test above is a real assertion (it
+            # can fail before the redactor is wired in) rather than a tautology -- the
+            # leak this line demonstrates is the exact property both tests exist to prove.
             logging.getLogger("contextual_orchestrator.test.leak_control").debug(
                 "provider payload leaked: %s", json.dumps({"api_key": fake_secret})
             )
