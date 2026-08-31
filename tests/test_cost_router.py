@@ -987,6 +987,182 @@ def test_cheapest_capability_candidate_ignores_completion_price_for_embeddings()
     assert chosen.id == cheap_input_member.id
 
 
+def test_cheapest_capability_candidate_compares_equivalent_currency_spellings() -> None:
+    """Lowercase/padded currency codes must still compare as the same currency.
+
+    ``padded_lowercase_member`` has the true lowest price, but its price
+    entry stores the currency as ``"  usd  "`` (lowercase, padded) rather
+    than the price book's canonical ``"USD"``. An exact-string currency
+    comparison would wrongly treat that as a different, non-comparable
+    currency and let the costlier ``canonical_member`` win instead. This
+    mirrors ``model_discovery._currency_is_comparable``'s own
+    non-empty/trimmed/case-insensitive normalization.
+    """
+    padded_lowercase_member = ModelAgent(
+        "padded_lowercase_member", "padded-embedding", "mock://padded",
+        provider_name="padded-provider", tags=("embedding",), priority=10,
+    )
+    canonical_member = ModelAgent(
+        "canonical_member", "canonical-embedding", "mock://canonical",
+        provider_name="canonical-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([padded_lowercase_member, canonical_member])
+    with orchestrator.request_policy(False):
+        candidates = orchestrator._capability_agents("embedding", None)
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)  # default_currency == "USD"
+    price_book.set_price(
+        PriceEntry(
+            "padded-provider", "padded-embedding",
+            prompt_price_per_1k=0.01, completion_price_per_1k=0.0, currency_code="  usd  ",
+        )
+    )
+    price_book.set_price(
+        PriceEntry(
+            "canonical-provider", "canonical-embedding",
+            prompt_price_per_1k=5.0, completion_price_per_1k=0.0, currency_code="USD",
+        )
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    chosen = coordinator._cheapest_capability_candidate(candidates)
+
+    assert chosen.id == padded_lowercase_member.id
+
+
+def test_non_zdr_embedding_batch_selects_cheapest_capability_candidate_when_unspecified() -> None:
+    """Devin bug: ordinary (non-ZDR) unspecified embedding batches must also price-route.
+
+    Previously ``_resolve_embedding_target`` returned before
+    ``_cheapest_capability_candidate`` ever ran whenever ``zdr_only=False``,
+    so only ZDR embedding batches were cost-aware; ordinary batches always
+    kept the orchestrator's ranked (not price) order. An unspecified
+    (auto/group) model with multiple differently priced non-ZDR group
+    members must now resolve to the cheaper one.
+    """
+    from contextual_orchestrator.batch_routing import EmbeddingBatchResultItem
+
+    ranked_first = ModelAgent(
+        "ranked_first_plain_member", "expensive-plain-embedding", "mock://expensive-plain",
+        provider_name="expensive-plain-provider", tags=("embedding",),
+        group_name="shared_embedding_model", priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_plain_member", "cheap-plain-embedding", "mock://cheap-plain",
+        provider_name="cheap-plain-provider", tags=("embedding",),
+        group_name="shared_embedding_model", priority=1,
+    )
+
+    class _RecordingEmbeddingBackend:
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def submit(self, requests, metadata=None):
+            self.requests.extend(requests)
+            return BatchJob(
+                "non-zdr-cheapest", self.name, status="completed", request_count=len(requests)
+            )
+
+        def poll(self, job):
+            return {"is_complete": True, "status": "completed"}
+
+        def retrieve(self, job):
+            return [
+                EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model)
+                for request in self.requests
+            ]
+
+    backend = _RecordingEmbeddingBackend()
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+    with orchestrator.request_policy(False):
+        ranked = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in ranked] == [ranked_first.id, cheaper.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry(
+            "expensive-plain-provider", "expensive-plain-embedding",
+            prompt_price_per_1k=5.0, completion_price_per_1k=0.0,
+        )
+    )
+    price_book.set_price(
+        PriceEntry(
+            "cheap-plain-provider", "cheap-plain-embedding",
+            prompt_price_per_1k=0.01, completion_price_per_1k=0.0,
+        )
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, embedding_batch_backend=backend
+    )
+
+    # zdr_only defaults False and agent_id defaults None: the ordinary path.
+    coordinator.submit_embeddings_batch(["ordinary input"])
+
+    assert backend.requests[0].model == cheaper.model
+    assert backend.requests[0].agent_id == cheaper.id
+
+
+def test_non_zdr_complete_embeddings_batch_selects_cheapest_capability_candidate() -> None:
+    """Same fix, exercised through ``complete_embeddings_batch`` — the public,
+    synchronous coordinator entry point production callers (e.g. naruon's
+    batch embedding service) call directly."""
+    ranked_first = ModelAgent(
+        "ranked_first_public_member", "expensive-public-embedding", "mock://expensive-public",
+        provider_name="expensive-public-provider", tags=("embedding",), priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_public_member", "cheap-public-embedding", "mock://cheap-public",
+        provider_name="cheap-public-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry(
+            "expensive-public-provider", "expensive-public-embedding",
+            prompt_price_per_1k=5.0, completion_price_per_1k=0.0,
+        )
+    )
+    price_book.set_price(
+        PriceEntry(
+            "cheap-public-provider", "cheap-public-embedding",
+            prompt_price_per_1k=0.01, completion_price_per_1k=0.0,
+        )
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    document = coordinator.complete_embeddings_batch(["ordinary input"])
+
+    assert document["model"] == cheaper.model
+
+
+def test_non_zdr_embedding_batch_preserves_explicit_model_outside_the_pool() -> None:
+    """An explicit model absent from the pool must still pass through unresolved.
+
+    Widening ``_resolve_embedding_target`` to cost-route unspecified
+    non-ZDR requests must not force *every* ordinary embedding request
+    through ``_capability_agents`` — only the unspecified (auto/group
+    placeholder) case should. An explicit model outside the configured pool
+    has no matching agent to look up and must not raise or be rewritten.
+    """
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("configured_agent", "configured-embedding", tags=("embedding",))]
+    )
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+
+    resolved_model, resolved_agent_id = coordinator._resolve_embedding_target(
+        "unconfigured-upstream-model", zdr_only=False, agent_id=None
+    )
+
+    assert resolved_model == "unconfigured-upstream-model"
+    assert resolved_agent_id is None
+
+
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
     """The ZDR resolver must not change ordinary batch passthrough behavior."""
     captured: list[BatchRequest] = []

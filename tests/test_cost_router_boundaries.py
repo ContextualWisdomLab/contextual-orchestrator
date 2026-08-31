@@ -35,7 +35,10 @@ def _coordinator(**kwargs: Any) -> Coordinator:
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning", "writing"),
+            # "embedding" so unspecified-model embedding batch submissions
+            # (the ordinary, non-ZDR path) resolve through the real
+            # capability-agent lookup rather than relying on passthrough.
+            tags=("reasoning", "writing", "embedding"),
         )
     ]
     orchestrator = TaskOrchestrator(agents)

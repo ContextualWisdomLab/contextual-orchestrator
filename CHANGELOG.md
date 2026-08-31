@@ -26,6 +26,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `assumed_completion_tokens=0` (embeddings never consume completion
   tokens). Candidates with no comparable known-currency price keep the
   orchestrator's existing ranked order instead of being silently selected.
+- `_cheapest_capability_candidate`'s currency-comparability check now reuses
+  `model_discovery._currency_is_comparable`'s normalization (non-empty,
+  trimmed, case-insensitive) instead of an exact string match, so a
+  lowercase or whitespace-padded same-currency code (e.g. `"usd"` vs
+  `"USD"`) is recognized as comparable rather than losing to a costlier
+  candidate. `_resolve_embedding_target` now runs this cheapest-comparable-
+  member selection for ordinary (non-ZDR) unspecified embedding requests
+  too, not only ZDR ones — previously those returned before the selection
+  ever ran, so only ZDR embedding batches were price-aware. Explicit
+  `agent_id` choices and explicit-model passthrough (a model outside the
+  configured pool) are unchanged. This upstream-selection mechanism is
+  the `cheapest_upstream` table-driven load balancing already covered by
+  [ADR 0003](docs/adr/0003-cost-aware-sync-batch-routing.md#consequences);
+  no new research grounding applies to this bugfix.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

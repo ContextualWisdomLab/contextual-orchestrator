@@ -41,6 +41,7 @@ from .batch_routing import (
 from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
+from .model_discovery import _currency_is_comparable
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 
@@ -154,18 +155,25 @@ class CostRoutingCoordinator:
         stays unknown rather than becoming a false zero-cost winner, and an
         entry priced in a different currency is left out of the comparison
         rather than compared to a same-currency price by face value (this
-        repo has no exchange-rate conversion source). Comparison uses
-        ``assumed_completion_tokens=0`` because embedding requests never
-        consume completion tokens. Candidates with no comparable price —
-        including an all-unpriced or all-mixed-currency pool — keep the
-        original (ranked) order, so behavior is unchanged whenever the price
-        table has nothing to optimise.
+        repo has no exchange-rate conversion source). Currency comparability
+        uses :func:`~contextual_orchestrator.model_discovery._currency_is_comparable`
+        — the same non-empty/trimmed/case-insensitive normalization the
+        discovery price book applies — so a lowercase or whitespace-padded
+        same-currency code (e.g. ``"usd"`` or ``" USD "`` against ``"USD"``)
+        is still recognized as comparable rather than silently excluded.
+        Comparison uses ``assumed_completion_tokens=0`` because embedding
+        requests never consume completion tokens. Candidates with no
+        comparable price — including an all-unpriced or all-mismatched-
+        currency pool — keep the original (ranked) order, so behavior is
+        unchanged whenever the price table has nothing to optimise.
         """
         comparable: list[tuple[Any, dict[str, str]]] = []
         for candidate in candidates:
             provider, model = self._agent_provider_model(candidate, candidate.model)
             entry = self.price_book.get_price(provider, model)
-            if entry is None or entry.currency_code != self.price_book.default_currency:
+            if entry is None or not _currency_is_comparable(
+                entry.currency_code, self.price_book.default_currency
+            ):
                 continue
             comparable.append((candidate, {"provider": provider, "model": model}))
         if not comparable:
@@ -843,14 +851,28 @@ class CostRoutingCoordinator:
     def _resolve_embedding_target(
         self, model: str, zdr_only: bool, agent_id: Optional[str]
     ) -> tuple[str, Optional[str]]:
-        """Resolve one embedding member without losing a caller's member choice."""
-        if agent_id is None and not zdr_only:
+        """Resolve one embedding member without losing a caller's member choice.
+
+        An explicit caller-supplied ``agent_id`` always wins, and an explicit
+        caller-supplied ``model`` outside the configured pool always passes
+        through unresolved (no ``_capability_agents`` lookup, so it cannot
+        raise on an upstream model this repo has no matching agent for) —
+        both regardless of ``zdr_only``. The only case that now runs
+        cheapest-comparable-member selection is an *unspecified* model
+        (the ``contextual-orchestrator``/``AUTO_MODEL`` placeholder) with no
+        explicit ``agent_id``: previously this short-circuited to plain
+        passthrough for ordinary (non-ZDR) requests, so cost-aware routing
+        only ever reached ZDR embedding batches. ZDR requests already ran
+        this selection unconditionally (an explicit ZDR model still needs
+        pool-membership + privacy-tag validation), so that behavior is
+        unchanged here.
+        """
+        unspecified_model = model in {
+            "contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")
+        }
+        if agent_id is None and not zdr_only and not unspecified_model:
             return model, None
-        selection_model = (
-            None
-            if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
-            else model
-        )
+        selection_model = None if unspecified_model else model
         with self.orchestrator.request_policy(zdr_only):
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
