@@ -47,6 +47,28 @@ DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
 #: below) without editing its CLI invocation.
 VERBOSE_ENV_VAR = "CONTEXTUAL_ORCHESTRATOR_VERBOSE"
 _VERBOSE_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+#: The only loggers verbose mode raises to DEBUG. Each one is individually
+#: audited here (not merely "the modules this feature touched") to confirm
+#: every .debug() call site under it logs bounded, secret-free metadata --
+#: never a raw exception (str(exc)), a credential, or prompt/response
+#: content: orchestrator.py's route/conduct/provider/circuit-breaker sites
+#: (ADR 0125), server.py's request/response lifecycle sites, and
+#: model_discovery.py's discover_provider_models() account/error_code/
+#: model_count sites (#941). Deliberately excludes every OTHER logger in this
+#: package -- e.g. openrouter_uptime.py's pre-existing
+#: ``logger.debug("...: %s", exc)`` logs str(exc) directly and has not been
+#: rewritten to stop doing that, so it must never become reachable just
+#: because an operator asked to see routing/discovery decisions. Setting
+#: level on the root or a package-level "contextual_orchestrator" logger
+#: would raise every child logger's EFFECTIVE level through inheritance,
+#: silently re-opening exactly that leak for this logger and any other
+#: not-yet-audited or third-party logger sharing the process -- so this
+#: enables DEBUG on each named leaf logger individually instead.
+_VERBOSE_LOGGER_NAMES = (
+    "contextual_orchestrator.orchestrator",
+    "contextual_orchestrator.server",
+    "contextual_orchestrator.model_discovery",
+)
 
 
 def _env_flag(name: str) -> bool:
@@ -55,19 +77,30 @@ def _env_flag(name: str) -> bool:
 
 
 def _configure_logging(verbose: bool) -> None:
-    """Turn on DEBUG-level logging (timestamp, level, logger name) when requested.
+    """Turn on DEBUG-level logging for this package's audited loggers only.
 
     A no-op when ``verbose`` is false: this repository never introduces
     unrequested log noise, and ``.debug()`` call sites across the package stay
     silent unless a caller explicitly opts in here or via ``VERBOSE_ENV_VAR``.
-    ``force=True`` lets a later call (or a test invoking ``main()`` more than
-    once in one process) replace an earlier logging configuration instead of
-    silently no-op'ing, matching stdlib ``logging.basicConfig`` semantics for
-    a process whose configuration is decided exactly once at startup.
+
+    When true, this installs one shared timestamp/level/logger-name formatter
+    (``basicConfig`` with no ``level=``, so the *root* logger's level is left
+    untouched -- WARNING and above already reach stderr by default via
+    Python's handler-of-last-resort, and this only adds consistent
+    formatting for that existing output) and then raises the level to DEBUG
+    on exactly the loggers named in ``_VERBOSE_LOGGER_NAMES``, never the root
+    logger and never a whole-package logger. See that constant's comment for
+    why the distinction matters. ``force=True`` lets a later call (or a test
+    invoking ``main()`` more than once in one process) replace an earlier
+    handler instead of silently no-op'ing, matching stdlib
+    ``logging.basicConfig`` semantics for a process whose configuration is
+    decided exactly once at startup.
     """
     if not verbose:
         return
-    logging.basicConfig(level=logging.DEBUG, format=_VERBOSE_LOG_FORMAT, force=True)
+    logging.basicConfig(format=_VERBOSE_LOG_FORMAT, force=True)
+    for logger_name in _VERBOSE_LOGGER_NAMES:
+        logging.getLogger(logger_name).setLevel(logging.DEBUG)
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -338,7 +371,8 @@ def _discover_models_command(argv: list[str]) -> None:
         dest="verbose",
         action="store_true",
         default=_env_flag(VERBOSE_ENV_VAR),
-        help=f"Enable DEBUG-level logging (default: off; also settable via {VERBOSE_ENV_VAR}).",
+        help="Emit secret-free provider discovery diagnostics to stderr (default: off; "
+        f"also settable via {VERBOSE_ENV_VAR}).",
     )
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
@@ -602,9 +636,10 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         default=_env_flag(VERBOSE_ENV_VAR),
         help="Enable DEBUG-level logging (timestamp, level, logger name) to stderr for the "
-        f"orchestrator's route/conduct/provider-retry/circuit-breaker control flow; secrets "
-        f"and full prompt/response text are never logged (default: off; also settable via "
-        f"{VERBOSE_ENV_VAR}=true so a deployed server can turn it on without a new CLI flag).",
+        f"orchestrator's route/conduct/provider-retry/circuit-breaker control flow and model "
+        f"discovery; secrets and full prompt/response text are never logged (default: off; "
+        f"also settable via {VERBOSE_ENV_VAR}=true so a deployed server can turn it on without "
+        f"a new CLI flag).",
     )
     args = parser.parse_args(arguments)
     _configure_logging(args.verbose)

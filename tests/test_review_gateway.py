@@ -89,7 +89,7 @@ def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch
 
 
 def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
-    """The gateway uses independent provider families before duplicate providers."""
+    """The gateway uses independently discovered providers before duplicates."""
     discovered = [
         _discovered("openrouter", "cheap_first", "OPENROUTER_API_KEY", 0.01),
         _discovered("openrouter", "cheap_second", "OPENROUTER_API_KEY", 0.02),

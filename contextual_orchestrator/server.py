@@ -5430,17 +5430,44 @@ def build_server(
         close_connection = True
 
         def handle_one_request(self) -> None:
-            """Reset per-request state before parsing each persistent request.
+            """Reset per-request state, then emit one bounded DEBUG completion entry.
 
             Body-consumption tracking must restart per request so an unread
             declared body still closes the connection, and correlation/trace
             state must never leak across requests on a reused connection.
+
+            The completion timer starts here (before ``parse_request`` even
+            runs) and the completion log fires here too, after
+            ``super().handle_one_request()`` returns -- i.e. after
+            ``do_GET``/``do_POST`` have fully finished, including every
+            streamed SSE frame a chat-completion-chunk response wrote, not
+            only its first byte. ``log_request`` below only *captures* the
+            status code the moment the response starts (``send_response``
+            fires it immediately, before headers or any body/stream content
+            are written): logging latency there would understate it for
+            every streaming response, reporting time-to-first-byte instead
+            of true delivery time.
             """
             self._request_body_consumed = False
+            self._debug_request_started_at = time.perf_counter()
+            self._debug_response_code: int | str | None = None
             try:
                 super().handle_one_request()
             finally:
                 self._reset_session()
+                if self._debug_response_code is not None and _LOGGER.isEnabledFor(
+                    logging.DEBUG
+                ):
+                    _LOGGER.debug(
+                        "http_response_sent method=%s path=%s status=%s latency_ms=%s",
+                        getattr(self, "command", "-"),
+                        urllib.parse.urlparse(getattr(self, "path", "")).path[:256],
+                        self._debug_response_code,
+                        round(
+                            (time.perf_counter() - self._debug_request_started_at) * 1000,
+                            2,
+                        ),
+                    )
             # A request that declared a body it never delivered (unsupported
             # method, rejected route) must not leave those bytes on a reusable
             # connection for the stdlib to reparse as the next request.
@@ -5461,7 +5488,6 @@ def build_server(
             and path are known here -- never headers (the Authorization bearer
             lives there) or body content.
             """
-            self._debug_request_started_at = time.perf_counter()
             parsed_ok = super().parse_request()
             if parsed_ok and _LOGGER.isEnabledFor(logging.DEBUG):
                 _LOGGER.debug(
@@ -5472,29 +5498,18 @@ def build_server(
             return parsed_ok
 
         def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
-            """Emit one bounded DEBUG response-completion entry instead of stdlib's stderr log.
+            """Capture the response status for the completion log; never log latency here.
 
-            ``BaseHTTPRequestHandler.send_response`` calls this on every response;
-            the default implementation writes to stderr via ``log_message``, which
-            is already suppressed above to keep service output structured. This
-            override stays silent unless DEBUG is enabled, and never logs headers,
-            query strings beyond the bare path, or response bodies.
+            ``BaseHTTPRequestHandler.send_response`` calls this the instant a
+            response *starts* (before headers or any body/stream content are
+            written), which is too early to measure delivery time -- see
+            ``handle_one_request`` above, which emits the actual bounded
+            completion log (status + full latency, streamed or not) once the
+            request is truly finished. This override intentionally does not
+            call ``log_message`` (suppressed below to keep service output
+            structured) or log anything itself.
             """
-            if not _LOGGER.isEnabledFor(logging.DEBUG):
-                return
-            started_at = getattr(self, "_debug_request_started_at", None)
-            latency_ms = (
-                round((time.perf_counter() - started_at) * 1000, 2)
-                if isinstance(started_at, float)
-                else None
-            )
-            _LOGGER.debug(
-                "http_response_sent method=%s path=%s status=%s latency_ms=%s",
-                getattr(self, "command", "-"),
-                urllib.parse.urlparse(getattr(self, "path", "")).path[:256],
-                code,
-                latency_ms,
-            )
+            self._debug_response_code = code
 
         def do_GET(self) -> None:  # noqa: N802
             """Dispatch GET requests after applying the route's authorization scope."""

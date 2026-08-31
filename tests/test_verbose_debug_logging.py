@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 import time
 import urllib.error
 from contextlib import contextmanager
@@ -47,17 +48,41 @@ from contextual_orchestrator.server import build_server  # noqa: E402
 FAKE_SECRET = "sk-live-should-never-appear-9f8e7d6c5b4a"  # noqa: S105 - fixture value, not a real key
 
 
+#: Loggers _configure_logging may mutate: the root logger's handlers/format,
+#: plus every individually audited logger it may raise to DEBUG (see
+#: __main__._VERBOSE_LOGGER_NAMES) and the one deliberately UNAUDITED sibling
+#: logger (openrouter_uptime) these tests prove stays untouched -- restoring
+#: it too costs nothing and guards against a future regression there leaking
+#: across tests the same way.
+_LOGGERS_UNDER_TEST = (
+    "",  # root
+    "contextual_orchestrator.orchestrator",
+    "contextual_orchestrator.server",
+    "contextual_orchestrator.model_discovery",
+    "contextual_orchestrator.openrouter_uptime",
+)
+
+
 @pytest.fixture
 def restore_root_logger():
-    """Snapshot and restore the root logger so ``_configure_logging`` never leaks between tests."""
-    root = logging.getLogger()
-    original_level = root.level
-    original_handlers = root.handlers[:]
+    """Snapshot and restore every logger ``_configure_logging`` may touch.
+
+    Guards against ``_configure_logging(True)`` leaking a raised level (or,
+    for root, a new handler/formatter) into unrelated tests later in the same
+    process -- root's own handlers/level, plus the ``.level`` of each
+    individually named logger it may set to DEBUG.
+    """
+    snapshots = [
+        (name, logging.getLogger(name).level, logging.getLogger(name).handlers[:])
+        for name in _LOGGERS_UNDER_TEST
+    ]
     try:
         yield
     finally:
-        root.handlers[:] = original_handlers
-        root.setLevel(original_level)
+        for name, level, handlers in snapshots:
+            logger = logging.getLogger(name)
+            logger.setLevel(level)
+            logger.handlers[:] = handlers
 
 
 def _agents() -> list[ModelAgent]:
@@ -98,21 +123,86 @@ def test_configure_logging_is_a_noop_unless_verbose(restore_root_logger) -> None
 
 
 def test_configure_logging_enables_debug_with_bounded_format(restore_root_logger) -> None:
-    """Verbose startup configures DEBUG level with a timestamp/level/logger-name format."""
+    """Verbose startup configures a timestamp/level/logger-name format and scopes DEBUG.
+
+    Root's own level is left untouched -- see ``_VERBOSE_LOGGER_NAMES``'s
+    docstring in ``__main__.py``: raising the ROOT (or a whole-package)
+    logger's level would raise every child logger's EFFECTIVE level through
+    inheritance, including loggers this change never audited. Only the
+    specific named module loggers move to DEBUG.
+    """
     root = logging.getLogger()
+    level_before = root.level
     _configure_logging(True)
-    assert root.level == logging.DEBUG
+    assert root.level == level_before
     assert root.handlers, "verbose logging must attach a handler"
     formatter = root.handlers[0].formatter
     assert formatter is not None
     assert "%(asctime)s" in formatter._fmt
     assert "%(levelname)s" in formatter._fmt
     assert "%(name)s" in formatter._fmt
+    for logger_name in (
+        "contextual_orchestrator.orchestrator",
+        "contextual_orchestrator.server",
+        "contextual_orchestrator.model_discovery",
+    ):
+        assert logging.getLogger(logger_name).level == logging.DEBUG, logger_name
+
+
+def test_configure_logging_never_raises_openrouter_uptime_or_root(restore_root_logger) -> None:
+    """SEC regression: verbose mode must not raise the root logger or an unaudited sibling.
+
+    Devin's review confirmed: setting the ROOT logger's level (the original
+    implementation) makes EVERY ``.debug()`` call site process-wide reachable,
+    including ``openrouter_uptime.py``'s pre-existing
+    ``logger.debug("...: %s", exc)`` -- which logs a raw upstream exception,
+    not a classified/bounded value. Enabling verbose mode for
+    route/conduct/provider/discovery visibility must not also newly expose
+    that unrelated, unaudited call site.
+    """
+    _configure_logging(True)
+    root = logging.getLogger()
+    assert root.level != logging.DEBUG
+    assert not logging.getLogger("contextual_orchestrator.openrouter_uptime").isEnabledFor(
+        logging.DEBUG
+    )
+
+
+def test_verbose_mode_keeps_openrouter_uptime_failures_silent(
+    monkeypatch, caplog, restore_root_logger
+) -> None:
+    """Concrete case: an OpenRouter uptime fetch failure stays silent even with verbose on.
+
+    This is the exact call site (``openrouter_uptime.py``'s
+    ``_fetch_uptime``) Devin's review named. It logs ``str(exc)`` directly at
+    DEBUG and was never rewritten to stop doing that, so verbose mode must
+    never raise ITS logger's level -- only the three audited-safe loggers.
+    """
+    import contextual_orchestrator.openrouter_uptime as openrouter_uptime_module
+    from contextual_orchestrator.model_group import ModelGroupRouter
+
+    _configure_logging(True)
+    secret_reason = f"upstream refused credential {FAKE_SECRET}"
+
+    def fake_urlopen(request, timeout=None):  # noqa: ARG001
+        raise urllib.error.URLError(secret_reason)
+
+    monkeypatch.setattr(openrouter_uptime_module.urllib.request, "urlopen", fake_urlopen)
+    collector = openrouter_uptime_module.OpenRouterUptimeCollector(
+        [], ModelGroupRouter(), ModelGroupRouter()
+    )
+
+    with caplog.at_level("DEBUG"):
+        result = collector._fetch_uptime("openrouter/some-model")
+
+    assert result is None
+    assert "Failed to fetch OpenRouter uptime" not in caplog.text
+    assert secret_reason not in caplog.text
+    assert FAKE_SECRET not in caplog.text
 
 
 def test_serve_cli_flag_enables_debug_logging(restore_root_logger) -> None:
     """``--verbose`` on the main --serve parser reaches ``_configure_logging`` early."""
-    root = logging.getLogger()
     with (
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient"),
@@ -122,7 +212,8 @@ def test_serve_cli_flag_enables_debug_logging(restore_root_logger) -> None:
     ):
         main(["--serve", "--auth-token", "token", "--verbose"])
     assert serve.called
-    assert root.level == logging.DEBUG
+    assert logging.getLogger("contextual_orchestrator.orchestrator").level == logging.DEBUG
+    assert logging.getLogger("contextual_orchestrator.server").level == logging.DEBUG
 
 
 def test_serve_cli_omits_debug_by_default(restore_root_logger) -> None:
@@ -130,6 +221,7 @@ def test_serve_cli_omits_debug_by_default(restore_root_logger) -> None:
     root = logging.getLogger()
     handlers_before = root.handlers[:]
     level_before = root.level
+    orchestrator_level_before = logging.getLogger("contextual_orchestrator.orchestrator").level
     with (
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient"),
@@ -141,12 +233,15 @@ def test_serve_cli_omits_debug_by_default(restore_root_logger) -> None:
     assert serve.called
     assert root.handlers == handlers_before
     assert root.level == level_before
+    assert (
+        logging.getLogger("contextual_orchestrator.orchestrator").level
+        == orchestrator_level_before
+    )
 
 
 def test_verbose_env_var_enables_debug_without_a_new_cli_flag(monkeypatch, restore_root_logger) -> None:
     """A deployed server can turn on DEBUG logging via env alone, no CLI edit required."""
     monkeypatch.setenv(VERBOSE_ENV_VAR, "true")
-    root = logging.getLogger()
     with (
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient"),
@@ -155,18 +250,17 @@ def test_verbose_env_var_enables_debug_without_a_new_cli_flag(monkeypatch, resto
         patch("contextual_orchestrator.__main__.serve"),
     ):
         main(["--serve", "--auth-token", "token"])
-    assert root.level == logging.DEBUG
+    assert logging.getLogger("contextual_orchestrator.orchestrator").level == logging.DEBUG
 
 
 def test_discover_models_and_register_credential_accept_verbose_flag(restore_root_logger) -> None:
     """The bootstrap subcommands expose the same flag for CLI consistency."""
-    root = logging.getLogger()
     with (
         patch("contextual_orchestrator.__main__.discover_all_models", return_value=([], [])),
         patch("contextual_orchestrator.__main__._bootstrap_discovery_sources", return_value=()),
     ):
         main(["discover-models", "--verbose"])
-    assert root.level == logging.DEBUG
+    assert logging.getLogger("contextual_orchestrator.model_discovery").level == logging.DEBUG
 
 
 # -- orchestration control-flow: dispatch / route / conduct ----------------
@@ -465,8 +559,8 @@ def test_provider_debug_logs_absent_without_debug_level(monkeypatch, caplog) -> 
 # -- HTTP request/response lifecycle (server.py) -----------------------------
 
 
-def test_http_request_lifecycle_debug_logs_report_bounded_metadata(monkeypatch, caplog) -> None:
-    """Request-start/response-sent DEBUG entries report method/path/status/latency only."""
+def test_request_received_debug_log_reports_bounded_method_and_path(monkeypatch, caplog) -> None:
+    """parse_request's DEBUG entry reports method/path only, never a query string."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
     handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
 
@@ -480,11 +574,76 @@ def test_http_request_lifecycle_debug_logs_report_bounded_metadata(monkeypatch, 
     try:
         with caplog.at_level("DEBUG"):
             assert handler.parse_request() is True
-            handler.log_request(200)
 
         assert "http_request_received method=POST path=/v1/chat/completions" in caplog.text
-        assert "http_response_sent method=POST path=/v1/chat/completions status=200 latency_ms=" in caplog.text
         assert "leaked-secret-token" not in caplog.text
+    finally:
+        server.server_close()
+
+
+def test_log_request_only_captures_status_and_never_logs_by_itself(caplog) -> None:
+    """log_request fires when send_response STARTS (before body/stream content);
+
+    it must only capture the status for handle_one_request's later completion
+    log, never emit anything on its own -- otherwise a streamed response's
+    latency would be measured at time-to-first-byte instead of full delivery.
+    """
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    try:
+        with caplog.at_level("DEBUG"):
+            handler.log_request(200)
+        assert handler._debug_response_code == 200
+        assert caplog.text == ""
+    finally:
+        server.server_close()
+
+
+def test_response_completion_log_covers_full_streamed_duration_not_first_byte(
+    monkeypatch, caplog
+) -> None:
+    """The completion log's latency covers the WHOLE response, including streamed frames.
+
+    Regression for the bug Devin's review caught: log_request fires the
+    instant send_response is called (headers only, before any SSE frame is
+    written), so logging latency there would report only time-to-first-byte
+    for a streaming chat.completion.chunk response. This simulates a
+    streaming handler that calls log_request immediately (as _begin_sse does)
+    and then keeps writing frames for a further, measurable delay before
+    do_GET/do_POST returns -- proving the logged latency covers that full
+    delay, not just the moment headers went out.
+    """
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    stream_delay_seconds = 0.05
+
+    def fake_super_handle_one_request(self) -> None:
+        self.command = "POST"
+        self.path = "/v1/chat/completions"
+        # Simulate _begin_sse(): headers/status sent immediately...
+        self.log_request(200)
+        # ...then simulate writing further SSE frames over real wall-clock
+        # time, exactly as a long chat.completion.chunk stream would.
+        time.sleep(stream_delay_seconds)
+
+    monkeypatch.setattr(
+        BaseHTTPRequestHandler, "handle_one_request", fake_super_handle_one_request
+    )
+    monkeypatch.setattr(handler, "_reset_session", lambda: None)
+
+    try:
+        with caplog.at_level("DEBUG"):
+            handler.handle_one_request()
+
+        assert caplog.text.count("http_response_sent") == 1
+        match = re.search(r"latency_ms=(\d+(?:\.\d+)?)", caplog.text)
+        assert match is not None, caplog.text
+        logged_latency_ms = float(match.group(1))
+        # If latency were measured at log_request's call (time-to-first-byte)
+        # instead of after the full stream, this would be ~0, not >= the
+        # simulated stream delay.
+        assert logged_latency_ms >= stream_delay_seconds * 1000
+        assert "http_response_sent method=POST path=/v1/chat/completions status=200" in caplog.text
     finally:
         server.server_close()
 
@@ -494,16 +653,18 @@ def test_http_request_lifecycle_debug_logs_absent_by_default(monkeypatch, caplog
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
     handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
 
-    def fake_super_parse_request(self) -> bool:
+    def fake_super_handle_one_request(self) -> None:
         self.command = "GET"
         self.path = "/healthz"
-        return True
+        self.log_request(200)
 
-    monkeypatch.setattr(BaseHTTPRequestHandler, "parse_request", fake_super_parse_request)
+    monkeypatch.setattr(
+        BaseHTTPRequestHandler, "handle_one_request", fake_super_handle_one_request
+    )
+    monkeypatch.setattr(handler, "_reset_session", lambda: None)
 
     try:
-        assert handler.parse_request() is True
-        handler.log_request(200)
+        handler.handle_one_request()
         assert "http_request_received" not in caplog.text
         assert "http_response_sent" not in caplog.text
     finally:

@@ -5400,6 +5400,16 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @staticmethod
+    def _usage_total_tokens(usage: dict[str, Any] | None) -> int | None:
+        """Provider-reported total token count, or None when absent/invalid."""
+        if not isinstance(usage, dict):
+            return None
+        tokens = usage.get("total_tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            return None
+        return tokens
+
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -6740,11 +6750,13 @@ class TaskOrchestrator:
                 # are never inferred from text length or chunk counts.
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 output_tokens = self._usage_completion_tokens(usage)
+                total_tokens = self._usage_total_tokens(usage)
                 if agent.group_name or allowed_agent_ids is not None:
                     self._group_router.observe_success(
                         agent.id,
                         time.perf_counter() - attempt_start,
                         output_tokens=output_tokens,
+                        total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
                 _LOGGER.debug(
