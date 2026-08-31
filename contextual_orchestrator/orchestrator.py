@@ -3354,6 +3354,7 @@ class TaskOrchestrator:
             SqliteRoutingObservationStore(
                 state_db,
                 routing_observation_window_seconds,
+                start_heartbeat=False,
             )
             if state_db is not None and routing_observation_window_seconds is not None
             else None
@@ -3472,6 +3473,8 @@ class TaskOrchestrator:
         self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
+        if self._routing_observation_store is not None:
+            self._routing_observation_store.start_heartbeat()
 
     def close(self) -> None:
         """Release optional durable resources owned by this orchestrator."""

@@ -855,6 +855,42 @@ def test_idle_live_long_window_heartbeat_preserves_replay_evidence(
         short_window.close()
 
 
+def test_heartbeat_retries_after_connection_failure(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "routing.sqlite"
+    clock = _Clock(100.0)
+    monkeypatch.setattr(
+        SqliteRoutingObservationStore, "_HEARTBEAT_INTERVAL_MAX_SECONDS", 0.01
+    )
+    store = SqliteRoutingObservationStore(path, 60, clock=clock, start_heartbeat=False)
+    connect = store._connect
+    attempts = 0
+
+    def flaky_connect():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise sqlite3.OperationalError("temporary connection failure")
+        return connect()
+
+    store._connect = flaky_connect
+    clock.value = 200.0
+    store.start_heartbeat()
+    try:
+        deadline = time.monotonic() + 1.0
+        while attempts < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert attempts >= 2
+        with sqlite3.connect(path) as connection:
+            lease = connection.execute(
+                "SELECT lease_expires_at FROM routing_observation_registrations "
+                "WHERE registration_id = ?",
+                (store._registration_id,),
+            ).fetchone()
+        assert lease is not None and lease[0] > clock.value
+    finally:
+        store.close()
+
+
 def test_store_prunes_only_rows_older_than_database_retention_window(tmp_path) -> None:
     path = tmp_path / "routing.sqlite"
     clock = _Clock(50.0)
@@ -956,6 +992,29 @@ def test_task_orchestrator_requires_state_db_for_durable_observations() -> None:
             [ModelAgent("member_a", "mock-model")],
             routing_observation_window_seconds=60,
         )
+
+
+def test_failed_orchestrator_initialization_does_not_start_retention_heartbeat(
+    tmp_path, monkeypatch
+) -> None:
+    started: list[SqliteRoutingObservationStore] = []
+    original = SqliteRoutingObservationStore.start_heartbeat
+
+    def record_start(store):
+        started.append(store)
+        original(store)
+
+    monkeypatch.setattr(SqliteRoutingObservationStore, "start_heartbeat", record_start)
+
+    with pytest.raises(ValueError, match="tool_retry_attempts"):
+        TaskOrchestrator(
+            [ModelAgent("member_a", "mock-model")],
+            state_db=str(tmp_path / "state.sqlite"),
+            routing_observation_window_seconds=60,
+            tool_retry_attempts=-1,
+        )
+
+    assert started == []
 
 
 def test_cli_requires_state_db_for_durable_observations(capsys) -> None:

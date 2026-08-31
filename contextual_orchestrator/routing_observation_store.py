@@ -107,6 +107,7 @@ class SqliteRoutingObservationStore:
         window_seconds: int,
         *,
         clock: Callable[[], float] = time.time,
+        start_heartbeat: bool = True,
     ) -> None:
         if not isinstance(path, (str, os.PathLike)) or not str(path):
             raise TypeError("path must be a non-empty filesystem path")
@@ -142,6 +143,14 @@ class SqliteRoutingObservationStore:
                 connection.commit()
             finally:
                 connection.close()
+        self._heartbeat_thread: threading.Thread | None = None
+        if start_heartbeat:
+            self.start_heartbeat()
+
+    def start_heartbeat(self) -> None:
+        """Start lease renewal after the owning service finishes initialization."""
+        if self._heartbeat_thread is not None:
+            return
         self._heartbeat_thread = threading.Thread(
             target=self._heartbeat_registration,
             name=f"routing-observation-heartbeat-{self._registration_id[:8]}",
@@ -239,15 +248,18 @@ class SqliteRoutingObservationStore:
             with self._lock:
                 if self._closed:
                     return
-                connection = self._connect()
+                connection = None
                 try:
+                    connection = self._connect()
                     connection.execute("BEGIN IMMEDIATE")
                     self._refresh_registration(connection)
                     connection.commit()
                 except Exception:
-                    connection.rollback()
+                    if connection is not None:
+                        connection.rollback()
                 finally:
-                    connection.close()
+                    if connection is not None:
+                        connection.close()
 
     def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
         """Return the physical prune boundary from the shared database-wide window."""
@@ -426,7 +438,8 @@ class SqliteRoutingObservationStore:
     def close(self) -> None:
         """Release this store's retention-window registration."""
         self._heartbeat_stop.set()
-        self._heartbeat_thread.join()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join()
         with self._lock:
             if self._closed:
                 return
