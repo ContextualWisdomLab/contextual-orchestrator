@@ -5421,15 +5421,20 @@ class TaskOrchestrator:
                 prompt_context=prompt_context,
                 deadline=deadline,
             )
+            # Recorded before the deadline check for the same reason as the
+            # worker row above: _realtime_route_judge already completed (and
+            # already recorded its own quality-ledger observation) by this
+            # point, so its verdict belongs in the trace even if the deadline
+            # then prevents this candidate from being accepted or failed over.
+            row["realtime_judge"] = {
+                "accepted": verification["accepted"],
+                "reason": verification["reason"],
+            }
             if deadline is not None and time.monotonic() >= deadline:
                 raise RouteDeadlineExceededError(
                     "request deadline exceeded during real-time judging",
                     trace=trace_rows,
                 )
-            row["realtime_judge"] = {
-                "accepted": verification["accepted"],
-                "reason": verification["reason"],
-            }
             if verification["accepted"]:
                 break
             # Rejected answers already recorded a quality-ledger failure in

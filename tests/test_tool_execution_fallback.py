@@ -1295,5 +1295,50 @@ def test_route_once_deadline_exceeded_error_preserves_completed_worker_trace(
     assert excinfo.value.trace[0]["output"] == "completed just past the deadline"
 
 
+def test_route_once_deadline_exceeded_error_preserves_judge_verdict_in_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed judge verdict is not lost when the deadline expires right after it.
+
+    Regression test (Devin review, contextual-orchestrator#974, follow-up on
+    63a77fe8): route_once raised immediately after _realtime_route_judge
+    returned once the deadline had passed, without ever setting
+    row["realtime_judge"] -- a verdict that already completed (and already
+    recorded its own quality-ledger observation inside
+    _realtime_route_judge) was missing from the trace
+    RouteDeadlineExceededError.trace exposes to the caller.
+    """
+    client = _ScriptedToolClient({"primary_worker": ["unused"]})
+    orchestrator = _orchestrator(client)
+
+    def fast_invoke(*args: object, **kwargs: object) -> tuple[str, str, None]:
+        del args, kwargs
+        return "worker answer", "primary_worker", None
+
+    def slow_judge(*args: object, **kwargs: object) -> dict[str, object]:
+        del args, kwargs
+        time.sleep(0.05)
+        return {
+            "accepted": True,
+            "reason": "judged",
+            "verifier_output": "worker answer",
+            "judge": "model",
+        }
+
+    monkeypatch.setattr(orchestrator, "_invoke", fast_invoke)
+    monkeypatch.setattr(orchestrator, "_realtime_route_judge", slow_judge)
+
+    with pytest.raises(
+        RouteDeadlineExceededError, match="deadline exceeded during real-time judging"
+    ) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.02,
+        )
+
+    assert len(excinfo.value.trace) == 1
+    assert excinfo.value.trace[0]["realtime_judge"] == {"accepted": True, "reason": "judged"}
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
