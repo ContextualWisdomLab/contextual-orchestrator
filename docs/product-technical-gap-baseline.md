@@ -1,5 +1,169 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
+
+`provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
+inventory mismatch: ['BYTEZ_API_KEY']`. Traced to `bootstrap_provider_catalog_runtime`
+(`contextual_orchestrator/provider_catalog_bootstrap.py`): it registers all provider credentials up
+front, and per-provider discovery failures (an entry in `errors`, or zero live models matching that
+provider/credential pair) roll the credential back to its previous KV value via
+`_restore_provider_credentials_atomically` — for a run-scoped ephemeral KV that previous value is
+`None`, so the credential is deleted again. `registered_credentials` on the final report is then
+filtered to `durable_registered_credentials = tuple(name for name in registered if
+get_credential(name) is not None)`, correctly excluding the rolled-back credential. This is exactly
+the graceful degradation the function's own docstring describes ("retains last-known-good models for
+failed providers") — but the workflow's embedded verification script asserted
+`set(report['registered_credentials']) == set(PROVIDER_CREDENTIAL_NAMES)` unconditionally, with no
+tolerance for a single isolated provider outage, turning every occurrence into a hard CI failure.
+
+**Not a one-off flake.** `list_workflow_runs` for this workflow (runs #4-#49, `2026-08-25T09:01:27Z`
+through today's #49 at `2026-08-30T12:55:16Z`) shows 44 `failure` / 1 `cancelled` / 1 `skipped` — zero
+successes since the schedule started, across both the 43 `schedule`-triggered runs (42 failure, 1
+cancelled) and the 3 manual `workflow_dispatch` runs (2 failure, 1 skipped). The only `success` runs
+(#1-3) were `pull_request`-triggered before the workflow went live on `main`. This had gone unnoticed
+for 5 days of continuous near-hourly failures — itself evidence that a hard-fail-on-any-provider-hiccup
+design was not actually serving as a useful signal.
+
+**Bytez code path checked for a false-positive bug** (`contextual_orchestrator/model_discovery.py`
+`PROVIDER_MODEL_SOURCES`/`_parse_bytez`/`discover_provider_models`): URL
+(`https://api.bytez.com/models/v2/list/models?task=chat`), `Authorization: Key <token>` header, and
+response parsing all look correct and match this repo's stdlib `urllib` discovery convention used by
+every other provider; nothing there would unconditionally reject every response. No `BYTEZ_API_KEY`
+is available in this sandbox to replay the exact authenticated call, but an unauthenticated live probe
+of the same endpoint returned a fast, well-formed `401 {"error":"Unauthorized"}` (not a 500), showing
+the endpoint itself is reachable and enforcing auth normally right now. Independent corroborating
+evidence from earlier the same day, a completely different code path (`ContextualWisdomLab/.github`'s
+`noema-review` sidecar, which vendors this repo's discovery code) logged
+`provider_discovery_failed provider=bytez code=http_status_500` (see the entry below). A real
+`http_status_500` from Bytez's own backend, reproduced independently, is a stronger signal than a
+one-off flake — but five straight days with zero successes is also too long/consistent to be an
+ordinary transient outage; it's most consistent with a persistent problem specific to Bytez's handling
+of this account/key/query shape (or, less likely, a quietly invalid `BYTEZ_API_KEY` secret returning
+500 instead of the clean 401 an actually-wrong key gets from the same endpoint). Not resolvable from
+this repo alone — needs an operator check of the Bytez account/dashboard for this credential.
+
+**Fix applied, PR [#928](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/928)**
+(`contextual_orchestrator/provider_catalog_bootstrap.py`,
+`.github/workflows/provider-catalog-sync.yml`): a new
+`evaluate_provider_credential_inventory()` — real, unit-tested production code, not YAML-inline
+branching — judges a credential missing from `registered_credentials` and still hard-fails every case
+that must not be silently swallowed:
+
+- the secret was never supplied to the job at all (`environ` empty — a real configuration gap);
+- the report gives no `providers_with_errors` evidence tying the rollback to a discovery failure (an
+  unexplained rollback, which could hide a real bug elsewhere);
+- **the rollback isn't classified as a genuinely retryable, transient condition** —
+  `ProviderDiscoveryError.error_code` (already computed by
+  `model_discovery._provider_discovery_error_code`, just previously discarded before reaching the
+  report) is now bucketed into a small report-safe classification
+  (`provider_error_classifications`), and `evaluate_provider_credential_inventory` default-denies:
+  only `transient_failure` is tolerated, everything else hard-fails. `transient_failure` is
+  deliberately narrow — a rate limit (`http_status_429`), a request-timeout status
+  (`http_status_408`), any `http_status_5xx`, or a below-HTTP-layer `timeout`/`transport_error` — the
+  set standard retry semantics call retryable. `authentication_failure` (`http_status_401`/`403`), a
+  persistent non-auth 4xx (`http_status_400`/`404`/…), an unparseable response (`invalid_response`), a
+  successful-but-empty listing, and anything unrecognized all collapse to `unknown_failure` and
+  hard-fail. An invalid/expired credential or a permanently broken integration (wrong endpoint,
+  malformed request shape, a provider that moved/retired the API) must never be excused as a
+  transient blip: left alone, either would let that provider stay silently disabled forever, no
+  alert, every run;
+- **more than one provider is affected at once** — bounded at exactly one provider
+  (`max_tolerated_missing_providers=1`) so a broader outage (several providers degraded
+  simultaneously) still fails instead of reporting success while serving a stale catalog. The bound
+  counts every provider whose discovery failed this run — both providers that actually lost their
+  registered credential (`registered_credentials` no longer has the name) and providers whose
+  credential was restored to an old-but-still-valid durable value and therefore never dropped out of
+  `registered_credentials` at all (see the third review round below). A provider that merely logged
+  any error with no corresponding rollback at all still does not count against the bound — the bound
+  is about discovery failures with rollback evidence, not raw error-log noise.
+
+Only when a single provider's credential is missing, the secret was supplied, and its classification is
+exactly `transient_failure` does the job print a `::warning::` (with `providers_with_errors`,
+`catalog_refresh_failure_count`, `restored_credentials`) and succeed — matching what the bootstrap
+design already promises: the pool keeps serving from last-known-good/other-provider models. The
+existing `catalog_model_count`/`eligible_model_count`/`selected_agent_ids` checks are unchanged and
+still fail the job if the pool itself is unhealthy.
+
+**Four review rounds, not one.** The first cut only checked whether the missing credential's provider
+appeared anywhere in `providers_with_errors`, with no auth/transient distinction and no bound on
+simultaneous providers. Devin and CodeRabbit's first pass caught both gaps (fixed above). Devin's
+*second* pass on that fix caught a narrower version of the same underlying problem: the original
+transient bucket was `_TRANSIENT_FAILURE_ERROR_CODES | {any http_status_*}`, so a *persistent* non-auth
+4xx (400, 404, …) or a successful-but-empty listing — either plausibly a permanently broken
+integration, not a blip — was still being tolerated forever. Narrowed to the retryable-only set above,
+plus the default-deny reframing so a future new classification value is hard-fail by default rather
+than silently allowed. Devin's research-grounding finding on this entry was declined: this is a CI
+reliability bugfix (isolating transient vs. permanent provider failures), not a novel algorithm or
+research claim, and no other CI-only fix in this repo's history (`abb9aaa6`, `b3278df7`, `c328c1e8`,
+`1bbda718`, `8abc4b45`) attaches a paper either.
+
+Devin's *third* pass ("Durable rollback bypasses failure verdict") found the deepest gap of the three,
+in the still-standing `if not missing: return ... True ...` early return itself. `missing` is computed
+as `expected_credential_names - registered_credentials`, and `registered_credentials` on the report is
+filtered to names where `get_credential(name) is not None` *after* rollback has already run. On the
+run-scoped/first-registration KV every test above exercises, a failed provider's rollback restores
+`previous_credentials[name] = None` (nothing was registered before), so the name both leaves
+`registered_credentials` and enters `restored_credentials` — the two were accidentally redundant in
+every scenario the first two rounds tested. But on a KV that already durably held a still-valid value
+for that name from an earlier successful run, rollback restores *that* value instead of `None`: the
+credential never leaves `registered_credentials` at all, `missing` comes back empty, and the function
+returned healthy at the very first line — without ever inspecting `provider_error_classifications`.
+After a scheduled sync's first successful run against the durable PostgreSQL KV, this made the entire
+auth-failure/persistent-4xx/multi-provider hard-fail logic built across the first two rounds silently
+unreachable: a revoked or rotated credential, or several providers failing at once, would both report
+`ok=True` forever. Fixed by evaluating the union of `missing` and `restored_credentials` (bridged
+credential-name→provider-name through the same `provider_by_credential` map the `missing` path already
+used, joined on `expected_credential_names` for defense against untrusted report input) through the
+identical unconfigured/unexplained/classification/bound checks, rather than `missing` alone — a name
+that shows up in `restored_credentials` for a reason the report can't tie to `providers_with_errors`
+still hard-fails as an unexplained rollback, exactly like a fully-missing name would.
+
+> Superseded on 2026-08-31: this historical provider-family conclusion is no longer the product contract.
+> Every credential account is discovered and judged independently; only explicit `model_group`
+> membership establishes logical model equivalence or shared routing evidence (ADR 0032).
+
+Devin's *fourth* pass ("One NVIDIA outage fails sync") caught a false-positive introduced by fixing the
+third-round gap: `nvidia_nim` and `nvidia_nim_sub` are two separate `provider_name` values but one
+upstream outage domain — two KV credential names (`NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB`)
+registered for load balancing against the same NVIDIA endpoint, per `PROVIDER_MODEL_SOURCES`'s own
+comment and `model_discovery._provider_family` (already used by `select_provider_diverse_models` for
+exactly this collapsing). The `affected_providers` bound counted raw `provider_name`, so a single
+NVIDIA-side blip that happened to fail both keys at once counted as *two* providers degraded and
+hard-failed — exactly the isolated-outage case the tolerance exists for, misread as a broad one.
+Fixed by routing `affected_providers` through `_provider_family` before comparing against
+`max_tolerated_missing_providers`; the per-credential unconfigured/unexplained/classification checks
+are untouched (they still key off the real `provider_name`, since `providers_with_errors`/
+`provider_error_classifications` are recorded per source, not per family).
+
+Regression coverage in `tests/test_provider_catalog_bootstrap.py` (a genuinely retryable status —
+408/429/5xx — tolerated as a warning; an HTTP 401/403 authentication failure still hard-failing; a
+persistent non-auth 4xx and an unparseable response still hard-failing; two simultaneous provider
+failures still hard-failing; for the third round, an authentication failure and two simultaneous
+failures each reproduced end to end with the credential pre-registered so rollback restores a
+durable, non-`None` prior value — `test_durable_rollback_with_auth_failure_still_hard_fails`,
+`test_durable_rollback_with_two_simultaneous_failures_still_hard_fails` — plus
+`test_durable_rollback_with_single_transient_failure_is_still_tolerated` confirming the fix doesn't
+over-correct into hard-failing a legitimately tolerable single transient outage; and, for the fourth
+round, both NVIDIA keys failing together still tolerated as one family
+(`test_nvidia_primary_and_sub_outage_together_is_one_provider_family`) contrasted with that same
+NVIDIA-family outage plus a genuinely distinct provider still hard-failing
+(`test_nvidia_family_outage_plus_a_distinct_provider_still_hard_fails`)) and
+`tests/test_provider_catalog_bootstrap_boundaries.py` (the verdict function's own edge cases: fully
+healthy, unconfigured secret, unexplained rollback, non-string error code, and three third-round unit
+cases exercising the union directly against a report where `registered_credentials` is already
+complete —
+`test_credential_inventory_verdict_evaluates_restored_names_even_when_registered_is_complete`,
+`test_credential_inventory_verdict_hard_fails_on_unexplained_restored_credential`,
+`test_credential_inventory_verdict_tolerates_restored_transient_failure_when_registered_is_complete`)
+exercises all of it end to end through `bootstrap_provider_catalog_runtime`, not just the workflow's
+string content. `tests/test_provider_bootstrap_secret_normalization.py` now asserts the workflow
+delegates to this tested function instead of pinning inline branching logic. 100% statement and
+docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (79 tests across
+`tests/test_provider_bootstrap*.py`/`tests/test_provider_catalog_bootstrap*.py`); full
+`python -m pytest tests -q` (excluding `tests/test_psychometric_routing.py`, which fails to collect
+in this sandbox for lack of `numpy` — an unrelated pre-existing environment gap) completed clean at
+`2781 passed, 1 skipped in 720.75s`.
+
 ## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
 
 Checked whether the `.github` `opencode-review` required check's own verdict-matching logic (the
@@ -2251,3 +2415,153 @@ REMAINING GAP (follow-up loop): re-fit these priors against fast-mlsirm/
 TEPP calibrated quality latents before enabling benchmark priors on any
 revenue-serving route; until then their influence is capped at the same
 budget an unmeasured member already spends.
+
+### GAP RESOLVED (partial) — 2026-08-30 20:57 KST: `stream_options.include_usage` + `tools` gateway rejection
+
+**Symptom**: every Strix scan org-wide against `orchestrator/free` failed closed with
+`400 invalid_stream_options` (evidence: `.github` run `33307905354`, job
+`99247611184`, step 23). Strix's `openai-agents` SDK always sends
+`stream_options.include_usage=true` alongside `tools` on every streamed turn
+(`strix/core/inputs.py::make_model_settings`, no supported opt-out that keeps
+streaming), and `server.py`'s tools/response_format passthrough branch rejected
+that exact combination unconditionally, before any upstream call.
+
+**Root cause was gateway-side, not a real upstream constraint.** No provider
+(OpenAI, NVIDIA NIM, OpenRouter, Bytez) rejects this combination — this
+codebase has never sent `tools` + `stream=true` to a real provider in the
+first place; `proxy_completion()` always forces `upstream["stream"] = False`
+for tool-calling requests. `_chat_response_sse_chunks` (the SSE framing
+function this passthrough already calls) already had full, independently
+tested support for both tool_calls delta framing and honest usage-chunk
+emission (`usage_source: "reported"` vs `"estimated"`) — the only thing
+missing was reachability.
+
+**Fix**: [PR #925](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/925)
+narrowed the rejection from *all* `tools`/`response_format` structured
+passthrough to `response_format`-only (conduct mode, no tools).
+
+**Why not remove the rejection entirely** (a competing, independently-authored
+fix, PR #924, took that broader approach and was closed in favor of #925):
+traced `cost_router.py:456-507` — a conduct-mode multi-step workflow's
+`result["usage"]` dict is built by summing per-step counts and is *always*
+populated, but carries no `usage_source`/`measurement_status` tag of its own;
+when a step's provider response omits usage, the sum silently includes a
+local token-count estimate (the `measurement_status="estimated"` case, which
+only survives on the sibling `cost` key, never on `usage` itself).
+`_chat_response_sse_chunks` labels any populated `usage` dict
+`"usage_source": "reported"` unconditionally — it does not check
+`payload["cost"]["measurement_status"]`, unlike the sibling
+`orchestrator.py::chat_completion_chunks` (used by the *other* conduct-mode
+streaming path), which already correctly gates usage emission on
+`cost.get("measurement_status") == "measured"`. Removing the rejection for
+`response_format`-only would have let the gateway present a gateway-side
+token estimate as `"reported"` for a live SSE consumer — precisely the kind
+of fabricated-precision the project's Honest metrics convention exists to
+prevent. `tools` passthrough doesn't have this exposure (always one
+non-streaming upstream call; `payload["usage"]` there is always the raw
+provider JSON's own field), which is also exactly the shape Strix needs.
+**Follow-up (not yet scheduled)**: teach `_chat_response_sse_chunks` the same
+`measurement_status == "measured"` gate `chat_completion_chunks` already has,
+so conduct-mode streamed usage can be exposed honestly too, instead of kept
+closed.
+
+**Duplicate-work consolidation** (concurrent autonomous sessions independently
+converged on the same bug): closed contextual-orchestrator#924 (superseded by
+#925, evidence above); closed `.github`#1445 (duplicate of #1442, orphaned
+direct-NVIDIA-NIM resolver removal — unrelated cleanup, same root discovery
+day); closed `.github`#1447 (duplicate of #1448, both temporary
+`LLM_DISABLE_STREAMING` mitigations for Strix — #1448 is correctly scoped to
+only the contextual-orchestrator loopback base URL, #1447 was unconditional
+and would have also disabled streaming on Strix's other provider fallbacks).
+`.github`#1448 is held open, unmerged, as a fallback only: the correct fix is
+root-cause (#925, in normal — not bypassed — review, since it does not touch
+`.github`'s trusted scripts), and a non-streaming workaround is technical debt
+that would need a follow-up revert. Will bypass-merge #1448 only if #925's
+review stalls well beyond this org's accepted multi-hour LLM-review latency.
+
+**Follow-up (2026-08-30, same head): Devin review finding on #925, CONFIRMED
+and fixed.** The `tools`-passthrough narrowing above assumed the one
+upstream call "always" carries provider-reported usage. Traced
+`ModelClient.proxy_send`/`_proxy_send` (`orchestrator.py`): it returns a
+provider's raw JSON verbatim and neither requires nor synthesizes a `usage`
+key, so a real provider omitting it was untested and unproven safe. Added
+`tests/test_stream_options_null_flags_noop_http_honesty.py::test_http_chat_tools_streams_estimated_usage_when_provider_omits_it`,
+a real (loopback `local://`) HTTP provider — `mock://` agents cannot exercise
+this, since `ModelClient._mock_raw` always injects a zero-valued `usage`
+dict — whose tool-call response omits `usage` entirely; confirmed the
+existing `_chat_response_sse_chunks` fallback (already used for the
+non-tools case) correctly labels the resulting chunk `usage_source:
+"estimated"`, never `"reported"` (RED-before-GREEN: flipping that one label
+in `server.py` makes this new test fail). No behavior change was needed —
+this closes the coverage gap and corrects the PR's own comment/README/
+CHANGELOG language, which had overclaimed the guarantee.
+
+**TRACKED FOLLOW-UP (2026-08-30, action required once this PR merges):**
+a concurrent session merged `.github#1448`
+(`LLM_DISABLE_STREAMING=true` for Strix against the contextual-orchestrator
+loopback) at 12:15 UTC, before this PR merged. Its own justification is a
+*separate*, real deadlock, not a disagreement with the analysis above:
+`pr_review_merge_scheduler.py::inspect_pr` requires completed Strix
+evidence on a PR's head before it will ever dispatch OpenCode review, so a
+PR fixing Strix's only failure mode could never itself pass the review
+gated behind Strix succeeding — a genuine self-referential deadlock,
+independent of the `stream_options`/`tools` root cause this PR fixes.
+Confirmed with the user this is explicitly a temporary workaround, not the
+resolution: it trades away Strix's real-time SSE streaming to route around
+the gateway bug rather than fixing it. **Once this PR (#925) merges**,
+Strix's `tools` + `stream_options.include_usage=true` requests will
+succeed on their own against `orchestrator/free`, and the
+`LLM_DISABLE_STREAMING` opt-in in `scripts/ci/strix_quick_gate.sh`
+(`.github`) becomes unnecessary technical debt — file a follow-up PR in
+`.github` to revert it and restore real SSE streaming for Strix scans.
+Do not let this workaround become permanent by omission.
+
+**CONFIRMED (2026-08-30, ~21:52 KST): `.github#1451`'s narrower-scope claim
+proven correct, with a real posted verdict as evidence.** Earlier today
+`.github#1451`'s own PR body/comments overclaimed "blocking every PR
+org-wide" for the `pingora_edge_policy.py:345` coverage gap; corrected in
+that PR's comments once verified. The precise mechanism:
+`opencode-review-dispatch.yml`'s `coverage-evidence` job measures the
+*target PR's own repository's* coverage (it clones and tests whichever
+repo the reviewed PR lives in) — for a `.github`-hosted PR that happens to
+equal `.github`'s own `scripts/ci`, so the fix only unblocks `.github`
+PRs specifically. Confirmed by contrast: `fast-mlsirm#1473`'s post-merge
+dispatch (run `33311678659`) still failed `coverage-evidence`, but for a
+completely unrelated reason native to that repo (a Rust extension import
+error, `cannot import name '_core' from partially initialized module
+'fast_mlsirm'`, plus 69.8% docstring coverage) — proving the fix's scope
+boundary directly rather than assuming it.
+
+**End-to-end proof the `.github` scope now works**: `.github#1452`'s
+dispatch (run `33312352417`) is the first all the way through today:
+`coverage-evidence` succeeded, `Run OpenCode PR Review model pool`
+succeeded, and `opencode-agent[bot]` posted a real, substantive,
+evidence-based review on the current head — `CHANGES_REQUESTED` citing
+that PR's own unrelated failing checks (`osv-scan`, cancelled `Strix`),
+plus a genuine Changed-File Evidence Map covering the actual diff. Not a
+rubber stamp, not a coverage-gate skip: the review mechanism itself is
+now demonstrably working for `.github`-hosted PRs. Minor unresolved
+detail on that same run: "Publish repository_dispatch OpenCode status"
+failed after the verdict was already correctly published and enforced —
+a downstream status-publish step, not the review pipeline itself; not yet
+investigated.
+
+**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+`noema-review` run, flagged by the user as "still not working" after the
+above fixes landed): `TaskOrchestrator._invoke()`
+(`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
+call/retry/failover loop) has no overall wall-clock deadline. Each
+attempt is capped at `ModelClient.timeout = 90s`, but a hanging (not
+erroring) candidate plus one same-agent retry can chain past 90s +
+backoff + 90s = 180s+ before any response — well past
+`contextual_orchestrator_review_sidecar.sh`'s 120s outer
+`curl --max-time` bound on its own gateway-preflight self-check, so the
+sidecar sees exactly "0 bytes received after 120002ms" even though
+nothing is truly hung, just still working through an unbounded internal
+retry chain. Reproduced once (`.github` run `33312258611`, job
+`99259327051`); org-wide evidence since the pingora/Strix fixes landed
+shows this is now occasional, not the dominant failure mode (most
+`.github`-hosted PRs' `noema-review`/dispatch runs succeed). Correct fix
+is an overall deadline on `_invoke`'s candidate/retry loop, not another
+timeout increase on the sidecar's client side — deferred rather than
+rushed into this heavily-tested core file without dedicated validation.
