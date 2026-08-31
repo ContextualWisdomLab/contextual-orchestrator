@@ -1392,6 +1392,13 @@ class ModelClient:
         vector so unit tests can exercise cosine ordering without network
         access; this fixture is never used against production traffic.
         """
+        vectors, _prompt_tokens = self.embed_with_usage(agent, texts)
+        return vectors
+
+    def embed_with_usage(
+        self, agent: ModelAgent, texts: list[str]
+    ) -> tuple[list[list[float]], int | None]:
+        """Return embeddings plus an authoritative provider input-token count when supplied."""
         if not isinstance(texts, list) or not texts:
             raise ValueError("texts must be a non-empty list of strings")
         for item in texts:
@@ -1404,7 +1411,7 @@ class ModelClient:
                 raw = [byte for byte in digest[: self.MOCK_EMBEDDING_DIMENSION]]
                 centered = [(value / 255.0) * 2.0 - 1.0 for value in raw]
                 vectors.append(centered)
-            return vectors
+            return vectors, None
         destination = self._validate_provider(agent)  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
         response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
@@ -1423,7 +1430,13 @@ class ModelClient:
                     f"provider {agent.id} returned a non-numeric embedding vector"
                 )
             vectors.append([float(value) for value in vector])  # pragma: no cover
-        return vectors  # pragma: no cover
+        usage = response.get("usage") if isinstance(response, dict) else None  # pragma: no cover
+        prompt_tokens = None  # pragma: no cover
+        if isinstance(usage, dict):  # pragma: no cover
+            raw_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+            if type(raw_tokens) is int and raw_tokens >= 0:
+                prompt_tokens = raw_tokens
+        return vectors, prompt_tokens  # pragma: no cover
 
     def chat(
         self,

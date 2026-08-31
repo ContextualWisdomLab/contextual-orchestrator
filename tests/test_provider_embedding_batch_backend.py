@@ -3,12 +3,23 @@
 import threading
 import time
 
+import pytest
+
 from contextual_orchestrator.batch_routing import (
     EmbeddingBatchRequest,
     ProviderEmbeddingBatchBackend,
 )
-from contextual_orchestrator import CostRoutingCoordinator, ModelAgent, TaskOrchestrator
+from contextual_orchestrator import (
+    CostRoutingCoordinator,
+    InMemoryConfigStore,
+    ModelAgent,
+    TaskOrchestrator,
+)
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.token_counting import (
+    TokenCountUnavailable,
+    UnavailableEmbeddingTokenCounter,
+)
 
 
 class _SyntheticProviderClient(ModelClient):
@@ -20,11 +31,88 @@ class _SyntheticProviderClient(ModelClient):
         self.embedding_calls.append(list(texts))
         return [[float(len(text))] for text in texts]
 
+    def embed_with_usage(self, agent, texts):
+        return self.embed(agent, texts), sum(len(text.encode("utf-8")) for text in texts)
+
 
 class _SyntheticExactCounter:
     def count_text(self, text, model):
         """Return a deterministic synthetic authoritative count."""
         return len(text.split())
+
+
+def test_unknown_tokenizer_uses_authoritative_provider_usage() -> None:
+    """A byte-safe request completes only after the provider supplies exact usage."""
+    agent = ModelAgent(
+        "provider_embedding", "provider-embedding-model", "https://provider.synthetic.invalid/v1", tags=("embedding",)
+    )
+    orchestrator = TaskOrchestrator([agent], client=_SyntheticProviderClient())
+    coordinator = CostRoutingCoordinator(
+        orchestrator, embedding_token_counter=UnavailableEmbeddingTokenCounter()
+    )
+
+    document = coordinator.complete_embeddings_batch(["synthetic input"])
+
+    assert document["status"] == "completed"
+    assert document["total_tokens"] == len("synthetic input".encode("utf-8"))
+
+
+def test_unknown_tokenizer_rejects_missing_provider_usage() -> None:
+    """Vectors without authoritative provider usage never become a successful job."""
+    agent = ModelAgent(
+        "provider_embedding", "provider-embedding-model", "https://provider.synthetic.invalid/v1", tags=("embedding",)
+    )
+    client = _SyntheticProviderClient()
+    client.embed_with_usage = lambda agent, texts: (client.embed(agent, texts), None)
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client),
+        embedding_token_counter=UnavailableEmbeddingTokenCounter(),
+    )
+
+    job = coordinator.submit_embeddings_batch(["synthetic input"])
+    deadline = time.time() + 2
+    while coordinator.embedding_batch_backend.poll(job)["status"] not in {"completed", "failed"} and time.time() < deadline:
+        time.sleep(0.01)
+
+    assert coordinator.embedding_batch_backend.poll(job)["status"] == "failed"
+
+
+def test_unknown_tokenizer_fails_before_provider_when_byte_bound_exceeds_budget() -> None:
+    """An unprovable preflight token budget never reaches provider I/O."""
+    agent = ModelAgent(
+        "provider_embedding", "provider-embedding-model", "https://provider.synthetic.invalid/v1", tags=("embedding",)
+    )
+    client = _SyntheticProviderClient()
+    client.embed_with_usage = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("provider must not be called")
+    )
+    config = InMemoryConfigStore()
+    config.set("routing", "embedding_max_tokens_per_request", 3)
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client),
+        config,
+        embedding_token_counter=UnavailableEmbeddingTokenCounter(),
+    )
+
+    with pytest.raises(TokenCountUnavailable):
+        coordinator.submit_embeddings_batch(["four"])
+
+
+@pytest.mark.parametrize("text", ["한글🙂e\u0301", "<|special|>", "\x00\U0010ffff"])
+def test_unknown_tokenizer_byte_bound_never_becomes_recorded_usage(text) -> None:
+    """Unicode byte proofs admit provider I/O but never masquerade as token usage."""
+    agent = ModelAgent(
+        "provider_embedding", "provider-embedding-model", "https://provider.synthetic.invalid/v1", tags=("embedding",)
+    )
+    client = _SyntheticProviderClient()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent], client=client),
+        embedding_token_counter=UnavailableEmbeddingTokenCounter(),
+    )
+
+    document = coordinator.complete_embeddings_batch([text])
+
+    assert document["total_tokens"] == len(text.encode("utf-8"))
 
 
 def test_provider_batch_returns_before_terminal_result() -> None:

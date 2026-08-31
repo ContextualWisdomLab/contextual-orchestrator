@@ -43,6 +43,7 @@ from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import (
     HeuristicTokenCounter,
+    TokenCountUnavailable,
     build_embedding_token_counter,
     build_token_counter,
 )
@@ -101,6 +102,7 @@ class CostRoutingCoordinator:
         else:
             self.embedding_token_counter = build_embedding_token_counter(postgres_dsn)
         self.policy = routing_policy or RoutingPolicy(self.config)
+        self._resolve_virtual_embedding_target = embedding_batch_backend is None
         # Job registries live in Valkey when the credential registry carries
         # batch_job_registry_valkey_url, so submitted jobs survive a process
         # restart; otherwise they are the historical in-process dicts. Built
@@ -154,21 +156,25 @@ class CostRoutingCoordinator:
                     shard: List[EmbeddingBatchRequest] = []
                     shard_tokens = 0
                     for request in requests:
-                        if shard and shard_tokens + request.token_count > max_tokens:
-                            vectors.extend(
-                                orchestrator.client.embed(
-                                    agent, [item.input_text for item in shard]
-                                )
+                        request_tokens = request.token_count or len(
+                            request.input_text.encode("utf-8")
+                        )
+                        if shard and shard_tokens + request_tokens > max_tokens:
+                            shard_vectors, shard_usage = self._run_embedding_shard(
+                                agent, shard
                             )
+                            vectors.extend(shard_vectors)
+                            prompt_tokens += shard_usage
                             shard = []
                             shard_tokens = 0
                         shard.append(request)
-                        shard_tokens += request.token_count
-                        prompt_tokens += request.token_count
+                        shard_tokens += request_tokens
                     if shard:
-                        vectors.extend(
-                            orchestrator.client.embed(agent, [item.input_text for item in shard])
+                        shard_vectors, shard_usage = self._run_embedding_shard(
+                            agent, shard
                         )
+                        vectors.extend(shard_vectors)
+                        prompt_tokens += shard_usage
                     return vectors, prompt_tokens
 
                 self.embedding_batch_backend = ProviderEmbeddingBatchBackend(
@@ -207,6 +213,21 @@ class CostRoutingCoordinator:
         """Derive the ledger provider/model identity for one served agent."""
         provider = agent.provider_name or _provider_from_base_url(agent.base_url)
         return provider or "unknown", agent.model or fallback_model
+
+    def _run_embedding_shard(
+        self, agent: Any, requests: List[EmbeddingBatchRequest]
+    ) -> tuple[List[List[float]], int]:
+        texts = [request.input_text for request in requests]
+        if all(request.token_count > 0 or not request.input_text for request in requests):
+            return self.orchestrator.client.embed(agent, texts), sum(
+                request.token_count for request in requests
+            )
+        vectors, provider_tokens = self.orchestrator.client.embed_with_usage(agent, texts)
+        if provider_tokens is None:
+            raise TokenCountUnavailable(
+                "provider embedding response omitted authoritative usage"
+            )
+        return vectors, provider_tokens
 
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
@@ -872,11 +893,19 @@ class CostRoutingCoordinator:
         self, model: str, zdr_only: bool, agent_id: Optional[str]
     ) -> tuple[str, Optional[str]]:
         """Resolve one embedding member without losing a caller's member choice."""
-        if agent_id is None and not zdr_only:
+        virtual_models = {
+            "contextual-orchestrator",
+            getattr(self.orchestrator, "AUTO_MODEL", ""),
+        }
+        if (
+            agent_id is None
+            and not zdr_only
+            and (model not in virtual_models or not self._resolve_virtual_embedding_target)
+        ):
             return model, None
         selection_model = (
             None
-            if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
+            if model in virtual_models
             else model
         )
         with self.orchestrator.request_policy(zdr_only):
@@ -963,9 +992,18 @@ class CostRoutingCoordinator:
         """Split one original embedding input into provider-safe map parts."""
         if text == "":
             return [("", 0)]
-        parts = self._force_token_safe_chunks(
-            text, model=model, max_tokens=max_tokens, max_chars=max_chars
-        )
+        try:
+            parts = self._force_token_safe_chunks(
+                text, model=model, max_tokens=max_tokens, max_chars=max_chars
+            )
+        except TokenCountUnavailable:
+            if (
+                self._resolve_virtual_embedding_target
+                and len(text) <= max_chars
+                and len(text.encode("utf-8")) <= max_tokens
+            ):
+                return [(text, 0)]
+            raise
         return parts or [("", 0)]
 
     def _force_token_safe_chunks(
@@ -1099,6 +1137,10 @@ class CostRoutingCoordinator:
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)
         part_limits = self._embedding_part_limits.get(batch_id, {})
         ordered = sorted(items, key=lambda item: item.index)
+        usage = status.get("usage") if isinstance(status, dict) else None
+        provider_total_tokens = (
+            usage.get("prompt_tokens") if isinstance(usage, dict) else None
+        )
         parts_by_source: Dict[int, List[Dict[str, Any]]] = {index: [] for index in range(input_count)}
         for item in ordered:
             request = request_by_custom_id.get(item.custom_id)
@@ -1107,14 +1149,21 @@ class CostRoutingCoordinator:
             if prompt_tokens <= 0 and request is not None:
                 prompt_tokens = request.token_count
                 if request.input_text and prompt_tokens <= 0:
-                    prompt_tokens = int(
-                        self.embedding_token_counter.count_text(request.input_text, item.model)
-                    )
+                    try:
+                        prompt_tokens = int(
+                            self.embedding_token_counter.count_text(
+                                request.input_text, item.model
+                            )
+                        )
+                    except TokenCountUnavailable:
+                        prompt_tokens = None
             parts_by_source.setdefault(source_index, []).append(
                 {
                     "part_index": request.part_index if request else 0,
                     "embedding": item.embedding,
-                    "prompt_tokens": max(0, prompt_tokens),
+                    "prompt_tokens": (
+                        max(0, prompt_tokens) if prompt_tokens is not None else None
+                    ),
                     "model": item.model,
                     "attribution": dict(request.attribution) if request else {},
                     "agent_id": request.agent_id if request else None,
@@ -1122,7 +1171,7 @@ class CostRoutingCoordinator:
             )
 
         embeddings: List[Dict[str, Any]] = []
-        token_counts: List[int] = []
+        token_counts: List[int | None] = []
         total_cost_amount = 0.0
         currency_code = "USD"
         for source_index in range(input_count):
@@ -1132,6 +1181,17 @@ class CostRoutingCoordinator:
                 token_counts.append(0)
                 continue
             attribution = dict(parts[0]["attribution"])
+            authoritative_parts = all(part["prompt_tokens"] is not None for part in parts)
+            if not authoritative_parts:
+                if len(parts) != 1 or type(provider_total_tokens) is not int:
+                    raise TokenCountUnavailable(
+                        "provider embedding usage cannot be assigned to split inputs"
+                    )
+                token_counts.append(None)
+                embeddings.append(
+                    {"index": source_index, "embedding": parts[0]["embedding"]}
+                )
+                continue
             prompt_tokens = sum(int(part["prompt_tokens"]) for part in parts)
             model_name = str(parts[0]["model"])
             agent_id = parts[0]["agent_id"]
@@ -1172,7 +1232,11 @@ class CostRoutingCoordinator:
             "model": model_name,
             "embeddings": embeddings,
             "token_counts": token_counts,
-            "total_tokens": sum(token_counts),
+            "total_tokens": (
+                provider_total_tokens
+                if any(value is None for value in token_counts)
+                else sum(value for value in token_counts if value is not None)
+            ),
             "part_count": len(requests),
             "input_part_counts": part_counts,
             "map_reduce": {
