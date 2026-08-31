@@ -33,11 +33,9 @@ time, in `_parse_openai_compatible` (`_pricing_is_free`, unless a merged row
 already carries an explicit `is_free` boolean), which requires a provider's
 own model-list response to carry a real per-token price of exactly zero. Of
 this gateway's six configured provider sources, only OpenRouter's own API
-ever reports real pricing, and at the time this ADR was written OpenRouter's
-`ProviderModelSource` set `evidence_only=True` (commit `952996ec`), so it
-never served inference. That characterization of `952996ec` as settled,
-owner-endorsed policy was false — see this ADR's 2026-08-31 Amendment, which
-corrects the record and removes the flag. Of the remaining five, `openai`, `nvidia_nim`,
+ever reports real pricing. Commit `952996ec` incorrectly made its entire
+authenticated catalog evidence-only even though ZDR evidence is route-specific;
+ADR 0032 now restores those rows as serving candidates. Of the remaining five, `openai`, `nvidia_nim`,
 `nvidia_nim_sub`, and `bytez` never report pricing in their own `/v1/models`
 responses, so `is_free` was never `True` for any of them. `orchestrator/free`
 was therefore structurally empty in practice: the one provider ADR 0032
@@ -89,7 +87,7 @@ constant and its `provider_name == "opencode_zen"` special case with the same
 value, now expressed as data), `nvidia_nim` and `nvidia_nim_sub` both set it
 to `"nvidia"`, and `openai` sets it to `"openai"`. `openrouter` and `bytez`
 keep the `None` default: OpenRouter already reports its own real per-token
-pricing and stays `evidence_only=True` regardless, and there is no
+pricing, and there is no
 Models.dev signal to join for Bytez.
 
 The invocation site in `discover_provider_models` becomes `if

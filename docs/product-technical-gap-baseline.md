@@ -630,11 +630,10 @@ This document serves as the baseline for the Contextual Orchestrator (an enterpr
 `orchestrator/free` (ADR 0032) was structurally empty in practice: `is_free`
 only ever becomes `True` from a provider's own reported per-token price, and
 of this gateway's six provider sources only OpenRouter's API ever reports
-real pricing — and at the time of this entry, OpenRouter's `ProviderModelSource`
-set `evidence_only=True` (commit `952996ec`), so it never served inference.
-That was described here and elsewhere as settled, owner-endorsed ZDR
-hardening; that description was false. See the 2026-08-31 entry below, which
-corrects the record and removes the flag. Of the remaining five, `openai`, `nvidia_nim`, `nvidia_nim_sub`,
+real pricing. Commit `952996ec` incorrectly made the entire OpenRouter account
+evidence-only even though its ZDR evidence is route-specific; ADR 0032 now
+keeps authenticated OpenRouter rows routable and applies ZDR only during
+`zdr_only` selection. Of the remaining five, `openai`, `nvidia_nim`, `nvidia_nim_sub`,
 and `bytez` never report pricing themselves. The one existing mitigation, cross-referencing
 `opencode_zen` against Models.dev (`https://models.dev/api.json`), only
 covers a source that is `bootstrap_required = False` and not always
