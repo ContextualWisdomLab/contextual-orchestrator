@@ -376,7 +376,9 @@ class RaterInvocation:
             )
         try:
             payload = json.loads(value, object_pairs_hook=_unique_object)
-        except (json.JSONDecodeError, RecursionError) as exc:
+        except RaterObservationError:
+            raise
+        except (ValueError, RecursionError) as exc:
             raise RaterObservationError(
                 "invalid_json", "invocation JSON is invalid"
             ) from exc

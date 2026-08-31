@@ -250,6 +250,11 @@ def test_deep_json_is_rejected_as_a_domain_error() -> None:
     assert _error_code(lambda: RaterInvocation.from_json(raw)) == "invalid_json"
 
 
+def test_huge_json_integer_is_rejected_as_a_domain_error() -> None:
+    raw = '{"value":' + "9" * 10_000 + "}"
+    assert _error_code(lambda: RaterInvocation.from_json(raw)) == "invalid_json"
+
+
 def test_observation_schema_is_exact_and_status_is_bounded() -> None:
     unknown = _observed()
     unknown["model_reasoning"] = "hidden"
