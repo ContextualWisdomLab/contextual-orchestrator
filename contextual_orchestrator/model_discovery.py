@@ -97,10 +97,17 @@ def _provider_discovery_error_code(exc: Exception) -> str:
         return "transport_error"
     if isinstance(exc, ValueError):
         return "invalid_response"
+    if isinstance(exc, RuntimeError):
+        # The configured-gateway transport (ModelClient._resolve_addresses /
+        # _open_provider) wraps DNS resolution and request-validation
+        # failures as plain RuntimeError, not an OSError subclass. Still a
+        # transport-level failure from the caller's perspective.
+        return "transport_error"
     # The sole caller catches exactly (URLError, TimeoutError, ValueError,
-    # OSError) plus HTTPError (a URLError subtype), every one of which is
-    # classified above. Reaching this point means the catch tuple drifted;
-    # fail loudly instead of silently labeling an unclassified failure.
+    # OSError, RuntimeError) plus HTTPError (a URLError subtype), every one
+    # of which is classified above. Reaching this point means the catch
+    # tuple drifted; fail loudly instead of silently labeling an
+    # unclassified failure.
     raise AssertionError(f"unclassified provider discovery failure: {exc!r}")
 
 
@@ -1163,10 +1170,12 @@ def discover_provider_models(
             payload = fetch(url, timeout=attempt_timeout, **fetch_kwargs)
             last_exc = None
             break
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError) as exc:
             # OSError covers ConnectionError/reset failures that are not URLError
-            # subclasses, so a raw provider transport failure can never escape the
-            # discovery boundary with provider text attached.
+            # subclasses, and RuntimeError covers the configured-gateway transport's
+            # (ModelClient._resolve_addresses / _open_provider) DNS and request-
+            # validation failures, so a raw provider transport failure can never
+            # escape the discovery boundary with provider text attached.
             last_exc = exc
             is_last_attempt = attempt_index == len(attempt_timeouts) - 1
             if is_last_attempt or not is_transient_error(exc):

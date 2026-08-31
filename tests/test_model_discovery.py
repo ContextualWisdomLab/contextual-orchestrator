@@ -1856,6 +1856,37 @@ def test_discover_provider_models_does_not_retry_non_transient_failure() -> None
     mock_sleep.assert_not_called()
 
 
+def test_discover_provider_models_isolates_a_dns_resolution_failure() -> None:
+    """A configured-gateway DNS failure must not abort the whole discovery pass.
+
+    ``ModelClient._resolve_addresses`` wraps ``socket.gaierror`` as a plain
+    ``RuntimeError`` (see ``_fetch_configured_gateway_json``'s pinned-address
+    validation path), which was not in ``discover_provider_models``'s catch
+    tuple (``URLError``, ``TimeoutError``, ``ValueError``, ``OSError``). One
+    provider's DNS hiccup must become an isolated ``ProviderDiscoveryError``,
+    not a bare ``RuntimeError`` that crashes ``discover_all_models`` entirely.
+    """
+    register_credential("LLM_GATEWAY_API_KEY", "sk-gateway")
+    gateway_source = ProviderModelSource(
+        provider_name="configured_gateway",
+        credential_name="LLM_GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_configured_gateway_json",
+        side_effect=RuntimeError("provider host 'gateway.example' could not be resolved"),
+    ):
+        try:
+            discover_provider_models(gateway_source)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "configured_gateway"
+        else:  # pragma: no cover
+            raise AssertionError("a DNS RuntimeError must become a ProviderDiscoveryError")
+
+
 def test_discover_provider_models_retry_timeout_never_exceeds_callers_budget() -> None:
     """A caller-supplied timeout shorter than the retry default must not expand on retry.
 
