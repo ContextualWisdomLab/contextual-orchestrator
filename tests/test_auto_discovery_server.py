@@ -495,6 +495,42 @@ def test_auto_discovery_recovers_model_first_discovered_while_spend_blocked(
     assert "spend:blocked" not in orchestrator.candidates[0].tags
 
 
+def test_auto_discovery_preserves_operator_disable_across_spend_recovery(
+    monkeypatch,
+) -> None:
+    blocked = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    existing = ModelAgent(
+        "openrouter_provider_paid",
+        blocked.model_id,
+        provider_name="openrouter",
+        tags=("discovered", "chat"),
+        disabled=True,
+    )
+    orchestrator = TaskOrchestrator([existing], allow_empty_agents=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([blocked], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    recovered = replace(blocked, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert orchestrator.candidates[0] == existing
+
+
 def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -> None:
     captured = []
     monkeypatch.setattr(
