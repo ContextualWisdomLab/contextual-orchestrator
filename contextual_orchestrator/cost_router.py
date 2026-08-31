@@ -827,14 +827,15 @@ class CostRoutingCoordinator:
                 )
             item_records.append((item, records))
 
-        persistence_settled = self.ledger.flush(
-            timeout=_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS
-        )
         record_ids = {
             record.usage_record_id
             for _item, records in item_records
             for record in records
         }
+        persistence_settled = self.ledger.wait_for_usage_record_ids(
+            list(record_ids),
+            timeout=_BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS,
+        )
         settled = {
             row["usage_record_id"]: row
             for row in self.ledger.records()

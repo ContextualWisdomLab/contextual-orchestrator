@@ -787,6 +787,68 @@ def test_batch_retrieval_does_not_wait_forever_for_ledger_storage(monkeypatch) -
     assert settled["results"] == document["results"]
 
 
+def test_batch_settlement_ignores_unrelated_global_flush_work(monkeypatch) -> None:
+    release = threading.Event()
+    unrelated_started = threading.Event()
+
+    class _Store:
+        def __init__(self):
+            self.rows = []
+        def append(self, record):
+            self.rows.append(record.as_dict())
+            if record.usage_record_id == "usage_unrelated":
+                unrelated_started.set()
+                release.wait(timeout=2)
+        def query(self, start=None, end=None):
+            return list(self.rows)
+        def existing_usage_record_ids(self, usage_record_ids):
+            return {row["usage_record_id"] for row in self.rows
+                    if row["usage_record_id"] in usage_record_ids}
+
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()),
+                        store=NonBlockingLedgerStore(_Store()))
+    coordinator = _coordinator(ledger=ledger)
+    wait_for_ids = ledger.wait_for_usage_record_ids
+    def wait_with_unrelated_work(usage_record_ids, *, timeout=None):
+        ledger.record_usage(provider="mock", model="mock", prompt_tokens=1,
+                            completion_tokens=1, usage_record_id="usage_unrelated")
+        assert unrelated_started.wait(timeout=1)
+        return wait_for_ids(usage_record_ids, timeout=timeout)
+    monkeypatch.setattr(ledger, "wait_for_usage_record_ids", wait_with_unrelated_work)
+    job = coordinator.complete([{"role": "user", "content": "batch settlement"}],
+                               hints={"channel": "batch"})
+    try:
+        document = coordinator.retrieve_batch(job["job_id"])
+    finally:
+        release.set()
+    assert document["usage_persistence_status"] == "settled"
+
+
+def test_rejected_async_batch_write_remains_pending_and_idempotent(monkeypatch) -> None:
+    class _RejectingStore:
+        def append(self, record):
+            return False
+        def query(self, start=None, end=None):
+            return []
+        def existing_usage_record_ids(self, usage_record_ids):
+            return set()
+
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()),
+                        store=NonBlockingLedgerStore(_RejectingStore()))
+    coordinator = _coordinator(ledger=ledger)
+    monkeypatch.setattr(
+        "contextual_orchestrator.cost_router._BATCH_LEDGER_SETTLEMENT_TIMEOUT_SECONDS", 0.01
+    )
+    job = coordinator.complete([{"role": "user", "content": "rejected write"}],
+                               hints={"channel": "batch"})
+    first = coordinator.retrieve_batch(job["job_id"])
+    second = coordinator.retrieve_batch(job["job_id"])
+    assert first["usage_persistence_status"] == "pending"
+    assert second["usage_persistence_status"] == "pending"
+    assert second["results"][0]["usage_record_ids"] == first["results"][0]["usage_record_ids"]
+    assert ledger.records() == []
+
+
 def test_local_batch_cache_hit_does_not_rebill_provider() -> None:
     coordinator = _coordinator()
     coordinator.batch_backend = LocalBatchBackend(lambda *_: {
