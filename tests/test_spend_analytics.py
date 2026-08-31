@@ -21,11 +21,11 @@ from contextual_orchestrator.orchestrator import estimate_tokens  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
-def test_estimate_tokens_uses_exact_cl100k() -> None:
+def test_estimate_tokens_heuristic() -> None:
     assert estimate_tokens("") == 0
     assert estimate_tokens("abcd") == 1  # 4 chars ~ 1 token
     assert estimate_tokens("abcde") == 2  # (5 + 3) // 4
-    assert estimate_tokens("a" * 400) == 50
+    assert estimate_tokens("a" * 400) == 100
 
 
 def test_spend_without_prices_reports_null_cost() -> None:

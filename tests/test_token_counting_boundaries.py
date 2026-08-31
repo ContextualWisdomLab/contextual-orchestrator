@@ -8,41 +8,40 @@ import types
 import pytest
 
 from contextual_orchestrator.token_counting import (
-    RustCl100kTokenCounter,
+    HeuristicTokenCounter,
     PgTiktokenAdapter,
-    RustCl100kPacker,
     build_token_counter,
 )
 
 
-def test_exact_cl100k_packing_fails_closed_without_rust_extension(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setitem(sys.modules, "contextual_orchestrator._token_packer", None)
-    with pytest.raises(RuntimeError, match="Rust token packer extension is unavailable"):
-        RustCl100kPacker()
-
-
-def test_exact_counter_preserves_whitespace_tokens() -> None:
-    counter = RustCl100kTokenCounter()
+def test_heuristic_empty_and_whitespace_only_text_count_zero() -> None:
+    counter = HeuristicTokenCounter()
     assert counter.count_text("") == 0
-    assert counter.count_text("   \t\n  ") == 3
+    # Whitespace-only text matches no word units and must not round up to 1.
+    assert counter.count_text("   \t\n  ") == 0
 
 
-def test_exact_counter_counts_punctuation_with_cl100k() -> None:
-    assert RustCl100kTokenCounter().count_text("!?...") == 2
+def test_heuristic_punctuation_only_counts_standalone_symbols() -> None:
+    counter = HeuristicTokenCounter()
+    # Five standalone punctuation units, expanded by the BPE factor: ceil(5*1.3)=7.
+    assert counter.count_text("!?...") == 7
 
 
-def test_exact_counter_rejects_arbitrary_multiplier() -> None:
-    with pytest.raises(ValueError, match="heuristics are not supported"):
-        RustCl100kTokenCounter(tokens_per_word=1.0)
+def test_heuristic_custom_tokens_per_word_scales_monotonically() -> None:
+    text = "alpha beta gamma"
+    low = HeuristicTokenCounter(tokens_per_word=1.0).count_text(text)
+    high = HeuristicTokenCounter(tokens_per_word=2.5).count_text(text)
+    assert low == 3
+    assert high == 8
+    assert high > low
 
 
 @pytest.mark.parametrize("bad_message", ["plain string", None, 42])
-def test_exact_counter_ignores_non_mapping_message_content(bad_message: object) -> None:
-    counter = RustCl100kTokenCounter()
+def test_heuristic_non_dict_messages_contribute_framing_only(bad_message: object) -> None:
+    counter = HeuristicTokenCounter()
     total = counter.count_messages([{"content": "hello"}, bad_message])  # type: ignore[list-item]
-    assert total == 1
+    # "hello" -> ceil(1*1.3)=2 tokens plus 3 framing for each of two messages.
+    assert total == 2 + 3 + 0 + 3
 
 
 class _StubPgCounter:
@@ -99,10 +98,10 @@ def test_build_degrades_to_heuristic_when_pg_dependency_fails_to_import(
     monkeypatch.setitem(sys.modules, "pg_llm_batch", broken)
     # Attribute access on a bare module raises ImportError -> degrade cleanly.
     counter = build_token_counter("postgresql://ledger_user@localhost/usage_db")
-    assert isinstance(counter, RustCl100kTokenCounter)
+    assert isinstance(counter, HeuristicTokenCounter)
 
 
 def test_build_defaults_to_heuristic_without_dsn() -> None:
     counter = build_token_counter()
-    assert isinstance(counter, RustCl100kTokenCounter)
+    assert isinstance(counter, HeuristicTokenCounter)
     assert counter.count_text("hello world") >= 1

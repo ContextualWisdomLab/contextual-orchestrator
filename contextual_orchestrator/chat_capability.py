@@ -10,6 +10,7 @@ speech-only models cannot.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import re
 
 _MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -94,3 +95,57 @@ def is_general_chat_agent_model_id(model_id: str) -> bool:
         or token.startswith("nemoguard")
         for token in tokens
     )
+
+
+def requires_non_text_input(input_modalities: Iterable[str]) -> bool:
+    """Return whether declared input-modality evidence includes non-text input.
+
+    A model whose provider/catalog architecture evidence declares an input
+    modality other than ``"text"`` (e.g. ``image``, ``audio``, ``video``) is a
+    specialized multimodal deployment: a caller cannot use it for an arbitrary
+    request without knowing in advance that the request must carry that extra
+    modality. Absence of modality evidence is not evidence of a multimodal
+    requirement, so an empty ``input_modalities`` iterable never triggers this.
+
+    Shared by ``model_discovery._requires_non_text_input`` (reading
+    ``DiscoveredModel.input_modalities`` directly) and
+    ``orchestrator.TaskOrchestrator._agent_requires_non_text_input`` (reading
+    an agent's persisted ``input:<modality>`` tags, with the ``input:`` prefix
+    already stripped by the caller) so the "what counts as non-text" reading
+    lives in exactly one place -- the two representations of the same catalog
+    evidence can never drift on this question independently of each other.
+    """
+    return any(
+        modality.strip().casefold() != "text"
+        for modality in input_modalities
+        if isinstance(modality, str) and modality.strip()
+    )
+
+
+def is_general_chat_candidate(
+    model_id: str,
+    *,
+    capabilities: Iterable[str] = (),
+    output_modalities: Iterable[str] = (),
+) -> bool:
+    """Apply explicit catalog evidence before falling back to the model name.
+
+    A generic model identifier cannot identify a media-only endpoint. When a
+    provider supplies capability or output-modality metadata, that metadata is
+    therefore authoritative; absent metadata keeps the legacy name heuristic.
+    """
+    outputs = {
+        value.strip().casefold()
+        for value in output_modalities
+        if isinstance(value, str) and value.strip()
+    }
+    if outputs:
+        return "text" in outputs and is_general_chat_agent_model_id(model_id)
+    declared_capabilities = {
+        value.strip().casefold()
+        for value in capabilities
+        if isinstance(value, str) and value.strip()
+    }
+    if declared_capabilities:
+        return "chat" in declared_capabilities and is_general_chat_agent_model_id(model_id)
+    return is_general_chat_agent_model_id(model_id)

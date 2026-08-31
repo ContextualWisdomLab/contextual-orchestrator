@@ -1,0 +1,1 @@
+Classify provider failures by actionable HTTP/network cause without exposing provider-controlled diagnostics; preserve request-size taxonomy in telemetry, and attach measured shared provider-batch latency to each affected workflow trace row without claiming unavailable per-request timing precision.

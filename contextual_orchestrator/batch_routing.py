@@ -27,6 +27,7 @@ import json
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol
 from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory
 
 _ROUTING_CATEGORY = "routing"
+_PROVIDER_CUSTOM_ID_MAX_LENGTH = 64
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +167,7 @@ class BatchRequest:
     custom_id: str = field(default_factory=lambda: f"req_{uuid.uuid4().hex}")
     attribution: Dict[str, Any] = field(default_factory=dict)
     mode: str = "auto"
+    zdr_only: bool = False
 
     def to_jsonl_line(self, endpoint: str = "/v1/chat/completions") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API JSONL line."""
@@ -172,6 +175,8 @@ class BatchRequest:
             "custom_id": self.custom_id,
             "method": "POST",
             "url": endpoint,
+            # ``zdr_only`` is a contextual-orchestrator selection policy, not
+            # an upstream provider request field.
             "body": {"model": self.model, "messages": self.messages},
         }
 
@@ -185,6 +190,9 @@ class BatchJob:
     status: str = "submitted"
     submitted_at: int = field(default_factory=lambda: int(time.time()))
     request_count: int = 0
+    # HTTP callers bind this opaque digest to the authenticated principal;
+    # library-only jobs may remain unowned for standalone use.
+    owner_id: Optional[str] = None
 
 
 @dataclass
@@ -236,11 +244,13 @@ class LocalBatchBackend:
         *,
         max_concurrency: int = 1,
         job_registry: Any = None,
+        request_context: Optional[Callable[[BatchRequest], Any]] = None,
     ) -> None:
         if type(max_concurrency) is not int or max_concurrency < 1:
             raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
         self.max_concurrency = max_concurrency
+        self._request_context = request_context
         # Computed results survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
         self._results: Dict[str, List[BatchResultItem]] = (
@@ -253,7 +263,13 @@ class LocalBatchBackend:
         """Run every request in-process and stash the results under a job id."""
         job_id = f"localbatch_{uuid.uuid4().hex}"
         def run(request: BatchRequest) -> BatchResultItem:
-            result = self._runner(request.messages, request.mode, request.model)
+            context = (
+                self._request_context(request)
+                if self._request_context is not None
+                else nullcontext()
+            )
+            with context:
+                result = self._runner(request.messages, request.mode, request.model)
             answer = result.get("answer", "")
             return BatchResultItem(
                 custom_id=request.custom_id,
@@ -450,13 +466,31 @@ class EmbeddingBatchRequest:
     token_end: int = 0
     shard_index: int = 0
     routing_agent_id: str | None = None
+    zdr_only: bool = False
+    agent_id: Optional[str] = None
+
+    def wire_custom_id(self) -> str:
+        """Return a provider-safe id while retaining the internal request mapping.
+
+        The provider only needs a unique wire id; ``PgLlmBatchEmbeddingBackend``
+        maps it back to the persisted request, which already carries ``agent_id``.
+        Hashing avoids exposing or lengthening that internal identifier and keeps
+        the OpenAI-compatible 64-character custom-id limit intact.
+        """
+        if self.agent_id is None and len(self.custom_id) <= _PROVIDER_CUSTOM_ID_MAX_LENGTH:
+            return self.custom_id
+        identity = self.custom_id if self.agent_id is None else f"{self.agent_id}\x00{self.custom_id}"
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""
         return {
-            "custom_id": self.custom_id,
+            # The provider body stays OpenAI-compatible; the backend's tracked
+            # request map carries the immutable route identity separately.
+            "custom_id": self.wire_custom_id(),
             "method": "POST",
             "url": endpoint,
+            # ``zdr_only`` is enforced before this provider JSONL is built.
             "body": {"model": self.model, "input": self.input_text},
         }
 
@@ -470,6 +504,7 @@ class EmbeddingBatchResultItem:
     embedding: List[float]
     prompt_tokens: int = 0
     model: str = "contextual-orchestrator"
+    agent_id: Optional[str] = None
 
 
 class EmbeddingBatchBackend(Protocol):
@@ -530,9 +565,7 @@ class LocalEmbeddingBatchBackend:
         dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
         job_registry: Any = None,
     ) -> None:
-        if embedder is None or token_counter is None:
-            raise ValueError("local embedding backend requires explicit mock embedder and exact token counter")
-        self._embedder = embedder
+        self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
         self._token_counter = token_counter
         # Computed results survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
@@ -545,10 +578,9 @@ class LocalEmbeddingBatchBackend:
         )
 
     def _count_tokens(self, text: str, model: str) -> int:
-        count = int(self._token_counter.count_text(text, model))
-        if count < 0 or (text and count == 0):
-            raise RuntimeError("exact token counter returned an invalid count")
-        return count
+        if self._token_counter is not None:
+            return int(self._token_counter.count_text(text, model))
+        return len(text.split())
 
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
@@ -564,6 +596,7 @@ class LocalEmbeddingBatchBackend:
                     embedding=list(self._embedder(request.input_text)),
                     prompt_tokens=self._count_tokens(request.input_text, request.model),
                     model=request.model,
+                    agent_id=request.agent_id,
                 )
             )
         self._results[job_id] = items
@@ -859,6 +892,17 @@ class PgLlmBatchEmbeddingBackend:
     ) -> BatchJob:
         """Upload embeddings JSONL + create a batch job via the pg-llm-batch client."""
         file_path = self._assemble_payload(requests)
+        wire_custom_ids = [
+            request.to_jsonl_line(self._endpoint)["custom_id"] for request in requests
+        ]
+        job_metadata = dict(metadata) if metadata is not None else None
+        agent_ids = sorted({request.agent_id for request in requests if request.agent_id})
+        if agent_ids:
+            job_metadata = job_metadata or {}
+            if len(agent_ids) == 1:
+                job_metadata["agent_id"] = agent_ids[0]
+            else:
+                job_metadata["agent_ids"] = agent_ids
 
         async def _submit() -> Dict[str, Any]:
             uploaded = await self._client.upload_jsonl(file_path, self._endpoint_alias)
@@ -867,7 +911,7 @@ class PgLlmBatchEmbeddingBackend:
                 input_file_id,
                 self._endpoint_alias,
                 endpoint=self._endpoint,
-                metadata=metadata,
+                metadata=job_metadata,
             )
 
         job_payload = self._run(_submit())
@@ -877,9 +921,10 @@ class PgLlmBatchEmbeddingBackend:
             # JSON primitives, not dataclass instances, so a Valkey-backed
             # registry can serialize the tracked state (see PgLlmBatchBackend).
             "requests": {
-                request.custom_id: dataclasses.asdict(request) for request in requests
+                wire_id: dataclasses.asdict(request)
+                for wire_id, request in zip(wire_custom_ids, requests)
             },
-            "order": [request.custom_id for request in requests],
+            "order": wire_custom_ids,
         }
         return BatchJob(
             job_id=batch_id,
@@ -923,11 +968,12 @@ class PgLlmBatchEmbeddingBackend:
             tracked_request = EmbeddingBatchRequest(**raw_request) if raw_request else None
             items.append(
                 EmbeddingBatchResultItem(
-                    custom_id=custom_id,
+                    custom_id=tracked_request.custom_id if tracked_request else custom_id,
                     index=position_by_custom_id.get(custom_id, len(items)),
                     embedding=embedding,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     model=tracked_request.model if tracked_request else "contextual-orchestrator",
+                    agent_id=tracked_request.agent_id if tracked_request else None,
                 )
             )
         items.sort(key=lambda item: item.index)

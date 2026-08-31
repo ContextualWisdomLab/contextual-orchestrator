@@ -106,20 +106,9 @@ def test_unit_model_rejects_blank() -> None:
             assert getattr(exc, "code", None) == "invalid_model"
 
 
-def test_http_chat_omission_uses_gateway_default_model() -> None:
-    """Chat Completions omission uses the public orchestrator gateway id."""
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/chat/completions",
-            {"messages": [{"role": "user", "content": "choose explicitly"}]},
-        )
-        assert status == 200, body
-        assert body["model"] == TaskOrchestrator.GATEWAY_DEFAULT_MODEL
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
+def test_completions_model_rejects_non_string_with_type_error() -> None:
+    with pytest.raises(RequestError, match="model must be a string"):
+        _validate_completions_model({"model": 42})
 
 
 def test_http_chat_tools_accepts_padded_model() -> None:

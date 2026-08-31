@@ -5,10 +5,6 @@
 .secrets
 __pycache__
 *.pyc
-contextual_orchestrator/_token_packer*.so
-contextual_orchestrator/_token_packer*.dylib
-contextual_orchestrator/_token_packer*.dll
-contextual_orchestrator/_token_packer*.pyd
 *.db
 build
 dist

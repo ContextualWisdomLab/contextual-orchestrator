@@ -33,12 +33,12 @@ import urllib.error
 import urllib.request
 
 import certifi
-from jsonschema import Draft202012Validator, SchemaError, ValidationError
 from jsonschema.validators import validator_for
 
 from .chat_capability import (
     is_chat_compatible_model_id,
-    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
+    requires_non_text_input,
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
@@ -47,7 +47,17 @@ from .model_group import ModelGroupRouter, canonical_group_name
 from .openrouter_uptime import OpenRouterUptimeCollector
 from .benchmark_priors import resolve_quality_prior
 from .endpoint_race import EndpointAttempt, EndpointEquivalenceContract, race_first_valid
-from .telemetry import inject_trace_context, traced
+from .provider_errors import (
+    ProviderUpstreamError,
+    classify_provider_failure,
+    provider_error_body,
+)
+from .telemetry import (
+    annotate_current_span,
+    inject_trace_context,
+    record_provider_usage,
+    traced,
+)
 from .pii_protection import (
     DEFAULT_PII_KEY_NAME,
     ENCRYPTED_FIELDS_KEY,
@@ -56,7 +66,6 @@ from .pii_protection import (
     is_encrypted_detail,
     load_pii_encryptor,
 )
-
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
@@ -64,6 +73,7 @@ from .tool_fallback import (
     ToolFailureKind,
     ToolFallbackAction,
     ToolFallbackStoppedError,
+    classify_provider_transport_failure,
     classify_tool_failure,
     downgrade_to_failover,
 )
@@ -74,76 +84,6 @@ from .reasoning_effort_profile import (
     apply_request_profile,
     snapshot_role_effort_catalog,
 )
-from .token_counting import RustCl100kPacker
-
-
-_REQUEST_ENDPOINT_AGENT_IDS: ContextVar[frozenset[str] | None] = ContextVar(
-    "contextual_orchestrator_request_endpoint_agent_ids", default=None
-)
-_REQUEST_ENDPOINT_IDENTITY: ContextVar[str | None] = ContextVar(
-    "contextual_orchestrator_request_endpoint_identity", default=None
-)
-
-
-class EndpointUnavailableError(ValueError):
-    """The requested configured endpoint cannot serve this request."""
-
-
-def normalize_endpoint_selector(value: str) -> str:
-    """Normalize an endpoint selector without ever using it as transport input."""
-    parsed = urlparse(value)
-    scheme = parsed.scheme.casefold()
-    try:
-        hostname = parsed.hostname
-        port = parsed.port
-    except ValueError as exc:
-        raise EndpointUnavailableError("endpoint_unavailable") from exc
-    if (
-        scheme not in {"http", "https"}
-        or not hostname
-        or parsed.username
-        or parsed.password
-        or parsed.params
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise EndpointUnavailableError("endpoint_unavailable")
-    host = hostname.casefold()
-    if ":" in host:
-        host = f"[{host}]"
-    if port is not None and port != (443 if scheme == "https" else 80):
-        host = f"{host}:{port}"
-    path = parsed.path.rstrip("/").removesuffix("/v1")
-    return urlunsplit(
-        (scheme, host, path, "", "")
-    )
-
-
-def _configured_endpoint_matches(value: str, normalized: str) -> bool:
-    """Return exact normalized equality for one already-configured transport."""
-    try:
-        return normalize_endpoint_selector(value) == normalized
-    except EndpointUnavailableError:
-        return False
-
-
-def _agent_matches_request_endpoint(agent: "ModelAgent") -> bool:
-    """Revalidate both agent id and configured endpoint for the active request."""
-    endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-    endpoint_identity = _REQUEST_ENDPOINT_IDENTITY.get()
-    if endpoint_ids is None or endpoint_identity is None:
-        return endpoint_ids is None and endpoint_identity is None
-    return agent.id in endpoint_ids and _configured_endpoint_matches(
-        agent.base_url, endpoint_identity
-    )
-
-
-def _request_endpoint_partition() -> str:
-    """Return a non-reversible cache partition for the configured endpoint."""
-    identity = _REQUEST_ENDPOINT_IDENTITY.get()
-    if identity is None:
-        return "endpoint:auto"
-    return "endpoint:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -152,6 +92,9 @@ ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
+_PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
+    "each tool.function.description must be at most 1024 characters"
+)
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
@@ -200,89 +143,36 @@ class BudgetExceededError(RuntimeError):
 class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
 
+
+class ProviderRequestTooLargeError(ProviderUpstreamError):
+    """Preserve request-size taxonomy across transport and telemetry boundaries."""
+
     def __init__(
         self,
         message: str,
         *,
-        status_code: int | None = None,
-        provider_code: str | None = None,
-        max_inputs: int | None = None,
-        max_tokens: int | None = None,
+        agent_id: str = "",
+        model: str = "",
+        provider_status: int | None = None,
+        transport: str = "chat",
     ) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-        self.provider_code = provider_code
-        self.max_inputs = max_inputs
-        self.max_tokens = max_tokens
-
-
-class _ProviderTransportExhausted(ProviderResponseError):
-    """Distinguish retry-exhausted transport from an invalid provider response."""
-
-
-class RequestDeadlineExceeded(RuntimeError):
-    """Raised when the caller's request-scoped monotonic deadline is exhausted."""
-
-
-class NoViableAgentError(RuntimeError):
-    """Raised when recent capability evidence has no ready declared candidate."""
-
-    code = "no_viable_agent"
-
-    def __init__(self, *, retry_after_seconds: int) -> None:
-        super().__init__("no viable agent is currently ready")
-        self.retry_after_seconds = retry_after_seconds
-
-
-_JSON_SCHEMA_ANNOTATION_KEYWORDS = frozenset(
-    {"$comment", "$defs", "$id", "$schema", "$ref", "default", "deprecated", "description", "examples", "readOnly", "title", "writeOnly"}
-)
-
-
-def validate_json_schema_contract(schema: dict[str, Any]) -> None:
-    """Validate the supported Draft 2020-12 schema vocabulary before execution."""
-    supported = frozenset(Draft202012Validator.VALIDATORS) | _JSON_SCHEMA_ANNOTATION_KEYWORDS
-
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            unknown = set(value) - supported
-            if unknown:
-                raise ValueError("json_schema contains an unsupported keyword")
-            for key, child in value.items():
-                if key in {"properties", "$defs", "patternProperties", "dependentSchemas"} and isinstance(child, dict):
-                    for subschema in child.values():
-                        visit(subschema)
-                elif key not in {"enum", "const", "default", "examples", "required"}:
-                    if isinstance(child, dict):
-                        visit(child)
-                    elif isinstance(child, list) and key in {"allOf", "anyOf", "oneOf", "prefixItems"}:
-                        for subschema in child:
-                            visit(subschema)
-
-    visit(schema)
-    try:
-        Draft202012Validator.check_schema(schema)
-    except SchemaError as exc:
-        raise ValueError("json_schema is not a valid Draft 2020-12 schema") from exc
-
-
-class ProviderRequestTooLargeError(RuntimeError):
-    """Raised after every eligible provider rejects the request as too large."""
+        super().__init__(
+            agent_id=agent_id,
+            model=model,
+            error_code="request_too_large",
+            message=message,
+            client_status=413,
+            provider_status=provider_status,
+            retryable=False,
+            transport=transport,
+        )
 
 
 def _structured_output_error(
     content: str, response_format: object
 ) -> str | None:
-    """Return a bounded contract error for JSON-object or JSON-Schema output."""
-    if not isinstance(response_format, Mapping):
-        return None
-    if response_format.get("type") == "json_object":
-        try:
-            instance = json.loads(content)
-        except (TypeError, json.JSONDecodeError):
-            return "invalid_json"
-        return None if isinstance(instance, dict) else "not_json_object"
-    if response_format.get("type") != "json_schema":
+    """Return a bounded contract error for strict JSON Schema output."""
+    if not isinstance(response_format, Mapping) or response_format.get("type") != "json_schema":
         return None
     specification = response_format.get("json_schema")
     schema = specification.get("schema") if isinstance(specification, Mapping) else None
@@ -322,8 +212,12 @@ def _bind_provider_file_ids(
 
 
 def estimate_tokens(text: str) -> int:
-    """Return the exact cl100k count used when provider usage is unavailable."""
-    return RustCl100kPacker().count_text(text)
+    """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
+
+    Honest floor for spend analytics on mock/runtime text; replace with provider-reported
+    usage when real workers return it.
+    """
+    return (len(text) + 3) // 4 if text else 0
 
 
 def _step_output_tokens(step: Mapping[str, Any]) -> tuple[int, bool]:
@@ -351,6 +245,7 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     "commercial_report_cache",
     default=None,
 )
+_REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -429,48 +324,26 @@ class _FastMLSIJudgeAdapter:
             raise ValueError("mode must be auto, route, or conduct")
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
-        primary = self._agent()
+        agent = self._agent()
+        request = {
+            "model": agent.model,
+            "messages": messages,
+            "temperature": self.orchestrator.client.temperature,
+            "max_tokens": self.orchestrator.client.max_output_tokens,
+            "response_format": response_format,
+        }
         effort_profile = self.orchestrator._role_effort_profile("judge")
-        candidates = self.orchestrator._structured_ready_candidates(
-            primary, self.text, self.allowed_agent_ids
+        if effort_profile is not None:
+            request = self.orchestrator.client.apply_effort_profile(
+                agent, request, effort_profile
+            )
+        request["stream"] = False
+        response = self.orchestrator.client.proxy_send(
+            agent, "chat/completions", request
         )
-        for agent in candidates:
-            request = {
-                "model": agent.model,
-                "messages": messages,
-                "temperature": self.orchestrator.client.temperature,
-                "max_tokens": self.orchestrator.client.max_output_tokens,
-                "response_format": response_format,
-            }
-            if effort_profile is not None:
-                request = self.orchestrator.client.apply_effort_profile(
-                    agent, request, effort_profile
-                )
-            request["stream"] = False
-            try:
-                self.orchestrator.client.remaining_request_timeout()
-                started_at = time.perf_counter()
-                response = self.orchestrator.client.proxy_send(
-                    agent, "chat/completions", request
-                )
-                output = ModelClient._response_content(agent, response)
-            except RequestDeadlineExceeded:
-                raise
-            except Exception:  # noqa: BLE001 - bounded structured-provider failover
-                self.orchestrator._group_router.observe_failure(agent.id)
-                self.orchestrator._record_failure(agent.id)
-                self.orchestrator._record_structured_not_ready(agent.id)
-                continue
-            self.orchestrator._group_router.observe_success(
-                agent.id, time.perf_counter() - started_at
-            )
-            self.orchestrator._record_success(agent.id)
-            usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
-            return self._completion_payload(
-                output, agent.id, usage, self.mode if mode is None else mode
-            )
-        self.orchestrator.client.remaining_request_timeout()
-        raise RuntimeError("all structured judge providers failed") from None
+        output = ModelClient._response_content(agent, response)
+        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
 
     def _completion_payload(
         self,
@@ -560,6 +433,26 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
     return decision_value, reason.strip()
 
 
+AUTH_SCHEME_RAW_TOKEN = "raw-token"
+"""Sentinel ``auth_scheme`` for a provider whose Authorization header carries
+the bare credential with no scheme word at all. Bytez documents its API as
+``Authorization: <token>`` (https://docs.bytez.com/http-reference/list/models.md)
+-- unlike ``Bearer``-style providers, it takes no prefix word before the key.
+"""
+
+
+def format_authorization_header(auth_scheme: str, api_key: str) -> str:
+    """Return one provider's Authorization header value for a credential.
+
+    Every provider except the :data:`AUTH_SCHEME_RAW_TOKEN` sentinel sends its
+    credential behind a literal scheme word (``Bearer <key>``); that sentinel
+    sends the bare credential instead, with no scheme word or separator.
+    """
+    if auth_scheme == AUTH_SCHEME_RAW_TOKEN:
+        return api_key
+    return f"{auth_scheme} {api_key}"
+
+
 @dataclass(frozen=True)
 class ModelAgent:
     """Configuration for one model-backed worker in the agent pool."""
@@ -580,8 +473,9 @@ class ModelAgent:
     # Explicit KV credential for an authenticated loopback gateway. Keep this
     # separate from ``credential_key`` so mlx:// workers remain keyless.
     local_credential_key: str = ""
-    # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
-    # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
+    # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default), or
+    # the AUTH_SCHEME_RAW_TOKEN sentinel (Bytez) for a bare, prefix-free
+    # credential. See format_authorization_header().
     auth_scheme: str = "Bearer"
     # Optional measured-routing group: agents sharing a canonical group name are
     # one logical model whose members are ordered by observed speed/stability
@@ -593,6 +487,8 @@ class ModelAgent:
     reasoning_effort_supported: bool | None = None
     # Explicit reviewed replica contract. A group never races when this is absent.
     endpoint_equivalence: dict[str, Any] | None = None
+    # Provider-declared support for the Chat Completions terminal usage frame.
+    stream_usage_supported: bool = False
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -606,6 +502,8 @@ class ModelAgent:
             raise ValueError("auth_scheme must be a non-empty string")
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
+        if type(self.stream_usage_supported) is not bool:
+            raise TypeError("stream_usage_supported must be a boolean")
         if self.endpoint_equivalence is not None:
             contract = EndpointEquivalenceContract(**self.endpoint_equivalence)
             object.__setattr__(self, "endpoint_equivalence", dict(contract.__dict__))
@@ -628,6 +526,7 @@ class ModelAgent:
             "group_name": self.group_name,
             "reasoning_effort_supported": self.reasoning_effort_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
+            "stream_usage_supported": self.stream_usage_supported,
         }
 
     @property
@@ -660,7 +559,25 @@ class ModelAgent:
             group_name=value.get("group_name", ""),
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
+            stream_usage_supported=value.get("stream_usage_supported", False),
         )
+
+
+def _is_general_chat_agent(agent: ModelAgent) -> bool:
+    """Apply persisted provider capability tags before model-name fallback."""
+    return is_general_chat_candidate(
+        agent.model,
+        capabilities=(
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("capability:")
+        ),
+        output_modalities=(
+            tag.split(":", 1)[1]
+            for tag in agent.tags
+            if tag.startswith("output:")
+        ),
+    )
 
 
 def _validate_batch_results(
@@ -758,23 +675,9 @@ class OrchestrationPolicy:
 # HTTP statuses worth retrying: request timeout, conflict, too-early, rate limit,
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
-TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
-
-
-def _http_error_body(error: urllib.error.HTTPError, limit: int = 65536) -> bytes:
-    """Read an HTTP error body once so independent classifiers see identical evidence."""
-    cache_key = "_contextual_orchestrator_response_body"
-    cached = getattr(error, cache_key, None)
-    if isinstance(cached, bytes):
-        return cached[:limit]
-    body = error.read(65536)
-    try:
-        setattr(error, cache_key, body)
-    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
-        pass
-    return body[:limit]
 
 
 def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
@@ -785,10 +688,7 @@ def _http_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
     if cached is not missing:
         return cached if isinstance(cached, dict) else None
     try:
-        raw = _http_error_body(error)
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8")
-        payload = json.loads(raw)
+        payload = json.loads(provider_error_body(error).decode("utf-8"))
     except (
         AttributeError,
         OSError,
@@ -821,16 +721,43 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     return result
 
 
+def _provider_error_payload(error: urllib.error.HTTPError) -> dict[str, Any] | None:
+    """Keep the older provider-error helper aligned with the shared cache."""
+    return _http_error_payload(error)
+
+
+def _is_provider_tool_description_limit_error(error: urllib.error.HTTPError) -> bool:
+    """Recognize the provider capability error that is safe to fail over."""
+    if error.code != 400:
+        return False
+    payload = _provider_error_payload(error)
+    details = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(details, str):
+        return _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE in details.casefold()
+    return (
+        isinstance(details, dict)
+        and details.get("code") == "invalid_tools"
+        and details.get("message") == _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE
+    )
+
+
 def _is_oversized_tool_description_error(error: urllib.error.HTTPError) -> bool:
     """Recognize the provider-specific 1,024-character tool-description cap."""
     if error.code != 400:
         return False
     payload = _http_error_payload(error)
     details = payload.get("error") if isinstance(payload, dict) else None
-    message = details.get("message") if isinstance(details, dict) else None
+    message = (
+        details.get("message")
+        if isinstance(details, dict)
+        else details
+        if isinstance(details, str)
+        else None
+    )
     return (
-        isinstance(details, dict)
-        and details.get("code") == "invalid_tools"
+        (isinstance(details, str) or (
+            isinstance(details, dict) and details.get("code") == "invalid_tools"
+        ))
         and isinstance(message, str)
         and "tool.function.description" in message.casefold()
         and "1024" in message
@@ -1178,11 +1105,28 @@ def is_transient_error(exc: BaseException) -> bool:
         if _is_tool_execution_stopped(exc):
             return False
         return exc.code in TRANSIENT_HTTP_STATUS
+    # urlopen wraps a TLS handshake's ssl.SSLCertVerificationError as
+    # URLError(reason=...), not as a bare ssl.SSLError -- unwrap it here so a
+    # bad trust boundary is never retried as if it were a network fault. The
+    # isinstance(exc, ssl.SSLError) check further below never reaches this
+    # case, since it never sees the wrapping URLError.
+    if isinstance(exc, urllib.error.URLError) and isinstance(
+        exc.reason, ssl.SSLCertVerificationError
+    ):
+        return False
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True
     if isinstance(exc, socket.gaierror):
         return exc.errno == socket.EAI_AGAIN
+    # ModelClient._resolve_addresses wraps a DNS resolution failure as plain
+    # RuntimeError (not a socket.gaierror subclass) with the original
+    # exception chained as __cause__, so a temporary DNS hiccup (EAI_AGAIN)
+    # is still worth retrying through that wrapper. Any other RuntimeError
+    # (a malformed URL, no resolvable stream address) has no such cause and
+    # falls through to the non-transient default below.
+    if isinstance(exc, RuntimeError) and isinstance(exc.__cause__, socket.gaierror):
+        return exc.__cause__.errno == socket.EAI_AGAIN
     # A VPN/socket path can surface as an SSL EOF or SSL_ERROR_SYSCALL. Keep
     # certificate verification failures non-transient so a bad trust boundary
     # is never retried as if it were a network fault.
@@ -1191,52 +1135,37 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
-def _provider_limit_contract(
-    exc: urllib.error.HTTPError,
-) -> tuple[str | None, int | None, int | None]:
-    """Extract only explicit machine-readable provider limits from an error."""
-    try:
-        document = json.loads(_http_error_body(exc, 16 * 1024).decode("utf-8"))
-    except (OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError):
-        return None, None, None
+def _record_provider_response_telemetry(data: Any, started_monotonic: float) -> None:
+    """Annotate the active provider span with one response's concrete evidence.
 
-    values: dict[str, Any] = {}
-
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key in {
-                    "code",
-                    "max_inputs",
-                    "maximum_inputs",
-                    "max_batch_size",
-                    "maximum_batch_size",
-                    "max_tokens",
-                    "maximum_tokens",
-                }:
-                    values.setdefault(key, item)
-                visit(item)
-        elif isinstance(value, list):
-            for item in value:
-                visit(item)
-
-    visit(document)
-
-    def positive_int(*keys: str) -> int | None:
-        for key in keys:
-            value = values.get(key)
-            if type(value) is int and value > 0:
-                return value
-        return None
-
-    provider_code = values.get("code")
-    return (
-        str(provider_code) if isinstance(provider_code, (str, int)) else None,
-        positive_int(
-            "max_inputs", "maximum_inputs", "max_batch_size", "maximum_batch_size"
-        ),
-        positive_int("max_tokens", "maximum_tokens"),
+    Records GenAI semantic-convention usage counts, the served model name,
+    the finish reason, and request latency so traces carry real per-call
+    telemetry instead of transport metadata alone.
+    """
+    if not isinstance(data, dict):
+        return
+    attributes: dict[str, Any] = {
+        "contextual_orchestrator.latency_ms": round((time.monotonic() - started_monotonic) * 1000, 2)
+    }
+    served_model = data.get("model")
+    if isinstance(served_model, str) and served_model:
+        attributes["gen_ai.response.model"] = served_model
+    choices = data.get("choices")
+    finish_reasons = (
+        [
+            choice["finish_reason"]
+            for choice in choices
+            if isinstance(choice, dict)
+            and isinstance(choice.get("finish_reason"), str)
+            and choice["finish_reason"]
+        ]
+        if isinstance(choices, list)
+        else []
     )
+    if finish_reasons:
+        attributes["gen_ai.response.finish_reasons"] = finish_reasons
+    annotate_current_span(attributes)
+    record_provider_usage(data.get("usage"))
 
 
 _PASSTHROUGH_TRIGGER_KEYS = (
@@ -1308,16 +1237,19 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
         if current is None or id(current) in seen:
             return False
         seen.add(id(current))
+        if isinstance(current, ProviderUpstreamError):
+            if current.provider_status in (
+                _PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS
+            ):
+                return True
         if (
-            current is exc
-            and isinstance(current, RuntimeError)
-            and current.__cause__ is None
-            and current.__context__ is None
+            isinstance(current, urllib.error.HTTPError)
+            and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
         ):
             return True
         if (
             isinstance(current, urllib.error.HTTPError)
-            and current.code in (_PASSTHROUGH_UNAVAILABLE_STATUS | TRANSIENT_HTTP_STATUS)
+            and _is_provider_tool_description_limit_error(current)
         ):
             return True
         if isinstance(current, socket.gaierror) and current.errno == socket.EAI_AGAIN:
@@ -1349,8 +1281,6 @@ class ModelClient:
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
-        if isinstance(timeout, bool) or not math.isfinite(float(timeout)) or timeout <= 0:
-            raise ValueError("provider timeout must be a positive finite number")
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
@@ -1366,6 +1296,7 @@ class ModelClient:
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
         self.temperature = temperature
+        self.ca_bundle = ca_bundle
         if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -1377,9 +1308,6 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
-        self._request_settings: ContextVar[dict[str, Any] | None] = ContextVar(
-            f"model_client_request_settings_{id(self)}", default=None
-        )
         if not verify_tls:
             raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
         # TLS trust for provider egress. The system trust store is the default;
@@ -1428,40 +1356,29 @@ class ModelClient:
 
     def request_settings_snapshot(self) -> dict[str, Any]:
         """Return this thread's effective request-scoped provider settings."""
-        scoped = self._request_settings.get() or {}
+        scoped = getattr(self._local, "request_settings", {})
         return {
             "temperature": scoped.get("temperature", self.default_temperature),
             "top_p": scoped.get("top_p", self.default_top_p),
             "presence_penalty": scoped.get("presence_penalty", self.default_presence_penalty),
             "frequency_penalty": scoped.get("frequency_penalty", self.default_frequency_penalty),
             "max_output_tokens": scoped.get("max_output_tokens", self.max_output_tokens),
-            "request_deadline_monotonic": scoped.get("request_deadline_monotonic"),
         }
-
-    def remaining_request_timeout(self) -> float | None:
-        """Return seconds remaining on the caller deadline, or ``None`` when absent."""
-        deadline = self.request_settings_snapshot()["request_deadline_monotonic"]
-        if deadline is None:
-            return None
-        remaining = float(deadline) - time.monotonic()
-        if remaining <= 0:
-            raise RequestDeadlineExceeded("request deadline exceeded")
-        return remaining
 
     @contextmanager
     def request_settings(self, **overrides: Any):
         """Apply provider settings to only the current server request thread."""
+        previous = getattr(self._local, "request_settings", None)
         current = self.request_settings_snapshot()
         current.update({key: value for key, value in overrides.items() if value is not None})
-        if "request_deadline_monotonic" in overrides:
-            # Background work may deliberately detach from the submitting HTTP
-            # request while retaining the remaining request-scoped settings.
-            current["request_deadline_monotonic"] = overrides["request_deadline_monotonic"]
-        token = self._request_settings.set(current)
+        self._local.request_settings = current
         try:
             yield
         finally:
-            self._request_settings.reset(token)
+            if previous is None:
+                del self._local.request_settings
+            else:
+                self._local.request_settings = previous
 
     #: Deterministic vector dimension for mock-provider embeddings (test fixture
     #: only; production providers always return their own dimensionality).
@@ -1475,12 +1392,6 @@ class ModelClient:
         vector so unit tests can exercise cosine ordering without network
         access; this fixture is never used against production traffic.
         """
-        return self.embed_with_usage(agent, texts)[0]
-
-    def embed_with_usage(
-        self, agent: ModelAgent, texts: list[str]
-    ) -> tuple[list[list[float]], int]:
-        """Return provider embeddings with the provider-reported input token count."""
         if not isinstance(texts, list) or not texts:
             raise ValueError("texts must be a non-empty list of strings")
         for item in texts:
@@ -1493,17 +1404,13 @@ class ModelClient:
                 raw = [byte for byte in digest[: self.MOCK_EMBEDDING_DIMENSION]]
                 centered = [(value / 255.0) * 2.0 - 1.0 for value in raw]
                 vectors.append(centered)
-            return vectors, 0
+            return vectors
         destination = self._validate_provider(agent)  # pragma: no cover
         payload = {"model": agent.model, "input": texts}  # pragma: no cover
-        remaining = self.remaining_request_timeout()  # pragma: no cover
-        timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
-        response = self._send_raw_with_retry(  # pragma: no cover
-            agent, "embeddings", payload, destination, timeout=timeout
-        )
+        response = self._send_raw(agent, "embeddings", payload, destination)  # pragma: no cover
         data = response.get("data") if isinstance(response, dict) else None  # pragma: no cover
         if not isinstance(data, list) or len(data) != len(texts):  # pragma: no cover
-            raise ProviderResponseError(  # pragma: no cover
+            raise RuntimeError(  # pragma: no cover
                 f"provider {agent.id} returned an invalid embeddings payload"
             )
         vectors = []  # pragma: no cover
@@ -1512,15 +1419,11 @@ class ModelClient:
             if not isinstance(vector, list) or not all(  # pragma: no cover
                 isinstance(value, (int, float)) and math.isfinite(float(value)) for value in vector
             ):
-                raise ProviderResponseError(  # pragma: no cover
+                raise RuntimeError(  # pragma: no cover
                     f"provider {agent.id} returned a non-numeric embedding vector"
                 )
             vectors.append([float(value) for value in vector])  # pragma: no cover
-        usage = response.get("usage") if isinstance(response, dict) else None  # pragma: no cover
-        token_count = (usage or {}).get(  # pragma: no cover
-            "prompt_tokens", (usage or {}).get("total_tokens", 0)
-        )
-        return vectors, int(token_count or 0)  # pragma: no cover
+        return vectors  # pragma: no cover
 
     def chat(
         self,
@@ -1588,30 +1491,34 @@ class ModelClient:
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
         ), _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            remaining = self.remaining_request_timeout()
-            if remaining is None:
-                return self._send_with_retry(agent, payload, destination)
-            return self._send_with_retry(
-                agent, payload, destination, timeout=min(self.timeout, remaining)
-            )
+            return self._send_with_retry(agent, payload, destination)
 
     def apply_effort_profile(
         self,
         agent: ModelAgent,
         payload: dict[str, Any],
         profile: ReasoningEffortProfile | None,
+        *,
+        api_surface: str = "chat.completions",
     ) -> dict[str, Any]:
         """Apply an opt-in profile while proving provider support before egress."""
+        if api_surface not in {"chat.completions", "responses"}:
+            raise ValueError("api_surface must be chat.completions or responses")
         supports = (
             agent.reasoning_effort_supported is True
             or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
         )
-        return apply_request_profile(
+        applied = apply_request_profile(
             payload,
             profile,
             supports_reasoning_effort=supports,
             default_max_output_tokens=self.max_output_tokens,
         )
+        if api_surface == "responses":
+            applied["max_output_tokens"] = applied.pop("max_tokens")
+            if "reasoning_effort" in applied:
+                applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
+        return applied
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
@@ -1693,42 +1600,6 @@ class ModelClient:
                 "failure_code": failure_code,
             }
 
-    def probe_structured(
-        self,
-        agent: ModelAgent,
-        *,
-        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
-        response_format: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Probe one declared agent's structured-output capability within its probe budget."""
-        probe_timeout = _validate_provider_probe_timeout(timeout)
-        current_deadline = self.request_settings_snapshot()["request_deadline_monotonic"]
-        probe_deadline = time.monotonic() + probe_timeout
-        if current_deadline is not None:
-            probe_deadline = min(float(current_deadline), probe_deadline)
-        try:
-            with self.request_settings(request_deadline_monotonic=probe_deadline):
-                self.proxy_send(
-                    agent,
-                    "chat/completions",
-                    {
-                        "model": agent.model,
-                        "messages": [{"role": "user", "content": "Return one JSON object."}],
-                        "max_tokens": 1,
-                        "response_format": response_format or {"type": "json_object"},
-                        "stream": False,
-                    },
-                )
-        except RequestDeadlineExceeded:
-            raise
-        except Exception as exc:  # noqa: BLE001 - readiness is bounded evidence
-            return {
-                "agent_id": agent.id,
-                "status": "not_ready",
-                "error_type": type(exc).__name__,
-            }
-        return {"agent_id": agent.id, "status": "ready"}
-
     def _send_with_retry(
         self,
         agent: ModelAgent,
@@ -1737,43 +1608,38 @@ class ModelClient:
         *,
         timeout: float | None = None,
     ) -> str:
-        """Call a provider with one timeout budget shared by all transport retries."""
+        """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
-        provider_timeout = self.timeout if timeout is None else float(timeout)
-        deadline = time.monotonic() + provider_timeout
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                last_error = TimeoutError("provider attempt deadline exceeded")
-                break
             try:
-                self._local.provider_transport_timeout = remaining
-                return self._send(agent, payload, destination)
+                return (
+                    self._send(agent, payload, destination)
+                    if timeout is None
+                    else self._send(agent, payload, destination, timeout=timeout)
+                )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._sleep(min(self._backoff_delay(attempt), remaining))
-            finally:
-                self._local.provider_transport_timeout = None
-        self.remaining_request_timeout()
+                self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
         ):
-            raise ProviderRequestTooLargeError("provider request body is too large") from None
+            raise ProviderRequestTooLargeError(
+                "provider request body is too large",
+                agent_id=agent.id,
+                model=agent.model,
+                provider_status=last_error.code,
+                transport="chat",
+            ) from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
-        # The provider transport exhausted its own retry policy. Surface the
-        # bounded provider-response category so orchestration fails over to the
-        # next measured member instead of multiplying the same call through the
-        # tool-runtime retry loop.
-        raise _ProviderTransportExhausted(f"provider {agent.id} request failed") from None
+        # Classify instead of collapsing: a 401/404/429 upstream failure is
+        # caller-actionable and must not surface as one opaque internal error.
+        raise classify_provider_failure(last_error, agent_id=agent.id, model=agent.model)
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -1796,7 +1662,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -1804,6 +1670,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        started = time.monotonic()
         opened = (
             self._open_provider(request, destination)
             if timeout is None
@@ -1811,6 +1678,7 @@ class ModelClient:
         )
         with opened as response:
             data = json.loads(response.read().decode("utf-8"))
+        _record_provider_response_telemetry(data, started)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -1830,7 +1698,6 @@ class ModelClient:
                 "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
             )
         raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
-
     @staticmethod
     def _connect_validated(
         destination: ProviderDestination, timeout: float | None, source_address: tuple[str, int] | None
@@ -1882,13 +1749,7 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
-        connection_timeout = timeout
-        if connection_timeout is None:
-            connection_timeout = getattr(
-                self._local, "provider_transport_timeout", None
-            )
-        if connection_timeout is None:
-            connection_timeout = self.timeout
+        connection_timeout = self.timeout if timeout is None else timeout
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
@@ -1939,6 +1800,7 @@ class ModelClient:
         messages: list[ChatMessage],
         temperature: float | None = None,
         effort_profile: ReasoningEffortProfile | None = None,
+        include_usage: bool = False,
     ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
@@ -1946,10 +1808,14 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if type(include_usage) is not bool:
+            raise TypeError("include_usage must be a boolean")
+        self._local.usage = None
         if not is_chat_compatible_model_id(agent.model):
             raise ValueError(
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
+        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1965,8 +1831,12 @@ class ModelClient:
             "stream": True,
             "max_tokens": settings["max_output_tokens"],
         }
+        if agent.stream_usage_supported:
+            payload["stream_options"] = {"include_usage": True}
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        if include_usage:
+            payload["stream_options"] = {"include_usage": True}
         payload = self.apply_effort_profile(agent, payload, effort_profile)
         parsed_provider = urlparse(agent.base_url)
         with traced(
@@ -1979,28 +1849,18 @@ class ModelClient:
                 "server.address": parsed_provider.hostname or "",
                 "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
             },
-        ):
-            remaining = self.remaining_request_timeout()  # pragma: no cover
-            timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
-            with _local_provider_slot(agent, self.local_concurrency, timeout):  # pragma: no cover
-                if remaining is None:
-                    yield from self._stream_send(agent, payload, destination)
-                else:
-                    yield from self._stream_send(agent, payload, destination, timeout=timeout)
+        ), _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            yield from self._stream_send(agent, payload, destination)
 
     def _stream_send(
-        self,
-        agent: ModelAgent,
-        payload: dict[str, Any],
-        destination: ProviderDestination | None = None,
-        *,
-        timeout: float | None = None,
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
+        self._local.usage = None
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
@@ -2009,9 +1869,10 @@ class ModelClient:
             method="POST",
         )
         stream_error: RuntimeError | None = None
-        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
-        if timeout is not None:
-            self._local.provider_transport_timeout = timeout
+        started = time.monotonic()
+        stream_usage: dict[str, Any] | None = None
+        stream_model: str | None = None
+        stream_choices: list[dict[str, str]] = []
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -2025,10 +1886,33 @@ class ModelClient:
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    choices = chunk.get("choices") or [{}]
+                    if not isinstance(chunk, dict):
+                        continue
+                    usage = chunk.get("usage")
+                    if isinstance(usage, dict):
+                        self._local.usage = usage
+                        stream_usage = usage
+                    if isinstance(chunk.get("model"), str):
+                        stream_model = chunk["model"]
+                    choices = chunk.get("choices")
+                    if choices == []:
+                        continue
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    stream_choices.extend(
+                        {"finish_reason": choice["finish_reason"]}
+                        for choice in choices
+                        if isinstance(choice, dict)
+                        and isinstance(choice.get("finish_reason"), str)
+                        and choice["finish_reason"]
+                    )
                     delta = (choices[0] or {}).get("delta", {}).get("content")
                     if delta:
                         yield delta
+            _record_provider_response_telemetry(
+                {"usage": stream_usage, "model": stream_model, "choices": stream_choices},
+                started,
+            )
         except Exception as exc:  # noqa: BLE001 - provider error boundary (CWE-209)
             # The gateway's own terminal tool-stop contract must survive the
             # boundary: convert the provider HTTP shape into the package-owned
@@ -2037,17 +1921,13 @@ class ModelClient:
                 raise _provider_tool_execution_stopped(agent) from None
             if isinstance(exc, ToolFallbackStoppedError):
                 raise
-            if isinstance(exc, RequestDeadlineExceeded):
-                raise
-            self.remaining_request_timeout()
             # A stream may already have emitted bytes, so it can neither be retried
             # nor failed over to another provider. Keep the provider status, body,
             # and exception cause inside the gateway; callers get one stable,
-            # package-owned error instead of raw provider diagnostics.
-            stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
-        finally:
-            if timeout is not None:
-                self._local.provider_transport_timeout = previous_timeout
+            # classified, package-owned error instead of raw provider diagnostics.
+            stream_error = classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport="stream"
+            )
         if stream_error is not None:
             raise stream_error
 
@@ -2090,8 +1970,6 @@ class ModelClient:
             )
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, normalized_endpoint, payload)
-        remaining = self.remaining_request_timeout()
-        provider_timeout = self.timeout if remaining is None else min(self.timeout, remaining)
         destination = self._validate_provider(agent)  # pragma: no cover
         parsed_provider = urlparse(agent.base_url)
         operation_name = {
@@ -2133,40 +2011,21 @@ class ModelClient:
                 chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, provider_timeout):
-                    if remaining is None:
-                        chat_response = self._send_raw_with_retry(
-                            agent,
-                            "chat/completions",
-                            chat_payload,
-                            destination,
-                            allow_transient_retries=allow_transient_retries,
-                        )
-                    else:
-                        chat_response = self._send_raw_with_retry(
-                            agent,
-                            "chat/completions",
-                            chat_payload,
-                            destination,
-                            timeout=provider_timeout,
-                            allow_transient_retries=allow_transient_retries,
-                        )
-                return _chat_to_responses_payload(chat_response, payload)
-            with _local_provider_slot(agent, self.local_concurrency, provider_timeout):  # pragma: no cover
-                if remaining is None:
-                    return self._send_raw_with_retry(
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    chat_response = self._send_raw_with_retry(
                         agent,
-                        normalized_endpoint,
-                        payload,
+                        "chat/completions",
+                        chat_payload,
                         destination,
                         allow_transient_retries=allow_transient_retries,
                     )
+                return _chat_to_responses_payload(chat_response, payload)
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
                 return self._send_raw_with_retry(
                     agent,
                     normalized_endpoint,
                     payload,
                     destination,
-                    timeout=provider_timeout,
                     allow_transient_retries=allow_transient_retries,
                 )
 
@@ -2179,27 +2038,20 @@ class ModelClient:
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {"content-type": "application/json"}  # pragma: no cover
         if api_key:  # pragma: no cover
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
         )
-        remaining = self.remaining_request_timeout()  # pragma: no cover
-        timeout = self.timeout if remaining is None else min(self.timeout, remaining)  # pragma: no cover
-        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
-        self._local.provider_transport_timeout = timeout
         try:
-            with self._open_provider(  # pragma: no cover
-                request, self._validate_provider(agent)
-            ) as response:
+            with self._open_provider(request, self._validate_provider(agent)) as response:  # pragma: no cover
                 return response.read(), response.headers.get_content_type()
-        except Exception:
-            self.remaining_request_timeout()
-            raise
-        finally:
-            self._local.provider_transport_timeout = previous_timeout
+        except Exception as exc:  # noqa: BLE001 - classify provider transport failures
+            raise classify_provider_failure(
+                exc, agent_id=agent.id, model=agent.model, transport="passthrough"
+            ) from None
 
     def proxy_get_json(self, agent: ModelAgent, endpoint: str, *, max_response_bytes: int) -> dict[str, Any]:
         """Retrieve provider JSON from the exact agent that owns an async job."""
@@ -2232,7 +2084,7 @@ class ModelClient:
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {}  # pragma: no cover
         if api_key:  # pragma: no cover
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             headers=headers,
@@ -2268,7 +2120,7 @@ class ModelClient:
             "content-length": str(content_length),
         }
         if api_key:  # pragma: no cover
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         request = urllib.request.Request(  # pragma: no cover
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=body,
@@ -2292,53 +2144,38 @@ class ModelClient:
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
         *,
-        timeout: float | None = None,
         allow_transient_retries: bool = True,
     ) -> dict[str, Any]:  # pragma: no cover
-        """Passthrough transport sharing one timeout budget across all retries."""
+        """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
-        provider_timeout = self.timeout if timeout is None else float(timeout)
-        deadline = time.monotonic() + provider_timeout
         for attempt in range(retry_limit + 1):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                last_error = TimeoutError("provider attempt deadline exceeded")
-                break
             try:
-                self._local.provider_transport_timeout = remaining
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._sleep(min(self._backoff_delay(attempt), remaining))
-            finally:
-                self._local.provider_transport_timeout = None
-        self.remaining_request_timeout()
+                self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
             last_error.code == 413 or _is_oversized_tool_description_error(last_error)
         ):
-            raise ProviderRequestTooLargeError("provider request body is too large") from None
-        if not allow_transient_retries and last_error is not None:
-            raise last_error
-        if isinstance(last_error, urllib.error.HTTPError) and endpoint.strip("/").endswith(
-            "embeddings"
-        ):
-            provider_code, max_inputs, max_tokens = _provider_limit_contract(last_error)
-            raise ProviderResponseError(
-                "provider rejected the embeddings batch",
-                status_code=int(last_error.code),
-                provider_code=provider_code,
-                max_inputs=max_inputs,
-                max_tokens=max_tokens,
+            raise ProviderRequestTooLargeError(
+                "provider request body is too large",
+                agent_id=agent.id,
+                model=agent.model,
+                provider_status=last_error.code,
+                transport="passthrough",
             ) from None
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
+        if last_error is None:  # pragma: no cover - the loop always attempts once
+            raise RuntimeError(f"provider {agent.id} passthrough request failed")
+        if not allow_transient_retries:
+            raise last_error
+        raise classify_provider_failure(
+            last_error, agent_id=agent.id, model=agent.model, transport="passthrough"
+        ) from None
 
     def _send_raw(
         self,
@@ -2346,14 +2183,12 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
-        *,
-        timeout: float | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+            headers["authorization"] = format_authorization_header(agent.auth_scheme, api_key)
         inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
@@ -2361,18 +2196,11 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        effective_timeout = timeout
-        if effective_timeout is None:
-            effective_timeout = getattr(self._local, "provider_transport_timeout", None)
-        previous_timeout = getattr(self._local, "provider_transport_timeout", None)
-        if timeout is not None:
-            self._local.provider_transport_timeout = effective_timeout
-        try:
-            with self._open_provider(request, destination) as response:
-                return json.loads(response.read().decode("utf-8"))
-        finally:
-            if timeout is not None:
-                self._local.provider_transport_timeout = previous_timeout
+        started = time.monotonic()
+        with self._open_provider(request, destination) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        _record_provider_response_telemetry(data, started)
+        return data
 
     def _mock_raw(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -2384,8 +2212,7 @@ class ModelClient:
         mock_content = (
             "{}"
             if isinstance(response_format, dict)
-            and str(response_format.get("type", "")).strip().lower()
-            in {"json_object", "json_schema"}
+            and str(response_format.get("type", "")).strip().lower() == "json_schema"
             else f"[{agent.id}] chat-mock"
         )
         echoed = {
@@ -2528,18 +2355,19 @@ class ModelClient:
             results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
-            batch_error: RuntimeError | None = None
+            batch_error: ProviderUpstreamError | None = None
             try:
                 results = self._batch_run(  # pragma: no cover
                     agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
                 )
-            except RequestDeadlineExceeded:
-                raise
-            except Exception:  # noqa: BLE001 - provider batch boundary (CWE-209)
+            except Exception as exc:  # noqa: BLE001 - provider batch boundary (CWE-209)
                 # Batch upload, polling, and output retrieval all cross the same
                 # public gateway boundary; provider bodies and exception text stay
-                # inside the authorized provider observability system.
-                batch_error = RuntimeError(f"provider {agent.id} batch request failed")
+                # inside the authorized provider observability system. The failure
+                # is still classified so callers can act on the cause.
+                batch_error = classify_provider_failure(
+                    exc, agent_id=agent.id, model=agent.model, transport="batch"
+                )
             if batch_error is not None:
                 raise batch_error
         return _validate_batch_results(requests, results)
@@ -2648,7 +2476,7 @@ class ModelClient:
             self._provider_url(agent, "/files"),
             data=body,
             headers={
-                "authorization": f"{agent.auth_scheme} {api_key}",
+                "authorization": format_authorization_header(agent.auth_scheme, api_key),
                 "content-type": f"multipart/form-data; boundary={boundary}",
             },
             method="POST",
@@ -2670,7 +2498,7 @@ class ModelClient:
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
-                "authorization": f"{agent.auth_scheme} {api_key}",
+                "authorization": format_authorization_header(agent.auth_scheme, api_key),
                 "content-type": "application/json",
             },
             method=method,
@@ -2698,7 +2526,7 @@ class ModelClient:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
-            headers={"authorization": f"{agent.auth_scheme} {api_key}"},
+            headers={"authorization": format_authorization_header(agent.auth_scheme, api_key)},
             method="GET",
         )
         with self._open_provider(request, destination) as response:
@@ -2738,10 +2566,13 @@ def _coerce_message_content_text(content: Any) -> str:
 
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
-    """Load model agent definitions from an agents JSON file."""
+    """Load model agent definitions from an object- or list-shaped JSON file."""
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
-    return [ModelAgent.from_dict(item) for item in data["agents"]]
+    items = data.get("agents") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise ValueError("agents JSON must contain a list of agent definitions")
+    return [ModelAgent.from_dict(item) for item in items]
 
 
 class _AgentPoolStore:
@@ -2772,6 +2603,7 @@ class _AgentPoolStore:
             "local_credential_key",
             "auth_scheme",
             "reasoning_effort_supported",
+            "stream_usage_supported",
         }
     )
 
@@ -2808,9 +2640,12 @@ class _AgentPoolStore:
                 local_credential_key TEXT NOT NULL,
                 auth_scheme TEXT NOT NULL,
                 reasoning_effort_supported INTEGER,
+                stream_usage_supported INTEGER NOT NULL DEFAULT 0,
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
                 CONSTRAINT agent_pool_reasoning_effort_flag_check
-                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))
+                    CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1)),
+                CONSTRAINT agent_pool_stream_usage_flag_check
+                    CHECK (stream_usage_supported IN (0, 1))
             )
             """
         )
@@ -2849,8 +2684,8 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                reasoning_effort_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                reasoning_effort_supported, stream_usage_supported
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -2864,6 +2699,7 @@ class _AgentPoolStore:
                 config["local_credential_key"],
                 config["auth_scheme"],
                 config["reasoning_effort_supported"],
+                int(config["stream_usage_supported"]),
             ),
         )
         conn.executemany(
@@ -2915,6 +2751,12 @@ class _AgentPoolStore:
                 "CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))"
             )
             columns.add("reasoning_effort_supported")
+        if "stream_usage_supported" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN stream_usage_supported INTEGER NOT NULL DEFAULT 0 "
+                "CHECK (stream_usage_supported IN (0, 1))"
+            )
+            columns.add("stream_usage_supported")
         if not cls._AGENT_COLUMNS.issubset(columns):
             missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
             raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
@@ -3009,7 +2851,7 @@ class _AgentPoolStore:
                         model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
                         priority = ?, disabled = ?, provider_name = ?,
                         local_credential_key = ?, auth_scheme = ?,
-                        reasoning_effort_supported = ?
+                        reasoning_effort_supported = ?, stream_usage_supported = ?
                     WHERE agent_id = ?
                     """,
                     (
@@ -3023,6 +2865,7 @@ class _AgentPoolStore:
                         config["local_credential_key"],
                         config["auth_scheme"],
                         config["reasoning_effort_supported"],
+                        int(config["stream_usage_supported"]),
                         agent.id,
                     ),
                 )
@@ -3118,7 +2961,7 @@ class _AgentPoolStore:
                     """
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
-                           reasoning_effort_supported
+                           reasoning_effort_supported, stream_usage_supported
                     FROM agent_pool ORDER BY agent_id
                     """
                 ).fetchall()
@@ -3181,6 +3024,7 @@ class _AgentPoolStore:
                 local_credential_key=row[8],
                 auth_scheme=row[9],
                 reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
+                stream_usage_supported=bool(row[11]),
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -3460,6 +3304,7 @@ class TaskOrchestrator:
         cache_provider: ResponseCacheProvider | None = None,
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
+        allow_empty_agents: bool = False,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -3469,7 +3314,7 @@ class TaskOrchestrator:
             agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
         self.candidates = list(agents)
         self.agents = [agent for agent in self.candidates if not agent.disabled]
-        if not self.agents:  # pragma: no cover
+        if not self.agents and not allow_empty_agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         # Measured speed/stability routing inside model groups (global: every
         # selection path below funnels through _ranked_agents). Ledger state is
@@ -3557,13 +3402,6 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self._circuit_lock = threading.Lock()
         self._provider_readiness_lock = threading.Lock()
-        self._structured_readiness: dict[str, dict[str, Any]] = {}
-        self._request_failed_agents: ContextVar[set[str] | None] = ContextVar(
-            f"request_failed_agents_{id(self)}", default=None
-        )
-        self._request_admitted_agents: ContextVar[frozenset[str] | None] = ContextVar(
-            f"request_admitted_agents_{id(self)}", default=None
-        )
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -3590,6 +3428,55 @@ class TaskOrchestrator:
             self._pool_store.close()
         if self._store is not None:
             self._store.close()
+
+    @contextmanager
+    def request_policy(self, zdr_only: bool = False):
+        """Scope request selection to models carrying verified ZDR evidence."""
+        if type(zdr_only) is not bool:
+            raise TypeError("zdr_only must be a boolean")
+        token = _REQUEST_ZDR_ONLY.set(zdr_only)
+        try:
+            yield
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+
+    @staticmethod
+    def _zdr_agent_allowed(agent: ModelAgent) -> bool:
+        """Return whether one agent is eligible under the active privacy policy."""
+        return not _REQUEST_ZDR_ONLY.get() or "privacy:zdr" in agent.tags
+
+    def select_model_group_members(
+        self,
+        candidate_pool: Iterable[ModelAgent],
+        *,
+        text: str = "",
+        role: str = "worker",
+        free_only: bool = False,
+        chat_only: bool = True,
+        zdr_only: bool | None = None,
+    ) -> list[ModelAgent]:
+        """Select from the caller-supplied model-group array.
+
+        The configured pool is only the default request source. Callers such as
+        naruon may pass any discovered/configured group array; the active
+        request policy then filters that array without inventing candidates.
+        """
+        if zdr_only is not None:
+            with self.request_policy(zdr_only):
+                return self.select_model_group_members(
+                    candidate_pool,
+                    text=text,
+                    role=role,
+                    free_only=free_only,
+                    chat_only=chat_only,
+                )
+        return self._ranked_agents(
+            text,
+            role,
+            free_only=free_only,
+            chat_only=chat_only,
+            candidate_pool=candidate_pool,
+        )
 
     def provider_readiness_report(
         self,
@@ -3638,101 +3525,6 @@ class TaskOrchestrator:
             "items": items,
         }
 
-    def _structured_ready_candidates(
-        self,
-        primary: ModelAgent,
-        text: str,
-        allowed_agent_ids: set[str] | None,
-    ) -> list[ModelAgent]:
-        """Return recently probed structured-ready candidates from one declared set."""
-        candidates = self._failover_candidates(
-            primary, text, "verifier", allowed_agent_ids=allowed_agent_ids
-        )
-        if allowed_agent_ids is None:
-            candidates = [primary]
-        if len(candidates) > MAX_LOCAL_CONCURRENCY:
-            raise ValueError("declared structured candidate set exceeds concurrency limit")
-        now = time.monotonic()
-        with self._provider_readiness_lock:
-            stale = [
-                agent
-                for agent in candidates
-                if now
-                - float(
-                    self._structured_readiness.get(agent.id, {}).get(
-                        "checked_at", -math.inf
-                    )
-                )
-                >= self.circuit_reset_seconds
-            ]
-        if stale:
-            with ThreadPoolExecutor(max_workers=len(stale)) as executor:
-                futures = {
-                    executor.submit(
-                        copy_context().run,
-                        self.client.probe_structured,
-                        agent,
-                        timeout=DEFAULT_PROVIDER_PROBE_TIMEOUT,
-                    ): agent
-                    for agent in stale
-                }
-                results = [(futures[future], future.result()) for future in futures]
-            checked_at = time.monotonic()
-            with self._provider_readiness_lock:
-                for agent, result in results:
-                    ready = result.get("status") == "ready"
-                    self._structured_readiness[agent.id] = {
-                        "status": "ready" if ready else "not_ready",
-                        "checked_at": checked_at,
-                    }
-                    # Capability readiness is separate from transport health.
-                    # Do not open or clear the shared provider circuit from a
-                    # structured-format probe outcome.
-        with self._provider_readiness_lock:
-            ready = [
-                agent
-                for agent in candidates
-                if self._structured_readiness.get(agent.id, {}).get("status") == "ready"
-                and not self._circuit_open(agent.id)
-            ]
-        if not ready:
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            )
-        return ready
-
-    def _record_structured_not_ready(self, agent_id: str) -> None:
-        """Exclude one failed structured candidate until the existing circuit retry window."""
-        with self._provider_readiness_lock:
-            self._structured_readiness[agent_id] = {
-                "status": "not_ready",
-                "checked_at": time.monotonic(),
-            }
-
-    def _structured_admitted_agent_ids(self) -> frozenset[str]:
-        """Return agents with latest successful structured-readiness evidence.
-
-        A conducted request must never turn discovery rows into live provider
-        calls merely to discover whether they work.  Mock transports are an
-        explicit deterministic test capability. External evidence remains
-        admitted until a provider failure records contradictory evidence;
-        an arbitrary wall-clock freshness heuristic is intentionally absent.
-        """
-        with self._provider_readiness_lock:
-            admitted = frozenset(
-                agent.id
-                for agent in self.agents
-                if agent.base_url.startswith("mock://")
-                or self._structured_readiness.get(agent.id, {}).get("status") == "ready"
-            )
-        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-        if endpoint_ids is None:
-            return admitted
-        current = {
-            agent.id for agent in self.agents if _agent_matches_request_endpoint(agent)
-        }
-        return admitted.intersection(current)
-
     def _reload_state(self) -> None:
         for observation in self._store.load("psychometric_observation"):
             self._psychometric_router.observe_context_id(
@@ -3763,6 +3555,8 @@ class TaskOrchestrator:
             "include_orchestration_trace",
             "attribution",
             "routing",
+            "zdr_only",
+            "stream_options",
             "_required_agent_id",
             "_file_replicas",
         }
@@ -3786,38 +3580,8 @@ class TaskOrchestrator:
         Direct callers retain the established single-provider passthrough
         contract.
         """
-        requested_model = body.get("model")
-        virtual_model = requested_model in {
-            None,
-            "contextual-orchestrator",
-            self.AUTO_MODEL,
-            self.FREE_MODEL,
-        }
         normalized_endpoint = endpoint.strip("/")
-        structured_request = normalized_endpoint == "responses" or any(
-            key in body and not _is_omit_equivalent_control(key, body.get(key))
-            for key in _PASSTHROUGH_TRIGGER_KEYS
-        )
-        active_scope = self._request_failed_agents.get()
-        if virtual_model and structured_request and active_scope is None:
-            admitted = self._structured_admitted_agent_ids()
-            if not admitted:
-                raise NoViableAgentError(
-                    retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-                )
-            failed_token = self._request_failed_agents.set(set())
-            admitted_token = self._request_admitted_agents.set(admitted)
-            try:
-                return self.proxy_completion(
-                    body,
-                    endpoint=endpoint,
-                    effort_profile=effort_profile,
-                    single_agent=single_agent,
-                )
-            finally:
-                self._request_admitted_agents.reset(admitted_token)
-                self._request_failed_agents.reset(failed_token)
-
+        api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
         if not single_agent and (
             normalized_endpoint == "responses"
             or any(
@@ -3849,11 +3613,21 @@ class TaskOrchestrator:
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
         agent = (
-            next((candidate for candidate in self.agents if candidate.id == required_agent_id), None)
+            next(
+                (
+                    candidate
+                    for candidate in self.agents
+                    if candidate.id == required_agent_id
+                ),
+                None,
+            )
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and agent is None:
+        if (
+            isinstance(required_agent_id, str)
+            and (agent is None or not self._zdr_agent_allowed(agent))
+        ):
             raise RuntimeError("required file provider is unavailable")
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
@@ -3870,7 +3644,12 @@ class TaskOrchestrator:
             else None
         )
         if replica_agent_ids is not None and agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             agent = next(
                 (
@@ -3905,14 +3684,14 @@ class TaskOrchestrator:
             if isinstance(file_replicas, dict):
                 upstream = _bind_provider_file_ids(upstream, file_replicas, agent.id)
             if effort_profile is not None:
-                upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+                upstream = self.client.apply_effort_profile(
+                    agent, upstream, effort_profile, api_surface=api_surface
+                )
             measured = bool(agent.group_name or requested_model == self.FREE_MODEL)
             started_at = time.perf_counter()
             try:
                 result = self.client.proxy_send(agent, endpoint, upstream)
             except Exception as exc:
-                if isinstance(exc, RequestDeadlineExceeded):
-                    raise
                 request_too_large = _is_request_too_large_error(exc)
                 if measured and not request_too_large:
                     self._group_router.observe_failure(agent.id)
@@ -3923,24 +3702,23 @@ class TaskOrchestrator:
                 )
             return result
 
-        allowed_agent_ids = (
-            {agent.id}
-            if isinstance(required_agent_id, str)
+        allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
+            if requested_model == self.FREE_MODEL
             else (
-                {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
-                if requested_model == self.FREE_MODEL
-                else (
-                    {candidate.id for candidate in self.agents}
-                    if requested_model == self.AUTO_MODEL
-                    else None
-                )
+                {
+                    candidate.id
+                    for candidate in self.agents
+                    if self._zdr_agent_allowed(candidate)
+                }
+                if requested_model in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL}
+                else None
             )
-        )
-        admitted = self._request_admitted_agents.get()
-        if admitted is not None:
-            allowed_agent_ids = set(admitted) & (
-                allowed_agent_ids if allowed_agent_ids is not None else set(admitted)
-            )
+        ))
         if replica_agent_ids is not None:
             allowed_agent_ids = (
                 replica_agent_ids
@@ -3976,19 +3754,16 @@ class TaskOrchestrator:
         candidates: list[ModelAgent] = []
         seen_providers: set[str] = set()
         for candidate in ranked_candidates:
-            if candidate.provider_name.strip():
-                provider_key = f"provider:{candidate.provider_name.casefold()}"
-            elif structured_request and candidate.base_url.startswith("mock://"):
-                # Distinct mock agents are deterministic structured-readiness
-                # fixtures; production endpoints still deduplicate below.
-                provider_key = f"mock:{candidate.id}"
-            else:
-                provider_key = f"endpoint:{candidate.base_url.rstrip('/').casefold()}"
+            provider_key = (
+                f"provider:{candidate.provider_name.casefold()}"
+                if candidate.provider_name.strip()
+                else f"endpoint:{candidate.base_url.rstrip('/').casefold()}"
+            )
             if provider_key in seen_providers:
                 continue
             seen_providers.add(provider_key)
             candidates.append(candidate)
-        last_error: Exception | None = None
+        last_failure: tuple[Exception, ModelAgent] | None = None
         every_failure_was_request_too_large = True
         for candidate in candidates:
             started_at = time.perf_counter()
@@ -4000,25 +3775,27 @@ class TaskOrchestrator:
                 )
             if effort_profile is not None:
                 candidate_payload = self.client.apply_effort_profile(
-                    candidate, candidate_payload, effort_profile
+                    candidate,
+                    candidate_payload,
+                    effort_profile,
+                    api_surface=api_surface,
                 )
             try:
                 send_once = getattr(self.client, "proxy_send_once", None)
-                if type(self.client).proxy_send is not ModelClient.proxy_send:
-                    send_once = self.client.proxy_send
-                elif not callable(send_once):
+                if not callable(send_once):
                     send_once = self.client.proxy_send
                 result = send_once(candidate, endpoint, candidate_payload)
             except Exception as exc:  # noqa: BLE001 - provider trust boundary
-                if isinstance(exc, RequestDeadlineExceeded):
-                    raise
                 if not _is_passthrough_failover_error(exc):
+                    if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
+                        raise classify_provider_failure(
+                            exc,
+                            agent_id=candidate.id,
+                            model=candidate.model,
+                            transport="passthrough",
+                        ) from None
                     raise
-                last_error = exc
-                failed_agents = self._request_failed_agents.get()
-                if failed_agents is not None:
-                    self._record_structured_not_ready(candidate.id)
-                    failed_agents.add(candidate.id)
+                last_failure = (exc, candidate)
                 request_too_large = _is_request_too_large_error(exc)
                 every_failure_was_request_too_large = (
                     every_failure_was_request_too_large
@@ -4035,17 +3812,19 @@ class TaskOrchestrator:
                     candidate.id, time.perf_counter() - started_at
                 )
             return result
-        if last_error is not None and every_failure_was_request_too_large:
+        if last_failure is not None and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             ) from None
-        if structured_request and virtual_model:
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            ) from last_error
-        raise RuntimeError(
-            f"all {len(candidates)} candidate agents failed for passthrough endpoint={endpoint}"
-        ) from last_error
+        if last_failure is not None:
+            last_error, failed_candidate = last_failure
+            raise classify_provider_failure(
+                last_error,
+                agent_id=failed_candidate.id,
+                model=failed_candidate.model,
+                transport="passthrough",
+            ) from None
+        raise RuntimeError("passthrough has no eligible provider candidate")
 
     def _orchestrated_provider_completion(
         self,
@@ -4062,6 +3841,7 @@ class TaskOrchestrator:
         generation; other synthesis failures remain single-shot and fail closed.
         """
         response_request = endpoint == "responses"
+        api_surface = "responses" if response_request else "chat.completions"
         chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
         messages = chat_body.get("messages")
         if not isinstance(messages, list) or not messages:
@@ -4082,26 +3862,26 @@ class TaskOrchestrator:
         prompt_context = self._prompt_interaction(messages)
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         response_format_requested = bool(chat_body.get("response_format"))
-        structured_admitted = (
-            self._structured_admitted_agent_ids()
-            if response_format_requested
-            else None
-        )
         requested_model = body.get("model")
         free_only = requested_model == self.FREE_MODEL
-        final_agent = self._requested_agent(requested_model)
-        if structured_admitted is not None and not structured_admitted:
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            )
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
         final_agent = (
-            next((agent for agent in self.agents if agent.id == required_agent_id), None)
+            next(
+                (
+                    agent
+                    for agent in self.agents
+                    if agent.id == required_agent_id
+                ),
+                None,
+            )
             if isinstance(required_agent_id, str)
             else self._requested_agent(requested_model)
         )
-        if isinstance(required_agent_id, str) and final_agent is None:
+        if (
+            isinstance(required_agent_id, str)
+            and (final_agent is None or not self._zdr_agent_allowed(final_agent))
+        ):
             raise RuntimeError("required file provider is unavailable")
         if final_agent is None:
             try:
@@ -4113,11 +3893,6 @@ class TaskOrchestrator:
                     prefer_tags=(
                         (("response_format",) if response_format_requested else ())
                     ),
-                    allowed_agent_ids=(
-                        set(structured_admitted)
-                        if structured_admitted is not None
-                        else None
-                    ),
                     prompt_context=prompt_context,
                 )
             except RuntimeError as exc:
@@ -4127,23 +3902,23 @@ class TaskOrchestrator:
                         + ", ".join(required_tags)
                     ) from exc
                 if response_format_requested:
-                    raise NoViableAgentError(
-                        retry_after_seconds=max(
-                            1, math.ceil(self.circuit_reset_seconds)
-                        )
-                    ) from None
+                    raise ValueError(
+                        "no enabled model can serve the requested response_format; "
+                        "the pool has no chat synthesizer"
+                    ) from exc
                 raise
-        elif structured_admitted is not None and final_agent.id not in structured_admitted:
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            )
         replica_agent_ids = (
             set.intersection(*(set(value) for value in file_replicas.values()))
             if isinstance(file_replicas, dict) and file_replicas
             else None
         )
         if replica_agent_ids is not None and final_agent.id not in replica_agent_ids:
-            if requested_model not in {None, "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL}:
+            if requested_model not in {
+                None,
+                self.GATEWAY_DEFAULT_MODEL,
+                self.AUTO_MODEL,
+                self.FREE_MODEL,
+            }:
                 raise RuntimeError("requested model has no referenced file replica")
             final_agent = next(
                 (
@@ -4263,9 +4038,21 @@ class TaskOrchestrator:
             self.FREE_MODEL,
         }
         allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
-            {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+            {
+                candidate.id
+                for candidate in self.agents
+                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            }
             if free_only
-            else ({candidate.id for candidate in self.agents} if virtual_model else None)
+            else (
+                {
+                    candidate.id
+                    for candidate in self.agents
+                    if self._zdr_agent_allowed(candidate)
+                }
+                if virtual_model
+                else None
+            )
         ))
         if replica_agent_ids is not None:
             allowed_agent_ids = (
@@ -4320,14 +4107,14 @@ class TaskOrchestrator:
                     )
                 if active_profile is not None:
                     candidate_payload = self.client.apply_effort_profile(
-                        candidate, candidate_payload, active_profile
+                        candidate,
+                        candidate_payload,
+                        active_profile,
+                        api_surface=api_surface,
                     )
                 try:
                     send = self.client.proxy_send
-                    if (
-                        virtual_model
-                        and type(self.client).proxy_send is ModelClient.proxy_send
-                    ):
+                    if virtual_model:
                         send_once = getattr(self.client, "proxy_send_once", None)
                         if callable(send_once):
                             send = send_once
@@ -4352,16 +4139,7 @@ class TaskOrchestrator:
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)
-            if (
-                virtual_model
-                and response_format_requested
-                and not isinstance(exc, ProviderRequestTooLargeError)
-            ):
-                raise NoViableAgentError(
-                    retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-                ) from None
             raise
-
         def provider_output(response: Mapping[str, Any]) -> str:
             if not response_request:
                 try:
@@ -4408,7 +4186,7 @@ class TaskOrchestrator:
             )
             repair_upstream = copy.deepcopy(upstream)
             repair_instruction = (
-                "The prior synthesis violated the caller's structured-output contract "
+                "The prior synthesis violated the caller's strict JSON Schema "
                 f"({contract_error}). Regenerate the complete answer and return only "
                 "JSON that satisfies the supplied response_format."
             )
@@ -4439,8 +4217,6 @@ class TaskOrchestrator:
             repaired_output = provider_output(repaired)
             if _structured_output_error(repaired_output, response_format) is not None:
                 self._record_failure(final_agent.id)
-                if response_format_requested:
-                    self._record_structured_not_ready(final_agent.id)
                 if final_agent.group_name:
                     self._group_router.observe_failure(final_agent.id)
                 raise ProviderResponseError(
@@ -4524,288 +4300,6 @@ class TaskOrchestrator:
         }
         return raw
 
-    @staticmethod
-    def _validated_structured_text(text: str, schema: dict[str, Any]) -> str | None:
-        """Return canonical JSON when the complete model text satisfies the schema."""
-        validator = Draft202012Validator(schema)
-        try:
-            value = json.loads(text.strip())
-            validator.validate(value)
-        except (json.JSONDecodeError, ValidationError):
-            return None
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-    @staticmethod
-    def _structured_contract_messages(
-        messages: list[ChatMessage], schema: dict[str, Any]
-    ) -> list[ChatMessage]:
-        """Attach the schema as a caller instruction for every conduct role."""
-        return [
-            *messages,
-            {
-                "role": "system",
-                "content": (
-                    "The final answer must be one JSON value satisfying this Draft 2020-12 schema:\n"
-                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
-                ),
-            },
-        ]
-
-    def _repair_structured_answer(
-        self,
-        messages: list[ChatMessage],
-        synthesized: str,
-        schema: dict[str, Any],
-        admitted: frozenset[str],
-    ) -> tuple[str, dict[str, Any]]:
-        """Translate one synthesis into schema-valid JSON using admitted plain-chat agents."""
-        direct = self._validated_structured_text(synthesized, schema)
-        if direct is not None:
-            return direct, {"id": -1, "role": "structured_validator", "access": [], "output": direct}
-        task = self._latest_user_text(messages)
-        repair_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Return only one JSON value satisfying the supplied Draft 2020-12 schema. "
-                    "Preserve supported facts from the synthesis; do not invent missing facts."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Original task:\n{task}\n\nSynthesis:\n{synthesized}\n\n"
-                    f"JSON Schema:\n{json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}"
-                ),
-            },
-        ]
-        try:
-            primary = self._ranked_agents(task, "synthesizer")[0]
-        except (IndexError, RuntimeError) as exc:
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            ) from exc
-        candidates = self._failover_candidates(
-            primary, task, "synthesizer", allowed_agent_ids=set(admitted)
-        )
-        for candidate in candidates:
-            try:
-                self.client.remaining_request_timeout()
-                started_at = time.perf_counter()
-                output = self.client.chat(candidate, repair_messages)
-                usage = self.client.take_usage()
-            except RequestDeadlineExceeded:
-                raise
-            except Exception:
-                self._record_failure(candidate.id)
-                failed = self._request_failed_agents.get()
-                if failed is not None:
-                    failed.add(candidate.id)
-                continue
-            valid = self._validated_structured_text(output, schema)
-            if valid is None:
-                failed = self._request_failed_agents.get()
-                if failed is not None:
-                    failed.add(candidate.id)
-                continue
-            self._record_success(candidate.id)
-            return valid, {
-                "id": -1,
-                "role": "structured_repair",
-                "agent_id": candidate.id,
-                "access": [],
-                "output": valid,
-                "latency_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                **({"usage": usage} if usage is not None else {}),
-            }
-        self.client.remaining_request_timeout()
-        raise NoViableAgentError(retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds)))
-
-    def run_structured(
-        self,
-        messages: list[ChatMessage],
-        *,
-        response_format: dict[str, Any],
-        workflow_run_id: str | None = None,
-        owner_id: str | None = None,
-        model_name: str = "contextual-orchestrator",
-    ) -> dict[str, Any]:
-        """Persist a multi-agent synthesis and schema-validated repair result."""
-        schema = response_format["json_schema"]["schema"]
-        validate_json_schema_contract(schema)
-        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-            budget = self.budget_status()
-            if budget["exceeded"]:
-                raise BudgetExceededError("spend budget exceeded", detail=budget)
-        admitted = self._structured_admitted_agent_ids()
-        if model_name == self.FREE_MODEL:
-            admitted = frozenset(
-                agent.id for agent in self.agents
-                if agent.id in admitted and self._is_free_agent(agent)
-            )
-        if not admitted:
-            raise NoViableAgentError(retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds)))
-        failed_token = self._request_failed_agents.set(set())
-        admitted_token = self._request_admitted_agents.set(admitted)
-        try:
-            structured_messages = self._structured_contract_messages(messages, schema)
-            result = self.complete(
-                structured_messages, mode="conduct", bypass_cache=True, model_name=model_name
-            )
-            answer, repair_trace = self._repair_structured_answer(
-                messages, result["answer"], schema, admitted
-            )
-        finally:
-            self._request_admitted_agents.reset(admitted_token)
-            self._request_failed_agents.reset(failed_token)
-        result["answer"] = answer
-        repair_trace["id"] = len(result["trace"])
-        repair_trace["access"] = [len(result["trace"]) - 1]
-        result["trace"].append(repair_trace)
-        record = self._with_effort_snapshot({
-            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
-            "created_at": int(time.time()),
-            "mode": result["mode"],
-            "policy_mode": "conduct",
-            "prompt_text": self._latest_user_text(messages),
-            "answer": answer,
-            "cache_status": result.get("cache_status", "bypass"),
-            "trace": list(result["trace"]),
-            "policy_snapshot": self.policy.as_dict(),
-            "verification": result.get("verification"),
-        })
-        if owner_id is not None:
-            record["owner_id"] = owner_id
-        self._replace_workflow_run(record)
-        self._run_order.appendleft(record["workflow_run_id"])
-        if self._store is not None:
-            self._store.save("workflow_run", record["workflow_run_id"], record)
-        self._append_audit_event("workflow_run_created", {
-            "workflow_run_id": record["workflow_run_id"],
-            "mode": record["mode"],
-            "agent_count": len(record["trace"]),
-        })
-        self.record_analytics_event("workflow_run_created", {
-            "workflow_run_id": record["workflow_run_id"],
-            "run_mode": record["mode"],
-            "policy_mode": "conduct",
-            "trace_step_count": len(record["trace"]),
-        })
-        for step in record["trace"]:
-            self.record_analytics_event("workflow_step_completed", {
-                "workflow_run_id": record["workflow_run_id"],
-                "step_id": step.get("id"),
-                "step_role": step.get("role"),
-                "agent_id": step.get("agent_id"),
-            })
-        result["workflow_run_id"] = record["workflow_run_id"]
-        return result
-
-    def probe_structured_workflow(
-        self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT
-    ) -> dict[str, Any]:
-        """Exercise internal schema work and both native structured transports."""
-        probe_timeout = _validate_provider_probe_timeout(timeout)
-        deadline = time.monotonic() + probe_timeout
-        schema = {
-            "type": "object",
-            "properties": {"ok": {"type": "boolean"}},
-            "required": ["ok"],
-            "additionalProperties": False,
-        }
-        failed_token = self._request_failed_agents.set(set())
-        admitted_token = self._request_admitted_agents.set(frozenset({agent.id}))
-        try:
-            with self.client.request_settings(request_deadline_monotonic=deadline):
-                synthesis = self._conduct_request(
-                    self._structured_contract_messages(
-                        [{"role": "user", "content": "Return whether this request is valid."}], schema
-                    ),
-                    model_name=self.AUTO_MODEL,
-                )
-                self._repair_structured_answer([], synthesis["answer"], schema, frozenset({agent.id}))
-                remaining = deadline - time.monotonic()
-                if remaining < 0.1:
-                    raise RequestDeadlineExceeded("request deadline exceeded")
-                schema_transport = self.client.probe_structured(
-                    agent,
-                    timeout=min(probe_timeout, remaining),
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {"name": "structured_readiness", "schema": schema},
-                    },
-                )
-                remaining = deadline - time.monotonic()
-                if remaining < 0.1:
-                    raise RequestDeadlineExceeded("request deadline exceeded")
-                object_transport = self.client.probe_structured(
-                    agent, timeout=min(probe_timeout, remaining)
-                )
-                if object_transport.get("status") != "ready":
-                    return {
-                        "agent_id": agent.id,
-                        "status": "not_ready",
-                        "error_type": str(
-                            object_transport.get("error_type", "ProviderResponseError")
-                        ),
-                        "failure_code": "json_object_transport_not_ready",
-                    }
-                if schema_transport.get("status") != "ready":
-                    return {
-                        "agent_id": agent.id,
-                        "status": "not_ready",
-                        "error_type": str(
-                            schema_transport.get("error_type", "ProviderResponseError")
-                        ),
-                        "failure_code": "json_schema_transport_not_ready",
-                    }
-        except RequestDeadlineExceeded:
-            raise
-        except Exception as exc:
-            return {
-                "agent_id": agent.id,
-                "status": "not_ready",
-                "error_type": _safe_provider_probe_error_type(exc),
-            }
-        finally:
-            self._request_admitted_agents.reset(admitted_token)
-            self._request_failed_agents.reset(failed_token)
-        return {"agent_id": agent.id, "status": "ready"}
-
-    @contextmanager
-    def routing_endpoint_scope(self, endpoint: str | None, requested_model: Any):
-        """Constrain this request to agents whose configured endpoint matches exactly."""
-        if endpoint is None:
-            yield
-            return
-        if not isinstance(endpoint, str) or not endpoint.strip():
-            raise EndpointUnavailableError("endpoint_unavailable")
-        normalized = normalize_endpoint_selector(endpoint.strip())
-        matching = frozenset(
-            agent.id
-            for agent in self.agents
-            if _configured_endpoint_matches(agent.base_url, normalized)
-        )
-        if not matching:
-            raise EndpointUnavailableError("endpoint_unavailable")
-        if requested_model not in {
-            None,
-            self.GATEWAY_DEFAULT_MODEL,
-            self.AUTO_MODEL,
-            self.FREE_MODEL,
-        } and not any(
-            agent.id in matching and agent.model == requested_model
-            for agent in self.agents
-        ):
-            raise EndpointUnavailableError("endpoint_unavailable")
-        ids_token = _REQUEST_ENDPOINT_AGENT_IDS.set(matching)
-        identity_token = _REQUEST_ENDPOINT_IDENTITY.set(normalized)
-        try:
-            yield
-        finally:
-            _REQUEST_ENDPOINT_IDENTITY.reset(identity_token)
-            _REQUEST_ENDPOINT_AGENT_IDS.reset(ids_token)
-
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
         if requested_model is None or requested_model in {
@@ -4814,24 +4308,32 @@ class TaskOrchestrator:
             return None
         if type(requested_model) is not str or not requested_model:
             raise ValueError("requested model must be a configured non-empty string")
-        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
         matches = [
             candidate
             for candidate in self.candidates
-            if candidate.model == requested_model
-            and (endpoint_ids is None or _agent_matches_request_endpoint(candidate))
+            if (
+                candidate.model == requested_model
+                and self._zdr_agent_allowed(candidate)
+                and (not _REQUEST_ZDR_ONLY.get() or not candidate.disabled)
+            )
         ]
-        if not matches:
+        configured_exact = any(candidate.model == requested_model for candidate in self.candidates)
+        if not matches and not configured_exact:
             try:
                 requested_group = canonical_group_name(requested_model)
             except ValueError:
                 requested_group = ""
-            matches = [
+            group_candidates = [
                 candidate
-                for candidate in self._ranked_agents("", "worker")
+                for candidate in self.candidates
                 if candidate.group_name
                 and canonical_group_name(candidate.group_name) == requested_group
             ]
+            if group_candidates:
+                try:
+                    matches = self.select_model_group_members(group_candidates)
+                except RuntimeError:
+                    matches = []
         if not matches:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
@@ -4846,24 +4348,6 @@ class TaskOrchestrator:
         cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
-        return self._complete_request(
-            messages,
-            mode,
-            bypass_cache=bypass_cache,
-            model_name=model_name,
-            cache_partition=cache_partition,
-        )
-
-    def _complete_request(
-        self,
-        messages: list[ChatMessage],
-        mode: str = "auto",
-        *,
-        bypass_cache: bool = False,
-        model_name: str = "contextual-orchestrator",
-        cache_partition: str | None = None,
-    ) -> dict[str, Any]:
-        """Complete one request inside its failed-provider exclusion scope."""
         if not isinstance(bypass_cache, bool):
             raise TypeError("bypass_cache must be a boolean")
         if not isinstance(model_name, str) or not model_name.strip():
@@ -4944,6 +4428,8 @@ class TaskOrchestrator:
         *,
         model_name: str = GATEWAY_DEFAULT_MODEL,
         owner_id: str | None = None,
+        include_usage: bool = False,
+        usage_callback: Callable[[dict[str, Any] | None], None] | None = None,
     ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
@@ -4956,22 +4442,24 @@ class TaskOrchestrator:
         )
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
-        stream = (
-            self.client.stream_chat(agent, messages, effort_profile=effort_profile)
-            if effort_profile is not None
-            else self.client.stream_chat(agent, messages)
-        )
+        stream_kwargs: dict[str, Any] = {}
+        if effort_profile is not None:
+            stream_kwargs["effort_profile"] = effort_profile
+        if include_usage:
+            stream_kwargs["include_usage"] = True
+        stream = self.client.stream_chat(agent, messages, **stream_kwargs)
         started_at = time.perf_counter()
         try:
             for delta in stream:
                 parts.append(delta)
                 yield delta
-        except RequestDeadlineExceeded:
-            raise
         except Exception:
             if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
             raise
+        usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+        if usage_callback is not None:
+            usage_callback(usage)
         if agent.group_name or model_name == self.FREE_MODEL:
             self._group_router.observe_success(agent.id, time.perf_counter() - started_at)
         answer = "".join(parts)
@@ -4985,9 +4473,22 @@ class TaskOrchestrator:
             answer=answer,
             served_id=agent.id,
             latency_seconds=latency_seconds,
-            usage=None,
+            usage=usage,
             free_only=model_name == self.FREE_MODEL,
         )
+        trace_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "model": agent.model,
+            "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+            "subtask": "Direct route (streamed)",
+            "access": [],
+            "latency_ms": round(latency_seconds * 1000, 2),
+            "output": answer,
+        }
+        if isinstance(usage, dict):
+            trace_step["usage"] = usage
         record = self._with_effort_snapshot(
             {
                 "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -4997,8 +4498,7 @@ class TaskOrchestrator:
                 "prompt_text": text,
                 "answer": answer,
                 "trace": [
-                    {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                     "access": [], "output": answer}
+                    trace_step
                 ],
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {**verification, "verifier_output": answer},
@@ -5033,18 +4533,13 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
-        endpoint_partition = _request_endpoint_partition()
-        combined_partition = (
-            endpoint_partition
-            if cache_partition is None
-            else f"{cache_partition}|{endpoint_partition}"
-        )
+        parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
         return build_response_cache_key(
             messages,
             mode,
             model=model_name,
             parameters=parameters,
-            partition=combined_partition,
+            partition=cache_partition,
         )
 
     def run(
@@ -5187,14 +4682,23 @@ class TaskOrchestrator:
             requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
 
         answers: dict[int, dict[str, Any]] = {}
+        batch_latency_ms_by_agent: dict[str, float] = {}
         for agent_id, requests in requests_by_agent.items():
             effort_profile = self._role_effort_profile("worker")
+            batch_started_at = time.perf_counter()
             batch = (
                 self.client.batch_chat(
                     agents_by_id[agent_id], requests, effort_profile=effort_profile
                 )
                 if effort_profile is not None
                 else self.client.batch_chat(agents_by_id[agent_id], requests)
+            )
+            # One provider batch call covers every request in this group. Record
+            # its shared elapsed time on each trace row without claiming
+            # unavailable per-request timing precision.
+            batch_latency_ms_by_agent[agent_id] = round(
+                (time.perf_counter() - batch_started_at) * 1000,
+                2,
             )
             results = _validate_batch_results(requests, batch)
             for custom_id, result in results.items():
@@ -5219,6 +4723,9 @@ class TaskOrchestrator:
             result = answers[index]
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
+                "model": agent.model,
+                "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+                "latency_ms": batch_latency_ms_by_agent[agent.id],
                 "subtask": "Direct route (batched)", "access": [], "output": result["content"],
             }
             if result.get("usage") is not None:
@@ -5446,6 +4953,10 @@ class TaskOrchestrator:
             if value is not None and not isinstance(value, dict):
                 raise ValueError("endpoint_equivalence must be an object or null")
             patched = replace(patched, endpoint_equivalence=value)
+        if "stream_usage_supported" in patch:
+            patched = replace(
+                patched, stream_usage_supported=patch["stream_usage_supported"]
+            )
 
         updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
@@ -5701,7 +5212,11 @@ class TaskOrchestrator:
         ) or self._ranked_agents(
             text, "worker", free_only=free_only, prompt_context=prompt_context
         )
-        free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+        free_ids = {
+            candidate.id
+            for candidate in self.agents
+            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+        }
         allowed_agent_ids = free_ids if free_only else None
 
         max_attempts = 1 + min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
@@ -5732,6 +5247,8 @@ class TaskOrchestrator:
                 "id": attempt_index,
                 "role": "worker",
                 "agent_id": candidate.id,
+                "model": candidate.model,
+                "provider": candidate.provider_name or self._infer_provider_name(candidate.base_url),
                 "subtask": "Direct route",
                 "access": [],
                 "latency_ms": round(latency_seconds * 1000, 2),
@@ -5850,42 +5367,25 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @staticmethod
+    def _usage_total_tokens(usage: dict[str, Any] | None) -> int | None:
+        """Provider-reported total token count, or None when absent/invalid."""
+        if not isinstance(usage, dict):
+            return None
+        tokens = usage.get("total_tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            return None
+        return tokens
+
     def conduct(
         self,
         messages: list[ChatMessage],
         *,
         model_name: str = GATEWAY_DEFAULT_MODEL,
         progress: Any = None,
+        workflow_run_id: str | None = None,
     ) -> dict[str, Any]:
-        """Run a workflow, optionally reporting safe stage summaries (never hidden reasoning)."""
-        active_scope = self._request_failed_agents.get()
-        if active_scope is not None:
-            return self._conduct_request(
-                messages, model_name=model_name, progress=progress
-            )
-        admitted = self._structured_admitted_agent_ids()
-        if not admitted:
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            )
-        token = self._request_failed_agents.set(set())
-        admitted_token = self._request_admitted_agents.set(admitted)
-        try:
-            return self._conduct_request(
-                messages, model_name=model_name, progress=progress
-            )
-        finally:
-            self._request_admitted_agents.reset(admitted_token)
-            self._request_failed_agents.reset(token)
-
-    def _conduct_request(
-        self,
-        messages: list[ChatMessage],
-        *,
-        model_name: str = "contextual-orchestrator",
-        progress: Any = None,
-    ) -> dict[str, Any]:
-        """Conduct one workflow inside its request-scoped exclusion boundary."""
+        """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
@@ -5902,7 +5402,7 @@ class TaskOrchestrator:
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
-            except (RequestDeadlineExceeded, BudgetExceededError):
+            except BudgetExceededError:
                 raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
@@ -5911,13 +5411,18 @@ class TaskOrchestrator:
             steps = self._plan(task)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
-        free_ids = {candidate.id for candidate in self.agents if self._is_free_agent(candidate)}
+        free_ids = {
+            candidate.id
+            for candidate in self.agents
+            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+        }
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
             {
                 candidate.id
                 for candidate in self.agents
                 if candidate.group_name == requested_agent.group_name
+                and self._zdr_agent_allowed(candidate)
             }
             if requested_agent is not None and requested_agent.group_name
             else {requested_agent.id}
@@ -5970,6 +5475,7 @@ class TaskOrchestrator:
                         + (f"\n\nCaller instructions:\n{caller_instructions}" if caller_instructions else "")
                     ),
                 },
+                *copy.deepcopy(messages),
                 {
                     "role": "user",
                     "content": user_content,
@@ -5988,6 +5494,8 @@ class TaskOrchestrator:
             row = step.as_dict()
             row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
+            row["model"] = agent.model
+            row["provider"] = agent.provider_name or self._infer_provider_name(agent.base_url)
             row["output"] = output
             if usage is not None:
                 row["usage"] = usage
@@ -6030,15 +5538,44 @@ class TaskOrchestrator:
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
-        return self._with_effort_snapshot(
+        result = {
+            "mode": "conduct",
+            "answer": answer,
+            "trace": trace,
+            "verification": verification,
+            "plan_source": plan_source,
+        }
+        if workflow_run_id is None:
+            return self._with_effort_snapshot(result)
+        record = self._with_effort_snapshot(
             {
-                "mode": "conduct",
-                "answer": answer,
-                "trace": trace,
-                "verification": verification,
-                "plan_source": plan_source,
+                "workflow_run_id": workflow_run_id,
+                "created_at": int(time.time()),
+                "policy_mode": "conduct",
+                "prompt_text": task,
+                "policy_snapshot": self.policy.as_dict(),
+                **result,
             }
         )
+        self._replace_workflow_run(record)
+        self._run_order.appendleft(workflow_run_id)
+        if self._store is not None:
+            self._store.save("workflow_run", workflow_run_id, record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": workflow_run_id, "mode": "conduct", "agent_count": len(trace)},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "run_mode": "conduct",
+                "policy_mode": "conduct",
+                "trace_step_count": len(trace),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        return record
 
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
         """Return the opt-in profile bound to one workflow role."""
@@ -6071,12 +5608,10 @@ class TaskOrchestrator:
         back to the fixed template — a bad plan must never break the request.
         """
         planner = self._select_agent(task, "thinker")
-        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if is_general_chat_agent_model_id(agent.model)
-            and (endpoint_ids is None or _agent_matches_request_endpoint(agent))
+            if _is_general_chat_agent(agent) and self._zdr_agent_allowed(agent)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -6108,12 +5643,7 @@ class TaskOrchestrator:
         raw_steps = data.get("steps")
         if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
             raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
-        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-        known_agents = {
-            agent.id: agent
-            for agent in self.agents
-            if endpoint_ids is None or _agent_matches_request_endpoint(agent)
-        }
+        known_agents = {agent.id: agent for agent in self.agents}
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
             if int(item.get("id", -1)) != index:
@@ -6129,7 +5659,11 @@ class TaskOrchestrator:
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
             assigned = known_agents.get(agent_id)
-            if assigned is None or not is_general_chat_agent_model_id(assigned.model):
+            if (
+                assigned is None
+                or not _is_general_chat_agent(assigned)
+                or not self._zdr_agent_allowed(assigned)
+            ):
                 # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
@@ -6191,6 +5725,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         free_only: bool = False,
         chat_only: bool = True,
+        candidate_pool: Iterable[ModelAgent] | None = None,
         prompt_context: str | None = None,
     ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group.
@@ -6203,21 +5738,36 @@ class TaskOrchestrator:
         3. Inside one logical model group, measured ledgers refine member
            order (:meth:`_measured_member_order`: judged quality first, then
            successful responses per second).
+
+        ``free_only`` selects between the two ``FREE_MODEL`` eligibility
+        predicates using ``chat_only`` as the scope signal: ``chat_only=True``
+        (every caller except ``_capability_agents``) means the request shape
+        is not yet known, so :meth:`_is_general_free_agent` applies the
+        blind-serving modality exclusion; ``chat_only=False`` means a
+        specific, already-known capability was requested (only
+        ``_capability_agents`` passes this), so the plain price-only
+        :meth:`_is_free_agent` applies instead -- a non-text ``input:``
+        modality there is the capability's own expected shape, not a
+        surprise. This is a deliberate reuse of an existing, audited signal
+        (``chat_only`` already means "the caller does not know which
+        capability will be needed"), not a new implicit distinction.
         """
+        source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
             agent
-            for agent in self.agents
-            if (not free_only or self._is_free_agent(agent))
-            and (not chat_only or is_general_chat_agent_model_id(agent.model))
+            for agent in source
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            if (
+                not free_only
+                or (self._is_general_free_agent(agent) if chat_only else self._is_free_agent(agent))
+            )
+            and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
-        endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-        if endpoint_ids is not None:
-            candidates = [agent for agent in candidates if _agent_matches_request_endpoint(agent)]
-        admitted = self._request_admitted_agents.get()
-        if admitted is not None:
-            candidates = [agent for agent in candidates if agent.id in admitted]
         if not candidates:
+            if _REQUEST_ZDR_ONLY.get():
+                raise RuntimeError("no ZDR-eligible agent is available for the active privacy policy")
             if free_only:
                 raise RuntimeError("no enabled zero-cost model is available")
             if chat_only:
@@ -6351,13 +5901,63 @@ class TaskOrchestrator:
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
 
+    @staticmethod
+    def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
+        """Return whether an agent's discovery-derived tags declare non-text input.
+
+        ``ModelAgent`` carries no dedicated modality field; every discovery
+        pathway (``model_discovery.agent_from_discovered``,
+        ``provider_bootstrap.serving_tags_for_discovered``) instead records
+        each declared input modality as an ``input:<modality>`` tag. Delegates
+        the actual "what counts as non-text" classification to
+        ``chat_capability.requires_non_text_input``, the single evidence-based
+        rule shared with ``model_discovery._requires_non_text_input`` (which
+        reads ``DiscoveredModel.input_modalities`` directly) so the two
+        representations of the same catalog evidence cannot drift on this
+        question independently of each other.
+        """
+        return requires_non_text_input(
+            tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
+        )
+
     def _is_free_agent(self, agent: ModelAgent) -> bool:
-        """Return true only for explicitly zero-priced configured models."""
+        """Return true only for explicitly zero-priced configured models.
+
+        Price-only, deliberately blind to modality: this predicate backs
+        every ``FREE_MODEL`` selection path, including capability-scoped
+        media routes (``_capability_agents`` -> ``/v1/audio/transcriptions``,
+        ``/v1/videos``, image, speech, rerank) where an agent's non-text
+        ``input:<modality>`` tag is exactly the modality the request is
+        already asking for, not a surprise -- excluding it there would make a
+        genuinely free transcription/video/image agent unreachable through
+        its own capability's free route. See :meth:`_is_general_free_agent`
+        for the stricter, blind-general-chat variant.
+        """
         if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
             return True
         return self.price_per_million.get(agent.model) == 0 and sum(
             candidate.model == agent.model for candidate in self.candidates
         ) == 1
+
+    def _is_general_free_agent(self, agent: ModelAgent) -> bool:
+        """Return true only for zero-priced models fit for *blind* free serving.
+
+        Zero price alone does not certify fitness for the general-purpose
+        ``orchestrator/free`` chat pool: that pool serves every role and
+        request shape -- including tool-calling requests -- without knowing
+        in advance which capability a request will need. An agent whose tags
+        declare a non-text input modality (e.g. a vision-input deployment) is
+        therefore never treated as free *here*, even when it is honestly
+        tagged ``cost:free`` for price inventory purposes and for its own
+        capability-scoped free route (see :meth:`_is_free_agent`, and
+        ``contextual_orchestrator.model_discovery.general_free_serving_candidates``
+        for the equivalent discovery-time selector and its incident writeup).
+        This is the single choke point every *general chat* ``FREE_MODEL``
+        selection path shares -- including an agent row loaded from a durable
+        pool store that was written before this exclusion existed, or one
+        activated by a pool-construction path this repository adds later.
+        """
+        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 
@@ -6370,8 +5970,15 @@ class TaskOrchestrator:
     def _cosine_similarity(
         vector_a: list[float], vector_b: list[float]
     ) -> float | None:
-        """Return validated cosine similarity from the Rust numeric authority."""
-        return RustCl100kPacker().cosine_similarity(vector_a, vector_b)
+        """Cosine of two equal-length vectors; None when either norm is zero."""
+        if len(vector_a) != len(vector_b) or not vector_a:
+            return None
+        dot = sum(a * b for a, b in zip(vector_a, vector_b))
+        norm_a = math.sqrt(sum(a * a for a in vector_a))
+        norm_b = math.sqrt(sum(b * b for b in vector_b))
+        if norm_a == 0.0 or norm_b == 0.0:
+            return None
+        return dot / (norm_a * norm_b)
 
     def _cache_put(self, cache: OrderedDict[str, Any], key: str, value: Any) -> None:
         """Insert into one bounded LRU evidence cache under the evidence lock."""
@@ -6385,17 +5992,12 @@ class TaskOrchestrator:
         """First measured embedding-capable member id, or None when unconfigured."""
         try:
             return self.select_capability_agent("embedding").id
-        except RequestDeadlineExceeded:
-            raise
         except (RuntimeError, ValueError):
             return None
 
     def _embed_cached(self, text: str) -> list[float] | None:
         """Embedding vector for text via the configured embedding member; None on failure."""
-        endpoint_scope = _request_endpoint_partition()
-        digest = hashlib.sha256(
-            f"{endpoint_scope}\x1f{text}".encode("utf-8")
-        ).hexdigest()
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         with self._evidence_lock:
             cached = self._task_vector_cache.get(digest)
         if cached is not None:
@@ -6405,8 +6007,6 @@ class TaskOrchestrator:
             return None
         try:
             vectors = self.client.embed(self._agent(embedding_member), [text])
-        except RequestDeadlineExceeded:
-            raise
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -6417,13 +6017,7 @@ class TaskOrchestrator:
     def _descriptor_vector_cached(self, agent: ModelAgent) -> list[float] | None:
         """Cached embedding of one agent's operator-declared metadata document."""
         fingerprint = hashlib.sha256(
-            "\x1f".join(
-                [
-                    _request_endpoint_partition(),
-                    agent.id,
-                    self._agent_descriptor_text(agent),
-                ]
-            ).encode("utf-8")
+            "\x1f".join([agent.id, self._agent_descriptor_text(agent)]).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._descriptor_vector_cache.get(fingerprint)
@@ -6436,8 +6030,6 @@ class TaskOrchestrator:
             vectors = self.client.embed(
                 self._agent(embedding_member), [self._agent_descriptor_text(agent)]
             )
-        except RequestDeadlineExceeded:
-            raise
         except Exception:  # noqa: BLE001 - similarity is best-effort evidence
             return None
         vector = vectors[0] if vectors else None
@@ -6489,13 +6081,8 @@ class TaskOrchestrator:
         assurance; an absent triage agent degrades to the direct path because
         no evidence source exists at all. Verdicts are cached by content hash.
         """
-        endpoint_scope = _request_endpoint_partition()
         digest = hashlib.sha256(
-            json.dumps(
-                {"text": text, "endpoint_partition": endpoint_scope},
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
+            (text + ("\x00zdr_only" if _REQUEST_ZDR_ONLY.get() else "")).encode("utf-8")
         ).hexdigest()
         with self._evidence_lock:
             cached = self._triage_cache.get(digest)
@@ -6509,17 +6096,10 @@ class TaskOrchestrator:
         """One uncached triage decision for :meth:`_triage_workflow_required`."""
         try:
             candidates = self._ranked_agents(text, "worker", free_only=True)
-        except RequestDeadlineExceeded:
-            raise
         except RuntimeError:
             candidates = []
-        if not candidates:
-            endpoint_ids = _REQUEST_ENDPOINT_AGENT_IDS.get()
-            candidates = [
-                agent
-                for agent in self.agents
-                if endpoint_ids is None or _agent_matches_request_endpoint(agent)
-            ]
+        if not candidates and not _REQUEST_ZDR_ONLY.get():
+            candidates = list(self.agents)
         if not candidates:
             return False
         triage_agent = candidates[0]
@@ -6530,8 +6110,6 @@ class TaskOrchestrator:
         try:
             reply = self.client.chat(triage_agent, messages, temperature=0.0)
             return _parse_triage_reply(reply)
-        except RequestDeadlineExceeded:
-            raise
         except Exception:  # noqa: BLE001 - fail closed toward verified orchestration
             return True
 
@@ -6543,18 +6121,17 @@ class TaskOrchestrator:
         free_only: bool = False,
         required_tags: tuple[str, ...] = (),
         prefer_tags: tuple[str, ...] = (),
-        allowed_agent_ids: set[str] | None = None,
         prompt_context: str | None = None,
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
         Non-chat discovery rows (embeddings, rerank, transcription, ...) are
         excluded by the capability contract enforced by
-        :func:`is_general_chat_agent_model_id`; this is an endpoint-compatibility
-        gate, not a task-keyword heuristic. ``required_tags`` must all be present
-        (hard entitlements); ``prefer_tags`` only influence tie-breaking when a
-        candidate already carries them, so a pool that does not advertise an
-        optional gateway capability still resolves.
+        :func:`is_general_chat_candidate`; this is an endpoint-compatibility
+        gate, not a task-keyword heuristic. ``required_tags`` must all be
+        present (hard entitlements); ``prefer_tags`` only influence
+        tie-breaking when a candidate already carries them, so a pool that
+        does not advertise an optional gateway capability still resolves.
         """
         ranked = [
             agent
@@ -6565,9 +6142,8 @@ class TaskOrchestrator:
                 required_tags=required_tags,
                 prompt_context=prompt_context,
             )
-            if is_general_chat_agent_model_id(agent.model)
+            if _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
-            and (allowed_agent_ids is None or agent.id in allowed_agent_ids)
         ]
         if prefer_tags and ranked:
             preferred = [
@@ -6593,7 +6169,9 @@ class TaskOrchestrator:
         if not capability:
             raise ValueError("capability must be a non-empty string")
         virtual_model = model_name in {
-            "contextual-orchestrator", self.AUTO_MODEL, self.FREE_MODEL
+            self.GATEWAY_DEFAULT_MODEL,
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
         }
         free_only = model_name == self.FREE_MODEL
         exact_models = {agent.model for agent in self.candidates}
@@ -6615,6 +6193,10 @@ class TaskOrchestrator:
         ranked = [
             agent
             for agent in self._ranked_agents(
+                # chat_only=False signals a known, explicit capability request
+                # (not a blind general-chat one), so free_only here uses
+                # _ranked_agents' price-only _is_free_agent branch: a capable
+                # agent's own non-text input tag is expected, not disqualifying.
                 "", capability, free_only=free_only, chat_only=False
             )
             if not agent.disabled
@@ -6863,8 +6445,6 @@ class TaskOrchestrator:
                     else self.client.proxy_send(agent, provider_endpoint, payload)
                 )
             except Exception as exc:  # noqa: BLE001 - fail over to the next measured member
-                if isinstance(exc, RequestDeadlineExceeded):
-                    raise
                 last_error = exc
                 saw_failure = True
                 request_too_large = _is_request_too_large_error(exc)
@@ -6886,6 +6466,8 @@ class TaskOrchestrator:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             ) from last_error
+        if isinstance(last_error, ProviderUpstreamError):
+            raise last_error
         raise RuntimeError(f"all {capability} providers failed") from last_error
 
     def _invoke(
@@ -6927,10 +6509,6 @@ class TaskOrchestrator:
                 prompt_context=prompt_context,
             )
         if not candidates:
-            if self._request_failed_agents.get():
-                raise NoViableAgentError(
-                    retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-                )
             raise RuntimeError(f"no chat-compatible agent available for role={role}")
         race_members = self._equivalent_race_members(candidates, capability="text")
         if race_members:
@@ -6992,12 +6570,14 @@ class TaskOrchestrator:
         bounded_provider_response_failures = 0
         last_provider_response_error: ProviderResponseError | None = None
         every_failure_was_request_too_large = True
+        # The final classified upstream failure survives the candidate loop so a
+        # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
+        # one opaque collapse message.
+        last_upstream_error: ProviderUpstreamError | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
                 try:
-                    if hasattr(self.client, "remaining_request_timeout"):
-                        self.client.remaining_request_timeout()
                     attempt_start = time.perf_counter()
                     effort_profile = self._role_effort_profile(role)
                     output = (
@@ -7006,37 +6586,53 @@ class TaskOrchestrator:
                         else self.client.chat(agent, messages)
                     )
                 except Exception as exc:
-                    if isinstance(exc, RequestDeadlineExceeded):
-                        # The shared caller budget may expire before this
-                        # provider is contacted. It is not provider-health
-                        # evidence and must not poison the cross-request
-                        # readiness or circuit state.
-                        raise
                     if _is_request_too_large_error(exc):
                         break
                     every_failure_was_request_too_large = False
                     if agent.group_name or allowed_agent_ids is not None:
                         self._group_router.observe_failure(agent.id)
                     if isinstance(exc, ToolFallbackStoppedError):
+                        # Deliberately terminal, even inside a free/auto virtual
+                        # pool with untried candidates remaining: every path that
+                        # raises this (the provider's own explicit terminal
+                        # tool-execution-state signal via
+                        # _provider_tool_execution_stopped, or a FAIL_CLOSED
+                        # verdict from classify_tool_failure below) resolves to
+                        # ambiguous_outcome, permission_denied, policy_blocked, or
+                        # invalid_arguments -- the exact ADR 0001 safety invariants
+                        # ("permission and policy failures never fall through to
+                        # another agent"; "non-idempotent timeout or transport
+                        # uncertainty never replays automatically") that a
+                        # different candidate cannot make safer: an ambiguous
+                        # server-side outcome is ambiguous regardless of which
+                        # agent asks next, and authorization/policy denial must
+                        # not be worked around by trying a different one. Do not
+                        # convert this to failover without an explicit product
+                        # decision distinguishing which failure kinds that would
+                        # actually be safe for.
                         raise
-                    if isinstance(exc, ProviderResponseError):
-                        if (
-                            allowed_agent_ids is None
-                            and self._request_failed_agents.get() is None
-                            and not isinstance(exc, _ProviderTransportExhausted)
-                        ):
+                    if isinstance(exc, ProviderUpstreamError):
+                        last_upstream_error = exc
+                        # The primary chat call is a bounded, side-effect-free
+                        # model request, not a tool invocation: classify from
+                        # the provider's own already-computed retryability
+                        # instead of classify_tool_failure's message-text
+                        # heuristics, so free/auto virtual-model failover can
+                        # never be accidentally downgraded to fail-closed by
+                        # incidental wording in an upstream error body (e.g. a
+                        # 400 that happens to mention "invalid arguments").
+                        decision = classify_provider_transport_failure(exc.retryable)
+                    elif isinstance(exc, ProviderResponseError):
+                        if allowed_agent_ids is None:
                             raise
                         bounded_provider_response_failures += 1
                         last_provider_response_error = exc
                         decision = classify_tool_failure(exc)
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
-                        failed_agents = self._request_failed_agents.get()
-                        if failed_agents is not None:
-                            self._record_structured_not_ready(agent.id)
-                            failed_agents.add(agent.id)
                         break
-                    decision = classify_tool_failure(exc)
+                    else:
+                        decision = classify_tool_failure(exc)
                     action = decision.action
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
@@ -7065,10 +6661,6 @@ class TaskOrchestrator:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
                         raise ToolFallbackStoppedError(agent.id, decision) from None
-                    failed_agents = self._request_failed_agents.get()
-                    if failed_agents is not None and role != "judge":
-                        self._record_structured_not_ready(agent.id)
-                        failed_agents.add(agent.id)
                     break
                 # Success: one Bernoulli observation plus measured latency, and
                 # provider-reported completion tokens when available feeding the
@@ -7076,29 +6668,27 @@ class TaskOrchestrator:
                 # are never inferred from text length or chunk counts.
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 output_tokens = self._usage_completion_tokens(usage)
+                total_tokens = self._usage_total_tokens(usage)
                 if agent.group_name or allowed_agent_ids is not None:
                     self._group_router.observe_success(
                         agent.id,
                         time.perf_counter() - attempt_start,
                         output_tokens=output_tokens,
+                        total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
-        if hasattr(self.client, "remaining_request_timeout"):
-            self.client.remaining_request_timeout()
-        if self._request_failed_agents.get():
-            raise NoViableAgentError(
-                retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
-            )
         if (
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
         ):
             raise last_provider_response_error
-        if every_failure_was_request_too_large:
+        if candidates and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
+        if last_upstream_error is not None:
+            raise last_upstream_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
@@ -7166,11 +6756,11 @@ class TaskOrchestrator:
         ordered = [
             agent
             for agent in ordered
-            if is_general_chat_agent_model_id(agent.model)
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            and _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
         ]
-        request_failed_agents = self._request_failed_agents.get() or set()
-        ordered = [agent for agent in ordered if agent.id not in request_failed_agents]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
@@ -7200,7 +6790,7 @@ class TaskOrchestrator:
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
-            if agent.id == agent_id and _agent_matches_request_endpoint(agent):
+            if agent.id == agent_id:
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
 
@@ -7380,10 +6970,6 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-        except RequestDeadlineExceeded:
-            raise
-        except NoViableAgentError:
-            raise
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return {
                 "accepted": False,
@@ -7471,6 +7057,7 @@ class TaskOrchestrator:
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
+            "stream_usage_supported": agent.stream_usage_supported,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,
         }
@@ -7510,7 +7097,7 @@ class TaskOrchestrator:
             "created": created,
             "owned_by": "contextual-orchestrator",
         })
-        if any(self._is_free_agent(agent) for agent in self.agents):
+        if any(self._is_general_free_agent(agent) for agent in self.agents):
             data.append({
                 "id": self.FREE_MODEL,
                 "object": "model",
@@ -7728,8 +7315,8 @@ class TaskOrchestrator:
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
 
-        Tokens use provider-reported usage when available and exact local cl100k otherwise.
-        Cost is computed only for models with an operator-supplied price; models without
+        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
+        usage. Cost is computed only for models with an operator-supplied price; models without
         one are reported under ``unpriced_models`` with a null cost. This is the honest local
         floor for spend observability, not a billing system.
         """
@@ -7798,7 +7385,7 @@ class TaskOrchestrator:
             "measurement_status": "local_runtime_estimate",
             "source_note": (
                 "output_tokens use provider-reported usage when available (usage_source=reported/mixed) and "
-                "fall back to exact local cl100k otherwise; cost = output_tokens x operator-supplied price only."
+                "fall back to a ~4 chars/token estimate otherwise; cost = output_tokens x operator-supplied price only."
             ),
             "pricing_configured": bool(prices),
             "totals": {
@@ -14684,24 +14271,43 @@ def chat_completion_chunks(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    include_usage: bool = False,
 ) -> list[dict[str, Any]]:
-    """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
+    """Frame an orchestration result as OpenAI-compatible chat completion chunks.
 
-    The engine produces the full answer before framing, so this yields a correct-shape
-    SSE stream (role delta, content deltas, terminal stop delta) rather than true
-    token-by-token streaming — real token streaming requires a streaming ModelClient.
+    Only provider-reported usage may be emitted. Gateway estimates remain internal
+    because presenting estimates as provider usage would violate the wire contract.
     """
     answer = result.get("answer", "")
     completion_id = _new_chat_completion_id()
     created = int(time.time())
-    base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+    }
+    if include_usage:
+        base["usage"] = None
 
     chunks: list[dict[str, Any]] = [
-        {**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+        {
+            **base,
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+            ],
+        }
     ]
-    for start in range(0, len(answer), _STREAM_CHUNK_SIZE):
-        piece = answer[start : start + _STREAM_CHUNK_SIZE]
-        chunks.append({**base, "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]})
+    for offset in range(0, len(answer), _STREAM_CHUNK_SIZE):
+        piece = answer[offset : offset + _STREAM_CHUNK_SIZE]
+        chunks.append(
+            {
+                **base,
+                "choices": [
+                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
+                ],
+            }
+        )
 
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -14710,9 +14316,25 @@ def chat_completion_chunks(
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
-    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
-    final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
+
+    final = {
+        **base,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "orchestration": {
+            key: value for key, value in orchestration.items() if value is not None
+        },
+    }
     chunks.append(final)
+
+    usage = result.get("usage")
+    cost = result.get("cost")
+    if (
+        include_usage
+        and isinstance(cost, dict)
+        and cost.get("measurement_status") == "measured"
+        and isinstance(usage, dict)
+    ):
+        chunks.append({**base, "choices": [], "usage": usage})
     return chunks
 
 

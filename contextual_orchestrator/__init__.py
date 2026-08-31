@@ -1,12 +1,5 @@
 """Public package exports for the contextual orchestration runtime."""
 
-from pkgutil import extend_path
-
-# The ABI3 Rust extension is installed by a wheel while local development and
-# CI import Python sources from the checkout. Extend the regular package path so
-# the source package can find the wheel-owned native submodule.
-__path__ = extend_path(__path__, __name__)
-
 from .batch_routing import (
     BatchJob,
     BatchRequest,
@@ -38,11 +31,24 @@ from .cost_ledger import (
     SqlLedgerStore,
     UsageTelemetryEvent,
     UsageTelemetryHealth,
+    UsageRecordSink,
     UsageTelemetrySink,
     UsageRecord,
     dimension_catalog,
 )
+from .metering import CanonicalUsageRecordSink
 from .cost_router import CostRoutingCoordinator
+from .cefr_language_observation import (
+    CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1,
+    FAST_MLSIRM_SCORING_SCHEMA_VERSION,
+    CefrContractAdapter,
+    CefrLanguageObservationRequest,
+    CefrObservationError,
+    CefrRaterAssignment,
+    StructuredObservationGateway,
+    TaskOrchestratorCefrGateway,
+    observe_language_response_criteria,
+)
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
@@ -55,7 +61,7 @@ from .reasoning_effort_profile import (
     parse_reasoning_effort_profile,
     snapshot_role_effort_catalog,
 )
-from .token_counting import HeuristicTokenCounter, RustCl100kTokenCounter, build_token_counter
+from .token_counting import HeuristicTokenCounter, build_token_counter
 from .response_cache import (
     RedisResponseCacheProvider,
     ResponseCacheProvider,
@@ -106,13 +112,14 @@ __all__ = [
     "UsageRecord",
     "UsageTelemetryEvent",
     "UsageTelemetryHealth",
+    "UsageRecordSink",
     "UsageTelemetrySink",
+    "CanonicalUsageRecordSink",
     "dimension_catalog",
     # config / tokens
     "InMemoryConfigStore",
     "get_config_store",
     "HeuristicTokenCounter",
-    "RustCl100kTokenCounter",
     "build_token_counter",
     "ResponseCacheProvider",
     "RedisResponseCacheProvider",
@@ -136,5 +143,14 @@ __all__ = [
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
+    "CEFR_LANGUAGE_ASSESSMENT_CONTRACT_V1",
+    "FAST_MLSIRM_SCORING_SCHEMA_VERSION",
+    "CefrContractAdapter",
+    "CefrLanguageObservationRequest",
+    "CefrObservationError",
+    "CefrRaterAssignment",
+    "StructuredObservationGateway",
+    "TaskOrchestratorCefrGateway",
+    "observe_language_response_criteria",
     "evaluate_release_authorization",
 ]

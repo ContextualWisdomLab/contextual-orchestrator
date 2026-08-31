@@ -55,13 +55,6 @@ The Fugu report combines these ideas into production constraints:
 
 ## Implementation Mapping
 
-Native acceleration follows [ADR 0006](adr/0006-native-accelerator-runtime-boundaries.md):
-the hash-locked CPU PyO3 arithmetic boundary remains in-process; macOS MLX is
-an authenticated external native-host provider; and CUDA/OpenCL are deferred to
-independently scalable workers until measured vendor-runtime evidence exists.
-Kubernetes replicas additionally require external authorities for mutable state;
-same-Pod sidecars do not satisfy independent accelerator scaling.
-
 This repository implements the interface and control plane, not the trained
 coordinator or its optional recursive self-worker. The public model is therefore
 an explicit control-plane candidate, while the worker pool is selected from
@@ -72,9 +65,37 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
 - `TaskOrchestrator.route_once`: the low-latency routing path.
 - `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `TaskOrchestrator._invoke`: the shared route/Conduct invocation path. A
+  request-time failure of the primary provider call — 5xx, 429, network, a
+  413 request-size rejection, or a non-retryable 4xx such as 401/403/404
+  (this list is illustrative, not exhaustive: any failure the provider
+  taxonomy classifies via `classify_provider_transport_failure` falls into
+  either bucket) — advances to the next ranked candidate within the same
+  cost tier — `orchestrator/free` never fails over into a priced agent, and
+  `orchestrator/auto` only fails over inside the primary's own declared
+  model group — instead of surfacing an opaque error; exhausting every
+  eligible candidate still fails closed with the last classified provider
+  error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.video_jobs.VideoJobRegistry`: provider-affine async
+  video resources. New submissions join immutable `video_job_records` with an
+  optional first-complete `video_job_usages` row; legacy owner payloads are a
+  compatibility read-and-update path — `observe_provider_result` still writes
+  the first-complete `video_job_usages` row for a legacy `video_job_owners`
+  record that has none. Provider status is observed in provider responses,
+  never persisted or inferred.
+- Batch routing jobs carry a non-secret authenticated-principal digest from
+  submission through status and result retrieval; mismatched owners receive
+  the same not-found response before backend access. Results require the
+  separate trace purpose in addition to inference authorization.
+- Streamed `/v1/responses` workflow runs preserve optional provider usage on
+  each trace step and record one `stream` cost-ledger row per completed step.
+  Missing provider counts remain `unavailable`; the gateway never derives
+  billing tokens from the final answer. The final Responses event uses the
+  standard `input_tokens`/`output_tokens`/`total_tokens` usage shape only when
+  all workflow steps are measured. See [ADR 0040](planning/adrs/0040-streamed-responses-usage-boundary.md).
 - `ResponsiveThreadingHTTPServer`: I/O-bound provider waits run in independent
   daemon request threads, the accept queue uses the operating system's native
   `SOMAXCONN`, and fixed-length responses use HTTP/1.1 persistent connections.

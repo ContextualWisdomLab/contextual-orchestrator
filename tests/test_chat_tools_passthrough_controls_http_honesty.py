@@ -146,6 +146,37 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
         thread.join(timeout=5)
 
 
+def test_http_response_format_only_stream_usage_fails_closed_before_execution() -> None:
+    """response_format-only (conduct mode, no tools) still rejects stream+usage.
+
+    Its usage comes from a multi-step workflow's cost ledger, which may be
+    unmeasured, so this keeps failing closed. The sibling `tools` case (this
+    same request shape but with a `tools` list, i.e. single-agent
+    passthrough) no longer rejects this combination -- its one upstream call
+    is always non-streaming and its real, reported usage survives into the
+    SSE framing unmodified; see
+    test_stream_options_null_flags_noop_http_honesty.py::test_http_chat_tools_streams_include_reported_usage
+    for that positive case.
+    """
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_stream_options" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_tools_passthrough_accepts_coerced_sampling() -> None:
     server, thread, port = _server()
     try:
@@ -185,6 +216,7 @@ if __name__ == "__main__":
     test_http_tools_passthrough_rejects_invalid_temperature()
     test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n()
     test_http_tools_passthrough_rejects_invalid_user_and_stream_options()
+    test_http_response_format_only_stream_usage_fails_closed_before_execution()
     test_http_tools_passthrough_accepts_coerced_sampling()
     test_http_response_format_passthrough_rejects_seed()
     print("ok")

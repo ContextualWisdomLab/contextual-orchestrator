@@ -5,7 +5,6 @@ These run entirely on the in-memory backend — no Postgres or KV service needed
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import sys
@@ -22,7 +21,10 @@ from contextual_orchestrator.credentials import (  # noqa: E402
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelClient,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -117,8 +119,22 @@ def test_auth_scheme_defaults_to_bearer() -> None:
     assert agent.auth_scheme == "Bearer"
 
 
+def test_format_authorization_header_prefixes_ordinary_schemes() -> None:
+    from contextual_orchestrator.orchestrator import format_authorization_header
+
+    assert format_authorization_header("Bearer", "sk-example") == "Bearer sk-example"
+
+
+def test_format_authorization_header_sends_raw_token_for_the_sentinel() -> None:
+    from contextual_orchestrator.orchestrator import format_authorization_header
+
+    assert format_authorization_header(AUTH_SCHEME_RAW_TOKEN, "bytez-secret") == "bytez-secret"
+
+
 def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
-    # Bytez (and similar providers) use "Key <token>" instead of "Bearer <token>".
+    # Bytez documents its Authorization header as the bare credential with no
+    # scheme word at all (https://docs.bytez.com/http-reference/list/models.md),
+    # unlike "Bearer <token>" providers.
     from unittest.mock import patch
 
     agent = ModelAgent(
@@ -126,7 +142,7 @@ def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
         "some/model",
         base_url="https://api.bytez.com/models/v2/openai/v1",
         credential_key="BYTEZ_API_KEY",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     client = ModelClient(max_retries=0)
@@ -157,75 +173,9 @@ def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
         return_value=(2, ("93.184.216.34", 443)),
     ), patch.object(client, "_open_provider", side_effect=open_provider):
         assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "ok"
-    assert seen[0].get_header("Authorization") == "Key bytez-secret"
+    assert seen[0].get_header("Authorization") == "bytez-secret"
 
 
 def test_auth_scheme_rejects_empty_value() -> None:
     with pytest.raises(ValueError):
         ModelAgent("bad_agent", "gpt-example", "https://api.openai.com/v1", auth_scheme="")
-
-
-def test_model_client_embedding_uses_provider_endpoint_and_usage() -> None:
-    """Provider embeddings preserve auth, vector values, and reported usage."""
-    from unittest.mock import patch
-
-    agent = ModelAgent(
-        "embedding_agent", "embedding-model",
-        base_url="https://provider.example/v1",
-        credential_key="EMBEDDING_API_KEY", tags=("embedding",),
-    )
-    register_credential("EMBEDDING_API_KEY", "embedding-secret")
-    client = ModelClient(max_retries=0)
-    seen = []
-    seen_timeouts = []
-
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self) -> bytes:
-            return json.dumps({
-                "data": [{"embedding": [0.125, 0.875]}],
-                "usage": {"prompt_tokens": 4},
-            }).encode()
-
-    def open_provider(request, _destination=None):
-        seen.append(request)
-        seen_timeouts.append(client._local.provider_transport_timeout)
-        return _Response()
-
-    with (
-        patch.object(client, "_validate_provider", return_value=(2, ("127.0.0.1", 443))),
-        patch.object(client, "_open_provider", side_effect=open_provider),
-        patch("contextual_orchestrator.orchestrator.time.monotonic", return_value=10.0),
-        client.request_settings(request_deadline_monotonic=15.0),
-    ):
-        vectors, token_count = client.embed_with_usage(agent, ["evidence"])
-
-    assert vectors == [[0.125, 0.875]]
-    assert token_count == 4
-    assert seen[0].full_url == "https://provider.example/v1/embeddings"
-    assert seen[0].get_header("Authorization") == "Bearer embedding-secret"
-    assert seen_timeouts == [5.0]
-
-
-def test_model_client_embedding_rejects_non_object_data_entry() -> None:
-    """Malformed provider rows fail through the classified response boundary."""
-    from unittest.mock import patch
-
-    from contextual_orchestrator.orchestrator import ProviderResponseError
-
-    agent = ModelAgent(
-        "embedding_agent", "embedding-model",
-        base_url="https://provider.example/v1", tags=("embedding",),
-    )
-    client = ModelClient(max_retries=0)
-    with (
-        patch.object(client, "_validate_provider", return_value=(2, ("127.0.0.1", 443))),
-        patch.object(client, "_send_raw_with_retry", return_value={"data": ["invalid"]}),
-        pytest.raises(ProviderResponseError),
-    ):
-        client.embed_with_usage(agent, ["evidence"])

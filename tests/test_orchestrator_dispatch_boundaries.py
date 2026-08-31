@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import base64
 import sqlite3
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
-    register_credential,
     set_backend,
 )
 from contextual_orchestrator.orchestrator import (

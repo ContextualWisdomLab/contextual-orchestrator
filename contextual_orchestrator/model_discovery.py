@@ -7,7 +7,7 @@ and/or :class:`~contextual_orchestrator.cost_ledger.PriceBook` rows.
 
 Credentials are never fabricated: a provider resolves through :func:`get_credential`
 (the KV registry), and a provider with nothing registered is silently skipped so
-registering a subset of the five supported keys still works. Stdlib only
+registering a subset of the declared provider keys still works. Stdlib only
 (``urllib.request``), matching this repo's dependency-free transport convention.
 """
 
@@ -16,9 +16,11 @@ from __future__ import annotations
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import math
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 import certifi
@@ -26,21 +28,58 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .chat_capability import is_general_chat_agent_model_id
+from .chat_capability import (
+    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
+    requires_non_text_input,
+)
 from .credentials import get_credential
-from .orchestrator import ModelAgent, ModelClient
+from .orchestrator import (
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelAgent,
+    ModelClient,
+    format_authorization_header,
+    is_transient_error,
+)
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+_LOGGER = logging.getLogger(__name__)
+# One bounded retry for a provider's primary model-list fetch, reusing the same
+# transient-vs-terminal classification completion calls already trust
+# (is_transient_error). A short, fixed delay and a shortened retry timeout keep
+# the added worst case small and predictable for CI callers with their own
+# overall time budget (see ContextualWisdomLab/.github's review sidecar).
+# Non-transient failures (auth/config errors, malformed responses) are never
+# retried — a retry cannot fix those and would only waste the time budget.
+_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
+_DISCOVERY_RETRY_DELAY_SECONDS = 0.5
+# Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
+# 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
+# bot signature. A stable, identifying user agent is not a credential and is
+# safe to send on every request, authenticated or not.
+_HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
-_MODELS_DEV_OPENCODE_PROVIDER = "opencode"
+# Small bounded retry budget for the one shared, unauthenticated, third-party
+# Models.dev fetch that every ``models_dev_provider_id``-joined source's
+# free-tier classification depends on (ADR 0041/0032). It has already been
+# observed live to reject urllib's default user agent as a bot signature (see
+# ``_HTTP_USER_AGENT`` above); a lone transient failure of that kind must not
+# silently erase every dependent provider's ``orchestrator/free`` coverage for
+# the whole discovery run the way a single un-retried attempt would.
+_MODELS_DEV_FETCH_ATTEMPTS = 3
+_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS = 0.05
 _OPENROUTER_ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
 _OPENROUTER_PROVIDER_POLICIES_URL = "https://openrouter.ai/api/frontend/v1/all-providers"
 CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
 MAX_DISCOVERY_RESPONSE_BYTES = 8 * 1024 * 1024
+# Sentinel distinguishing "no shared Models.dev payload supplied" (fall back to
+# a lazy per-call fetch) from an explicitly supplied ``None`` -- the honest
+# outcome of a real fetch failure. Never compare to it with ``==``.
+_NOT_FETCHED = object()
 _OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 
@@ -58,10 +97,17 @@ def _provider_discovery_error_code(exc: Exception) -> str:
         return "transport_error"
     if isinstance(exc, ValueError):
         return "invalid_response"
+    if isinstance(exc, RuntimeError):
+        # The configured-gateway transport (ModelClient._resolve_addresses /
+        # _open_provider) wraps DNS resolution and request-validation
+        # failures as plain RuntimeError, not an OSError subclass. Still a
+        # transport-level failure from the caller's perspective.
+        return "transport_error"
     # The sole caller catches exactly (URLError, TimeoutError, ValueError,
-    # OSError) plus HTTPError (a URLError subtype), every one of which is
-    # classified above. Reaching this point means the catch tuple drifted;
-    # fail loudly instead of silently labeling an unclassified failure.
+    # OSError, RuntimeError) plus HTTPError (a URLError subtype), every one
+    # of which is classified above. Reaching this point means the catch
+    # tuple drifted; fail loudly instead of silently labeling an
+    # unclassified failure.
     raise AssertionError(f"unclassified provider discovery failure: {exc!r}")
 
 
@@ -78,6 +124,9 @@ class ProviderModelSource:
     task_filter: str = ""
     capabilities: tuple[str, ...] = ()
     privacy_policy_urls: tuple[str, ...] = ()
+    bootstrap_required: bool = True
+    evidence_only: bool = False
+    models_dev_provider_id: str | None = None
 
 
 def configured_gateway_source(
@@ -131,8 +180,8 @@ def configured_gateway_source(
     )
 
 
-# NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
-# keys participate in upstream load balancing without a second provider identity.
+# Each NVIDIA NIM KV credential is an independent account boundary and may expose
+# a different catalog even though both currently use the same API endpoint.
 PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openai",
@@ -140,6 +189,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://api.openai.com/v1/models",
         chat_base_url="https://api.openai.com/v1",
         privacy_policy_urls=("https://platform.openai.com/docs/guides/your-data",),
+        models_dev_provider_id="openai",
     ),
     ProviderModelSource(
         provider_name="openrouter",
@@ -154,6 +204,8 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://opencode.ai/zen/v1/models",
         chat_base_url="https://opencode.ai/zen/v1",
         capabilities=("chat",),
+        bootstrap_required=False,
+        models_dev_provider_id="opencode",
     ),
     ProviderModelSource(
         provider_name="nvidia_nim",
@@ -161,6 +213,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
         capabilities=("chat",),
+        models_dev_provider_id="nvidia",
     ),
     ProviderModelSource(
         provider_name="nvidia_nim_sub",
@@ -168,19 +221,19 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://integrate.api.nvidia.com/v1/models",
         chat_base_url="https://integrate.api.nvidia.com/v1",
         capabilities=("chat",),
+        models_dev_provider_id="nvidia",
     ),
     ProviderModelSource(
         provider_name="bytez",
         credential_name="BYTEZ_API_KEY",
         list_url="https://api.bytez.com/models/v2/list/models",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
         capabilities=("chat",),
     ),
 )
-
 
 @dataclass(frozen=True)
 class ModelUnitPrice:
@@ -229,6 +282,9 @@ class DiscoveredModel:
     supports_no_training: bool | None = None
     supports_no_prompt_retention: bool | None = None
     privacy_policy_urls: tuple[str, ...] = ()
+    zdr_capable: bool = False
+    evidence_only: bool = False
+    spend_admitted: bool = True
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -247,7 +303,9 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         # file:// and other unsafe schemes, so refuse anything not https as a
         # cheap invariant check rather than trusting the constant list alone.
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"user-agent": _HTTP_USER_AGENT}
+    if api_key:
+        headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
@@ -263,12 +321,40 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         return json.loads(response.read().decode("utf-8"))
 
 
+def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
+    """Fetch the shared Models.dev catalog with a small bounded retry.
+
+    Every ``models_dev_provider_id``-joined source (``opencode_zen``,
+    ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
+    unauthenticated, best-effort, third-party fetch for its free-cost
+    evidence; none of those providers report their own pricing, so a lone
+    transient failure here (a timeout, a reset connection, or the
+    bot-signature rejection ``_HTTP_USER_AGENT`` already guards against) used
+    to silently degrade every one of them to ``is_free = False`` for the rest
+    of the discovery run, collapsing ``orchestrator/free`` coverage over a
+    blip in a service this gateway does not control.
+
+    Returns ``None`` -- the existing "no evidence" fail-closed signal
+    :func:`_merge_models_dev_metadata` already handles -- only once every
+    bounded attempt has failed; a successful attempt returns immediately
+    without spending the rest of the retry budget.
+    """
+    for attempt in range(_MODELS_DEV_FETCH_ATTEMPTS):
+        try:
+            return _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            if attempt < _MODELS_DEV_FETCH_ATTEMPTS - 1:
+                time.sleep(_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS)
+    return None
+
+
 def _fetch_configured_gateway_json(
     url: str,
     *,
     api_key: str,
     auth_scheme: str,
     timeout: float,
+    ca_bundle: str | None = None,
 ) -> Any:
     """Fetch an operator URL through the gateway's pinned hardened transport."""
     parsed = urlsplit(url)
@@ -282,6 +368,7 @@ def _fetch_configured_gateway_json(
         raise ValueError("configured gateway discovery URL is not a safe HTTPS URL")
     origin = urlunsplit(("https", parsed.netloc, "", "", ""))
     client = ModelClient(
+        ca_bundle=ca_bundle,
         timeout=max(1, math.ceil(timeout)),
         allowed_provider_hosts={parsed.hostname},
     )
@@ -292,12 +379,59 @@ def _fetch_configured_gateway_json(
         credential_key=CONFIGURED_GATEWAY_CREDENTIAL_NAME,
     )
     destination = client._validate_provider(agent)
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     with client._open_provider(request, destination, timeout=timeout) as response:
         raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
     if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
         raise ValueError("configured gateway discovery response exceeds the size limit")
+    return json.loads(raw.decode("utf-8"))
+
+
+class _TrustedDiscoveryRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Allow authenticated discovery redirects only within one trusted HTTPS host."""
+
+    def __init__(self, trusted_host: str) -> None:
+        self._trusted_host = trusted_host.casefold()
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Follow a redirect only when it stays on the trusted HTTPS host."""
+        parsed = urlsplit(newurl)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.hostname.casefold() != self._trusted_host:
+            raise urllib.error.HTTPError(
+                newurl,
+                code,
+                "unsafe redirect during authenticated model discovery",
+                headers,
+                fp,
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _fetch_json_same_host_https(
+    url: str, *, api_key: str = "", auth_scheme: str = "Bearer", timeout: float
+) -> Any:
+    """Fetch JSON while rejecting redirects outside the original trusted HTTPS host."""
+    if not url.startswith("https://"):
+        raise ValueError(f"refusing non-https model discovery URL: {url!r}")
+    parsed = urlsplit(url)
+    if not parsed.hostname:
+        raise ValueError(f"refusing discovery URL without hostname: {url!r}")
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    opener = urllib.request.build_opener(
+        _TrustedDiscoveryRedirectHandler(parsed.hostname)
+    )
+    try:
+        response = opener.open(request, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise TimeoutError(str(exc.reason)) from exc
+        raise
+    with response:
+        raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_DISCOVERY_RESPONSE_BYTES:
+        raise ValueError("model discovery response exceeds maximum size")
     return json.loads(raw.decode("utf-8"))
 
 
@@ -331,9 +465,9 @@ def _price_per_1k(value: Any) -> float | None:
     return per_1k if _valid_price_component(per_1k) else None
 
 
-def _serving_identity(model: DiscoveredModel) -> tuple[str, str]:
-    """Return the durable agent identity used by discovery synchronization."""
-    return (model.provider_name, model.model_id)
+def _serving_identity(model: DiscoveredModel) -> tuple[str, str, str]:
+    """Return the account-scoped identity used by discovery synchronization."""
+    return (model.provider_name, model.credential_name, model.model_id)
 
 
 def _source_tiebreaker(model: DiscoveredModel) -> tuple[str, str, str, str]:
@@ -351,13 +485,13 @@ def _deduplicate_discovered_models(
 ) -> list[DiscoveredModel]:
     """Collapse duplicate agent identities and withhold conflicting price evidence.
 
-    Exact duplicate catalog rows become one candidate. When the same provider/model
-    identity is repeated with conflicting metadata or prices, one deterministic
-    transport record is retained but its prices become unknown. Provider row order
+    Exact duplicate catalog rows from one credential become one candidate. When the
+    same account/model identity repeats with conflicting metadata or prices, one
+    deterministic transport record is retained but its prices become unknown. Provider row order
     therefore cannot fabricate a cheaper bootstrap candidate or consume failover
     capacity twice.
     """
-    unique: dict[tuple[str, str], DiscoveredModel] = {}
+    unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
         identity = _serving_identity(model)
         previous = unique.get(identity)
@@ -371,6 +505,12 @@ def _deduplicate_discovered_models(
             chosen,
             prompt_price_per_1k=None,
             completion_price_per_1k=None,
+            unit_prices=(),
+            is_free=False,
+            supports_zero_data_retention=None,
+            supports_no_training=None,
+            supports_no_prompt_retention=None,
+            zdr_capable=False,
         )
     return list(unique.values())
 
@@ -386,6 +526,59 @@ def _pricing_is_free(pricing: dict[str, Any]) -> bool:
     if values:
         return all(value == 0.0 for value in values)
     return False
+
+
+def _unit_prices_are_free(
+    raw_unit_prices: object,
+    *,
+    provider_declares_free: bool,
+    inputs: tuple[str, ...],
+    outputs: tuple[str, ...],
+) -> bool:
+    """Return whether a non-token price vector is complete and entirely zero."""
+    non_text_modalities = {
+        modality for modality in (*inputs, *outputs) if modality != "text"
+    }
+    if not isinstance(raw_unit_prices, dict):
+        return provider_declares_free or not non_text_modalities
+    unknown_dimensions = {
+        key for key in raw_unit_prices if isinstance(key, str) and key not in UNIT_PRICE_DIMENSIONS
+    }
+    if unknown_dimensions:
+        return False
+    declared: dict[str, float] = {}
+    for key in UNIT_PRICE_DIMENSIONS:
+        if key not in raw_unit_prices:
+            continue
+        value = raw_unit_prices[key]
+        if not _valid_price_component(value):
+            return False
+        declared[key] = float(value)
+    if not declared:
+        return provider_declares_free or not non_text_modalities
+    return all(value == 0.0 for value in declared.values())
+
+
+def _row_is_free(
+    row: Mapping[str, Any],
+    *,
+    pricing: dict[str, Any],
+    inputs: tuple[str, ...],
+    outputs: tuple[str, ...],
+) -> bool:
+    """Classify only rows whose token and non-token prices are all known zero."""
+    raw_unit_prices = row.get("unit_pricing")
+    provider_declares_free = isinstance(row.get("is_free"), bool) and row["is_free"]
+    if isinstance(row.get("is_free"), bool) and row["is_free"] is False:
+        return False
+    if not _pricing_is_free(pricing):
+        return False
+    return _unit_prices_are_free(
+        raw_unit_prices,
+        provider_declares_free=provider_declares_free,
+        inputs=inputs,
+        outputs=outputs,
+    )
 
 
 def _models_dev_cost_is_free(cost: object) -> bool:
@@ -606,7 +799,7 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
                     )
                 else:
                     parsed_values.append(None)
-
+            
             if parsed_values and all(isinstance(value, bool) for value in parsed_values) and len(set(parsed_values)) == 1:
                 row[key] = parsed_values[0]
         if policy_urls:
@@ -814,10 +1007,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 unit_prices=unit_prices,
-                is_free=(
-                    row["is_free"]
-                    if isinstance(row.get("is_free"), bool)
-                    else _pricing_is_free(pricing)
+                is_free=_row_is_free(
+                    row,
+                    pricing=pricing,
+                    inputs=inputs,
+                    outputs=outputs,
                 ),
                 supports_zero_data_retention=(
                     row["supports_zero_data_retention"]
@@ -838,6 +1032,57 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             )
         )
     return _deduplicate_discovered_models(discovered)
+
+
+def _bytez_meter_price_is_free(meter_price: Any) -> bool:
+    """Return whether a Bytez ``meterPrice`` names an exact-zero GPU-second rate.
+
+    Bytez prices by GPU-second, e.g. ``"0.0006478333 / sec"`` (see
+    https://docs.bytez.com/http-reference/list/models.md), not per-token --
+    this never feeds ``prompt_price_per_1k``/``completion_price_per_1k``,
+    only whether the *rate itself* is known to be exactly zero. Parses
+    through :class:`~decimal.Decimal` to avoid a nonzero rate underflowing to
+    ``0.0`` in float, matching :func:`_price_per_1k`'s precision handling. A
+    missing, non-numeric, or malformed value is unknown, not free -- the same
+    fail-closed default this module uses everywhere else pricing evidence is
+    incomplete. The sibling ``meter`` field (a GPU-tier name, e.g.
+    ``"sm-free"``) is not used here: live documentation shows tier names can
+    contain "free" while their own ``meterPrice`` is nonzero, so tier naming
+    is not a trustworthy zero-cost signal.
+
+    A string value must match the full documented ``"<rate> / <unit>"`` shape
+    -- exactly one ``/`` separating a non-empty rate from a non-empty unit --
+    before any part of it is trusted. Reading only the text before the first
+    ``/`` would let a shape that does not match the documented grammar at all
+    (a missing unit, e.g. ``"0 /"``, or an extra separator, e.g.
+    ``"0 / sec / token"``) still read as ``"0"`` and get confidently
+    classified free; an unexpected shape is itself a signal something about
+    the row is wrong, so it fails closed instead. The *unit* is deliberately
+    not required to equal ``"sec"``: a rate of exactly zero cost is zero
+    regardless of its time unit (``"0 / hour"`` is exactly as free as
+    ``"0 / sec"``), so this only validates the shape, never the unit name.
+    """
+    if isinstance(meter_price, bool):
+        return False
+    if isinstance(meter_price, (int, float)):
+        try:
+            return Decimal(str(meter_price)) == 0
+        except (ArithmeticError, ValueError):
+            return False
+    if not isinstance(meter_price, str):
+        return False
+    segments = meter_price.split("/")
+    if len(segments) != 2:
+        # Zero or two-or-more "/" characters does not match the documented
+        # "<rate> / <unit>" shape -- trust nothing from it, zero included.
+        return False
+    rate, unit = (segment.strip() for segment in segments)
+    if not rate or not unit:
+        return False
+    try:
+        return Decimal(rate) == 0
+    except (ArithmeticError, ValueError):
+        return False
 
 
 def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
@@ -866,44 +1111,142 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 privacy_policy_urls=_privacy_policy_urls(source, row),
                 # Bytez prices by GPU-second (meterPrice), not per-token; leaving
                 # per-1k pricing unset is more honest than a misleading estimate.
+                is_free=_bytez_meter_price_is_free(row.get("meterPrice")),
             )
         )
     return _deduplicate_discovered_models(discovered)
 
 
-def discover_provider_models(
-    source: ProviderModelSource, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+def _openrouter_zdr_model_ids(*, timeout: float) -> set[str]:
+    """Read public OpenRouter ZDR evidence for discovered provider models."""
+    api_key = get_credential("OPENROUTER_API_KEY") or ""
+    try:
+        payload = _fetch_json_same_host_https(
+            _OPENROUTER_ZDR_ENDPOINTS_URL,
+            api_key=api_key,
+            timeout=timeout,
+        )
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return set()
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return set()
+    return {
+        row["model_id"].casefold()
+        for row in rows or ()
+        if isinstance(row, dict)
+        and isinstance(row.get("model_id"), str)
+        and row["model_id"].strip()
+    }
+
+
+def _apply_discovered_model_evidence(
+    discovered: list[DiscoveredModel], zdr_model_ids: set[str]
 ) -> list[DiscoveredModel]:
-    """Discover one provider's models, or ``[]`` if its credential is not registered."""
+    """Apply model-level ZDR evidence to matching rows from every provider.
+
+    Providers may expose the same canonical model id as OpenRouter while using
+    a different upstream endpoint. Exact canonical ids are the only portable
+    identity; suffix matching would transfer privacy evidence to an unrelated
+    model that merely shares a display name.
+    """
+    if not zdr_model_ids:
+        return discovered
+    exact_ids = {model_id.strip().casefold() for model_id in zdr_model_ids if model_id.strip()}
+
+    def matches(model_id: str) -> bool:
+        normalized = model_id.strip().casefold()
+        return normalized in exact_ids
+
+    return [
+        replace(
+            model,
+            zdr_capable=not model.evidence_only and matches(model.model_id),
+        )
+        for model in discovered
+    ]
+
+
+def discover_provider_models(
+    source: ProviderModelSource,
+    *,
+    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    ca_bundle: str | None = None,
+    models_dev_metadata: Any = _NOT_FETCHED,
+) -> list[DiscoveredModel]:
+    """Discover one provider's models, or ``[]`` if its credential is not registered.
+
+    ``models_dev_metadata`` lets a caller that already fetched
+    ``https://models.dev/api.json`` (e.g. :func:`discover_all_models`, once,
+    for every source that wants it) hand the parsed payload in directly so
+    this call does not repeat the fetch. Leaving it at the default sentinel
+    preserves this function's existing lazy, per-call fetch-on-demand
+    behavior for every other caller, tests included.
+
+    The primary model-list fetch gets one bounded retry (short fixed delay,
+    shortened timeout) when the failure is transient (5xx/timeout/connection
+    reset, per :func:`~contextual_orchestrator.orchestrator.is_transient_error`)
+    — a single provider's momentary blip no longer has to zero out that
+    provider's entire contribution for this discovery pass. A non-transient
+    failure (bad credential, malformed response) is never retried.
+    """
     api_key = get_credential(source.credential_name)
     if not api_key:
+        _LOGGER.debug(
+            "model discovery skipped account=%s reason=key_missing",
+            source.provider_name,
+        )
         return []
+    _LOGGER.debug(
+        "model discovery started account=%s",
+        source.provider_name,
+    )
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
-    try:
-        fetch = (
-            _fetch_configured_gateway_json
-            if source.provider_name == "configured_gateway"
-            else _fetch_json
-        )
-        payload = fetch(
-            url,
-            api_key=api_key,
-            auth_scheme=source.auth_scheme,
-            timeout=timeout,
-        )
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        # OSError covers ConnectionError/reset failures that are not URLError
-        # subclasses, so a raw provider transport failure can never escape the
-        # discovery boundary with provider text attached.
-        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
-    if source.provider_name == "opencode_zen":
+    fetch = (
+        _fetch_configured_gateway_json
+        if source.provider_name == "configured_gateway"
+        else _fetch_json
+    )
+    fetch_kwargs = {
+        "api_key": api_key,
+        "auth_scheme": source.auth_scheme,
+        **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
+    }
+    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
+    payload: Any = None
+    last_exc: Exception | None = None
+    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
         try:
-            metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-            metadata = None
-        payload = _merge_models_dev_metadata(payload, metadata, _MODELS_DEV_OPENCODE_PROVIDER)
+            payload = fetch(url, timeout=attempt_timeout, **fetch_kwargs)
+            last_exc = None
+            break
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError) as exc:
+            # OSError covers ConnectionError/reset failures that are not URLError
+            # subclasses, and RuntimeError covers the configured-gateway transport's
+            # (ModelClient._resolve_addresses / _open_provider) DNS and request-
+            # validation failures, so a raw provider transport failure can never
+            # escape the discovery boundary with provider text attached.
+            last_exc = exc
+            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
+            if is_last_attempt or not is_transient_error(exc):
+                break
+            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    if last_exc is not None:
+        error_code = _provider_discovery_error_code(last_exc)
+        _LOGGER.debug(
+            "model discovery failed account=%s error_code=%s",
+            source.provider_name,
+            error_code,
+        )
+        raise ProviderDiscoveryError(source.provider_name, error_code) from None
+    if source.models_dev_provider_id:
+        if models_dev_metadata is _NOT_FETCHED:
+            metadata = _fetch_models_dev_metadata(timeout=timeout)
+        else:
+            metadata = models_dev_metadata
+        payload = _merge_models_dev_metadata(payload, metadata, source.models_dev_provider_id)
     elif source.provider_name == "openrouter":
         try:
             metadata = _fetch_json(_OPENROUTER_ZDR_ENDPOINTS_URL, api_key=api_key, timeout=timeout)
@@ -932,33 +1275,79 @@ def discover_provider_models(
                 api_key=api_key,
                 auth_scheme=source.auth_scheme,
                 timeout=timeout,
+                ca_bundle=ca_bundle,
             )
         except (urllib.error.URLError, TimeoutError, ValueError, OSError):
             metadata = None
         payload = _merge_configured_gateway_metadata(payload, metadata)
     if source.style == "bytez":
-        return _parse_bytez(payload, source)
-    return _parse_openai_compatible(payload, source)
+        discovered = _parse_bytez(payload, source)
+    else:
+        discovered = _parse_openai_compatible(payload, source)
+    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    _LOGGER.debug(
+        "model discovery completed account=%s model_count=%d",
+        source.provider_name,
+        len(result),
+    )
+    return result
 
 
 def discover_all_models(
     sources: tuple[ProviderModelSource, ...] = PROVIDER_MODEL_SOURCES,
     *,
     timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    ca_bundle: str | None = None,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
     """Discover models across every provider with a registered credential.
 
     One provider's failure never blocks the others: errors are collected and
     returned alongside whatever models were successfully discovered.
+
+    Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
+    ``openai``) each want the same Models.dev catalog. When any registered
+    source declares ``models_dev_provider_id``, fetch it here exactly once
+    (:func:`_fetch_models_dev_metadata`, with its own small bounded retry) and
+    hand every source the identical parsed payload, instead of each source
+    independently repeating the fetch inside :func:`discover_provider_models`.
     """
     discovered: list[DiscoveredModel] = []
     errors: list[ProviderDiscoveryError] = []
+    models_dev_metadata: Any = _NOT_FETCHED
+    if any(
+        source.models_dev_provider_id and get_credential(source.credential_name)
+        for source in sources
+    ):
+        models_dev_metadata = _fetch_models_dev_metadata(timeout=timeout)
     for source in sources:
         try:
-            discovered.extend(discover_provider_models(source, timeout=timeout))
+            discovered.extend(
+                discover_provider_models(
+                    source,
+                    timeout=timeout,
+                    ca_bundle=ca_bundle,
+                    models_dev_metadata=models_dev_metadata,
+                )
+            )
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    return _deduplicate_discovered_models(discovered), errors
+    # OpenRouter's authenticated catalog supplies routable account-model rows;
+    # its public ZDR endpoint adds route-specific privacy evidence without
+    # turning the whole provider account into either ZDR-only or non-serving.
+    routed = _apply_discovered_model_evidence(
+        _deduplicate_discovered_models(discovered),
+        _openrouter_zdr_model_ids(timeout=timeout),
+    )
+    if any(
+        source.provider_name == "openrouter"
+        and get_credential(source.credential_name)
+        for source in sources
+    ):
+        routed = apply_openrouter_spend_admission(
+            routed,
+            openrouter_paid_inference_available(timeout=timeout),
+        )
+    return routed, errors
 
 
 def openrouter_paid_inference_available(
@@ -994,6 +1383,24 @@ def openrouter_paid_inference_available(
         return None
 
 
+def apply_openrouter_spend_admission(
+    discovered: Sequence[DiscoveredModel],
+    paid_available: bool | None,
+) -> list[DiscoveredModel]:
+    """Fail closed for paid OpenRouter rows without current credit evidence."""
+    return [
+        replace(
+            model,
+            spend_admitted=(
+                model.provider_name != "openrouter"
+                or model.is_free
+                or paid_available is True
+            ),
+        )
+        for model in discovered
+    ]
+
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -1010,7 +1417,7 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
     """Translate only explicit provider privacy evidence into agent tags."""
     return (
-        *(("privacy:zdr",) if discovered.supports_zero_data_retention is True else ()),
+        *(("privacy:zdr",) if (discovered.supports_zero_data_retention is True or discovered.zdr_capable) else ()),
         *(("privacy:no_zdr",) if discovered.supports_zero_data_retention is False else ()),
         *(("privacy:no_training",) if discovered.supports_no_training is True else ()),
         *(("privacy:training_only",) if discovered.supports_no_training is False else ()),
@@ -1020,15 +1427,37 @@ def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:
 
 
 def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
-    """Require explicit chat evidence when a provider supplied capabilities."""
+    """Return whether a discovered row is chat-compatible before serving policy.
+
+    Provider-declared capabilities/modalities remain authoritative when
+    present. The model-id heuristic is only the fallback for bare
+    OpenAI-compatible listings that omit structured capability metadata.
+    """
+    return is_general_chat_candidate(
+        discovered.model_id,
+        capabilities=discovered.capabilities,
+        output_modalities=discovered.output_modalities,
+    )
+
+
+def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
+    """Return whether a discovered row may become an ordinary chat agent.
+
+    Explicit catalog metadata is authoritative when present. A provider may
+    expose a media-only model with a generic identifier, so the model-name
+    heuristic is only a fallback for rows with no capability or modality data.
+    """
     return (
-        (not discovered.capabilities or "chat" in discovered.capabilities)
-        and is_general_chat_agent_model_id(discovered.model_id)
+        not discovered.evidence_only
+        and discovered.spend_admitted
+        and is_discovered_chat_candidate(discovered)
     )
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
     """Build a disabled capability agent or reject a chat-ineligible record."""
+    if discovered.evidence_only:
+        raise ValueError("evidence-only model cannot become a serving agent")
     if not any(
         capability not in {"chat", "response_format"}
         for capability in discovered.capabilities
@@ -1046,8 +1475,10 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         tags=(
             "discovered",
             *(("cost:free",) if discovered.is_free else ()),
+            *(("spend:blocked",) if not discovered.spend_admitted else ()),
             *privacy_tags_for_discovered(discovered),
             *discovered.capabilities,
+            *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
         ),
@@ -1056,9 +1487,164 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     )
 
 
+def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog evidence shows this model needs non-text input.
+
+    A model whose provider/catalog architecture evidence declares an input
+    modality other than ``"text"`` (e.g. ``image``, ``audio``, ``video``) is a
+    specialized multimodal deployment: a caller cannot use it for an arbitrary
+    request without knowing in advance that the request must carry that extra
+    modality. Absence of modality evidence is not evidence of a multimodal
+    requirement, so an empty ``input_modalities`` tuple never triggers this.
+
+    This is a deliberately conservative reading: catalog fields such as
+    Models.dev's ``modalities.input`` document *supported* inputs, not which
+    ones a given request must supply, so a model that lists ``text`` next to
+    ``image`` still trips this check. ContextualWisdomLab/.github#1198's
+    incident model (NVIDIA NIM's ``meta/llama-3.2-90b-vision-instruct``) is
+    exactly that shape -- Models.dev reports its inputs as ``text`` *and*
+    ``image`` -- yet NIM's live deployment rejected a plain tool-calling
+    request against it three times in a row. With no reliable per-deployment
+    tool-calling signal available (see :func:`general_free_serving_candidates`
+    for the incident writeup), treating "declares any non-text input" as
+    disqualifying for *blind* serving is the only evidence-based reading that
+    actually keeps that incident fixed; a model believed to also serve plain
+    text requests just fine can still be reached through a pool that is not
+    modality-blind (see :func:`general_free_serving_candidates`'s docstring).
+
+    Delegates the actual classification to
+    ``chat_capability.requires_non_text_input``, the single evidence-based
+    rule shared with ``orchestrator.TaskOrchestrator._agent_requires_non_text_input``
+    (which reads an agent's persisted ``input:<modality>`` tags instead of
+    ``DiscoveredModel`` directly) so the two representations of the same
+    catalog evidence cannot drift on this question independently of each
+    other.
+    """
+    return requires_non_text_input(discovered.input_modalities)
+
+
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
-    """Return models whose provider metadata identifies zero-cost inference."""
+    """Return the complete zero-cost model inventory (price evidence only).
+
+    This is pure price-based inventory: every model whose structured
+    provider/catalog pricing evidence is entirely zero, regardless of input
+    or output modality. Reporting surfaces that answer "is this model free"
+    -- the ``discover-models`` CLI's ``--free-only`` report, ``free_tier_count``,
+    and the free-tier data-privacy totals -- need this complete inventory, not
+    a servable subset.
+
+    Fitness for the general-purpose *blind* serving pool (``orchestrator/free``)
+    is a stricter, separate question: see :func:`general_free_serving_candidates`.
+    An earlier revision of this function conflated the two, which silently
+    undercounted genuinely free models that are simply unsuited to
+    capability-blind serving in every "is this model free" report.
+    """
     return [model for model in discovered if model.is_free]
+
+
+def _log_zero_free_serving_contribution(
+    discovered: list[DiscoveredModel], candidates: list[DiscoveredModel]
+) -> None:
+    """Log one non-fatal diagnostic per account that discovered rows but seeded no
+    ``orchestrator/free`` serving candidate, naming the coarse reason.
+
+    A hard provider failure (e.g. Bytez's HTTP 500) already gets an explicit
+    ``model discovery failed account=bytez ...`` line from
+    :func:`discover_provider_models`. But a provider that discovers rows just fine
+    and still contributes nothing to the free pool -- OpenRouter's deliberate
+    ``evidence_only`` exclusion, or a provider with real pricing but no zero-cost
+    model today -- previously left no comparable trace, making a single-family
+    pool (e.g. 100% ``nvidia_nim``) look identical whether every other provider
+    was failing or simply had nothing free to offer. This is derived entirely from
+    already-discovered rows -- no extra fetch, no behavior change to the returned
+    candidate list.
+
+    ``credential_name`` here is always the KV credential *name* (e.g.
+    ``"BYTEZ_API_KEY"``) -- one of the literal strings declared on each
+    :class:`ProviderModelSource` in ``PROVIDER_MODEL_SOURCES`` and copied
+    verbatim onto every :class:`DiscoveredModel` at construction
+    (``_parse_openai_compatible``/``_parse_bytez``). The actual secret
+    *value* is a distinct local (``api_key`` in
+    :func:`discover_provider_models`) that is never threaded onto a
+    ``DiscoveredModel`` and never reaches this function or this log line.
+    """
+    serving_account_names = {model.credential_name for model in candidates}
+    seen: set[str] = set()
+    for model in discovered:
+        if model.credential_name in seen or model.credential_name in serving_account_names:
+            continue
+        seen.add(model.credential_name)
+        account_rows = [m for m in discovered if m.credential_name == model.credential_name]
+        if all(row.evidence_only for row in account_rows):
+            reason = "evidence_only"
+        elif not any(row.is_free for row in account_rows):
+            reason = "no_free_pricing_reported"
+        else:
+            reason = "free_rows_excluded_from_general_pool"
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure - credential_name is the KV secret's *name* (e.g. "BYTEZ_API_KEY"), never its value; see the docstring above for the exact field/type trace. The rule matches on the word "credential" in the format string, not on any actual secret reaching this call.
+        _LOGGER.debug(
+            "free serving pool contribution zero account=%s credential=%s reason=%s",
+            model.provider_name,
+            model.credential_name,
+            reason,
+        )
+
+
+def general_free_serving_candidates(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Return free models fit for the general-purpose blind serving pool.
+
+    A zero price alone does not certify fitness for arbitrary callers: the
+    free pool (``orchestrator/free``) serves every role and request shape --
+    including tool/function-calling requests -- without knowing in advance
+    which capability a given request will need. Provider pricing can be
+    reliably zero on a model that only a caller who already knows to supply
+    an extra input modality (e.g. an image) could ever use meaningfully;
+    :func:`_requires_non_text_input` excludes exactly those rows here, using
+    catalog evidence discovery already records, not a per-model name rule.
+    Such a model remains fully discovered, fully counted in
+    :func:`free_discovered_models`'s price-based inventory, and eligible for
+    a pool that is not modality-blind (e.g. one built for vision/multimodal
+    tasks) -- it is only withheld from *this* general-purpose free selector.
+
+    Reproduces ContextualWisdomLab/.github#1198's required Strix Security Scan
+    failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passed every existing chat-capability
+    check, yet NIM's live deployment rejected Strix's tool-calling request
+    against it with a definitive HTTP 400 three independent times in a row --
+    because the free pool had no other candidate to fail over to, this one
+    vision-input model alone exhausted the whole tool-calling pool.
+
+    This is the selector every runtime pool-construction path must apply
+    before treating a discovered model as eligible for blind free serving
+    (e.g. tagging an agent ``cost:free`` in a context where that tag alone
+    drives general-chat ``orchestrator/free`` routing).
+    ``TaskOrchestrator._is_general_free_agent`` additionally re-checks an
+    agent's persisted ``input:<modality>`` tags at selection time -- but only
+    for the capability-blind general chat pool, never for a capability-scoped
+    free route (``_capability_agents``), where that same tag is the expected
+    shape, not a surprise -- so a durable agent-pool row written by an older
+    build, before this exclusion existed, cannot bypass it either.
+
+    Zero price and text-only input still are not enough on their own: an
+    ``evidence_only`` catalog row can never become a serving agent at all
+    (:func:`agent_from_discovered` refuses to build one), and a free
+    non-chat-capable model (e.g. an embedding-only deployment) is not a
+    general chat candidate either. :func:`is_routable_discovered_model` --
+    the same predicate ``_auto_discover_runtime_agents`` and
+    ``provider_bootstrap`` already require before promoting a discovered row
+    to an ordinary chat agent -- excludes both here too, so this selector's
+    count never overstates how many free models the general chat pool could
+    actually serve.
+    """
+    candidates = [
+        model
+        for model in free_discovered_models(discovered)
+        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+    ]
+    _log_zero_free_serving_contribution(discovered, candidates)
+    return candidates
 
 
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
@@ -1154,13 +1740,6 @@ def _discovery_price_key(
     return (0, cost, model.provider_name, model.model_id)
 
 
-def _provider_family(provider_name: str) -> str:
-    """Collapse credentials that share one upstream provider outage domain."""
-    if provider_name in {"nvidia_nim", "nvidia_nim_sub"}:
-        return "nvidia_nim"
-    return provider_name
-
-
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
@@ -1173,7 +1752,7 @@ def select_cheapest_discovered_agent(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_discovered_chat_candidate(model)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return None
@@ -1189,7 +1768,7 @@ def select_top_n_cheapest_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_discovered_chat_candidate(model)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return []
@@ -1207,10 +1786,9 @@ def select_bootstrap_discovered_agents(
     """Build a deterministic, price-honest, provider-diverse initial pool.
 
     Candidates retain the known-price-first ordering above, but the first pass
-    takes at most one model from each independent provider family. Remaining
-    capacity is filled in the same deterministic cost order. NVIDIA NIM primary
-    and sub credentials are one outage domain, so they participate in the second
-    pass only after independently hosted providers have had a chance to enter.
+    takes at most one model from each independently discovered provider account.
+    Remaining capacity is filled in the same deterministic cost order. No vendor
+    or endpoint name is used to infer a shared family or collapse credential state.
     Duplicate serving identities never consume capacity twice.
     """
     if limit <= 0:
@@ -1218,7 +1796,7 @@ def select_bootstrap_discovered_agents(
     eligible = [
         model
         for model in _deduplicate_discovered_models(discovered)
-        if is_discovered_chat_candidate(model)
+        if is_routable_discovered_model(model)
     ]
     if not eligible:
         return []
@@ -1229,14 +1807,13 @@ def select_bootstrap_discovered_agents(
     )
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
-    provider_families: set[str] = set()
+    providers: set[str] = set()
 
     for model in ranked:
-        family = _provider_family(model.provider_name)
-        if family in provider_families:
+        if model.provider_name in providers:
             deferred.append(model)
             continue
-        provider_families.add(family)
+        providers.add(model.provider_name)
         selected.append(model)
         if len(selected) == limit:
             return selected

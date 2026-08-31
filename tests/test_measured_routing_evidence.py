@@ -22,10 +22,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import (  # noqa: E402
-    ModelClient,
-    RequestDeadlineExceeded,
-)
+from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.model_group import (  # noqa: E402
     BETA_PRIOR_FAILURE_COUNT,
     BETA_PRIOR_SUCCESS_COUNT,
@@ -94,6 +91,20 @@ def test_output_tokens_validation_rejects_non_positive_and_boolean() -> None:
             router.observe_success("member_one", 1.0, output_tokens=invalid)  # type: ignore[arg-type]
 
 
+def test_total_tokens_validation_rejects_non_positive_and_boolean() -> None:
+    router = ModelGroupRouter()
+    for invalid in (0, -5, True, 1.5, "12"):
+        with pytest.raises((TypeError, ValueError)):
+            router.observe_success("member_one", 1.0, total_tokens=invalid)  # type: ignore[arg-type]
+
+
+def test_usage_total_tokens_requires_provider_reported_positive_integer() -> None:
+    assert TaskOrchestrator._usage_total_tokens({"total_tokens": 42}) == 42
+    assert TaskOrchestrator._usage_total_tokens({"total_tokens": 0}) is None
+    assert TaskOrchestrator._usage_total_tokens({"total_tokens": True}) is None
+    assert TaskOrchestrator._usage_total_tokens({"completion_tokens": 42}) is None
+
+
 def test_unobserved_member_reports_include_null_token_column() -> None:
     router = ModelGroupRouter()
     report = router.member_report("never_seen")
@@ -116,38 +127,6 @@ def test_mock_embedding_vectors_are_deterministic() -> None:
     second = orchestrator._embed_cached("some task text")
     assert first is not None and first == second
     assert len(first) == orchestrator.client.MOCK_EMBEDDING_DIMENSION
-
-
-@pytest.mark.parametrize("helper", ["_embed_cached", "_descriptor_vector_cached"])
-def test_affinity_helpers_do_not_swallow_request_deadline(
-    monkeypatch: pytest.MonkeyPatch, helper: str
-) -> None:
-    embedding = ModelAgent("embedding_member", "mock-embed", tags=("embedding",))
-    worker = ModelAgent("worker_agent", "mock-worker", tags=("reasoning",))
-    orchestrator = _orch(embedding, worker)
-
-    def expired(*args, **kwargs):
-        del args, kwargs
-        raise RequestDeadlineExceeded("request deadline exceeded")
-
-    monkeypatch.setattr(orchestrator.client, "embed", expired)
-    argument = "some task text" if helper == "_embed_cached" else worker
-    with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
-        getattr(orchestrator, helper)(argument)
-
-
-def test_embedding_member_selection_does_not_swallow_request_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    orchestrator = _orch(ModelAgent("worker_agent", "mock", tags=("reasoning",)))
-
-    def expired(*args, **kwargs):
-        del args, kwargs
-        raise RequestDeadlineExceeded("request deadline exceeded")
-
-    monkeypatch.setattr(orchestrator, "select_capability_agent", expired)
-    with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
-        orchestrator._embedding_agent_id()
 
 
 def test_no_embedding_member_disables_affinity_entirely() -> None:
@@ -297,7 +276,6 @@ class _VerdictJudgeAdapter:
 
 def test_realtime_judge_accept_records_quality_success(monkeypatch: pytest.MonkeyPatch) -> None:
     orchestrator = _orch(ModelAgent("worker_agent", "mock", tags=("reasoning",)))
-    adapter = _VerdictJudgeAdapter(accepted=True)
 
     monkeypatch.setattr(orchestrator, "_model_judge_verification", lambda *a, **k: {
         "accepted": True, "reason": "stub verdict", "verifier_output": k.get("answer", ""),

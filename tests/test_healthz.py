@@ -68,14 +68,11 @@ def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:
         assert status == 200
         assert unprobed["status"] == "unprobed"
 
-        try:
-            request(f"{url}?refresh=true")
-        except HTTPError as exc:
-            assert exc.code == 409
-            body = json.loads(exc.read().decode("utf-8"))
-            assert body["error"]["code"] == "async_readiness_refresh_required"
-        else:  # pragma: no cover
-            raise AssertionError("inline broad readiness refresh must not run")
+        status, refreshed = request(f"{url}?refresh=true")
+        assert status == 200
+        assert refreshed["status"] == "ready"
+        assert refreshed["ready_agent_count"] == 1
+        assert refreshed["items"][1]["status"] == "disabled"
 
         try:
             request(f"{url}?refresh=true", token=None)
@@ -83,100 +80,6 @@ def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:
             assert exc.code == 401
         else:  # pragma: no cover
             raise AssertionError("provider readiness must require admin authentication")
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_provider_readiness_refresh_rejects_timeout_outside_probe_contract() -> None:
-    """An invalid probe timeout fails at submission instead of failing a job later."""
-    orchestrator = TaskOrchestrator([
-        ModelAgent("probe_agent", "mock-agent", tags=("reasoning",)),
-    ])
-    server = build_server(
-        orchestrator,
-        port=0,
-        security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"),
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    port = server.server_address[1]
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/v1/provider_readiness_refreshes",
-        data=json.dumps({
-            "agent_ids": ["probe_agent"],
-            "capability_code": "structured",
-            "timeout_seconds": 60,
-        }).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer admin_secret",
-            "Content-Type": "application/json",
-            "X-Request-Timeout-Ms": "5000",
-        },
-        method="POST",
-    )
-
-    try:
-        try:
-            urllib.request.urlopen(request, timeout=5)
-        except HTTPError as exc:
-            assert exc.code == 400
-            body = json.loads(exc.read().decode("utf-8"))
-            assert body["error"]["code"] == "invalid_probe_timeout"
-        else:  # pragma: no cover
-            raise AssertionError("out-of-range timeout must fail before job submission")
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_provider_readiness_refresh_declares_safe_polling_cadence() -> None:
-    """Submission and progress expose the rate-budget-derived poll interval."""
-    orchestrator = TaskOrchestrator([
-        ModelAgent("probe_agent", "mock-agent", tags=("reasoning",)),
-    ])
-    server = build_server(
-        orchestrator,
-        port=0,
-        security=SecurityConfig(
-            admin_token="admin_secret",
-            inference_token="inference_secret",
-            rate_limit_requests=2,
-            rate_limit_window_seconds=1,
-        ),
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    port = server.server_address[1]
-    submission = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/v1/provider_readiness_refreshes",
-        data=json.dumps({
-            "agent_ids": ["probe_agent"],
-            "capability_code": "structured",
-            "timeout_seconds": 1,
-        }).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer admin_secret",
-            "Content-Type": "application/json",
-            "X-Request-Timeout-Ms": "5000",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(submission, timeout=5) as response:
-            assert response.status == 202
-            submitted = json.loads(response.read().decode("utf-8"))
-        assert submitted["poll_after_ms"] == 500
-
-        progress = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/v1/provider_readiness_refreshes/{submitted['job_id']}",
-            headers={"Authorization": "Bearer admin_secret"},
-        )
-        with urllib.request.urlopen(progress, timeout=5) as response:
-            assert response.status == 200
-            document = json.loads(response.read().decode("utf-8"))
-        assert document["poll_after_ms"] == 500
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from dataclasses import replace
@@ -21,20 +22,18 @@ from .model_discovery import (
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
+    general_free_serving_candidates,
     is_discovered_chat_candidate,
-    openrouter_paid_inference_available,
+    is_routable_discovered_model,
     refresh_price_book,
     select_bootstrap_discovered_agents,
 )
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
-    ModelAgent,
     ModelClient,
     TaskOrchestrator,
-    _configured_endpoint_matches,
     load_agents,
-    normalize_endpoint_selector,
 )
 from .privacy_policy_analysis import (
     analyze_discovered_privacy_policies,
@@ -101,24 +100,6 @@ def _json_object(value: str) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise argparse.ArgumentTypeError("JSON object required")
     return parsed
-
-
-def _configured_provider_hosts() -> list[str] | None:
-    """Return the deployment allowlist used by both serving and discovery.
-
-    ``configured_gateway_source`` deliberately refuses a runtime source unless
-    its host is allowlisted.  The HTTP client already accepts the same
-    deployment setting, so CLI startup must pass it into ``ModelClient`` rather
-    than silently discarding it and leaving a blank bootstrap agent unexpanded.
-    """
-    hosts = [
-        host.strip()
-        for host in os.environ.get(
-            "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", ""
-        ).split(",")
-        if host.strip()
-    ]
-    return hosts or None
 
 
 def _resolve_auth_token(explicit: str, credential_name: str) -> str:
@@ -265,18 +246,8 @@ def _runtime_discovery_sources(
                 }
             )
         except ValueError:
-            orchestrator.record_analytics_event(
-                "configured_gateway_discovery_unavailable",
-                {"reason_code": "source_not_allowlisted"},
-            )
             continue
-        if source is None:
-            continue
-        if get_credential(source.credential_name) is None:
-            orchestrator.record_analytics_event(
-                "configured_gateway_discovery_unavailable",
-                {"reason_code": "credential_unavailable"},
-            )
+        if source is None or get_credential(source.credential_name) is None:
             continue
         identity = (source.list_url, source.credential_name)
         if identity not in seen:
@@ -296,6 +267,11 @@ def _discover_models_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-models",
         description="Discover models from every provider with a KV-registered credential.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Emit secret-free provider discovery diagnostics to stderr.",
     )
     parser.add_argument(
         "--agents-db",
@@ -324,7 +300,14 @@ def _discover_models_command(argv: list[str]) -> None:
             "this opt-in action may incur provider charges."
         ),
     )
+    parser.add_argument(
+        "--provider-ca-bundle",
+        default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
+        help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
+    )
     args = parser.parse_args(argv)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
@@ -332,30 +315,50 @@ def _discover_models_command(argv: list[str]) -> None:
         sources = _bootstrap_discovery_sources()
     except ValueError as exc:
         parser.error(str(exc))
-    discovered, errors = discover_all_models(sources)
+    discovered, errors = discover_all_models(
+        sources,
+        ca_bundle=args.provider_ca_bundle,
+    )
     privacy_assessments = []
     if args.analyze_privacy_policies:
         discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
+    # free_tier_count and general_free_serving_count are always computed over
+    # the complete `discovered` population, independent of --free-only (which
+    # only filters `reported`, the per-model listing below): both answer a
+    # global "how many, out of everything found" question, matching each
+    # other's population by design rather than "reported"'s row-level filter.
     free_models = free_discovered_models(discovered)
+    general_free_serving_models = general_free_serving_candidates(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
     priced_count = refresh_price_book(reported, price_book)
 
     enabled_agent_ids: list[str] = []
     if args.agents_db:
+        discovered_agents = [
+            agent_from_discovered(model)
+            for model in reported
+            if not model.evidence_only
+        ]
         bootstrap = TaskOrchestrator(
-            [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
+            discovered_agents,
+            agents_db=args.agents_db,
+            allow_empty_agents=True,
         )
-        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in reported])
-        if args.enable_cheapest:
-            for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
-                agent_id = agent_id_for(model)
-                bootstrap.patch_agent("default", agent_id, {"status": "active"})
-                enabled_agent_ids.append(agent_id)
+        try:
+            bootstrap.sync_discovered_agents(discovered_agents)
+            if args.enable_cheapest:
+                for model in select_bootstrap_discovered_agents(reported, price_book, args.enable_cheapest):
+                    agent_id = agent_id_for(model)
+                    bootstrap.patch_agent("default", agent_id, {"status": "active"})
+                    enabled_agent_ids.append(agent_id)
+        finally:
+            bootstrap.close()
 
     report = {
         "discovered_count": len(reported),
         "free_tier_count": len(free_models),
+        "general_free_serving_count": len(general_free_serving_models),
         "free_data_privacy": {
             status: sum(1 for model in free_models if (
                 "supported" if model.supports_zero_data_retention is True else
@@ -400,36 +403,53 @@ def _discover_models_command(argv: list[str]) -> None:
 
 
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
-    """Discover and activate chat-capable models, preserving free/ZDR evidence."""
-    discovered, errors = discover_all_models(_runtime_discovery_sources(orchestrator))
-    for error in errors:
-        orchestrator.record_analytics_event(
-            "provider_model_discovery_failed",
-            {
-                "provider_name": error.provider_name,
-                "reason_code": error.error_code,
-            },
-        )
-    openrouter_paid_available = openrouter_paid_inference_available()
-    chat_models = [model for model in discovered if is_discovered_chat_candidate(model)]
-    runtime_models = [
+    """Discover and activate routable chat models without runtime env transport.
+
+    The shared discovery predicate keeps ordinary chat rows discoverable even
+    when a provider omits structured capability metadata, while still refusing
+    evidence-only or non-chat rows.
+    """
+    discovered, _errors = discover_all_models(
+        _runtime_discovery_sources(orchestrator),
+        ca_bundle=orchestrator.client.ca_bundle,
+    )
+    chat_models = [
         model
         for model in discovered
-        if model in chat_models or "embedding" in model.capabilities
+        if not model.evidence_only and is_discovered_chat_candidate(model)
     ]
-    existing_ids = {agent.id for agent in orchestrator.candidates}
-    agents = [
-        replace(
-            agent_from_discovered(model),
-            disabled=(
-                model.provider_name == "openrouter"
-                and not model.is_free
-                and openrouter_paid_available is not True
-            ),
-        )
-        for model in runtime_models
-        if agent_id_for(model) not in existing_ids
-    ]
+    existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
+    agents = []
+    for model in chat_models:
+        existing = existing_by_id.get(agent_id_for(model))
+        routable = is_routable_discovered_model(model)
+        if existing is None:
+            agents.append(replace(agent_from_discovered(model), disabled=not routable))
+        elif "discovered" not in existing.tags:
+            continue
+        elif not routable:
+            tags = (*existing.tags, "spend:blocked")
+            if existing.disabled and "spend:blocked" not in existing.tags:
+                tags = (*tags, "spend:blocked:preserve-disabled")
+            agents.append(
+                replace(
+                    existing,
+                    disabled=True,
+                    tags=tuple(dict.fromkeys(tags)),
+                )
+            )
+        elif "spend:blocked" in existing.tags:
+            agents.append(
+                replace(
+                    existing,
+                    disabled="spend:blocked:preserve-disabled" in existing.tags,
+                    tags=tuple(
+                        tag
+                        for tag in existing.tags
+                        if tag not in {"spend:blocked", "spend:blocked:preserve-disabled"}
+                    ),
+                )
+            )
     result = (
         orchestrator.sync_discovered_agents(agents)
         if agents
@@ -437,21 +457,11 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     )
     if any(model.provider_name == "configured_gateway" for model in chat_models):
         for agent in tuple(orchestrator.candidates):
-            try:
-                normalized_seed_endpoint = normalize_endpoint_selector(agent.base_url)
-            except ValueError:
-                continue
             if (
                 agent.provider_name == "configured_gateway"
                 and not agent.model.strip()
                 and any(
-                    candidate.id != agent.id
-                    and candidate.provider_name == "configured_gateway"
-                    and bool(candidate.model.strip())
-                    and _configured_endpoint_matches(
-                        candidate.base_url, normalized_seed_endpoint
-                    )
-                    and not candidate.disabled
+                    candidate.id != agent.id and not candidate.disabled
                     for candidate in orchestrator.candidates
                 )
             ):
@@ -463,15 +473,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for candidate in orchestrator.agents
     )
     for candidate in tuple(orchestrator.agents):
-        configured_gateway_seed = (
-            candidate.provider_name == "configured_gateway"
-            and not candidate.model.strip()
-        )
-        if (
-            has_real_runtime_agent
-            and "bootstrap_seed" in candidate.tags
-            and not configured_gateway_seed
-        ):
+        if has_real_runtime_agent and "bootstrap_seed" in candidate.tags:
             orchestrator.patch_agent(
                 "default", candidate.id, {"status": "disabled"}
             )
@@ -500,6 +502,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Emit secret-free runtime and model-discovery diagnostics to stderr.",
+    )
+    parser.add_argument(
         "--release-authority-json",
         default=None,
         help="Path to a persisted exact-head release-authority snapshot collected by the governance CLI.",
@@ -516,6 +523,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument(
+        "--production",
+        action="store_true",
+        help="Require split admin/inference server credentials; single-token mode is local-only.",
+    )
     parser.add_argument(
         "--rate-limit-requests",
         type=_positive_int,
@@ -580,9 +592,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--auto-discover-model-agents",
         action="store_true",
-        help="discover source-declared chat- and embedding-capable models at startup and activate them",
+        help="discover source-declared chat-capable models at startup and activate them",
     )
     args = parser.parse_args(arguments)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -590,11 +604,7 @@ def main(argv: list[str] | None = None) -> None:
         max_output_tokens=args.max_output_tokens,
         local_concurrency=args.local_concurrency,
         chat_template_args=args.chat_template_args,
-        allowed_provider_hosts=(
-            args.allowed_provider_hosts
-            if args.allowed_provider_hosts is not None
-            else _configured_provider_hosts()
-        ),
+        allowed_provider_hosts=args.allowed_provider_hosts,
     )
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
@@ -639,6 +649,19 @@ def main(argv: list[str] | None = None) -> None:
                 "provided by --admin-token/--inference-token or "
                 "--admin-token-key/--inference-token-key"
             )
+        if (args.production or args.allow_public_bind) and not split_requested:
+            parser.error(
+                "--production/--allow-public-bind requires split "
+                "--admin-token/--inference-token credentials; single-token mode is local-only"
+            )
+        if (args.production or args.allow_public_bind) and args.insecure_admin_session_cookie:
+            parser.error(
+                "--production/--allow-public-bind cannot use --insecure-admin-session-cookie"
+            )
+        try:
+            SecurityConfig().check_bind(args.host, allow_public_bind=args.allow_public_bind)
+        except ValueError as exc:
+            parser.error(str(exc))
         try:
             auth_token = (
                 _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_CREDENTIAL_NAME)
@@ -659,6 +682,15 @@ def main(argv: list[str] | None = None) -> None:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):
             parser.error("--serve requires a KV auth credential or explicit local token")
+        if (
+            (args.production or args.allow_public_bind)
+            and split_requested
+            and admin_token == inference_token
+        ):
+            parser.error(
+                "--production/--allow-public-bind requires admin and inference tokens "
+                "to resolve to distinct credential values"
+            )
         serve(
             orchestrator,
             host=args.host,

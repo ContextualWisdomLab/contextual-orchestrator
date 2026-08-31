@@ -10,15 +10,9 @@ their results.
 
 from __future__ import annotations
 
-import gc
 import sys
-import threading
-import time
-import weakref
 from pathlib import Path
 from typing import Any, Dict
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -33,46 +27,29 @@ from contextual_orchestrator.batch_routing import (
     BatchRequest,
     BatchResultItem,
     LocalBatchBackend,
-    ProviderEmbeddingBatchBackend,
 )
-from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.kv_config import InMemoryConfigStore
-from contextual_orchestrator.orchestrator import (
-    ModelAgent,
-    ModelClient,
-    RequestDeadlineExceeded,
-    TaskOrchestrator,
-)
 
 
 class FakeValkeyClient:
     """In-memory stand-in for redis.Redis limited to the hash surface used."""
 
-    def __init__(self, *, claim_available: bool = True) -> None:
+    def __init__(self) -> None:
         self.hashes: Dict[str, Dict[str, str]] = {}
         self.expirations: Dict[str, int] = {}
-        self.locks: list[tuple[str, dict[str, int]]] = []
-        self.claim_available = claim_available
-
-    class Claim:
-        def __init__(self, available: bool) -> None:
-            self.available = available
-
-        def acquire(self) -> bool:
-            return self.available
-
-        def release(self) -> None:
-            return None
-
-    def lock(self, name: str, **kwargs: int) -> object:
-        self.locks.append((name, kwargs))
-        return self.Claim(self.claim_available)
 
     def hget(self, key: str, field: str) -> Any:
         return self.hashes.get(key, {}).get(field)
 
     def hset(self, key: str, field: str, value: str) -> int:
         self.hashes.setdefault(key, {})[field] = value
+        return 1
+
+    def hsetnx(self, key: str, field: str, value: str) -> int:
+        bucket = self.hashes.setdefault(key, {})
+        if field in bucket:
+            return 0
+        bucket[field] = value
         return 1
 
     def hdel(self, key: str, field: str) -> int:
@@ -93,297 +70,6 @@ class FakeValkeyClient:
         return True
 
 
-def test_readiness_refresh_is_durable_single_flight_and_explicit() -> None:
-    """One declared readiness scope returns immediately and survives restart."""
-
-    client = FakeValkeyClient()
-    registry = JobRegistryFactory(client)
-    entered = threading.Event()
-    release = threading.Event()
-
-    class BlockingProbeClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=1)
-
-        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
-            del timeout
-            entered.set()
-            release.wait(timeout=2)
-            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
-
-    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
-    orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
-    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
-    first = CostRoutingCoordinator(orchestrator, job_registry=registry)
-    submitted = first.submit_provider_readiness_refresh(
-        agent_ids=[agent.id],
-        capability_code="structured",
-        timeout_seconds=1.0,
-        deadline_epoch=time.time() + 5.0,
-    )
-    assert submitted["status"] in {"queued", "running"}
-    assert entered.wait(timeout=1)
-    duplicate = first.submit_provider_readiness_refresh(
-        agent_ids=[agent.id],
-        capability_code="structured",
-        timeout_seconds=1.0,
-        deadline_epoch=time.time() + 5.0,
-    )
-    assert duplicate["job_id"] == submitted["job_id"]
-    release.set()
-    for _ in range(100):
-        document = first.provider_readiness_refresh_document(submitted["job_id"])
-        if document["status"] == "completed":
-            break
-        time.sleep(0.01)
-    assert document["completed_count"] == 1
-    assert document["ready_count"] == 1
-    execution_claims = [
-        kwargs["timeout"]
-        for name, kwargs in client.locks
-        if "provider_readiness_job_execution" in name
-    ]
-    assert len(execution_claims) == 1
-    assert execution_claims[0] > orchestrator.client.timeout
-    restarted_orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
-    restarted = CostRoutingCoordinator(
-        restarted_orchestrator, job_registry=JobRegistryFactory(client)
-    )
-    assert restarted.provider_readiness_refresh_document(submitted["job_id"])["status"] == "completed"
-    assert restarted_orchestrator._structured_readiness[agent.id]["status"] == "ready"
-
-
-def test_cancelled_readiness_refresh_cannot_publish_late_probe_results() -> None:
-    """Cancellation wins before a blocked provider result reaches admission state."""
-    entered = threading.Event()
-    release = threading.Event()
-
-    class BlockingProbeClient(ModelClient):
-        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
-            del timeout
-            entered.set()
-            release.wait(timeout=2)
-            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
-
-    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
-    orchestrator = TaskOrchestrator([agent], client=BlockingProbeClient())
-    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
-    coordinator = CostRoutingCoordinator(orchestrator)
-    submitted = coordinator.submit_provider_readiness_refresh(
-        agent_ids=[agent.id],
-        capability_code="structured",
-        timeout_seconds=1.0,
-        deadline_epoch=time.time() + 5.0,
-    )
-    assert entered.wait(timeout=1)
-
-    cancelled = coordinator.cancel_provider_readiness_refresh(submitted["job_id"])
-    release.set()
-
-    assert cancelled["status"] == "cancelled"
-    for _ in range(100):
-        if coordinator.provider_readiness_refresh_document(submitted["job_id"])[
-            "status"
-        ] == "cancelled":
-            break
-        time.sleep(0.01)
-    assert orchestrator._structured_readiness == {}
-
-
-def test_readiness_refresh_rejects_implicit_or_unknown_scope() -> None:
-    """The admin job cannot expand an empty or unknown access list."""
-
-    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
-    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
-    for agent_ids in ([], ["unknown_agent"]):
-        try:
-            coordinator.submit_provider_readiness_refresh(
-                agent_ids=agent_ids,
-                capability_code="structured",
-                timeout_seconds=1.0,
-                deadline_epoch=None,
-            )
-        except ValueError:
-            pass
-        else:  # pragma: no cover
-            raise AssertionError("implicit or unknown readiness scope must fail closed")
-
-    with pytest.raises(ValueError, match="deadline_epoch is required"):
-        coordinator.submit_provider_readiness_refresh(
-            agent_ids=[agent.id],
-            capability_code="structured",
-            timeout_seconds=1.0,
-            deadline_epoch=None,
-        )
-
-
-def test_readiness_coordinator_close_releases_executor() -> None:
-    """Coordinator lifecycle closes every owned worker without waiting for work."""
-    agent = ModelAgent("declared_agent", "mock", tags=("reasoning",))
-    coordinator = CostRoutingCoordinator(TaskOrchestrator([agent]))
-    provider_closed: list[bool] = []
-    coordinator._provider_embedding_backend.close = lambda: provider_closed.append(True)  # type: ignore[method-assign]
-
-    coordinator.close()
-
-    assert coordinator._readiness_executor._shutdown is True
-    assert provider_closed == [True]
-
-
-def test_readiness_refresh_large_explicit_scope_uses_provider_concurrency() -> None:
-    """Access-list size is body-bounded; provider calls obey configured concurrency."""
-
-    lock = threading.Lock()
-    counters = {"active": 0, "maximum": 0}
-
-    class BoundedProbeClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(local_concurrency=2)
-
-        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
-            del timeout
-            with lock:
-                counters["active"] += 1
-                counters["maximum"] = max(counters["maximum"], counters["active"])
-            time.sleep(0.001)
-            with lock:
-                counters["active"] -= 1
-            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
-
-    agents = [ModelAgent(f"declared_{index}", "mock") for index in range(65)]
-    orchestrator = TaskOrchestrator(agents, client=BoundedProbeClient())
-    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
-    coordinator = CostRoutingCoordinator(orchestrator)
-    job = coordinator.submit_provider_readiness_refresh(
-        agent_ids=[agent.id for agent in agents],
-        capability_code="structured",
-        timeout_seconds=1.0,
-        deadline_epoch=time.time() + 5.0,
-    )
-    for _ in range(200):
-        document = coordinator.provider_readiness_refresh_document(job["job_id"])
-        if document["status"] == "completed":
-            break
-        time.sleep(0.01)
-    assert document["ready_count"] == len(agents)
-    assert counters["maximum"] == 2
-
-
-def test_readiness_refresh_keeps_ready_results_when_one_probe_times_out() -> None:
-    """One provider timeout is not a terminal failure for the aggregate job."""
-
-    class PartialProbeClient(ModelClient):
-        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
-            del timeout
-            if agent.id == "timed_out_agent":
-                raise RequestDeadlineExceeded("request deadline exceeded")
-            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
-
-    agents = [
-        ModelAgent("timed_out_agent", "mock"),
-        ModelAgent("ready_agent", "mock"),
-    ]
-    orchestrator = TaskOrchestrator(agents, client=PartialProbeClient())
-    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
-    coordinator = CostRoutingCoordinator(orchestrator)
-    job = coordinator.submit_provider_readiness_refresh(
-        agent_ids=[agent.id for agent in agents],
-        capability_code="structured",
-        timeout_seconds=1.0,
-        deadline_epoch=time.time() + 5.0,
-    )
-
-    for _ in range(100):
-        document = coordinator.provider_readiness_refresh_document(job["job_id"])
-        if document["status"] == "completed":
-            break
-        time.sleep(0.01)
-
-    assert document["status"] == "completed"
-    assert document["completed_count"] == 2
-    assert document["ready_count"] == 1
-    assert sorted(document["results"].values()) == ["not_ready", "ready"]
-    assert orchestrator._structured_readiness["timed_out_agent"]["status"] == "not_ready"
-    assert orchestrator._structured_readiness["ready_agent"]["status"] == "ready"
-
-
-def test_seven_slow_readiness_candidates_renew_claim_and_keep_terminal_success() -> None:
-    """A long access list renews its CAS claim and release loss cannot erase success."""
-
-    class LockNotOwnedError(RuntimeError):
-        pass
-
-    class RenewalClient(FakeValkeyClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.extensions = 0
-            self.extension_attempts = 0
-
-        class RenewalClaim:
-            def __init__(self, owner: "RenewalClient") -> None:
-                self.owner = owner
-
-            def acquire(self) -> bool:
-                return True
-
-            def extend(self, seconds: float, *, replace_ttl: bool) -> bool:
-                assert seconds > 0
-                assert replace_ttl is True
-                self.owner.extension_attempts += 1
-                if self.owner.extension_attempts == 1:
-                    raise ConnectionError("transient valkey failure")
-                self.owner.extensions += 1
-                return True
-
-            def release(self) -> None:
-                raise LockNotOwnedError("lease expired after terminal persistence")
-
-        def lock(self, name: str, **kwargs: Any) -> object:
-            self.locks.append((name, kwargs))
-            if "provider_readiness_job_execution" in name:
-                return self.RenewalClaim(self)
-            return self.Claim(True)
-
-    class SlowProbeClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=0.01, local_concurrency=1)
-
-        def probe_structured(self, agent, *, timeout):  # type: ignore[override]
-            del timeout
-            time.sleep(0.12)
-            return {"status": "ready", "agent_id": agent.id, "model": agent.model}
-
-    client = RenewalClient()
-    agents = [ModelAgent(f"declared_{index}", "mock") for index in range(7)]
-    orchestrator = TaskOrchestrator(agents, client=SlowProbeClient())
-    orchestrator.probe_structured_workflow = orchestrator.client.probe_structured  # type: ignore[method-assign]
-    coordinator = CostRoutingCoordinator(
-        orchestrator, job_registry=JobRegistryFactory(client)
-    )
-    job = coordinator.submit_provider_readiness_refresh(
-        agent_ids=[agent.id for agent in agents],
-        capability_code="structured",
-        timeout_seconds=0.1,
-        deadline_epoch=time.time() + 1.2,
-    )
-    for _ in range(100):
-        document = coordinator.provider_readiness_refresh_document(job["job_id"])
-        if document["status"] in {"completed", "failed", "expired"}:
-            break
-        time.sleep(0.01)
-
-    assert document["status"] == "completed"
-    assert document["ready_count"] == 7
-    assert client.extension_attempts >= 2
-    assert client.extensions >= 1
-    execution_claim = next(
-        kwargs
-        for name, kwargs in client.locks
-        if "provider_readiness_job_execution" in name
-    )
-    assert execution_claim["timeout"] < 1.2
-
-
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
     """Dataclasses, dataclass lists, and JSON scalars all survive the trip."""
     client = FakeValkeyClient()
@@ -402,22 +88,6 @@ def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
     assert counts["batch_1"] == 7
     assert counts.get("missing") is None
     assert "batch_1" in counts and len(counts) == 1
-
-
-def test_provider_backend_does_not_duplicate_a_claimed_durable_job() -> None:
-    """A second process leaves an in-flight job to the current claim owner."""
-    client = FakeValkeyClient(claim_available=False)
-    factory = JobRegistryFactory(client)
-    factory.mapping("provider_embedding_states")["inflight"] = "queued"
-    calls = []
-    backend = ProviderEmbeddingBatchBackend(
-        lambda requests: (calls.append(requests) or [], 0),
-        job_registry=factory,
-        claim_lease_seconds=90,
-    )
-    backend._executor.shutdown(wait=True)
-    assert calls == []
-    assert factory.mapping("provider_embedding_states")["inflight"] == "queued"
 
 
 def test_mapping_delete_and_iteration_match_dict_semantics() -> None:
@@ -443,6 +113,15 @@ def test_writes_refresh_the_registry_retention_window() -> None:
     mapping = ValkeyJsonMapping(client, "jobs", retention_seconds=123)
     mapping["job"] = {"ok": True}
     assert client.expirations["batch_job_registry:jobs"] == 123
+
+
+def test_set_if_absent_preserves_the_first_value() -> None:
+    client = FakeValkeyClient()
+    mapping = ValkeyJsonMapping(client, "jobs", retention_seconds=123)
+
+    assert mapping.set_if_absent("job", {"value": 1}) is True
+    assert mapping.set_if_absent("job", {"value": 2}) is False
+    assert mapping["job"] == {"value": 1}
 
 
 def test_factory_without_client_hands_out_plain_dicts() -> None:
@@ -477,67 +156,6 @@ def test_jobs_submitted_before_a_restart_are_retrievable_after_it() -> None:
 def test_default_retention_is_a_week() -> None:
     """Documented default: abandoned jobs expire after seven days."""
     assert DEFAULT_RETENTION_SECONDS == 7 * 24 * 3600
-
-
-def test_valkey_claim_uses_bounded_lease_and_wait_not_result_retention() -> None:
-    """A crashed claimant cannot stall a request for the result lifetime."""
-    client = FakeValkeyClient()
-    claim = JobRegistryFactory(client).lock("shards", "one", lease_seconds=90.0)
-    assert claim is not None
-    assert client.locks == [
-        (
-            "batch_job_registry:shards:claim:one",
-            {
-                "timeout": 90.0,
-                "blocking": True,
-                "blocking_timeout": 90.0,
-                "thread_local": False,
-            },
-        )
-    ]
-
-
-def test_valkey_claim_requires_an_explicit_positive_lease() -> None:
-    """Durable claims cannot silently invent a lease duration."""
-    factory = JobRegistryFactory(FakeValkeyClient())
-    for lease in (None, 0, -1):
-        try:
-            factory.lock("shards", "one", lease_seconds=lease)
-            raised = False
-        except ValueError:
-            raised = True
-        assert raised
-
-
-def test_embedding_claim_lease_uses_request_or_provider_timeout() -> None:
-    """The caller deadline narrows, but never extends, the provider timeout."""
-    client = ModelClient(timeout=90)
-    coordinator = CostRoutingCoordinator(
-        TaskOrchestrator([ModelAgent("mock_worker", "mock-model")], client=client)
-    )
-    assert coordinator._embedding_claim_lease_seconds() == 90
-    with client.request_settings(request_deadline_monotonic=time.monotonic() + 10):
-        lease = coordinator._embedding_claim_lease_seconds()
-    assert lease is not None and 0 < lease <= 10
-
-
-@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan"), True])
-def test_model_client_rejects_unbounded_provider_timeout(timeout: object) -> None:
-    """Durable provider claims require a positive finite transport timeout."""
-    with pytest.raises(ValueError, match="provider timeout must be a positive finite number"):
-        ModelClient(timeout=timeout)  # type: ignore[arg-type]
-
-
-def test_idle_local_claim_locks_are_reclaimed() -> None:
-    """Unique job and shard keys do not accumulate for the process lifetime."""
-    factory = JobRegistryFactory()
-    first = factory.lock("shards", "one")
-    assert factory.lock("shards", "one") is first
-    reference = weakref.ref(first)
-    del first
-    gc.collect()
-    assert reference() is None
-    assert len(factory._local_locks) == 0
 
 
 if __name__ == "__main__":

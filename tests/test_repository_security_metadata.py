@@ -160,27 +160,18 @@ def test_python_lockfile_uses_hash_pinning():
 
 
 def test_unit_workflow_uses_the_project_lock_for_git_runtime_dependencies():
-    """CI must run the Docker-backed hash-locked test runner."""
-    workflow_text = read_text(".github/workflows/tests.yml")
-    assert "run: make test" in workflow_text
-    assert "scripts/run_hash_locked_tests.sh" in read_text(
-        "Makefile"
-    )
-    installer_text = read_text("scripts/run_hash_locked_tests.sh")
-    assert "--target test-runner" in installer_text
-    dockerfile_text = read_text("Dockerfile")
-    assert "FROM rust:1.97.1-slim-bookworm@sha256:" in dockerfile_text
-    assert "apt-get install --no-install-recommends --yes build-essential ca-certificates" in dockerfile_text
-    assert "uv python install 3.12" in dockerfile_text
-    assert "--with-requirements requirements.lock" in dockerfile_text
-    assert "--with \"$1\"" in dockerfile_text
+    """CI must install the uv lock so git-backed runtime dependencies are present."""
+    workflow_text = read_text(".github/workflows/ci.yml")
+    assert "uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e" in workflow_text
+    assert 'version: "0.12.5"' in workflow_text
+    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in workflow_text
 
 
 def test_local_full_suite_installs_runtime_and_test_lockfiles():
-    """The documented local command must build the native test environment."""
+    """The documented local command must exercise the project lock."""
     makefile_text = read_text("Makefile")
 
-    assert "./scripts/run_hash_locked_tests.sh" in makefile_text
+    assert "uv run --locked --extra api --extra db --extra queue --group dev python -m pytest -q" in makefile_text
 
 
 def test_security_tool_lockfile_uses_hash_pinning():

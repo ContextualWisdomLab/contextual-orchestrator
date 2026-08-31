@@ -32,6 +32,11 @@ consume untrusted bytes/JSON:
 9. ``orchestrator._structured_output_error`` -- provider text and caller JSON
    Schema. Arbitrary values must return a bounded validation result without an
    unhandled parser or validator exception.
+10. ``model_discovery._models_dev_cost_is_free`` -- the untrusted-shaped
+    Models.dev ``cost`` object used to join free-price evidence onto
+    ``opencode_zen``/``nvidia_nim``/``nvidia_nim_sub``/``openai`` rows
+    (ADR 0041). Must never raise and must never return ``True`` unless every
+    present monetary value is a valid non-negative finite zero.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -45,6 +50,7 @@ from typing import Any
 from contextual_orchestrator import server
 from contextual_orchestrator.model_discovery import (
     ProviderModelSource,
+    _models_dev_cost_is_free,
     _parse_bytez,
     _parse_openai_compatible,
 )
@@ -269,6 +275,35 @@ def exercise_provider_model_payload(value: Any) -> None:
         for model in discovered:
             assert isinstance(model.model_id, str) and model.model_id
             assert model.provider_name == source.provider_name
+
+
+def exercise_models_dev_cost(value: Any) -> None:
+    """Drive the Models.dev free-cost classifier over an arbitrary cost object.
+
+    Invariant: never raises, and only returns ``True`` when every monetary
+    value it found -- however the object is nested or shaped -- is a valid,
+    non-negative, exactly-zero number.
+    """
+    result = _models_dev_cost_is_free(value)
+    assert isinstance(result, bool)
+    if result:
+        collected: list[Any] = []
+
+        def collect(item: Any, key: str = "") -> None:
+            if isinstance(item, dict):
+                for child_key, child_value in item.items():
+                    collect(child_value, child_key)
+            elif isinstance(item, list):
+                for child_value in item:
+                    collect(child_value, key)
+            elif key != "size":
+                collected.append(item)
+
+        collect(value)
+        assert collected
+        for item in collected:
+            assert isinstance(item, (int, float)) and not isinstance(item, bool)
+            assert math.isfinite(item) and item >= 0 and item == 0.0
 
 
 def exercise_redaction(text: str) -> None:

@@ -84,6 +84,24 @@ def test_http_responses_accepts_sync_routing_priority() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_forces_sync_for_bulk_routing_priority() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "orchestrator/auto",
+                "input": "routing bulk",
+                "routing": {"priority": "bulk"},
+            },
+        )
+        assert status == 200, body
+        assert body["object"] == "response"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_rejects_routing_batch_channel() -> None:
     server, thread, port = _server()
     try:

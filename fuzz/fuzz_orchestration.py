@@ -24,6 +24,7 @@ _MODES = ("auto", "route", "conduct")
 
 
 def one_input(data: bytes) -> None:
+    """Feed one Atheris-fuzzed prompt/mode pair through end-to-end orchestration."""
     fdp = atheris.FuzzedDataProvider(data)
     mode = _MODES[fdp.ConsumeIntInRange(0, len(_MODES) - 1)]
     prompt = fdp.ConsumeUnicodeNoSurrogates(fdp.remaining_bytes())
@@ -31,6 +32,7 @@ def one_input(data: bytes) -> None:
 
 
 def main() -> None:
+    """Run the Atheris coverage-guided fuzz loop against ``one_input``."""
     atheris.Setup(sys.argv, one_input)
     atheris.Fuzz()
 

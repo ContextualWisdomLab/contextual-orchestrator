@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
 
@@ -92,6 +93,81 @@ def test_stream_stops_consuming_and_releases_slot_after_disconnect() -> None:
         server.server_close()
 
 
+def test_stream_route_emits_provider_usage_when_requested() -> None:
+    """A successful live route includes provider usage after its stop frame."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    frames: list[str] = []
+
+    class Client:
+        def take_usage(self):
+            return {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6}
+
+    class Orchestrator:
+        client = Client()
+
+        def stream_route(
+            self,
+            messages,
+            workflow_run_id,
+            *,
+            model_name,
+            include_usage=False,
+            usage_callback=None,
+        ):
+            del messages, workflow_run_id, model_name
+            assert include_usage is True
+            yield "answer"
+            assert usage_callback is not None
+            usage_callback(
+                {"prompt_tokens": 2, "completion_tokens": 4, "total_tokens": 6}
+            )
+
+    class Security:
+        def acquire_run_slot(self):
+            return None
+
+        def release_run_slot(self):
+            return None
+
+    class Handler:
+        def _begin_sse(self):
+            return True
+
+        def _write_sse(self, frame):
+            frames.append(frame)
+            return True
+
+    try:
+        server.RequestHandlerClass._stream_route_completion(
+            Handler(),
+            Orchestrator(),
+            Security(),
+            [],
+            "model-group",
+            include_usage=True,
+        )
+    finally:
+        server.server_close()
+
+    payloads = [
+        json.loads(frame[6:])
+        for frame in frames
+        if frame.startswith("data: ") and frame != "data: [DONE]\n\n"
+    ]
+    usage_frames = [payload for payload in payloads if payload.get("choices") == []]
+    assert len(usage_frames) == 1
+    assert payloads[-2]["choices"][0]["finish_reason"] == "stop"
+    usage_frame = usage_frames[0]
+    assert usage_frame["object"] == "chat.completion.chunk"
+    assert usage_frame["model"] == "model-group"
+    assert usage_frame["choices"] == []
+    assert usage_frame["usage"] == {
+        "prompt_tokens": 2,
+        "completion_tokens": 4,
+        "total_tokens": 6,
+    }
+
+
 def test_responses_stream_does_not_start_orchestration_after_header_disconnect() -> None:
     """A dead Responses peer must not trigger any paid provider work."""
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
@@ -119,7 +195,7 @@ def test_responses_stream_does_not_start_orchestration_after_header_disconnect()
         result = server.RequestHandlerClass._stream_orchestrated_response(
             Handler(), Orchestrator(), security, [], "orchestrator/auto"
         )
-        assert result == (False, 500)
+        assert result is False
         assert security.acquired == security.released == 1
     finally:
         server.server_close()
@@ -166,7 +242,7 @@ def test_responses_stream_stops_orchestration_after_event_disconnect() -> None:
         result = server.RequestHandlerClass._stream_orchestrated_response(
             handler, Orchestrator(), security, [], "orchestrator/auto"
         )
-        assert result == (False, 500)
+        assert result is False
         assert continued == []
         assert handler.writes == 3
         assert security.acquired == security.released == 1

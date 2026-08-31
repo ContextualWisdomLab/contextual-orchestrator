@@ -22,6 +22,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 )
 from contextual_orchestrator.cost_ledger import PriceBook, PriceEntry  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
+from contextual_orchestrator import provider_bootstrap, review_gateway  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderModelSource,
@@ -31,7 +32,10 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelClient,
+)
 
 
 class _Response:
@@ -156,7 +160,7 @@ def test_bytez_chat_catalog_still_rejects_non_chat_identifiers() -> None:
         credential_name="BYTEZ_API_KEY",
         list_url="https://api.bytez.com/models/v2/list/models",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
     )
@@ -197,6 +201,73 @@ def test_non_chat_discovery_is_not_priced_or_selected_for_chat() -> None:
     assert select_top_n_cheapest_discovered_agents(
         [embedding_model], price_book, 1
     ) == []
+
+
+def test_generic_media_catalog_rows_stay_out_of_bootstrap_and_review_chat_pool(
+    monkeypatch,
+) -> None:
+    """Explicit media metadata beats a generic model-id heuristic everywhere."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-secret")
+    source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    payload = {
+        "data": [
+            {
+                "id": "text-free-model",
+                "pricing": {"prompt": "0", "completion": "0"},
+                "architecture": {"output_modalities": ["text"]},
+            },
+            {
+                "id": "wan-3.0",
+                "pricing": {"prompt": "0", "completion": "0"},
+                "architecture": {"output_modalities": ["video"]},
+            },
+            {
+                "id": "avatar-iv",
+                "pricing": {"prompt": "0", "completion": "0"},
+                "architecture": {"output_modalities": ["image"]},
+            },
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(source)
+
+    assert [model.model_id for model in discovered] == [
+        "text-free-model",
+        "wan-3.0",
+        "avatar-iv",
+    ]
+    assert [
+        model.model_id
+        for model in discovered
+        if provider_bootstrap.is_chat_serving_candidate(model)
+    ] == ["text-free-model"]
+    assert [
+        model.model_id
+        for model in provider_bootstrap.select_provider_diverse_models(
+            discovered, limit=10
+        )
+    ] == ["text-free-model"]
+
+    monkeypatch.setattr(
+        review_gateway,
+        "discover_all_models",
+        lambda: (discovered, []),
+    )
+    review_orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENAI_API_KEY": "review-secret"}, max_agents=10
+    )
+    assert [agent.model for agent in review_orchestrator.agents] == [
+        "text-free-model"
+    ]
 
 
 def test_stale_embedding_agent_cannot_win_synthesizer_selection() -> None:

@@ -176,7 +176,7 @@ def test_queue_overflow_drops_records_with_telemetry_evidence() -> None:
 
     first = None
     try:
-        from contextual_orchestrator.cost_ledger import UsageRecord, UNATTRIBUTED
+        from contextual_orchestrator.cost_ledger import UsageRecord
 
         def make_record(index: int) -> UsageRecord:
             return UsageRecord(

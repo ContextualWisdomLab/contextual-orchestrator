@@ -15,7 +15,6 @@ import threading
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from dataclasses import replace
@@ -26,15 +25,14 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
-    NoViableAgentError,
     ProviderRequestTooLargeError,
     ProviderResponseError,
-    RequestDeadlineExceeded,
     is_transient_error,
-    _is_tool_execution_stopped,
-    _provider_limit_contract,
 )
-import contextual_orchestrator.orchestrator as orchestrator_module
+from contextual_orchestrator.provider_errors import (  # noqa: E402
+    ProviderUpstreamError,
+    classify_provider_failure,
+)
 from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 
@@ -86,13 +84,22 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(socket.timeout("slow"))
 
 
-def test_http_error_body_is_shared_by_terminal_and_limit_classifiers() -> None:
-    error = urllib.error.HTTPError(
-        "https://provider.example/v1/embeddings", 413, "large", {},
-        io.BytesIO(json.dumps({"error": {"code": "too_many_inputs", "max_inputs": 2}}).encode()),
-    )
-    assert not _is_tool_execution_stopped(error)
-    assert _provider_limit_contract(error) == ("too_many_inputs", 2, None)
+def test_transient_classification_unwraps_a_temporary_dns_runtime_error() -> None:
+    """ModelClient._resolve_addresses wraps socket.gaierror as RuntimeError.
+
+    A genuinely temporary DNS failure (EAI_AGAIN) must still be retried even
+    through that wrapper; a permanent one (e.g. EAI_NONAME, a bad hostname)
+    and a config RuntimeError with no DNS cause must not be.
+    """
+    temporary_dns = RuntimeError("provider host 'gateway.example' could not be resolved")
+    temporary_dns.__cause__ = socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+    assert is_transient_error(temporary_dns) is True
+
+    permanent_dns = RuntimeError("provider host 'gateway.example' could not be resolved")
+    permanent_dns.__cause__ = socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+    assert is_transient_error(permanent_dns) is False
+
+    assert is_transient_error(RuntimeError("provider host 'gateway.example' has no stream address")) is False
 
 
 def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> None:
@@ -144,6 +151,14 @@ def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> N
     assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
     assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))
     assert not is_transient_error(ValueError("bad json"))
+    # Regression (Devin review on #923): urlopen wraps a TLS handshake's
+    # SSLCertVerificationError as URLError(reason=...), not a bare ssl.SSLError.
+    # The blanket URLError-is-transient branch used to shadow this before the
+    # ssl.SSLError check could ever see it.
+    assert not is_transient_error(
+        urllib.error.URLError(ssl.SSLCertVerificationError("certificate verify failed"))
+    )
+    assert is_transient_error(urllib.error.URLError(ConnectionResetError(104, "reset")))
 
 
 def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -> None:
@@ -444,269 +459,6 @@ def test_structural_provider_response_stops_before_tool_failover() -> None:
     assert orchestrator._circuit == {}
 
 
-def test_exhausted_provider_transport_uses_failover_error_category() -> None:
-    """Transport exhaustion cannot enter the orchestration tool-retry loop."""
-    class TransportFailureClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(max_retries=0, retry_backoff=0.0)
-            self.calls: list[str] = []
-
-        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
-            self.calls.append(agent.id)
-            raise RuntimeError("provider transport failed")
-
-    client = TransportFailureClient()
-    agent = ModelAgent(
-        "primary_worker", "mock", base_url="https://provider.example/v1", tags=("reasoning",)
-    )
-    with pytest.raises(ProviderResponseError):
-        client._send_with_retry(agent, {"model": agent.model})
-    assert client.calls == ["primary_worker"]
-
-
-def test_provider_retry_reuses_one_timeout_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Transport retries receive only the remainder of one provider-attempt budget."""
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class TimedFailureClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=1, retry_backoff=0.0)
-            self.timeouts: list[float] = []
-
-        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
-            del agent, payload, destination
-            timeout = self._local.provider_transport_timeout
-            self.timeouts.append(timeout)
-            now[0] += 60.0
-            raise TimeoutError("provider timed out")
-
-    client = TimedFailureClient()
-    agent = ModelAgent("provider_worker", "provider-model", base_url="https://provider.example/v1")
-    with pytest.raises(ProviderResponseError):
-        client._send_with_retry(agent, {"model": agent.model})
-    assert client.timeouts == [90.0, 30.0]
-
-
-def test_structured_passthrough_retries_share_one_provider_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Structured raw-provider retries cannot restart the transport timeout."""
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class TimedRawFailureClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=2, retry_backoff=0.0)
-            self.timeouts: list[float] = []
-
-        def _send_raw(self, agent, endpoint, payload, destination=None, *, timeout=None):  # type: ignore[override]
-            del agent, endpoint, payload, destination, timeout
-            remaining = self._local.provider_transport_timeout
-            self.timeouts.append(remaining)
-            now[0] += min(60.0, remaining)
-            raise TimeoutError("structured provider timed out")
-
-    client = TimedRawFailureClient()
-    agent = ModelAgent("provider_worker", "provider-model", base_url="https://provider.example/v1")
-    with pytest.raises(RuntimeError, match="passthrough request failed"):
-        client._send_raw_with_retry(
-            agent,
-            "chat/completions",
-            {"model": agent.model, "response_format": {"type": "json_object"}},
-        )
-    assert client.timeouts == [90.0, 30.0]
-    assert now[0] == 90.0
-
-
-def test_request_deadline_allows_backup_only_the_remaining_time(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A 180-second caller budget survives one 90-second provider exhaustion."""
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class DeadlineClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=0)
-            self.calls: list[tuple[str, float]] = []
-
-        def _validate_provider(self, agent):  # type: ignore[override]
-            del agent
-            return None
-
-        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
-            del payload, destination
-            timeout = self._local.provider_transport_timeout
-            self.calls.append((agent.id, timeout))
-            if agent.id == "primary_worker":
-                now[0] += timeout
-                raise TimeoutError("primary exhausted its provider budget")
-            self._local.usage = {"completion_tokens": 7}
-            return "backup answer"
-
-    agents = [
-        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=5),
-        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=1),
-    ]
-    client = DeadlineClient()
-    orchestrator = TaskOrchestrator(agents, client=client)
-    with client.request_settings(request_deadline_monotonic=180.0):
-        output, served, usage = orchestrator._invoke(
-            agents[0], [{"role": "user", "content": "route"}], text="route", role="worker"
-        )
-    assert output == "backup answer"
-    assert served == "backup_worker"
-    assert usage == {"completion_tokens": 7}
-    assert client.calls == [("primary_worker", 90.0), ("backup_worker", 90.0)]
-
-
-def test_all_provider_failures_end_at_shared_request_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Candidate failover cannot continue after the explicit caller deadline."""
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class AllTimedOut(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=0)
-
-        def _validate_provider(self, agent):  # type: ignore[override]
-            del agent
-            return None
-
-        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
-            del agent, payload, destination
-            timeout = self._local.provider_transport_timeout
-            now[0] += timeout
-            raise TimeoutError("provider timed out")
-
-    agents = [
-        ModelAgent("primary_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=5),
-        ModelAgent("backup_worker", "provider-model", base_url="https://provider.example/v1", credential_key="", tags=("reasoning",), priority=1),
-    ]
-    client = AllTimedOut()
-    orchestrator = TaskOrchestrator(agents, client=client)
-    with client.request_settings(request_deadline_monotonic=180.0):
-        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
-            orchestrator._invoke(
-                agents[0], [{"role": "user", "content": "route"}], text="route", role="worker"
-            )
-    assert now[0] == 180.0
-
-
-def test_raw_passthrough_retries_end_at_shared_request_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class TimedOutRawClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=3, retry_backoff=10)
-            self.calls = 0
-
-        def _send_raw(self, agent, endpoint, payload, destination=None):  # type: ignore[override]
-            del agent, endpoint, payload, destination
-            self.calls += 1
-            now[0] += self._local.provider_transport_timeout
-            raise TimeoutError("provider timed out")
-
-        def _validate_provider(self, agent):  # type: ignore[override]
-            del agent
-            return None
-
-    client = TimedOutRawClient()
-    agent = ModelAgent(
-        "worker_agent", "provider-model", base_url="https://provider.example/v1", credential_key=""
-    )
-    with client.request_settings(request_deadline_monotonic=5.0):
-        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
-            client.proxy_send(agent, "responses", {})
-
-    assert client.calls == 1
-    assert now[0] == 5.0
-
-
-def test_chat_retry_converts_exhausted_caller_budget_to_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class TimedOutChatClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=0)
-
-        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
-            del agent, payload, destination, timeout
-            now[0] += self._local.provider_transport_timeout
-            raise TimeoutError("provider timed out")
-
-    client = TimedOutChatClient()
-    agent = ModelAgent(
-        "worker_agent", "provider-model", base_url="https://provider.example/v1", credential_key=""
-    )
-    with client.request_settings(request_deadline_monotonic=5.0):
-        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
-            client._send_with_retry(
-                agent,
-                {"model": agent.model},
-                timeout=client.remaining_request_timeout(),
-            )
-
-    assert now[0] == 5.0
-
-
-def test_expired_caller_deadline_is_not_a_group_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: 10.0)
-    agent = ModelAgent(
-        "worker_agent", "provider-model", group_name="provider_group", tags=("reasoning",)
-    )
-    client = ModelClient()
-    orchestrator = TaskOrchestrator([agent], client=client)
-
-    with client.request_settings(request_deadline_monotonic=9.0):
-        with pytest.raises(RequestDeadlineExceeded):
-            orchestrator._invoke(
-                agent, [{"role": "user", "content": "route"}], text="route", role="worker"
-            )
-
-    assert orchestrator._group_router.member_observation_count(agent.id) == 0
-
-
-def test_expired_passthrough_deadline_is_not_a_group_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: 10.0)
-
-    class RemoteClient(ModelClient):
-        def _validate_provider(self, agent):  # type: ignore[override]
-            del agent
-            return None
-
-    agent = ModelAgent(
-        "worker_agent",
-        "provider-model",
-        base_url="https://provider.example/v1",
-        credential_key="",
-        group_name="provider_group",
-    )
-    client = RemoteClient()
-    orchestrator = TaskOrchestrator([agent], client=client)
-
-    with client.request_settings(request_deadline_monotonic=9.0):
-        with pytest.raises(RequestDeadlineExceeded):
-            orchestrator.proxy_completion(
-                {"model": agent.model, "input": "hello"}, endpoint="responses"
-            )
-
-    assert orchestrator._group_router.member_observation_count(agent.id) == 0
-
-
 def test_structural_provider_response_stays_inside_explicit_pool_failover() -> None:
     """One malformed free/group member cannot poison the requested bounded pool."""
     agents = [
@@ -818,110 +570,6 @@ def test_success_clears_prior_failures() -> None:
     assert "primary_worker" not in orchestrator._circuit
 
 
-def test_conduct_defers_without_probing_unready_discovered_pool() -> None:
-    """A large discovered pool is metadata, not permission to call providers."""
-
-    class CountingClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.chat_calls = 0
-
-        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
-            del agent, messages, kwargs
-            self.chat_calls += 1
-            raise AssertionError("unprobed provider must not receive a completion")
-
-    client = CountingClient()
-    agents = [
-        ModelAgent(
-            f"discovered_{index}",
-            f"provider/model-{index}",
-            base_url="https://provider.example/v1",
-            tags=("reasoning", "writing", "verification"),
-        )
-        for index in range(455)
-    ]
-    orchestrator = TaskOrchestrator(agents, client=client)
-
-    with pytest.raises(NoViableAgentError):
-        orchestrator.conduct([{"role": "user", "content": "structured task"}])
-
-    assert client.chat_calls == 0
-
-
-def test_conduct_attempts_only_ready_candidates_once_after_failures() -> None:
-    """Two readiness-admitted candidates produce at most two failed calls."""
-
-    class FailingClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.called: list[str] = []
-
-        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
-            del messages, kwargs
-            self.called.append(agent.id)
-            raise ProviderResponseError("sanitized provider failure")
-
-    client = FailingClient()
-    agents = [
-        ModelAgent(
-            f"ready_{index}",
-            f"provider/ready-{index}",
-            base_url="https://provider.example/v1",
-            tags=("reasoning", "writing", "verification"),
-            group_name="declared_group",
-        )
-        for index in range(2)
-    ]
-    orchestrator = TaskOrchestrator(agents, client=client)
-    orchestrator._structured_readiness = {
-        agent.id: {"status": "ready", "checked_at": orchestrator_module.time.monotonic()}
-        for agent in agents
-    }
-
-    with pytest.raises(NoViableAgentError):
-        orchestrator.conduct([{"role": "user", "content": "structured task"}])
-
-    assert sorted(client.called) == sorted(agent.id for agent in agents)
-    assert all(
-        orchestrator._structured_readiness[agent.id]["status"] == "not_ready"
-        for agent in agents
-    )
-
-
-def test_conduct_maps_exhausted_transport_failover_to_typed_unavailability() -> None:
-    """Exhausted ready transports are retryable unavailability, not an internal error."""
-
-    class FailingClient(ModelClient):
-        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
-            del agent, messages, kwargs
-            raise urllib.error.URLError("synthetic provider outage")
-
-    agents = [
-        ModelAgent(
-            f"ready_{index}",
-            f"provider/ready-{index}",
-            base_url="https://provider.example/v1",
-            tags=("reasoning", "writing", "verification"),
-            group_name="declared_group",
-        )
-        for index in range(2)
-    ]
-    orchestrator = TaskOrchestrator(agents, client=FailingClient(max_retries=0))
-    orchestrator._structured_readiness = {
-        agent.id: {"status": "ready", "checked_at": orchestrator_module.time.monotonic()}
-        for agent in agents
-    }
-
-    with pytest.raises(NoViableAgentError):
-        orchestrator.conduct([{"role": "user", "content": "structured task"}])
-
-    assert all(
-        orchestrator._structured_readiness[agent.id]["status"] == "not_ready"
-        for agent in agents
-    )
-
-
 def test_circuit_breaker_counts_concurrent_failures() -> None:
     orchestrator, _ = _two_worker_orchestrator(down_id="primary_worker")
     calls = orchestrator.circuit_failure_threshold * 4
@@ -968,7 +616,8 @@ def test_batch_boundary_hides_raw_upload_error_text_and_cause() -> None:
     try:
         client.batch_chat(agent, {"task_0": [{"role": "user", "content": "ping"}]})
     except RuntimeError as error:
-        assert "batch request failed" in str(error)
+        assert isinstance(error, ProviderUpstreamError)
+        assert error.transport == "batch"
         assert "provider-secret-batch-body" not in str(error)
         assert error.__cause__ is None
     else:  # pragma: no cover
@@ -982,6 +631,228 @@ def test_mock_batch_path_is_not_wrapped() -> None:
     results = client.batch_chat(agent, {"task_0": [{"role": "user", "content": "hello"}]})
     assert set(results) == {"task_0"}
     assert results["task_0"]["content"]
+
+
+# -- orchestrator/free request-time failover (ContextualWisdomLab/.github#1433) --
+
+
+def _free_pool_orchestrator(
+    client: ModelClient, *, free_ids: tuple[str, ...], priced_id: str = "priced_worker"
+) -> TaskOrchestrator:
+    """A free/priced mixed pool used to prove free-tier failover never promotes."""
+    agents = [
+        ModelAgent(free_id, f"{free_id}-model", tags=("reasoning", "cost:free"))
+        for free_id in free_ids
+    ] + [
+        ModelAgent(priced_id, "priced-model", tags=("reasoning",), priority=99),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents, client=client, tool_retry_attempts=1, tool_retry_backoff_seconds=0.0
+    )
+    orchestrator._triage_fn = lambda text: False  # force the single-worker route path
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+    return orchestrator
+
+
+def test_free_model_advances_through_the_free_pool_on_retryable_5xx() -> None:
+    """A 502/503 on the primary free route fails over to the next free route.
+
+    Regression for ContextualWisdomLab/.github#1433: the sidecar's
+    ``orchestrator/free`` preflight returned an opaque 502 instead of trying
+    the next-ranked free candidate already in the built catalog.
+    """
+    calls: list[str] = []
+
+    class FlakyFreeTier(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(_http_error(502), agent_id=agent.id, model=agent.model)
+            if agent.id == "free_route_b":
+                raise classify_provider_failure(_http_error(503), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        FlakyFreeTier(), free_ids=("free_route_a", "free_route_b", "free_route_c")
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_c] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_c"
+    # tool_retry_attempts=1 gives each failing free route one same-agent retry
+    # before advancing — the request-time-failure retry budget from point 2.
+    assert calls == [
+        "free_route_a",
+        "free_route_a",
+        "free_route_b",
+        "free_route_b",
+        "free_route_c",
+    ]
+    assert "priced_worker" not in calls
+
+
+def test_free_model_advances_through_the_free_pool_on_non_retryable_4xx() -> None:
+    """A non-retryable 400 on the primary free route advances immediately.
+
+    Reproduces a live incident reported against ContextualWisdomLab/.github#1437:
+    a required Strix run against ``orchestrator/free`` had all three of the
+    sidecar's bounded outer attempts land on the same agent and fail with a
+    provider HTTP 400 ``invalid_request_error`` (``retryable: false``), and
+    the gateway declared the whole free pool exhausted. Each outer attempt
+    starts a fresh gateway process, so this reproduces as: does a single
+    ``route_once`` call advance past a non-retryable failure on the primary
+    free route to a second, distinct free route, with no same-agent retry
+    (unlike the retryable-5xx case above)?
+    """
+    calls: list[str] = []
+
+    class InvalidRequestOnPrimary(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            calls.append(agent.id)
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(_http_error(400), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        InvalidRequestOnPrimary(), free_ids=("free_route_a", "free_route_b", "free_route_c")
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+    # Non-retryable: free_route_a is tried exactly once, then failover moves
+    # on immediately -- no same-agent retry, unlike the retryable-5xx case.
+    assert calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in calls
+
+
+def test_free_model_exhausted_pool_fails_closed_never_promotes_to_priced_agent() -> None:
+    """Exhausting every free route fails closed with the last classified error.
+
+    ADR-0003 (ContextualWisdomLab/.github) requires that failing over among
+    free routes never silently promotes to a priced route without the
+    evidence gate ``orchestrator/auto`` already enforces.
+    """
+
+    class AllFreeRoutesDown(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "priced_worker":  # pragma: no cover - must never be reached
+                return "[priced_worker] answer"
+            return_status = 502 if agent.id == "free_route_a" else 503
+            raise classify_provider_failure(
+                _http_error(return_status), agent_id=agent.id, model=agent.model
+            )
+
+    client = AllFreeRoutesDown()
+    orchestrator = _free_pool_orchestrator(client, free_ids=("free_route_a", "free_route_b"))
+    orchestrator.tool_retry_attempts = 0  # exhaust on the first attempt per candidate
+
+    with pytest.raises(ProviderUpstreamError) as excinfo:
+        orchestrator.route_once(
+            [{"role": "user", "content": "route this"}],
+            model_name=TaskOrchestrator.FREE_MODEL,
+        )
+
+    assert excinfo.value.client_status == 503
+    assert excinfo.value.agent_id == "free_route_b"
+    assert client.calls == ["free_route_a", "free_route_b"]
+    assert "priced_worker" not in client.calls
+
+
+def test_free_model_failover_survives_a_tool_shaped_provider_message() -> None:
+    """A 500 whose body happens to mention "tool"/"invalid arguments" still fails over.
+
+    Regression for the fragility this fix removes: before, ``_invoke``
+    classified the *primary provider call's* failure with
+    ``classify_tool_failure`` — a tool-execution-oriented, message-text
+    heuristic. A plain transport failure whose upstream JSON body incidentally
+    contained a tool-execution-shaped phrase (e.g. an "invalid arguments"
+    rejection that also names ``tool_choice``) was reclassified as
+    ``invalid_arguments`` and failed CLOSED instead of failing over, even
+    though replaying a stateless chat completion on another free route is
+    always safe. Classification now comes only from the provider's own
+    already-computed ``retryable`` flag.
+    """
+    tool_shaped_error = urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        500,
+        "Internal Server Error",
+        None,
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "message": "invalid arguments: unsupported tool_choice value",
+                    }
+                }
+            ).encode("utf-8")
+        ),
+    )
+
+    class ToolShapedFailureThenBackup(ModelClient):
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            if agent.id == "free_route_a":
+                raise classify_provider_failure(
+                    tool_shaped_error, agent_id=agent.id, model=agent.model
+                )
+            return f"[{agent.id}] answer"
+
+    orchestrator = _free_pool_orchestrator(
+        ToolShapedFailureThenBackup(), free_ids=("free_route_a", "free_route_b")
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.FREE_MODEL,
+    )
+
+    assert result["answer"] == "[free_route_b] answer"
+    assert result["trace"][0]["served_agent_id"] == "free_route_b"
+
+
+def test_auto_model_still_fails_over_on_retryable_5xx_without_change() -> None:
+    """``orchestrator/auto`` request-time failover is unaffected by the fix."""
+
+    class FlakyPrimary(ModelClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "auto_primary":
+                raise classify_provider_failure(_http_error(502), agent_id=agent.id, model=agent.model)
+            return f"[{agent.id}] answer"
+
+    agents = [
+        ModelAgent("auto_primary", "mock-a", tags=("reasoning",), priority=5),
+        ModelAgent("auto_backup", "mock-b", tags=("reasoning",), priority=1),
+    ]
+    client = FlakyPrimary()
+    orchestrator = TaskOrchestrator(
+        agents, client=client, tool_retry_attempts=0, tool_retry_backoff_seconds=0.0
+    )
+    orchestrator._triage_fn = lambda text: False
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "route this"}],
+        model_name=TaskOrchestrator.AUTO_MODEL,
+    )
+
+    assert result["answer"] == "[auto_backup] answer"
+    assert result["trace"][0]["served_agent_id"] == "auto_backup"
+    assert client.calls == ["auto_primary", "auto_backup"]
 
 
 if __name__ == "__main__":

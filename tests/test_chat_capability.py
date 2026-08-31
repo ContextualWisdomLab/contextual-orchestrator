@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.chat_capability import (  # noqa: E402
     is_chat_compatible_model_id,
+    is_general_chat_candidate,
     is_general_chat_agent_model_id,
 )
 
@@ -71,3 +72,14 @@ def test_normal_chat_identifier_remains_eligible() -> None:
     """A normal provider model remains eligible for both ordinary gates."""
     assert is_chat_compatible_model_id("provider/gpt-5.5") is True
     assert is_general_chat_agent_model_id("provider/gpt-5.5") is True
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    (
+        {"capabilities": ("chat",)},
+        {"output_modalities": ("text",)},
+    ),
+)
+def test_explicit_chat_metadata_does_not_admit_safety_models(metadata: dict) -> None:
+    assert is_general_chat_candidate("vendor/safety-guard", **metadata) is False

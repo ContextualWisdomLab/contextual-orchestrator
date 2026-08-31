@@ -60,8 +60,8 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     client = RecordingClient()
     build(client).conduct([{"role": "user", "content": "Analyze, implement, verify, and synthesize."}])
 
-    worker_prompt = client.calls[1][1][1]["content"]
-    verifier_prompt = client.calls[2][1][1]["content"]
+    worker_prompt = client.calls[1][1][-1]["content"]
+    verifier_prompt = client.calls[2][1][-1]["content"]
 
     assert "Step 0: planner_agent:1" in worker_prompt
     assert "Step 1: builder_agent:2" not in worker_prompt
@@ -81,7 +81,6 @@ def test_adr_records_include_verified_paper_and_standard_references() -> None:
     control_plane = _adr_text("docs/adr/0002-control-plane-orchestrator.md")
     cost_routing = _adr_text("docs/adr/0003-cost-aware-sync-batch-routing.md")
     msa_leaf = _adr_text("docs/adr/0004-msa-leaf-composition.md")
-    accelerator = _adr_text("docs/adr/0006-native-accelerator-runtime-boundaries.md")
 
     assert "docs/planning/adrs/" in index
     assert "not a second source of truth for the same number" in index
@@ -89,7 +88,6 @@ def test_adr_records_include_verified_paper_and_standard_references() -> None:
     assert "0002-control-plane-orchestrator.md" in index
     assert "0003-cost-aware-sync-batch-routing.md" in index
     assert "0004-msa-leaf-composition.md" in index
-    assert "0006-native-accelerator-runtime-boundaries.md" in index
 
     assert "## References" in fallback
     assert "https://doi.org/10.17487/RFC9110" in fallback
@@ -115,18 +113,6 @@ def test_adr_records_include_verified_paper_and_standard_references() -> None:
     assert "injected client" in msa_leaf
     assert "same interpreter" in msa_leaf
     assert "planning ADR 0001" in msa_leaf
-
-    for official_url in (
-        "https://ml-explore.github.io/mlx/build/html/index.html",
-        "https://docs.docker.com/reference/compose-file/version-and-name/",
-        "https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html",
-        "https://kubernetes.io/docs/tasks/manage-gpus/scheduling-gpus/",
-        "https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/",
-        "https://registry.khronos.org/OpenCL/specs/3.0-unified/html/OpenCL_API.html",
-    ):
-        assert official_url in accelerator
-    assert "No overlay, Kubernetes manifest" in accelerator
-    assert "container_name" in accelerator
     assert "naruon and gyeot are permitted callers" in msa_leaf
     assert "https://doi.org/10.6028/NIST.SP.800-204" in msa_leaf
 

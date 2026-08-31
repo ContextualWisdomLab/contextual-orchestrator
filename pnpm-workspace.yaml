@@ -1,5 +1,5 @@
 packages:
   - "admin_ui"
 
-overrides:
+resolutions:
   valibot: ">=1.4.2"

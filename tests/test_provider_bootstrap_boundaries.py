@@ -187,7 +187,7 @@ def test_select_unpriced_and_foreign_currency_models_sort_last_but_still_fill() 
     assert {m.model_id for m in selected} == {"gpt-cheap", "qwen-free", "nim-eur"}
 
 
-def test_select_fills_remaining_slots_from_same_provider_family() -> None:
+def test_select_keeps_independent_credential_accounts() -> None:
     primary = _model(
         "nvidia_nim", "NVIDIA_NIM_API_KEY", "nim-gamma", prompt=3.0
     )
@@ -195,8 +195,7 @@ def test_select_fills_remaining_slots_from_same_provider_family() -> None:
         "nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "nim-delta", prompt=4.0
     )
     selected = select_provider_diverse_models([primary, same_family_sub], limit=2)
-    # Both credentials share the nvidia_nim outage family, so diversity yields
-    # one slot and the filler loop backfills the second from the same family.
+    # A shared vendor endpoint does not collapse independent credential accounts.
     assert [m.model_id for m in selected] == ["nim-gamma", "nim-delta"]
 
 
@@ -315,3 +314,30 @@ def test_durable_pool_sync_keeps_manual_agents_and_disabled_leftovers(
     assert ids_by_state["openai_retired_model"] == "disabled"
     assert ids_by_state["openai_gpt_current"] == "enabled"
     assert ids_by_state["openrouter_qwen_current"] == "enabled"
+
+
+def test_durable_pool_sync_closes_temporary_orchestrator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """A refresh must stop telemetry owned by its temporary orchestrator."""
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator.provider_bootstrap import (
+        _synchronize_durable_agent_pool,
+    )
+
+    closed: list[bool] = []
+
+    class TrackingOrchestrator(TaskOrchestrator):
+        def close(self) -> None:
+            closed.append(True)
+            super().close()
+
+    monkeypatch.setattr(pb, "TaskOrchestrator", TrackingOrchestrator)
+    enabled = _synchronize_durable_agent_pool(
+        str(tmp_path / "pool_close.db"),
+        [_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")],
+    )
+
+    assert enabled == ("openrouter_qwen_current",)
+    assert closed == [True]

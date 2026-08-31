@@ -19,8 +19,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .token_counting import RustCl100kPacker
-
 PROFILE_VERSION = "reasoning_effort_profile.v1"
 PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD = 0.55
 WORKFLOW_ROLES = (
@@ -367,7 +365,8 @@ def estimate_theta(
         access_list_scope,
     )
     estimated = tuple((1.0 - shrink) * value for value in theta)
-    rmse = RustCl100kPacker().root_mean_square_error(list(estimated), theta)
+    residuals = [(hat - value) ** 2 for hat, value in zip(estimated, theta)]
+    rmse = math.sqrt(sum(residuals) / len(residuals))
     return ThetaEstimate(estimated_theta=estimated, rmse=rmse)
 
 

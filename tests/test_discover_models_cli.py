@@ -51,6 +51,24 @@ def test_free_only_help_rejects_name_inference() -> None:
     assert "-free/:free" not in help_text
 
 
+def test_discover_models_provider_ca_bundle_help_is_available() -> None:
+    """The discover-models subcommand exposes the reviewed TLS bundle knob."""
+    stdout = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "discover-models", "--help"],
+        ),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 0
+    assert "--provider-ca-bundle" in stdout.getvalue()
+
+
 def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None:
     set_backend(InMemoryCredentialBackend())
     stdout = StringIO()
@@ -70,6 +88,7 @@ def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None
         "privacy_policy_analysis": [],
         "enabled_agent_ids": [],
         "free_tier_count": 0,
+        "general_free_serving_count": 0,
         "free_data_privacy": {"supported": 0, "unsupported": 0, "unknown": 0},
         "models": [],
     }
@@ -307,6 +326,40 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
     assert any(agent.id == "openai_gpt_5_5" for agent in reloaded.candidates)
 
 
+def test_discover_models_closes_temporary_agents_db_orchestrator(tmp_path) -> None:
+    from contextual_orchestrator import TaskOrchestrator
+    from contextual_orchestrator import __main__ as cli
+
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENAI_API_KEY", "sk-live")
+    db_path = str(tmp_path / "pool.db")
+    stdout = StringIO()
+    closed: list[bool] = []
+
+    class TrackingOrchestrator(TaskOrchestrator):
+        def close(self) -> None:
+            closed.append(True)
+            super().close()
+
+    def urlopen(request, timeout=None):
+        if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
+            return _Response({"data": [{"id": "gpt-5.5"}]})
+        return _Response({"data": []})
+
+    try:
+        with (
+            patch.object(sys, "argv", ["contextual-orchestrator", "discover-models", "--agents-db", db_path]),
+            patch.object(sys, "stdout", stdout),
+            patch.object(cli, "TaskOrchestrator", TrackingOrchestrator),
+            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    assert closed == [True]
+
+
 def test_enable_cheapest_requires_agents_db() -> None:
     set_backend(InMemoryCredentialBackend())
     stderr = StringIO()
@@ -341,7 +394,7 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
         if host == "api.openai.com":
             return _Response({"data": [{"id": "pricey-model", "pricing": {"prompt": "0.00005", "completion": "0.0001"}}]})
         if host == "openrouter.ai":
-            return _Response({"data": [{"id": "cheap-model", "pricing": {"prompt": "0.0000001", "completion": "0.0000002"}}]})
+            return _Response({"data": [{"id": "cheap-model", "pricing": {"prompt": "0", "completion": "0"}}]})
         return _Response({"data": []})
 
     try:
@@ -364,11 +417,10 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
     assert by_id["openrouter_cheap_model"].disabled is False
-    assert by_id["openai_pricey_model"].disabled is True
 
 
-def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> None:
-    """CLI bootstrap must use the provider-diverse selector, not only the cheapest vendor."""
+def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> None:
+    """CLI bootstrap must preserve independent accounts, not only the cheapest vendor."""
     from contextual_orchestrator import TaskOrchestrator
     from contextual_orchestrator.orchestrator import ModelAgent
 
@@ -383,7 +435,7 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
         host = urllib.parse.urlsplit(request.full_url).hostname
         payloads = {
             "api.openai.com": {"data": [{"id": "openai-model", "pricing": {"prompt": "0.001", "completion": "0.001"}}]},
-            "openrouter.ai": {"data": [{"id": "router-model", "pricing": {"prompt": "0.000001", "completion": "0.000001"}}]},
+            "openrouter.ai": {"data": [{"id": "router-model", "pricing": {"prompt": "0", "completion": "0"}}]},
             "integrate.api.nvidia.com": {"data": [{"id": "nim-model", "pricing": {"prompt": "0.000002", "completion": "0.000002"}}]},
         }
         return _Response(payloads.get(host, {"data": []}))

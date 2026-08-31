@@ -21,10 +21,12 @@ with atheris.instrument_imports():
 
 
 def one_input(data: bytes) -> None:
+    """Feed one Atheris-fuzzed byte string through the request-body parser."""
     exercise_request_body(data)
 
 
 def main() -> None:
+    """Run the Atheris coverage-guided fuzz loop against ``one_input``."""
     atheris.Setup(sys.argv, one_input)
     atheris.Fuzz()
 

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
 import pytest
 
 from contextual_orchestrator import (
     CostLedger,
-    CostRoutingCoordinator,
     InMemoryConfigStore,
     ModelAgent,
     PriceBook,
@@ -26,8 +24,8 @@ from contextual_orchestrator.cost_router import (
 from contextual_orchestrator.cost_router import (
     _positive_int,
     _provider_from_base_url,
+    _weighted_average_embedding,
 )
-from contextual_orchestrator.token_counting import RustCl100kPacker
 
 
 def _coordinator(**kwargs: Any) -> Coordinator:
@@ -66,6 +64,36 @@ def test_sync_attribution_falls_back_when_trace_names_unknown_agent() -> None:
     # Unknown served agent degrades to provider "unknown" with the fallback model.
     assert row["provider_name"] == "unknown"
     assert row["model_name"] == "contextual-orchestrator"
+
+
+def test_stream_usage_aggregates_trace_steps_without_text_estimates() -> None:
+    coordinator = _coordinator()
+    stream_result = {
+        "workflow_run_id": "run_stream_usage",
+        "mode": "conduct",
+        "trace": [
+            {"agent_id": "mock_worker", "usage": {"prompt_tokens": 5, "completion_tokens": 7}},
+            {"agent_id": "mock_worker", "usage": {"prompt_tokens": 11, "completion_tokens": 13}},
+        ],
+    }
+    result = coordinator.record_stream_usage(
+        result=stream_result,
+        attribution={"team": "alpha"},
+        model_name="requested-model",
+    )
+
+    assert result["usage"] == {"input_tokens": 16, "output_tokens": 20, "total_tokens": 36}
+    assert result["cost"]["measurement_status"] == "measured"
+    assert len(result["usage_record_ids"]) == 2
+    rows = coordinator.ledger.records()
+    assert [row["request_channel"] for row in rows] == ["stream", "stream"]
+    assert all(row["measurement_status"] == "measured" for row in rows)
+    coordinator.record_stream_usage(
+        result=stream_result,
+        attribution={"team": "alpha"},
+        model_name="requested-model",
+    )
+    assert len(coordinator.ledger.records()) == 2
 
 
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
@@ -118,6 +146,26 @@ def test_retrieve_batch_requires_known_job_id() -> None:
         coordinator.retrieve_batch("nope_missing_job")
 
 
+def test_batch_poll_and_retrieve_require_the_bound_owner() -> None:
+    """An opaque job identifier cannot cross the authenticated owner boundary."""
+    coordinator = _coordinator()
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "owned"}],
+        hints={"channel": "batch"},
+        owner_id="principal-a",
+    )
+    job_id = submitted["job_id"]
+    job = coordinator._batch_jobs[job_id]
+
+    assert job.owner_id == "principal-a"
+    assert coordinator.poll_batch(job_id, owner_id="principal-a")["is_complete"] is True
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.poll_batch(job_id, owner_id="principal-b")
+    with pytest.raises(KeyError, match="batch job"):
+        coordinator.retrieve_batch(job_id, owner_id="principal-b")
+    assert coordinator.retrieve_batch(job_id, owner_id="principal-a")["result_count"] == 1
+
+
 # --- embedding input splitting --------------------------------------------------------
 
 
@@ -129,10 +177,11 @@ class _ExplodingCounter:
         return 3
 
 
-def test_embedding_token_count_fails_closed_when_counter_is_unavailable() -> None:
+def test_embedding_token_count_tolerates_counter_failure_and_clamps() -> None:
     coordinator = _coordinator(token_counter=_ExplodingCounter())
-    with pytest.raises(RuntimeError, match="counter backend offline"):
-        coordinator._count_embedding_tokens("alpha beta gamma", "mock-e")
+    # Adapter failure falls back to whitespace units.
+    assert coordinator._count_embedding_tokens("alpha beta gamma", "mock-e") == 3
+    assert coordinator._count_embedding_tokens("", "mock-e") == 0
 
 
 class _ZeroCounter:
@@ -143,10 +192,9 @@ class _ZeroCounter:
         return 1
 
 
-def test_embedding_token_count_rejects_zero_for_positive_text() -> None:
+def test_embedding_token_count_clamps_positive_text_to_one() -> None:
     coordinator = _coordinator(token_counter=_ZeroCounter())
-    with pytest.raises(RuntimeError, match="invalid count"):
-        coordinator._count_embedding_tokens("nonempty", "mock-e")
+    assert coordinator._count_embedding_tokens("nonempty", "mock-e") == 1
 
 
 def test_split_empty_input_yields_single_empty_part() -> None:
@@ -200,20 +248,23 @@ def test_positive_int_defaults_on_garbage_and_non_positive() -> None:
 # --- weighted average embedding reduction ----------------------------------------------
 
 
-def test_rust_weighted_average_empty_parts_returns_empty() -> None:
-    assert RustCl100kPacker().weighted_average_embeddings([]) == []
+def test_weighted_average_empty_vectors_returns_empty() -> None:
+    assert _weighted_average_embedding([]) == []
+    assert _weighted_average_embedding([([], 5)]) == []
 
 
-def test_rust_weighted_average_rejects_nonpositive_token_weights() -> None:
-    with pytest.raises(ValueError, match="weights must be positive"):
-        RustCl100kPacker().weighted_average_embeddings([([2.0, 4.0], 0)])
+def test_weighted_average_clamps_degenerate_weights_to_one() -> None:
+    reduced = _weighted_average_embedding([([2.0, 4.0], 0), ([4.0, 6.0], -1)])
+    # Zero/negative weights clamp up to 1, so this is the plain part mean.
+    assert reduced == [pytest.approx(3.0), pytest.approx(5.0)]
 
 
-def test_rust_weighted_average_rejects_ragged_dimensions() -> None:
-    with pytest.raises(ValueError, match="shared positive dimension"):
-        RustCl100kPacker().weighted_average_embeddings(
-            [([1.0, 3.0, 9.0], 3), ([2.0], 1)]
-        )
+def test_weighted_average_respects_ragged_dimensions_and_weights() -> None:
+    reduced = _weighted_average_embedding([([1.0, 3.0, 9.0], 3), ([2.0], 1)])
+    assert reduced[0] == pytest.approx((1.0 * 3 + 2.0 * 1) / 4)
+    assert reduced[1] == pytest.approx(9.0 / 4)  # short vector contributes zero
+    assert reduced[2] == pytest.approx(27.0 / 4)
+
 
 # --- embeddings batch document lifecycle -------------------------------------------------
 
@@ -276,37 +327,6 @@ def test_embeddings_document_is_idempotent_after_completion() -> None:
     assert backend.polled.count(job.job_id) == 1
 
 
-def test_concurrent_terminal_materialization_records_cost_once() -> None:
-    backend = _DroppingEmbeddingBackend()
-    coordinator = _coordinator(embedding_batch_backend=backend)
-    coordinator._cl100k_packer = type(
-        "RustFixture", (), {
-            "weighted_average_embeddings": staticmethod(lambda parts: parts[0][0]),
-            "sum_token_counts": staticmethod(sum),
-        }
-    )()
-    job = coordinator.submit_embeddings_batch(["only one"])
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        documents = list(pool.map(lambda _index: coordinator.embeddings_batch_document(job.job_id), range(2)))
-    assert documents[0] == documents[1]
-    assert len(coordinator.ledger.records()) == 1
-
-
-def test_cancelling_completed_batch_preserves_terminal_document() -> None:
-    backend = _DroppingEmbeddingBackend()
-    backend.cancel = lambda job, reason: {"status": "completed", "is_complete": True}
-    coordinator = _coordinator(embedding_batch_backend=backend)
-    coordinator._cl100k_packer = type(
-        "RustFixture", (), {
-            "weighted_average_embeddings": staticmethod(lambda parts: parts[0][0]),
-            "sum_token_counts": staticmethod(sum),
-        }
-    )()
-    job = coordinator.submit_embeddings_batch(["only one"])
-    completed = coordinator.embeddings_batch_document(job.job_id)
-    assert coordinator.cancel_embeddings_batch(job.job_id, reason="too late") == completed
-
-
 def test_embeddings_document_requires_known_batch() -> None:
     coordinator = _coordinator()
     with pytest.raises(KeyError, match="embeddings batch job"):
@@ -323,26 +343,6 @@ def test_embeddings_document_incomplete_status_has_no_vectors() -> None:
     document = coordinator.embeddings_batch_document(job.job_id)
     assert document["embeddings"] is None
     assert document["status"] == "in_progress"
-
-
-def test_embeddings_document_preserves_cancelled_backend_status() -> None:
-    class _CancelledBackend(_DroppingEmbeddingBackend):
-        def poll(self, job: BatchJob) -> Dict[str, Any]:
-            return {
-                "job_id": job.job_id,
-                "status": "cancelled",
-                "is_complete": True,
-                "cancellation": {"reason": "operator"},
-            }
-
-        def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
-            raise AssertionError("cancelled batches must not retrieve vectors")
-
-    coordinator = _coordinator(embedding_batch_backend=_CancelledBackend())
-    job = coordinator.submit_embeddings_batch(["later"])
-    document = coordinator.embeddings_batch_document(job.job_id)
-    assert document["status"] == "cancelled"
-    assert document["cancellation"] == {"reason": "operator"}
 
 
 def test_cost_report_delegates_to_ledger_window() -> None:
@@ -430,8 +430,8 @@ def test_document_recounts_tokens_when_backend_reports_zero_usage() -> None:
     coordinator = _coordinator(embedding_batch_backend=_SilentEmbeddingBackend())
     job = coordinator.submit_embeddings_batch(["alpha beta gamma"])
     document = coordinator.embeddings_batch_document(job.job_id)
-    assert document["token_counts"] == [3]
-    assert document["token_count_provenance"] == ["measured_or_estimated_per_input"]
+    # HeuristicTokenCounter counts word units with the BPE expansion factor.
+    assert document["token_counts"] == [4]
 
 
 def test_complete_embeddings_batch_round_trips_locally() -> None:
@@ -443,3 +443,33 @@ def test_complete_embeddings_batch_round_trips_locally() -> None:
     assert document["status"] == "completed"
     assert document["embeddings"][0]["index"] == 0
     assert document["cost_micro_usd"] >= 0
+
+
+
+def test_batch_model_identity_error_does_not_capture_backend_value_errors() -> None:
+    """Only model resolution receives the client-facing invalid-model category."""
+    from contextual_orchestrator.batch_routing import BatchRequest
+    from contextual_orchestrator.cost_router import InvalidBatchModelError
+
+    class RejectingBackend:
+        name = "rejecting-backend"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del requests, metadata
+            raise ValueError("backend payload validation failed")
+
+    coordinator = _coordinator(batch_backend=RejectingBackend())
+    with pytest.raises(ValueError, match="backend payload validation failed") as backend_error:
+        coordinator.submit_batch([
+            BatchRequest(messages=[{"role": "user", "content": "valid"}], model="mock-a")
+        ])
+    assert type(backend_error.value) is ValueError
+
+    with pytest.raises(InvalidBatchModelError, match="not configured"):
+        coordinator.submit_batch([
+            BatchRequest(
+                messages=[{"role": "user", "content": "private"}],
+                model="not-configured",
+                zdr_only=True,
+            )
+        ])

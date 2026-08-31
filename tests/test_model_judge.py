@@ -11,7 +11,6 @@ from dataclasses import replace
 from pathlib import Path
 import contextual_orchestrator.orchestrator as orchestrator_module
 import sys
-import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -23,9 +22,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
     ModelClient,
-    NoViableAgentError,
     ProviderResponseError,
-    RequestDeadlineExceeded,
     _parse_model_judge_reply,
     _structured_output_error,
 )
@@ -157,6 +154,32 @@ def test_free_conduct_keeps_model_judge_inside_zero_cost_pool() -> None:
     assert set(client.agent_ids) == {"free_verifier"}
 
 
+def test_zdr_conduct_limits_model_judge_allowlist_to_zdr_members() -> None:
+    client = _ScriptedClient('{"decision":"ACCEPT","reason":"ZDR verification passed."}')
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("free_non_zdr", "free-non-zdr", tags=("verification", "cost:free")),
+            ModelAgent(
+                "free_zdr",
+                "free-zdr",
+                tags=("verification", "cost:free", "privacy:zdr"),
+            ),
+        ],
+        client=client,
+    )
+    captured: dict[str, object] = {}
+
+    def judge(*_args: object, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"accepted": True, "verifier_output": "verified", "judge": "model"}
+
+    with patch.object(orchestrator, "_model_judge_verification", side_effect=judge):
+        with orchestrator.request_policy(True):
+            orchestrator.conduct(MESSAGES, model_name="orchestrator/free")
+
+    assert captured["allowed_agent_ids"] == {"free_zdr"}
+
+
 def test_group_conduct_keeps_model_judge_inside_requested_group() -> None:
     class _RecordingClient(_ScriptedClient):
         def __init__(self) -> None:
@@ -194,10 +217,6 @@ def test_free_structured_judge_uses_exact_free_agent_with_duplicate_model_id() -
         def proxy_send(self, agent: ModelAgent, endpoint: str, body: dict) -> dict:  # type: ignore[override]
             self.agent_ids.append(agent.id)
             return {"choices": [{"message": {"content": '{"decision":"ACCEPT","reason":"free"}'}}]}
-
-        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
-            del timeout
-            return {"agent_id": agent.id, "status": "ready"}
 
     class _StructuredJudge(_ScriptedFastJudge):
         def judge(self, **_: object) -> object:
@@ -426,10 +445,6 @@ def test_fast_mlsirm_judge_failover_honors_verifier_exclusions() -> None:
 
 def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
     orchestrator, _ = _orch("unused")
-    orchestrator._structured_readiness["general_agent"] = {
-        "status": "ready",
-        "checked_at": orchestrator_module.time.monotonic(),
-    }
     adapter = orchestrator_module._FastMLSIJudgeAdapter(
         orchestrator,
         "task",
@@ -471,339 +486,6 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
     assert completion["trace"][0]["usage"]["total_tokens"] == 5
 
 
-def test_fast_mlsirm_structured_judge_fails_over_with_shared_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A structural provider failure offers the request remainder to the backup."""
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class DeadlineClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=0)
-            self.calls: list[tuple[str, float]] = []
-
-        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
-            del endpoint, payload
-            remaining = self.remaining_request_timeout()
-            budget = min(float(self.timeout), remaining)
-            self.calls.append((agent.id, budget))
-            if agent.id == "primary_judge":
-                now[0] += budget
-                raise ProviderResponseError("primary structured response failed")
-            return {
-                "choices": [{"message": {"content": '{"accepted":true}'}}],
-                "usage": {"total_tokens": 7},
-            }
-
-        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
-            del timeout
-            return {"agent_id": agent.id, "status": "ready"}
-
-    agents = [
-        ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
-        ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
-    ]
-    client = DeadlineClient()
-    adapter = orchestrator_module._FastMLSIJudgeAdapter(
-        TaskOrchestrator(agents, client=client),
-        "task",
-        "primary_judge",
-        allowed_agent_ids={"primary_judge", "backup_judge"},
-    )
-    with client.request_settings(request_deadline_monotonic=180.0):
-        completion = adapter.complete_structured(
-            [{"role": "user", "content": "judge"}],
-            response_format={"type": "json_object"},
-        )
-    assert completion["answer"] == '{"accepted":true}'
-    assert completion["trace"][0]["agent_id"] == "backup_judge"
-    assert client.calls == [("primary_judge", 90.0), ("backup_judge", 90.0)]
-
-
-def test_fast_mlsirm_structured_judge_all_fail_at_request_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """All structured candidates fail closed when the shared deadline is exhausted."""
-    now = [0.0]
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: now[0])
-
-    class AllDownClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(timeout=90, max_retries=0)
-            self.calls: list[tuple[str, float]] = []
-
-        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
-            del endpoint, payload
-            remaining = self.remaining_request_timeout()
-            budget = min(float(self.timeout), remaining)
-            self.calls.append((agent.id, budget))
-            now[0] += budget
-            raise ProviderResponseError("structured response failed")
-
-        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
-            del timeout
-            return {"agent_id": agent.id, "status": "ready"}
-
-    agents = [
-        ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
-        ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
-    ]
-    client = AllDownClient()
-    adapter = orchestrator_module._FastMLSIJudgeAdapter(
-        TaskOrchestrator(agents, client=client),
-        "task",
-        "primary_judge",
-        allowed_agent_ids={"primary_judge", "backup_judge"},
-    )
-    with client.request_settings(request_deadline_monotonic=180.0):
-        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
-            adapter.complete_structured(
-                [{"role": "user", "content": "judge"}],
-                response_format={"type": "json_object"},
-            )
-    assert client.calls == [("primary_judge", 90.0), ("backup_judge", 90.0)]
-
-
-def test_structured_readiness_excludes_failed_probe_and_uses_ready_backup() -> None:
-    """Only a recently structured-ready declared candidate receives the request."""
-
-    class ProbeClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.probes: list[str] = []
-            self.calls: list[str] = []
-
-        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
-            del timeout
-            self.probes.append(agent.id)
-            return {
-                "agent_id": agent.id,
-                "status": "ready" if agent.id == "backup_judge" else "not_ready",
-            }
-
-        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
-            del endpoint, payload
-            self.calls.append(agent.id)
-            return {
-                "choices": [{"message": {"content": '{"accepted":true}'}}],
-                "usage": {"total_tokens": 7},
-            }
-
-    agents = [
-        ModelAgent("primary_judge", "primary-model", tags=("verification",), priority=2),
-        ModelAgent("backup_judge", "backup-model", tags=("verification",), priority=1),
-    ]
-    client = ProbeClient()
-    adapter = orchestrator_module._FastMLSIJudgeAdapter(
-        TaskOrchestrator(agents, client=client),
-        "task",
-        "primary_judge",
-        allowed_agent_ids={"primary_judge", "backup_judge"},
-    )
-
-    completion = adapter.complete_structured(
-        [{"role": "user", "content": "judge"}],
-        response_format={"type": "json_object"},
-    )
-
-    assert set(client.probes) == {"primary_judge", "backup_judge"}
-    assert client.calls == ["backup_judge"]
-    assert completion["trace"][0]["agent_id"] == "backup_judge"
-
-
-def test_structured_readiness_without_ready_candidate_avoids_provider_call() -> None:
-    """No recent ready evidence returns a typed retry contract before execution."""
-
-    class NoReadyClient(ModelClient):
-        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
-            del timeout
-            return {"agent_id": agent.id, "status": "not_ready"}
-
-        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
-            raise AssertionError((agent, endpoint, payload))
-
-    agents = [
-        ModelAgent("primary_judge", "primary-model", tags=("verification",)),
-        ModelAgent("backup_judge", "backup-model", tags=("verification",)),
-    ]
-    orchestrator = TaskOrchestrator(agents, client=NoReadyClient())
-    adapter = orchestrator_module._FastMLSIJudgeAdapter(
-        orchestrator,
-        "task",
-        "primary_judge",
-        allowed_agent_ids={"primary_judge", "backup_judge"},
-    )
-
-    with pytest.raises(NoViableAgentError) as exc_info:
-        adapter.complete_structured(
-            [{"role": "user", "content": "judge"}],
-            response_format={"type": "json_object"},
-        )
-
-    assert exc_info.value.code == "no_viable_agent"
-    assert exc_info.value.retry_after_seconds == 30
-
-
-def test_conduct_excludes_failed_candidates_for_the_entire_request() -> None:
-    """A later workflow stage cannot retry a provider that failed in this request."""
-
-    class FailingClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(max_retries=0)
-            self.calls: list[str] = []
-
-        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
-            del messages, kwargs
-            self.calls.append(agent.id)
-            raise ProviderResponseError("provider response unavailable")
-
-    tags = ("reasoning", "writing", "planning", "research", "verification")
-    agents = [
-        ModelAgent("first_agent", "first-model", tags=tags, group_name="declared_group"),
-        ModelAgent("second_agent", "second-model", tags=tags, group_name="declared_group"),
-    ]
-    client = FailingClient()
-    orchestrator = TaskOrchestrator(agents, client=client)
-
-    with pytest.raises(NoViableAgentError) as first_attempt:
-        orchestrator.complete(
-            [{"role": "user", "content": "produce a verified structured report"}],
-            mode="conduct",
-        )
-
-    assert first_attempt.value.retry_after_seconds == 30
-    assert client.calls == ["first_agent", "second_agent"]
-
-    # A later durable retry is a new request scope, so the candidates may be
-    # considered again after the caller has observed the Retry-After contract.
-    with pytest.raises(NoViableAgentError):
-        orchestrator.complete(
-            [{"role": "user", "content": "produce a verified structured report"}],
-            mode="conduct",
-        )
-    assert client.calls == ["first_agent", "second_agent", "first_agent", "second_agent"]
-
-
-def test_expired_request_deadline_does_not_mark_provider_not_ready(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Caller-budget exhaustion before transport is not a provider failure."""
-    monkeypatch.setattr(orchestrator_module.time, "monotonic", lambda: 10.0)
-    agent = ModelAgent(
-        "healthy_agent",
-        "healthy-model",
-        tags=("reasoning", "writing", "planning", "research", "verification"),
-    )
-    client = ModelClient(max_retries=0)
-    orchestrator = TaskOrchestrator([agent], client=client)
-
-    with client.request_settings(request_deadline_monotonic=9.0):
-        with pytest.raises(RequestDeadlineExceeded):
-            orchestrator.complete(
-                [{"role": "user", "content": "produce a verified report"}],
-                mode="conduct",
-            )
-
-    assert orchestrator._structured_readiness == {}
-    assert orchestrator._circuit == {}
-
-
-def test_direct_conduct_entrypoint_has_request_scoped_exclusion() -> None:
-    """Streaming callers that invoke conduct directly retain the same boundary."""
-
-    class FailingClient(ModelClient):
-        def __init__(self) -> None:
-            super().__init__(max_retries=0)
-            self.calls: list[str] = []
-
-        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
-            del messages, kwargs
-            self.calls.append(agent.id)
-            raise ProviderResponseError("provider response unavailable")
-
-    tags = ("reasoning", "writing", "planning", "research", "verification")
-    agents = [
-        ModelAgent("first_agent", "first-model", tags=tags, group_name="declared_group"),
-        ModelAgent("second_agent", "second-model", tags=tags, group_name="declared_group"),
-    ]
-    client = FailingClient()
-    orchestrator = TaskOrchestrator(agents, client=client)
-
-    with pytest.raises(NoViableAgentError):
-        orchestrator.conduct(
-            [{"role": "user", "content": "produce a verified structured report"}]
-        )
-
-    assert client.calls == ["first_agent", "second_agent"]
-
-
-def test_route_provider_failure_does_not_poison_structured_readiness() -> None:
-    """Ordinary chat failure remains separate from structured probe evidence."""
-
-    class FailingClient(ModelClient):
-        def chat(self, agent, messages, **kwargs):  # type: ignore[override]
-            del agent, messages, kwargs
-            raise ProviderResponseError("provider response unavailable")
-
-    agent = ModelAgent(
-        "route_agent",
-        "route-model",
-        tags=("reasoning", "writing", "planning", "research", "verification"),
-    )
-    orchestrator = TaskOrchestrator([agent], client=FailingClient(max_retries=0))
-
-    with pytest.raises(ProviderResponseError, match="provider response unavailable"):
-        orchestrator.complete(
-            [{"role": "user", "content": "answer directly"}], mode="route"
-        )
-
-    assert orchestrator._structured_readiness == {}
-def test_structured_readiness_probe_does_not_mutate_transport_circuit() -> None:
-    """Capability probes neither clear nor increment provider transport failures."""
-
-    class ProbeClient(ModelClient):
-        def probe_structured(self, agent, *, timeout=5.0):  # type: ignore[override]
-            del timeout
-            return {
-                "agent_id": agent.id,
-                "status": "ready" if agent.id == "ready_agent" else "not_ready",
-            }
-
-    agents = [
-        ModelAgent("ready_agent", "ready-model", tags=("verification",)),
-        ModelAgent("not_ready_agent", "not-ready-model", tags=("verification",)),
-    ]
-    orchestrator = TaskOrchestrator(agents, client=ProbeClient())
-    orchestrator._record_failure("ready_agent")
-    before = {agent_id: dict(state) for agent_id, state in orchestrator._circuit.items()}
-
-    ready = orchestrator._structured_ready_candidates(
-        agents[0], "judge", {agent.id for agent in agents}
-    )
-
-    assert [agent.id for agent in ready] == ["ready_agent"]
-    assert orchestrator._circuit == before
-
-
-def test_structured_readiness_probe_preserves_request_deadline() -> None:
-    """Caller deadline exhaustion remains a typed deadline failure, not readiness 503."""
-
-    class DeadlineClient(ModelClient):
-        def proxy_send(self, agent, endpoint, payload):  # type: ignore[override]
-            del agent, endpoint, payload
-            self.remaining_request_timeout()
-            raise AssertionError("expired deadline should raise first")
-
-    client = DeadlineClient()
-    agent = ModelAgent("judge_agent", "judge-model", tags=("verification",))
-    orchestrator = TaskOrchestrator([agent], client=client)
-
-    with client.request_settings(request_deadline_monotonic=time.monotonic() - 1.0):
-        with pytest.raises(RequestDeadlineExceeded, match="request deadline exceeded"):
-            orchestrator._structured_ready_candidates(agent, "judge", {agent.id})
-
-
 def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None:
     """An invalid synthesis is repaired once and both provider calls stay visible."""
     orchestrator, _ = _orch("unused")
@@ -830,7 +512,6 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
     }
 
     with (
-        patch.object(orchestrator, "conduct", return_value={"trace": []}),
         patch.object(
             orchestrator.client, "proxy_send", side_effect=[invalid, valid]
         ) as proxy,
@@ -855,7 +536,7 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
         )
 
     assert proxy.call_count == 2
-    assert budget_gate.call_count == 3
+    assert budget_gate.call_count == 4
     assert result["choices"][0]["message"]["content"] == '{"input_count":10}'
     run = orchestrator.get_workflow_run(result["orchestration"]["workflow_run_id"])
     assert [step["role"] for step in run["trace"][-2:]] == [
@@ -867,97 +548,6 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
     assert orchestrator.budget_status()["spent_output_tokens"] == traced_tokens
     assert _structured_output_error('{"input_count":10}', response_format) is None
     assert _structured_output_error('{"input_count":6}', response_format) == "schema_violation"
-
-
-def test_json_object_contract_rejects_non_object_json() -> None:
-    """json_object requires a complete JSON object, not merely valid JSON."""
-    response_format = {"type": "json_object"}
-    assert _structured_output_error('{"ready":true}', response_format) is None
-    assert _structured_output_error("not json", response_format) == "invalid_json"
-    assert _structured_output_error("[]", response_format) == "not_json_object"
-
-
-def test_structured_final_agent_uses_endpoint_scoped_admitted_set() -> None:
-    """A preferred but unready agent cannot bypass the measured endpoint set."""
-
-    class StructuredProxy(ModelClient):
-        def __init__(self) -> None:
-            super().__init__()
-            self.agent_ids: list[str] = []
-
-        def proxy_send(self, agent, endpoint, body):  # type: ignore[override]
-            del endpoint, body
-            self.agent_ids.append(agent.id)
-            return {
-                "choices": [{"message": {"content": '{"ready":true}'}}],
-                "model": agent.model,
-            }
-
-    client = StructuredProxy()
-    agents = [
-        ModelAgent("agent_a", "model-a", base_url="https://a.example/v1"),
-        ModelAgent("agent_b", "model-b", base_url="https://b.example/v1"),
-    ]
-    orchestrator = TaskOrchestrator(agents, client=client)
-    checked_at = time.monotonic()
-    orchestrator._structured_readiness = {
-        "agent_a": {"status": "not_ready", "checked_at": checked_at},
-        "agent_b": {"status": "ready", "checked_at": checked_at},
-    }
-    with (
-        orchestrator.routing_endpoint_scope(
-            "https://b.example/v1", orchestrator.AUTO_MODEL
-        ),
-        patch.object(orchestrator, "conduct", return_value={"trace": []}),
-    ):
-        result = orchestrator.proxy_completion(
-            {
-                "model": orchestrator.AUTO_MODEL,
-                "messages": [{"role": "user", "content": "synthetic"}],
-                "response_format": {"type": "json_object"},
-            },
-            single_agent=False,
-        )
-
-    assert client.agent_ids == ["agent_b"]
-    assert result["choices"][0]["message"]["content"] == '{"ready":true}'
-
-
-def test_structured_final_agent_fails_closed_without_admitted_candidate() -> None:
-    """Empty measured readiness remains typed admission deferral."""
-    agent = ModelAgent("agent_a", "model-a", base_url="https://a.example/v1")
-    orchestrator = TaskOrchestrator([agent], client=ModelClient())
-    with pytest.raises(NoViableAgentError):
-        orchestrator.proxy_completion(
-            {
-                "model": orchestrator.AUTO_MODEL,
-                "messages": [{"role": "user", "content": "synthetic"}],
-                "response_format": {"type": "json_object"},
-            },
-            single_agent=False,
-        )
-
-
-def test_structured_explicit_model_must_be_admitted() -> None:
-    """An explicit model cannot bypass contradictory readiness evidence."""
-    agents = [
-        ModelAgent("agent_a", "model-a", base_url="https://a.example/v1"),
-        ModelAgent("agent_b", "model-b", base_url="https://b.example/v1"),
-    ]
-    orchestrator = TaskOrchestrator(agents, client=ModelClient())
-    orchestrator._structured_readiness = {
-        "agent_a": {"status": "not_ready", "checked_at": time.monotonic()},
-        "agent_b": {"status": "ready", "checked_at": time.monotonic()},
-    }
-    with pytest.raises(NoViableAgentError):
-        orchestrator.proxy_completion(
-            {
-                "model": "model-a",
-                "messages": [{"role": "user", "content": "synthetic"}],
-                "response_format": {"type": "json_object"},
-            },
-            single_agent=False,
-        )
 
 
 def test_structured_synthesis_failure_updates_provider_health() -> None:
@@ -1024,7 +614,6 @@ def test_missing_structured_schema_never_starts_repair() -> None:
     }
     response = {"choices": [{"message": {"content": "{}"}}]}
     with (
-        patch.object(orchestrator, "conduct", return_value={"trace": []}),
         patch.object(orchestrator.client, "proxy_send", return_value=response) as proxy,
         pytest.raises(ProviderResponseError, match="missing a schema"),
     ):

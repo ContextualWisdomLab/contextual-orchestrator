@@ -13,11 +13,13 @@ with atheris.instrument_imports():
 
 
 def one_input(data: bytes) -> None:
+    """Feed one Atheris-fuzzed byte string through model-judge reply parsing."""
     fdp = atheris.FuzzedDataProvider(data)
     exercise_model_judge_reply(fdp.ConsumeUnicodeNoSurrogates(fdp.remaining_bytes()))
 
 
 def main() -> None:
+    """Run the Atheris coverage-guided fuzz loop against ``one_input``."""
     atheris.Setup(sys.argv, one_input)
     atheris.Fuzz()
 

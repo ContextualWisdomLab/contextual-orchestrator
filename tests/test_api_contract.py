@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from jsonschema import ValidationError, validate
 from pathlib import Path
+import pytest
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -59,9 +61,16 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
         "security"
     ] == [{"admin_bearer_auth": [], "trace_bearer_auth": []}]
+    patch_schema = OPENAPI_SPEC["paths"][
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}"
+    ]["patch"]["requestBody"]["content"]["application/json"]["schema"]
+    assert patch_schema["properties"]["stream_usage_supported"]["type"] == "boolean"
     assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (
         "bearer"
     )
+    assert OPENAPI_SPEC["paths"]["/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"]["post"][
+        "security"
+    ] == [{"inference_bearer_auth": [], "trace_bearer_auth": []}]
 
 
 def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> None:
@@ -75,13 +84,26 @@ def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> Non
     assert embeddings_schema["required"] == ["input"]
     assert "503" in OPENAPI_SPEC["paths"]["/v1/embeddings"]["post"]["responses"]
     assert "model" not in batch_schema.get("required", [])
-    assert "input_attributions" in batch_schema["properties"]
-    assert "input_metadata" in batch_schema["properties"]
     assert "503" in OPENAPI_SPEC["paths"]["/v1/batch/embeddings"]["post"]["responses"]
-    assert "/v1/batch/embeddings/capabilities" in OPENAPI_SPEC["paths"]
     assert "Optional enabled embedding-capable pool model" in embeddings_schema["properties"]["model"][
         "description"
     ]
+
+
+def test_openapi_omitted_text_models_match_runtime_contract() -> None:
+    """Omitted text models validate while explicit null still fails the schema."""
+    for path, payload in (
+        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]}),
+        ("/v1/completions", {"prompt": "hi"}),
+        ("/v1/responses", {"input": "hi"}),
+    ):
+        schema = OPENAPI_SPEC["paths"][path]["post"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        assert "model" not in schema.get("required", [])
+        validate(payload, schema)
+        with pytest.raises(ValidationError):
+            validate({**payload, "model": None}, schema)
 
 
 def test_openapi_capability_requests_have_endpoint_specific_contracts() -> None:
@@ -98,20 +120,7 @@ def test_openapi_capability_requests_have_endpoint_specific_contracts() -> None:
             "application/json"
         ]["schema"]
         assert schema["required"] == required
-
-
-def test_readiness_refresh_item_paths_declare_job_identifier() -> None:
-    """Every readiness by-id operation declares its required path parameter."""
-    for path, method in (
-        ("/api/v1/provider_readiness_refreshes/{job_id}", "get"),
-        ("/api/v1/provider_readiness_refreshes/{job_id}/cancel", "post"),
-    ):
-        assert OPENAPI_SPEC["paths"][path][method]["parameters"] == [{
-            "name": "job_id",
-            "in": "path",
-            "required": True,
-            "schema": {"type": "string"},
-        }]
+        assert schema["properties"]["zdr_only"]["type"] == "boolean"
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -119,3 +128,17 @@ if __name__ == "__main__":  # pragma: no cover
     test_openapi_uses_resource_oriented_operation_ids()
     test_openapi_documents_orchestrator_owned_embedding_model_selection()
     print("ok")
+
+
+
+def test_batch_job_openapi_documents_principal_hiding_404s() -> None:
+    """Missing and foreign batch jobs share the documented not-found surface."""
+    status = OPENAPI_SPEC["paths"][
+        "/api/v1/batch_routing_jobs/{batch_routing_job_id}"
+    ]["get"]["responses"]
+    results = OPENAPI_SPEC["paths"][
+        "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"
+    ]["post"]["responses"]
+    assert "404" in status
+    assert "not owned" in status["404"]["description"]
+    assert results["404"] == status["404"]

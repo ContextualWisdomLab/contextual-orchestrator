@@ -25,6 +25,7 @@ from contextual_orchestrator.tool_fallback import (
     ToolFailureKind,
     ToolFallbackAction,
     ToolFallbackStoppedError,
+    classify_provider_transport_failure,
     classify_tool_failure,
 )
 
@@ -907,6 +908,31 @@ def test_stream_fail_closed_tool_error_emits_structured_sse() -> None:
     assert error_body["detail"]["observed_failure_kind"] == "transport_error"
     assert parsed[-1]["choices"][0]["finish_reason"] == "error"
     assert "must-not-leak" not in body
+
+
+def test_classify_provider_transport_failure_never_fails_closed() -> None:
+    """A plain provider/model transport failure always retries or fails over.
+
+    Unlike :func:`classify_tool_failure`, this classifier has no ambiguous-
+    outcome branch: a bounded, side-effect-free completion request can always
+    be safely replayed or handed to the next candidate.
+    """
+    retryable = classify_provider_transport_failure(True)
+    assert retryable.action is ToolFallbackAction.RETRY_SAME_AGENT
+    assert retryable.retry_safe is True
+    assert retryable.circuit_failure is True
+
+    non_retryable = classify_provider_transport_failure(False)
+    assert non_retryable.action is ToolFallbackAction.FAILOVER_AGENT
+    assert non_retryable.circuit_failure is True
+
+    for decision in (retryable, non_retryable):
+        assert decision.action is not ToolFallbackAction.FAIL_CLOSED
+
+
+def test_classify_provider_transport_failure_rejects_non_boolean() -> None:
+    with pytest.raises(TypeError, match="retryable must be a boolean"):
+        classify_provider_transport_failure(1)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

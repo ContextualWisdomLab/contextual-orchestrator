@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import AUTH_SCHEME_RAW_TOKEN  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     register_credential,
@@ -28,6 +29,10 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ModelUnitPrice,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _MODELS_DEV_FETCH_ATTEMPTS,
+    _bytez_meter_price_is_free,
+    _deduplicate_discovered_models,
+    _fetch_json,
     _merge_configured_gateway_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
@@ -38,6 +43,8 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
+    general_free_serving_candidates,
+    is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -237,6 +244,126 @@ def test_configured_gateway_preserves_only_consensus_unit_prices() -> None:
     )
 
 
+def test_duplicate_discovery_withholds_conflicting_price_and_privacy_evidence() -> None:
+    """Ambiguous duplicate rows must not preserve unverified price/privacy fields."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=1.0,
+                completion_price_per_1k=2.0,
+                unit_prices=(ModelUnitPrice("output_cost_per_image", 0.0),),
+                is_free=True,
+                supports_zero_data_retention=True,
+                supports_no_training=True,
+                supports_no_prompt_retention=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                prompt_price_per_1k=1.0,
+                completion_price_per_1k=2.0,
+                unit_prices=(ModelUnitPrice("output_cost_per_image", 0.1),),
+                is_free=False,
+                supports_zero_data_retention=False,
+                supports_no_training=False,
+                supports_no_prompt_retention=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].prompt_price_per_1k is None
+    assert discovered[0].completion_price_per_1k is None
+    assert discovered[0].unit_prices == ()
+    assert discovered[0].is_free is False
+    assert discovered[0].supports_zero_data_retention is None
+    assert discovered[0].supports_no_training is None
+    assert discovered[0].supports_no_prompt_retention is None
+    assert discovered[0].zdr_capable is False
+
+
+def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
+    """Conflicting duplicate rows must not preserve a positive ZDR route tag."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                zdr_capable=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                zdr_capable=False,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].zdr_capable is False
+
+
+def test_same_provider_model_under_different_credentials_remains_independent() -> None:
+    """Credential accounts may expose different evidence for the same model id."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                is_free=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_B",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                is_free=False,
+            ),
+        ]
+    )
+
+    assert [(model.credential_name, model.is_free) for model in discovered] == [
+        ("KEY_A", True),
+        ("KEY_B", False),
+    ]
+
+
+def test_discovery_debug_log_identifies_account_without_secret(caplog) -> None:
+    """Verbose diagnostics expose account progress but never credential values."""
+    register_credential("OPENAI_API_KEY", "secret-value-must-not-appear")
+    with (
+        caplog.at_level("DEBUG", logger="contextual_orchestrator.model_discovery"),
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            return_value=_Response({"data": [{"id": "gpt-test"}]}),
+        ),
+    ):
+        discover_provider_models(OPENAI_SOURCE, models_dev_metadata=None)
+
+    assert "account=openai" in caplog.text
+    assert "OPENAI_API_KEY" not in caplog.text
+    assert "model_count=1" in caplog.text
+    assert "secret-value-must-not-appear" not in caplog.text
+
+
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
     payload = {
         "data": [
@@ -423,7 +550,7 @@ BYTEZ_SOURCE = ProviderModelSource(
     credential_name="BYTEZ_API_KEY",
     list_url="https://api.bytez.com/models/v2/list/models",
     chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-    auth_scheme="Key",
+    auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     style="bytez",
     task_filter="chat",
     capabilities=("chat",),
@@ -485,6 +612,7 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
+    assert all(not model.evidence_only for model in discovered)
     assert "response_format" in agent_from_discovered(discovered[0]).tags
 
 
@@ -521,7 +649,9 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert "audio" in generated_audio.capabilities
     embedding = next(model for model in discovered if "embedding" in model.capabilities)
     assert embedding.output_modalities == ("embeddings",)
-    assert {"input:text", "output:embeddings"} <= set(agent_from_discovered(embedding).tags)
+    assert {"input:text", "output:embeddings"} <= set(
+        agent_from_discovered(replace(embedding, evidence_only=False)).tags
+    )
 
 
 def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -> None:
@@ -632,7 +762,425 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(discovered[0]).group_name == ""
+    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
+
+
+def _nim_vision_model() -> DiscoveredModel:
+    """NVIDIA NIM's incident model: free, chat-capable, declares text + image."""
+    return DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.2-90b-vision-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+
+def test_general_free_serving_candidates_excludes_a_free_vision_only_input_model() -> None:
+    """The general-purpose free pool must exclude a zero-priced vision-input model.
+
+    Relocated from ``free_discovered_models`` (ContextualWisdomLab/.github PR
+    #1198's original fix) onto the dedicated serving-eligibility selector once
+    Devin's review on PR #933 found that ``free_discovered_models`` itself must
+    stay a pure price-based inventory (see
+    ``test_free_discovered_models_still_counts_a_free_vision_only_input_model``
+    below) -- the intent of the original regression test is unchanged.
+
+    Reproduces ``ContextualWisdomLab/.github`` PR #1198's required Strix Security
+    Scan failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passes every existing chat-capability
+    check (Models.dev reports its cost as 0/0, its output modality is "text",
+    and its model id carries no disqualifying token), yet NIM's live deployment
+    rejected Strix's tool-calling request against it with a definitive HTTP 400
+    (``invalid_request_error``) three independent times in a row -- because the
+    orchestrator/free pool has no other candidate to fail over to, this one
+    vision-input model alone exhausts the whole "free" tool-calling pool.
+    Models.dev's own ``tool_call`` field claims ``true`` for this exact model
+    (verified live), so that field cannot be the fix; its declared *input*
+    modality (``image``, alongside ``text``) is the only honest catalog
+    evidence distinguishing it from an ordinary text-only free worker. A
+    model requiring non-text input is a specialized multimodal deployment, not
+    a general-purpose worker a caller can route arbitrary (including
+    tool-calling) requests to without knowing in advance that it needs an
+    image -- so it must not enter the general free pool, while a text-only
+    free model of identical price remains fully eligible.
+    """
+    vision_model = _nim_vision_model()
+    text_only_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="meta/llama-3.1-8b-instruct",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    no_modality_evidence_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="mistralai/mistral-small",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        is_free=True,
+    )
+
+    serving_candidates = general_free_serving_candidates(
+        [vision_model, text_only_model, no_modality_evidence_model]
+    )
+
+    assert [model.model_id for model in serving_candidates] == [
+        "meta/llama-3.1-8b-instruct",
+        "mistralai/mistral-small",
+    ]
+
+
+def test_free_discovered_models_still_counts_a_free_vision_only_input_model() -> None:
+    """Price-based free inventory must not lose a model excluded from serving.
+
+    Finding 3 of Devin's review on PR #933: by filtering inside
+    ``free_discovered_models()`` itself, the original PR #1198 fix silently
+    undercounted a genuinely free model in every consumer of that function
+    that wants raw price inventory rather than serving-pool eligibility --
+    ``--free-only`` CLI output, ``free_tier_count``, and the free-tier
+    data-privacy totals. This model is priced at zero and must be counted
+    here even though :func:`general_free_serving_candidates` correctly
+    excludes it from blind serving.
+    """
+    vision_model = _nim_vision_model()
+
+    assert free_discovered_models([vision_model]) == [vision_model]
+    assert general_free_serving_candidates([vision_model]) == []
+
+
+def test_general_free_serving_candidates_excludes_unroutable_free_models() -> None:
+    """Non-text price/modality evidence alone does not certify servability.
+
+    Devin's review pass on PR #933 after ``efd44f6`` found that
+    ``general_free_serving_candidates`` admits any zero-priced, text-input
+    row regardless of whether it could ever actually become a serving agent:
+    an ``evidence_only`` catalog row (``agent_from_discovered`` refuses to
+    build an agent from one at all) and a free non-chat-capable model (e.g.
+    an embedding-only deployment) both pass the price and modality checks
+    while being fundamentally unroutable. ``general_free_serving_count``
+    therefore overcounted models the general chat pool could never actually
+    serve. ``is_routable_discovered_model`` -- the same predicate
+    ``_auto_discover_runtime_agents`` and ``provider_bootstrap`` already use
+    to decide whether a discovered row may become an ordinary chat agent at
+    all -- is the missing check.
+    """
+    evidence_only_free_text_model = replace(
+        DiscoveredModel(
+            provider_name="nvidia_nim",
+            model_id="evidence-only-free-model",
+            credential_name="NVIDIA_NIM_API_KEY",
+            chat_base_url="https://integrate.api.nvidia.com/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat",),
+            input_modalities=("text",),
+            output_modalities=("text",),
+            is_free=True,
+        ),
+        evidence_only=True,
+    )
+    embedding_only_free_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="embedding-only-free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    routable_free_text_model = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="routable-free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+    serving_candidates = general_free_serving_candidates([
+        evidence_only_free_text_model,
+        embedding_only_free_model,
+        routable_free_text_model,
+    ])
+
+    assert [model.model_id for model in serving_candidates] == ["routable-free-model"]
+    # Both unroutable rows remain fully counted in the price-based inventory.
+    assert {model.model_id for model in free_discovered_models([
+        evidence_only_free_text_model,
+        embedding_only_free_model,
+        routable_free_text_model,
+    ])} == {
+        "evidence-only-free-model",
+        "embedding-only-free-model",
+        "routable-free-model",
+    }
+
+
+def test_general_free_serving_candidates_logs_zero_contribution_reasons(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Accounts that discover rows but seed no free candidate get a reason, not silence.
+
+    OpenRouter's ``evidence_only`` exclusion and OpenAI having no free-tier model
+    today are both correct behavior, but previously left no diagnostic trace
+    explaining why they contributed nothing to ``orchestrator/free`` -- unlike a
+    hard provider failure, which already logs
+    ``model discovery failed account=<name> ...`` from
+    :func:`discover_provider_models`. This closes that visibility gap.
+    """
+    openrouter_evidence_only = replace(
+        DiscoveredModel(
+            provider_name="openrouter",
+            model_id="openrouter/some-model",
+            credential_name="OPENROUTER_API_KEY",
+            chat_base_url="https://openrouter.ai/api/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat",),
+            input_modalities=("text",),
+            output_modalities=("text",),
+            is_free=True,
+        ),
+        evidence_only=True,
+    )
+    openai_paid_only = DiscoveredModel(
+        provider_name="openai",
+        model_id="openai/gpt-paid",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=False,
+    )
+    nvidia_serving = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="nvidia/free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.model_discovery"):
+        serving_candidates = general_free_serving_candidates(
+            [openrouter_evidence_only, openai_paid_only, nvidia_serving]
+        )
+
+    assert [model.model_id for model in serving_candidates] == ["nvidia/free-model"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "account=openrouter" in message
+        and "credential=OPENROUTER_API_KEY" in message
+        and "reason=evidence_only" in message
+        for message in messages
+    )
+    assert any(
+        "account=openai" in message
+        and "credential=OPENAI_API_KEY" in message
+        and "reason=no_free_pricing_reported" in message
+        for message in messages
+    )
+    # The provider that did seed a candidate gets no zero-contribution line.
+    assert not any("account=nvidia_nim" in message for message in messages)
+
+
+def test_general_free_serving_candidates_modality_shapes() -> None:
+    """Explicit three-way modality contract: text-only, image-only, text+image.
+
+    Finding 2 of Devin's review on PR #933 argued the exclusion should spare a
+    model that "also supports text as a standalone input", so that only a
+    strictly vision-*only* model (no declared text input at all) is excluded.
+    Verified against this repository's own incident evidence and rejected:
+    NVIDIA NIM's real incident model (see ``_nim_vision_model``) declares
+    *both* ``text`` and ``image`` as supported inputs per Models.dev -- i.e.
+    it already satisfies "text is a supported standalone input" by Devin's own
+    proposed test -- yet NIM's live deployment rejected a plain tool-calling
+    request against it three times in a row. Models.dev's ``input_modalities``
+    documents supported inputs, not which ones a given request must supply, so
+    it cannot certify that this exact model would have served a tool-calling
+    request that carried text alone. Narrowing the exclusion to spare
+    "text is also listed" models would therefore silently re-admit the very
+    model this incident is about, so this repository instead keeps excluding
+    any declared non-text input modality from blind serving (see
+    ``general_free_serving_candidates``'s and ``_requires_non_text_input``'s
+    docstrings for the full reasoning) -- while a model with *no* modality
+    evidence at all is not penalized for an absent catalog field.
+    """
+    text_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="text-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    vision_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="vision-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("image",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    text_and_image = _nim_vision_model()
+
+    serving_candidates = general_free_serving_candidates(
+        [text_only, vision_only, text_and_image]
+    )
+
+    assert [model.model_id for model in serving_candidates] == ["text-only-model"]
+    # All three remain fully counted in the price-based inventory regardless.
+    assert {model.model_id for model in free_discovered_models(
+        [text_only, vision_only, text_and_image]
+    )} == {"text-only-model", "vision-only-model", "meta/llama-3.2-90b-vision-instruct"}
+
+
+def test_discovery_and_orchestrator_modality_eligibility_cannot_drift() -> None:
+    """``general_free_serving_candidates`` and ``_is_general_free_agent`` agree.
+
+    Devin's review on PR #933 (design-consistency note): the discovery-time
+    selector (over ``DiscoveredModel.input_modalities``) and the
+    selection-time predicate (over an agent's persisted ``input:<modality>``
+    tags) must never independently reimplement "what counts as non-text
+    input" -- both now delegate to ``chat_capability.requires_non_text_input``
+    for that classification. This locks the three fixture shapes already
+    established by ``test_general_free_serving_candidates_modality_shapes``
+    (text-only, vision-only-input, text+image) so the two call sites cannot
+    silently diverge again.
+    """
+    text_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="text-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    vision_only = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="vision-only-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("image",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+    text_and_image = _nim_vision_model()
+    discovered = [text_only, vision_only, text_and_image]
+    serving_model_ids = {model.model_id for model in general_free_serving_candidates(discovered)}
+
+    # ModelAgent.id must be two-or-more-word snake_case; provider model ids
+    # (e.g. "meta/llama-3.2-90b-vision-instruct") are not, so derive a
+    # compliant id distinct from the ``model`` field under test.
+    agent_id_translation = str.maketrans("/.-", "___")
+    agents = {
+        model.model_id: ModelAgent(
+            model.model_id.casefold().translate(agent_id_translation),
+            model.model_id,
+            tags=("cost:free", *(f"input:{value}" for value in model.input_modalities)),
+        )
+        for model in discovered
+    }
+    orchestrator = TaskOrchestrator(list(agents.values()))
+
+    for model in discovered:
+        agent = agents[model.model_id]
+        assert orchestrator._is_general_free_agent(agent) == (
+            model.model_id in serving_model_ids
+        ), model.model_id
+        # Every one of these stays reachable through its own capability route.
+        assert orchestrator._is_free_agent(agent) is True
+
+
+def test_discovery_does_not_mark_multimodal_input_rows_free_without_unit_prices() -> None:
+    """Non-text inputs require explicit zero non-token price evidence."""
+    source = ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "vision-chat",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
+                }
+            ]
+        },
+        source,
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is False
+
+
+def test_discovery_does_not_mark_rows_free_with_unknown_unit_price_dimensions() -> None:
+    """Unknown unit dimensions keep free status unknown rather than zero-cost."""
+    source = ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "text-chat",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                    },
+                    "unit_pricing": {"per_call": 0},
+                }
+            ]
+        },
+        source,
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is False
 
 
 def test_opencode_zen_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
@@ -707,15 +1255,370 @@ def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() 
     assert discovered[0].is_free is False
 
 
+def test_non_text_models_without_unit_price_evidence_are_not_classified_free() -> None:
+    """A zero token price alone cannot prove a non-text model is free."""
+    source = ProviderModelSource(
+        provider_name="gateway",
+        credential_name="GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("image",),
+    )
+
+    discovered = _parse_openai_compatible(
+        {
+            "data": [
+                {
+                    "id": "image-free-ish",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "architecture": {"output_modalities": ["image"]},
+                }
+            ]
+        },
+        source,
+    )
+
+    assert discovered[0].is_free is False
+
+
+def test_nvidia_nim_joins_models_dev_cost_and_modalities_without_name_inference() -> None:
+    """The generalized join (ADR 0032's opencode_zen contract, now data-driven)."""
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            assert request.get_header("Authorization") is None
+            return _Response(
+                {
+                    "nvidia": {
+                        "models": {
+                            "meta/llama-3.1-8b-instruct": {
+                                "cost": {"input": 0, "output": 0, "cache_read": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                            "deepseek-ai/deepseek-v4-flash": {
+                                "cost": {"input": 0.1, "output": 0.4},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                            "nvidia/cache-fee-model": {
+                                "cost": {"input": 0, "output": 0, "cache_write": 0.05},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            },
+                        }
+                    }
+                }
+            )
+        return _Response(
+            {
+                "data": [
+                    {"id": "meta/llama-3.1-8b-instruct"},
+                    {"id": "deepseek-ai/deepseek-v4-flash"},
+                    {"id": "nvidia/cache-fee-model"},
+                    {"id": "nvidia/unlisted-model"},
+                ]
+            }
+        )
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    # Free: every declared monetary component is exactly zero.
+    assert discovered[0].is_free is True
+    assert discovered[0].input_modalities == ("text",)
+    # Paid: nonzero input/output cost, consistent with the deliberately-priced
+    # models Models.dev documents for the nvidia provider.
+    assert discovered[1].is_free is False
+    assert discovered[1].prompt_price_per_1k == pytest.approx(0.0001)
+    assert discovered[1].completion_price_per_1k == pytest.approx(0.0004)
+    # Only cache_write is nonzero: must NOT be classified free (off-by-omission
+    # guard -- a free-looking token price is not the whole cost vector).
+    assert discovered[2].is_free is False
+    # In NIM's own listing but absent from Models.dev: stays unknown, not free.
+    assert discovered[3].is_free is False
+
+
+def test_nvidia_nim_metadata_failure_keeps_availability_but_not_free() -> None:
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            raise urllib.error.URLError("offline")
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is False
+
+
+def test_fetch_json_sends_a_stable_user_agent_on_every_request() -> None:
+    """Models.dev rejects urllib's default UA with HTTP 403 (Cloudflare error 1010);
+
+    every request -- authenticated or not -- must carry an identifying UA so the
+    Models.dev join (and any other unauthenticated discovery call) does not
+    silently degrade to metadata-unavailable.
+    """
+    captured: list[object] = []
+
+    def urlopen(request, timeout=None):
+        captured.append(request)
+        return _Response({"data": []})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        _fetch_json("https://models.dev/api.json", timeout=5.0)
+        _fetch_json("https://api.openai.com/v1/models", api_key="sk-test", timeout=5.0)
+
+    assert len(captured) == 2
+    for request in captured:
+        user_agent = request.get_header("User-agent")
+        assert user_agent, "every discovery request must carry a User-Agent header"
+        assert "urllib" not in user_agent.lower()
+    # The authorization header must still be scoped to the authenticated call only.
+    assert captured[0].get_header("Authorization") is None
+    assert captured[1].get_header("Authorization") == "Bearer sk-test"
+
+
+def test_nvidia_nim_join_requires_the_user_agent_header_to_avoid_a_403() -> None:
+    """Regression for the exact live failure: a fetch mock that 403s without a UA."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            if not request.get_header("User-agent"):
+                raise urllib.error.HTTPError(
+                    request.full_url, 403, "Forbidden", {}, None
+                )
+            return _Response(
+                {"nvidia": {"models": {"meta/llama-3.1-8b-instruct": {"cost": {"input": 0, "output": 0}}}}}
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered = discover_provider_models(source)
+
+    assert discovered[0].is_free is True
+
+
+def test_discover_all_models_fetches_models_dev_exactly_once_across_sources() -> None:
+    """opencode_zen + nvidia_nim + nvidia_nim_sub share one Models.dev fetch."""
+    register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    register_credential("NVIDIA_NIM_API_KEY_SUB", "nim-sub-key")
+    models_dev_calls = []
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            models_dev_calls.append(request.full_url)
+            return _Response(
+                {
+                    "opencode": {"models": {}},
+                    "nvidia": {
+                        "models": {
+                            "meta/llama-3.1-8b-instruct": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            }
+                        }
+                    },
+                }
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(
+        item
+        for item in PROVIDER_MODEL_SOURCES
+        if item.provider_name in {"opencode_zen", "nvidia_nim", "nvidia_nim_sub"}
+    )
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert len(models_dev_calls) == 1
+    # Both NVIDIA NIM credentials joined against the identical shared catalog.
+    assert [
+        (model.provider_name, model.is_free)
+        for model in discovered
+        if model.provider_name in {"nvidia_nim", "nvidia_nim_sub"}
+    ] == [("nvidia_nim", True), ("nvidia_nim_sub", True)]
+
+
+def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false() -> None:
+    """A failure of the ONE shared prefetch degrades every source to unknown cost."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    register_credential("NVIDIA_NIM_API_KEY_SUB", "nim-sub-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            raise urllib.error.URLError("offline")
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(
+        item
+        for item in PROVIDER_MODEL_SOURCES
+        if item.provider_name in {"nvidia_nim", "nvidia_nim_sub"}
+    )
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert [model.is_free for model in discovered] == [False, False]
+
+
+def test_discover_all_models_shared_models_dev_fetch_retries_a_transient_failure() -> None:
+    """A single transient Models.dev failure recovers on retry instead of erasing coverage.
+
+    Regression for the ContextualWisdomLab/.github#1433 ``orchestrator/free``
+    reliability gap: NVIDIA NIM's free-tier coverage depends entirely on this
+    one unauthenticated, third-party fetch (ADR 0041) succeeding, so a lone
+    blip must not degrade every dependent provider's evidence for the run.
+    """
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    attempts = {"models_dev": 0}
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            attempts["models_dev"] += 1
+            if attempts["models_dev"] < 2:
+                raise urllib.error.URLError("transient blip")
+            return _Response(
+                {
+                    "nvidia": {
+                        "models": {
+                            "meta/llama-3.1-8b-instruct": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            }
+                        }
+                    }
+                }
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert attempts["models_dev"] == 2
+    assert [model.is_free for model in discovered] == [True]
+
+
+def test_discover_all_models_shared_models_dev_fetch_gives_up_after_retry_budget() -> None:
+    """Exhausting the bounded retry budget still degrades to unknown cost, not a crash."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    attempts = {"models_dev": 0}
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            attempts["models_dev"] += 1
+            raise urllib.error.URLError("still offline")
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert attempts["models_dev"] == _MODELS_DEV_FETCH_ATTEMPTS
+    assert [model.is_free for model in discovered] == [False]
+
+
+def test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev() -> None:
+    """Bytez has no Models.dev coverage; it must never trigger the shared fetch."""
+    register_credential("BYTEZ_API_KEY", "bytez-key")
+    models_dev_calls = []
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            models_dev_calls.append(request.full_url)
+            return _Response({})
+        return _Response(
+            {"output": [{"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat"}]}
+        )
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=urlopen,
+    ):
+        discovered, errors = discover_all_models()
+
+    assert errors == []
+    assert models_dev_calls == []
+    assert [model.model_id for model in discovered] == ["0-hero/Matter-0.1-Slim-7B-C"]
+    assert discovered[0].is_free is False
+
+
 def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
 
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
+    assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
+
+
+@pytest.mark.parametrize(
+    ("credit_available", "paid_admitted"),
+    [(False, False), (None, False), (True, True)],
+)
+def test_discover_all_models_blocks_only_paid_openrouter_without_credit(
+    credit_available: bool | None,
+    paid_admitted: bool,
+) -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {"id": "provider/free", "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "provider/paid", "pricing": {"prompt": "0.1", "completion": "0.1"}},
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=lambda request, timeout=None: _Response(
+            payload if request.full_url == OPENROUTER_SOURCE.list_url else {"data": []}
+        ),
+    ), patch(
+        "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+        return_value=credit_available,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE,))
+
+    assert errors == []
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["provider/free"].spend_admitted is True
+    assert by_id["provider/paid"].spend_admitted is paid_admitted
+    assert is_routable_discovered_model(by_id["provider/free"]) is True
+    assert is_routable_discovered_model(by_id["provider/paid"]) is paid_admitted
 
 
 def test_price_per_1k_rejects_underflowing_positive_value() -> None:
@@ -743,14 +1646,105 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
         discovered = discover_provider_models(BYTEZ_SOURCE)
 
-    assert seen_requests[0].get_header("Authorization") == "Key bytez-secret"
+    assert seen_requests[0].get_header("Authorization") == "bytez-secret"
     assert seen_requests[0].full_url == "https://api.bytez.com/models/v2/list/models?task=chat"
     assert len(discovered) == 1
     assert discovered[0].model_id == "0-hero/Matter-0.1-Slim-7B-C"
-    assert discovered[0].auth_scheme == "Key"
+    assert discovered[0].auth_scheme == AUTH_SCHEME_RAW_TOKEN
     assert discovered[0].capabilities == ("chat",)
     # Bytez prices by GPU-second, not per-token: no fabricated per-1k estimate.
     assert discovered[0].prompt_price_per_1k is None
+    assert discovered[0].completion_price_per_1k is None
+    # Real, nonzero GPU-second pricing must not be misread as free.
+    assert discovered[0].is_free is False
+
+
+def test_discover_bytez_marks_zero_meter_price_as_free() -> None:
+    """A Bytez row whose real ``meterPrice`` rate is exactly zero is free.
+
+    Regression test: ``_parse_bytez`` used to build every ``DiscoveredModel``
+    without ever passing ``is_free``, silently defaulting every Bytez model
+    to ``is_free=False`` regardless of its actual price -- discarding the one
+    real zero-cost signal Bytez's API does expose (``meterPrice``). This
+    must stay True without fabricating per-1k pricing (Bytez bills by
+    GPU-second, not per-token; that omission is intentional and unrelated).
+    """
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+    payload = {
+        "error": None,
+        "output": [
+            {"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat", "meterPrice": "0 / sec"},
+        ],
+    }
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(BYTEZ_SOURCE)
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is True
+    # Still no fabricated per-1k estimate: the honest-pricing behavior for
+    # GPU-second billing is preserved even for a free model.
+    assert discovered[0].prompt_price_per_1k is None
+    assert discovered[0].completion_price_per_1k is None
+
+
+def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
+    """A Bytez row with no ``meterPrice`` at all is unknown pricing, not free."""
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+    payload = {
+        "error": None,
+        "output": [{"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat"}],
+    }
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(BYTEZ_SOURCE)
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is False
+
+
+@pytest.mark.parametrize(
+    ("meter_price", "expected"),
+    [
+        ("0.0006478333 / sec", False),
+        ("0 / sec", True),
+        ("0/sec", True),
+        ("0.0000 / sec", True),
+        (0, True),
+        (0.0, True),
+        (0.0006, False),
+        (None, False),
+        ("", False),
+        ("   ", False),
+        ("free", False),
+        (True, False),
+        (False, False),
+        ("-0 / sec", True),
+        # A zero rate is exactly as free regardless of its time unit -- the
+        # documented grammar constrains shape, not which unit word appears.
+        ("0 / hour", True),
+        # Genuinely malformed shapes must fail closed (unknown, not free),
+        # never trust a numeric-looking prefix pulled out of an unexpected
+        # overall shape.
+        ("0 /", False),  # missing unit
+        ("/ sec", False),  # missing rate
+        ("0 / sec / token", False),  # extra separator
+        ("0//sec", False),  # extra separator, empty middle segment
+        ("0", False),  # no separator at all -- does not match "<rate> / <unit>"
+        ("0 sec", False),  # no separator at all, space-joined
+        (" / ", False),  # separator present, both sides empty
+    ],
+)
+def test_bytez_meter_price_is_free_classifies_exact_zero_rates(
+    meter_price: object, expected: bool
+) -> None:
+    assert _bytez_meter_price_is_free(meter_price) is expected
 
 
 def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
@@ -761,7 +1755,7 @@ def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
         credential_name="BYTEZ_EMBEDDING_KEY",
         list_url="https://api.bytez.com/models/v2/list/models?task=embedding",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         capabilities=("embedding",),
     )
@@ -795,19 +1789,201 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert errors[0].__cause__ is None
 
 
+def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "openai/shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={"data": [{"model_id": "openai/shared-model"}]},
+        ),
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openrouter", True),
+        ("nvidia_nim", True),
+    ]
+
+
+def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    seen_calls = []
+
+    def fetch(url, *, api_key="", auth_scheme="Bearer", timeout):
+        seen_calls.append((url, api_key, auth_scheme, timeout))
+        return {"data": [{"model_id": "openai/shared-model"}]}
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+        side_effect=fetch,
+    ):
+        from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+        assert _openrouter_zdr_model_ids(timeout=1.0) == {"openai/shared-model"}
+
+    assert seen_calls == [
+        ("https://openrouter.ai/api/v1/endpoints/zdr", "sk-openrouter", "Bearer", 1.0)
+    ]
+
+
+def test_openrouter_zdr_evidence_rejects_cross_host_redirects() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    seen_requests = []
+
+    class _RedirectingOpener:
+        def __init__(self, handler):
+            self._handler = handler
+
+        def open(self, request, timeout=None):
+            seen_requests.append(request)
+            return self._handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {"Location": "https://evil.example/zdr"},
+                "https://evil.example/zdr",
+            )
+
+    def build_opener(handler):
+        return _RedirectingOpener(handler)
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.build_opener",
+        side_effect=build_opener,
+    ):
+        from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+        assert _openrouter_zdr_model_ids(timeout=1.0) == set()
+
+    assert seen_requests[0].get_header("Authorization") == "Bearer sk-openrouter"
+
+
+def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={"data": [{"model_id": "openai/shared-model"}]},
+        ),
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openrouter", True),
+        ("nvidia_nim", False),
+    ]
+
+
+def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    other_source = ProviderModelSource(
+        provider_name="nvidia_nim",
+        credential_name="NVIDIA_NIM_API_KEY",
+        list_url="https://integrate.api.nvidia.com/v1/models",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        capabilities=("chat",),
+    )
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+
+    def urlopen(request, timeout=None):
+        if request.full_url == other_source.list_url:
+            return _Response({"data": [{"id": "shared-model"}]})
+        return _Response({"data": [{"id": "openai/shared-model"}]})
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={
+                "data": [
+                    {"model_id": "openai/shared-model"},
+                    {"model_id": "other/shared-model"},
+                ]
+            },
+        ),
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE, other_source))
+
+    assert errors == []
+    assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
+        ("openrouter", True),
+        ("nvidia_nim", False),
+    ]
+
+
+def test_malformed_openrouter_zdr_data_is_ignored(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+        lambda *args, **kwargs: {"data": {"model_id": "not-a-list"}},
+    )
+
+    from contextual_orchestrator.model_discovery import _openrouter_zdr_model_ids
+
+    assert _openrouter_zdr_model_ids(timeout=1.0) == set()
+
+
 def test_discovery_boundary_contains_raw_connection_reset() -> None:
     """A raw ConnectionResetError (not a URLError) still fails inside the boundary.
 
     Regression: ``ConnectionError``/``OSError`` subclasses that are not
     ``URLError`` used to escape ``discover_provider_models`` uncaught, leaking
-    provider transport diagnostics to discovery callers.
+    provider transport diagnostics to discovery callers. A connection reset is
+    also transient, so this now retries once before giving up; both attempts
+    fail identically here, exercising the exhausted-retry path.
     """
     register_credential("OPENAI_API_KEY", "sk-openai")
+    attempts = []
 
     def urlopen(request, timeout=None):
+        attempts.append(timeout)
         raise ConnectionResetError(104, "Connection reset by peer")
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
         try:
             discover_provider_models(OPENAI_SOURCE)
         except ProviderDiscoveryError as error:
@@ -817,6 +1993,122 @@ def test_discovery_boundary_contains_raw_connection_reset() -> None:
             assert error.__cause__ is None
         else:  # pragma: no cover
             raise AssertionError("a raw connection reset must become a ProviderDiscoveryError")
+
+    assert len(attempts) == 2  # initial attempt + one bounded retry, both transient
+    mock_sleep.assert_called_once()
+
+
+def test_discover_provider_models_retries_transient_failure_then_succeeds() -> None:
+    """A single transient 5xx on the primary fetch is retried, not fatal.
+
+    This is the exact shape of the incident that motivated the retry: one
+    provider's momentary HTTP 500 must not zero out that provider's entire
+    contribution for this discovery pass.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    payload = {"data": [{"id": "gpt-test", "object": "model"}]}
+    attempt_timeouts = []
+
+    def urlopen(request, timeout=None):
+        attempt_timeouts.append(timeout)
+        if len(attempt_timeouts) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response(payload)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
+        discovered = discover_provider_models(OPENAI_SOURCE)
+
+    assert len(attempt_timeouts) == 2
+    assert attempt_timeouts[1] < attempt_timeouts[0]  # retry uses the shortened timeout
+    mock_sleep.assert_called_once()
+    assert [model.model_id for model in discovered] == ["gpt-test"]
+
+
+def test_discover_provider_models_does_not_retry_non_transient_failure() -> None:
+    """A 401 (bad credential) is never retried -- a retry cannot fix it."""
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    attempts = []
+
+    def urlopen(request, timeout=None):
+        attempts.append(timeout)
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
+        try:
+            discover_provider_models(OPENAI_SOURCE)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "openai"
+            assert error.error_code == "http_status_401"
+        else:  # pragma: no cover
+            raise AssertionError("a 401 must become a ProviderDiscoveryError")
+
+    assert len(attempts) == 1
+    mock_sleep.assert_not_called()
+
+
+def test_discover_provider_models_isolates_a_dns_resolution_failure() -> None:
+    """A configured-gateway DNS failure must not abort the whole discovery pass.
+
+    ``ModelClient._resolve_addresses`` wraps ``socket.gaierror`` as a plain
+    ``RuntimeError`` (see ``_fetch_configured_gateway_json``'s pinned-address
+    validation path), which was not in ``discover_provider_models``'s catch
+    tuple (``URLError``, ``TimeoutError``, ``ValueError``, ``OSError``). One
+    provider's DNS hiccup must become an isolated ``ProviderDiscoveryError``,
+    not a bare ``RuntimeError`` that crashes ``discover_all_models`` entirely.
+    """
+    register_credential("LLM_GATEWAY_API_KEY", "sk-gateway")
+    gateway_source = ProviderModelSource(
+        provider_name="configured_gateway",
+        credential_name="LLM_GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_configured_gateway_json",
+        side_effect=RuntimeError("provider host 'gateway.example' could not be resolved"),
+    ):
+        try:
+            discover_provider_models(gateway_source)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "configured_gateway"
+        else:  # pragma: no cover
+            raise AssertionError("a DNS RuntimeError must become a ProviderDiscoveryError")
+
+
+def test_discover_provider_models_retry_timeout_never_exceeds_callers_budget() -> None:
+    """A caller-supplied timeout shorter than the retry default must not expand on retry.
+
+    Regression (Devin review on #923): the retry attempt hardcoded
+    _DISCOVERY_RETRY_TIMEOUT_SECONDS (5.0s) regardless of what timeout the
+    caller actually requested, so a caller budgeting e.g. 2s per attempt
+    could see the retry alone blow well past that budget.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    payload = {"data": [{"id": "gpt-test", "object": "model"}]}
+    attempt_timeouts = []
+
+    def urlopen(request, timeout=None):
+        attempt_timeouts.append(timeout)
+        if len(attempt_timeouts) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response(payload)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered = discover_provider_models(OPENAI_SOURCE, timeout=2.0)
+
+    assert attempt_timeouts == [2.0, 2.0]
+    assert [model.model_id for model in discovered] == ["gpt-test"]
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:
@@ -836,15 +2128,29 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
         model_id="0-hero/Matter-0.1-Slim-7B-C",
         credential_name="BYTEZ_API_KEY",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     agent = agent_from_discovered(discovered, priority=3)
     assert agent.id == "bytez_0_hero_matter_0_1_slim_7b_c"
     assert agent.disabled is True
-    assert agent.auth_scheme == "Key"
+    assert agent.auth_scheme == AUTH_SCHEME_RAW_TOKEN
     assert agent.credential_key == "BYTEZ_API_KEY"
     assert agent.priority == 3
     assert "discovered" in agent.tags
+
+
+def test_agent_from_discovered_rejects_evidence_only_rows() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/evidence-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        evidence_only=True,
+    )
+
+    with pytest.raises(ValueError, match="evidence-only"):
+        agent_from_discovered(discovered)
 
 
 def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
@@ -857,7 +2163,11 @@ def test_agent_from_discovered_preserves_explicit_capabilities() -> None:
         capabilities=("embedding",),
     )
 
-    assert agent_from_discovered(discovered).tags == ("discovered", "embedding")
+    assert agent_from_discovered(discovered).tags == (
+        "discovered",
+        "embedding",
+        "capability:embedding",
+    )
 
 
 def test_agent_from_discovered_preserves_explicit_privacy_evidence() -> None:
@@ -909,7 +2219,7 @@ def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:
         model_id="some/model",
         credential_name="BYTEZ_API_KEY",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     written = refresh_price_book([priced, unpriced], price_book)
     assert written == 1
@@ -969,7 +2279,7 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
 
     price_book = PriceBook(InMemoryConfigStore())
     known = DiscoveredModel("openrouter", "known", "KEY_NAME", "https://openrouter.ai/api/v1", "Bearer")
-    unknown = DiscoveredModel("bytez", "unknown", "KEY_NAME", "https://api.bytez.com/v1", "Key")
+    unknown = DiscoveredModel("bytez", "unknown", "KEY_NAME", "https://api.bytez.com/v1", AUTH_SCHEME_RAW_TOKEN)
     price_book.set_price(PriceEntry("openrouter", "known", 0.1, 0.1))
 
     assert select_cheapest_discovered_agent([unknown, known], price_book) is known

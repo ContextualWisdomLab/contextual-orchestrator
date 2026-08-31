@@ -251,7 +251,7 @@ class UsageRecord:
     usage_record_id: str
     created_at: int
     workflow_run_id: Optional[str]
-    request_channel: str  # "sync" | "batch"
+    request_channel: str  # "sync" | "stream" | "batch"
     route_mode: Optional[str]  # "route" | "conduct"
     provider_name: str
     model_name: str
@@ -262,7 +262,6 @@ class UsageRecord:
     currency_code: str
     measurement_status: str = "measured"
     attribution: AttributionDimensions = field(default_factory=AttributionDimensions)
-    input_attributions: tuple[AttributionDimensions, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         """Flatten the record for JSON and backward-compatible report output."""
@@ -293,15 +292,14 @@ class UsageRecord:
                 "company_name": self.attribution.company,
             }
         )
-        row["input_attributions"] = [item.as_dict() for item in self.input_attributions]
         return row
 
 
 class LedgerStore(Protocol):
     """Storage contract for usage records."""
 
-    def append(self, record: UsageRecord) -> None:
-        """Persist a usage record."""
+    def append(self, record: UsageRecord) -> bool:
+        """Persist a usage record and report whether it was accepted."""
         ...
 
     def query(self, start: Optional[int], end: Optional[int]) -> List[Dict[str, Any]]:
@@ -372,6 +370,14 @@ class UsageTelemetrySink(Protocol):
         ...
 
 
+class UsageRecordSink(Protocol):
+    """Receive one accepted usage record for durable billing export."""
+
+    def emit_usage_record(self, record: UsageRecord) -> None:
+        """Export a prompt-safe usage record to an application-owned sink."""
+        ...
+
+
 class NoopUsageTelemetrySink:
     """Default sink for callers that do not wire telemetry yet."""
 
@@ -409,6 +415,7 @@ class UsageTelemetryHealth:
     records_stored: int = 0
     records_dropped: int = 0
     store_failures: int = 0
+    export_failures: int = 0
     last_error_type: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
@@ -418,6 +425,7 @@ class UsageTelemetryHealth:
             "records_stored": self.records_stored,
             "records_dropped": self.records_dropped,
             "store_failures": self.store_failures,
+            "export_failures": self.export_failures,
             "last_error_type": self.last_error_type,
         }
 
@@ -434,7 +442,11 @@ def _emit_usage_event(
 
 
 class NonBlockingLedgerStore:
-    """Ledger store wrapper that keeps persistence out of the request path."""
+    """Ledger store wrapper that keeps persistence out of the request path.
+
+    An already-open caller transaction is written synchronously so a background
+    worker cannot race its eventual commit or discard the usage record.
+    """
 
     def __init__(
         self,
@@ -442,12 +454,16 @@ class NonBlockingLedgerStore:
         *,
         queue_size: int = 1000,
         telemetry_sink: Optional[UsageTelemetrySink] = None,
+        usage_record_sink: Optional[UsageRecordSink] = None,
     ) -> None:
         if queue_size < 1:
             raise ValueError("queue_size must be at least 1")
         self.backend = backend
         self._telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
+        self._usage_record_sink = usage_record_sink
         self._queue: queue.Queue[UsageRecord] = queue.Queue(maxsize=queue_size)
+        self._deferred_usage_exports: List[UsageRecord] = []
+        self._deferred_usage_exports_lock = threading.Lock()
         self._health = UsageTelemetryHealth()
         self._lock = threading.Lock()
         self._worker = threading.Thread(
@@ -457,8 +473,39 @@ class NonBlockingLedgerStore:
         )
         self._worker.start()
 
-    def append(self, record: UsageRecord) -> None:
+    def append(self, record: UsageRecord) -> bool:
         """Queue a record for background persistence without blocking."""
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if (
+            callable(has_open_transaction)
+            and has_open_transaction()
+        ):
+            accepted = self.backend.append(record) is not False
+            if not accepted:
+                self._mark("records_dropped", error_type="duplicate")
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="duplicate",
+                    ),
+                )
+                return False
+            self._mark("records_accepted")
+            if self._usage_record_sink is not None:
+                with self._deferred_usage_exports_lock:
+                    self._deferred_usage_exports.append(record)
+            _emit_usage_event(
+                self._telemetry_sink,
+                UsageTelemetryEvent.from_record(
+                    record,
+                    export_state="queued",
+                ),
+            )
+            if self._usage_record_sink is None:
+                self._record_stored(record)
+            return True
         try:
             self._queue.put_nowait(record)
         except queue.Full:
@@ -471,12 +518,13 @@ class NonBlockingLedgerStore:
                     error_type="queue.Full",
                 ),
             )
-            return
+            return False
         self._mark("records_accepted")
         _emit_usage_event(
             self._telemetry_sink,
             UsageTelemetryEvent.from_record(record, export_state="queued"),
         )
+        return True
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Query the backing store; queued writes may still be in flight."""
@@ -489,6 +537,40 @@ class NonBlockingLedgerStore:
             if deadline is not None and time.monotonic() >= deadline:
                 return False
             time.sleep(0.01)
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if callable(has_open_transaction) and has_open_transaction():
+            return True
+        with self._deferred_usage_exports_lock:
+            pending = self._deferred_usage_exports
+            self._deferred_usage_exports = []
+        if not pending:
+            return True
+        try:
+            lookup = getattr(self.backend, "existing_usage_record_ids", None)
+            if callable(lookup):
+                persisted_ids = set(lookup([record.usage_record_id for record in pending]))
+            else:
+                persisted_ids = {
+                    row.get("usage_record_id") for row in self.backend.query(None, None)
+                }
+        except Exception as exc:
+            with self._deferred_usage_exports_lock:
+                self._deferred_usage_exports = pending + self._deferred_usage_exports
+            self._mark("store_failures", error_type=type(exc).__name__)
+            return True
+        for record in pending:
+            if record.usage_record_id in persisted_ids:
+                self._record_stored(record)
+            else:
+                self._mark("records_dropped", error_type="caller_transaction_rollback")
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="caller_transaction_rollback",
+                    ),
+                )
         return True
 
     def telemetry_health(self) -> Dict[str, Any]:
@@ -499,8 +581,9 @@ class NonBlockingLedgerStore:
     def _run(self) -> None:
         while True:
             record = self._queue.get()
+            accepted = False
             try:
-                self.backend.append(record)
+                accepted = self.backend.append(record) is not False
             except Exception as exc:
                 error_type = type(exc).__name__
                 self._mark("store_failures", error_type=error_type)
@@ -513,13 +596,50 @@ class NonBlockingLedgerStore:
                     ),
                 )
             else:
-                self._mark("records_stored")
-                _emit_usage_event(
-                    self._telemetry_sink,
-                    UsageTelemetryEvent.from_record(record, export_state="stored"),
-                )
+                if accepted:
+                    self._record_stored(record)
+                else:
+                    self._mark("records_dropped", error_type="duplicate")
+                    _emit_usage_event(
+                        self._telemetry_sink,
+                        UsageTelemetryEvent.from_record(
+                            record,
+                            export_state="dropped",
+                            error_type="duplicate",
+                        ),
+                    )
             finally:
                 self._queue.task_done()
+
+    def _record_stored(self, record: UsageRecord) -> None:
+        has_open_transaction = getattr(self.backend, "has_open_transaction", None)
+        if (
+            self._usage_record_sink is not None
+            and callable(has_open_transaction)
+            and has_open_transaction()
+        ):
+            with self._deferred_usage_exports_lock:
+                self._deferred_usage_exports.append(record)
+            return
+        self._mark("records_stored")
+        _emit_usage_event(
+            self._telemetry_sink,
+            UsageTelemetryEvent.from_record(record, export_state="stored"),
+        )
+        if self._usage_record_sink is not None:
+            try:
+                self._usage_record_sink.emit_usage_record(record)
+            except Exception as exc:
+                error_type = type(exc).__name__
+                self._mark("export_failures", error_type=error_type)
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="export_error",
+                        error_type=error_type,
+                    ),
+                )
 
     def _mark(self, field_name: str, error_type: Optional[str] = None) -> None:
         with self._lock:
@@ -536,17 +656,23 @@ class InMemoryLedgerStore:
         self._usage_record_ids: set[str] = set()
         self._lock = threading.Lock()
 
-    def append(self, record: UsageRecord) -> None:
+    def append(self, record: UsageRecord) -> bool:
         """Append a flattened record row."""
         with self._lock:
             if record.usage_record_id in self._usage_record_ids:
-                return
+                return False
             self._rows.append(record.as_dict())
             self._usage_record_ids.add(record.usage_record_id)
+            return True
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return rows within the optional half-open time window."""
         return [row for row in self._rows if _within_window(row["created_at"], start, end)]
+
+    def existing_usage_record_ids(self, usage_record_ids: List[str]) -> set[str]:
+        """Return the requested ids already present in the in-memory ledger."""
+        with self._lock:
+            return set(usage_record_ids).intersection(self._usage_record_ids)
 
     def __len__(self) -> int:
         return len(self._rows)
@@ -614,21 +740,6 @@ CREATE TABLE IF NOT EXISTS usage_record_attributions (
         FOREIGN KEY (usage_record_id) REFERENCES llm_usage_records(usage_record_id)
         ON DELETE CASCADE,
     CONSTRAINT usage_record_attributions_value_foreign_key
-        FOREIGN KEY (dimension_name, dimension_value)
-        REFERENCES cost_attribution_values(dimension_name, dimension_value)
-);
-
-CREATE TABLE IF NOT EXISTS usage_record_input_attributions (
-    usage_record_id TEXT NOT NULL,
-    input_index     INTEGER NOT NULL,
-    dimension_name TEXT NOT NULL,
-    dimension_value TEXT NOT NULL,
-    CONSTRAINT usage_record_input_attributions_primary_key
-        PRIMARY KEY (usage_record_id, input_index, dimension_name),
-    CONSTRAINT usage_record_input_attributions_record_foreign_key
-        FOREIGN KEY (usage_record_id) REFERENCES llm_usage_records(usage_record_id)
-        ON DELETE CASCADE,
-    CONSTRAINT usage_record_input_attributions_value_foreign_key
         FOREIGN KEY (dimension_name, dimension_value)
         REFERENCES cost_attribution_values(dimension_name, dimension_value)
 );
@@ -759,26 +870,6 @@ _USAGE_MEASUREMENT_INSERT_SQL = {
         "VALUES (%s, %s) ON CONFLICT (usage_record_id) DO NOTHING"
     ),
 }
-_INPUT_ATTRIBUTION_INSERT_SQL = {
-    style: (
-        "INSERT INTO usage_record_input_attributions "
-        "(usage_record_id, input_index, dimension_name, dimension_value) "
-        f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})"
-    )
-    for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
-}
-_INPUT_ATTRIBUTION_SELECT_SQL = {
-    "qmark": (
-        "SELECT input_index, dimension_name, dimension_value "
-        "FROM usage_record_input_attributions WHERE usage_record_id = ? "
-        "ORDER BY input_index, dimension_name"
-    ),
-    "pyformat": (
-        "SELECT input_index, dimension_name, dimension_value "
-        "FROM usage_record_input_attributions WHERE usage_record_id = %s "
-        "ORDER BY input_index, dimension_name"
-    ),
-}
 _USAGE_SELECT_SQL = (
     "SELECT u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
     "u.route_mode, u.provider_name, u.model_name, "
@@ -888,20 +979,6 @@ class SqlLedgerStore:
                 (row["usage_record_id"], dimension_name, dimension_value),
             )
 
-    def _insert_input_attributions(self, cur: Any, row: Dict[str, Any]) -> None:
-        """Persist each input's canonical dimensions without allocating aggregate cost."""
-        for input_index, attribution in enumerate(row.get("input_attributions", [])):
-            for dimension_name in ATTRIBUTION_DIMENSIONS:
-                dimension_value = attribution.get(dimension_name) or UNATTRIBUTED
-                cur.execute(
-                    _ATTRIBUTION_VALUE_INSERT_SQL[self._paramstyle],
-                    (dimension_name, dimension_value),
-                )
-                cur.execute(
-                    _INPUT_ATTRIBUTION_INSERT_SQL[self._paramstyle],
-                    (row["usage_record_id"], input_index, dimension_name, dimension_value),
-                )
-
     def _migrate_legacy_usage_table(self) -> None:
         """Rename the flattened generation, rebuild normalized, copy, drop legacy."""
         cur = self._conn.cursor()
@@ -936,7 +1013,6 @@ class SqlLedgerStore:
                 (row["usage_record_id"], "unavailable"),
             )
             self._insert_normalized_attribution(cur, row)
-            self._insert_input_attributions(cur, row)
 
     def _create_schema(self) -> None:
         """Create or migrate the ledger and roll back any partial DDL."""
@@ -1020,7 +1096,7 @@ class SqlLedgerStore:
                     (name, label, order),
                 )
 
-    def append(self, record: UsageRecord) -> None:
+    def append(self, record: UsageRecord) -> bool:
         """Insert a usage record row and its attributions atomically.
 
         On sqlite connections opened in autocommit mode an explicit ``BEGIN``
@@ -1030,9 +1106,16 @@ class SqlLedgerStore:
         open for the caller to commit or roll back.
         """
         with self._lock:
-            self._append_locked(record)
+            return self._append_locked(record)
 
-    def _append_locked(self, record: UsageRecord) -> None:
+    def has_open_transaction(self) -> bool:
+        """Return whether a caller-owned SQLite transaction is still open."""
+        with self._lock:
+            return self._paramstyle == "qmark" and bool(
+                getattr(self._conn, "in_transaction", False)
+            )
+
+    def _append_locked(self, record: UsageRecord) -> bool:
         """Insert one record while the shared DB-API connection is locked."""
         row = record.as_dict()
         cur = self._conn.cursor()
@@ -1046,16 +1129,17 @@ class SqlLedgerStore:
                 _CORE_USAGE_INSERT_SQL[self._paramstyle],
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
             )
+            accepted = getattr(cur, "rowcount", 1) != 0
             cur.execute(
                 _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
                 (row["usage_record_id"], row.get("measurement_status", "unavailable")),
             )
             self._insert_normalized_attribution(cur, row)
-            self._insert_input_attributions(cur, row)
             if outer_transaction:
                 cur.execute("RELEASE SAVEPOINT usage_record_append")
             else:
                 self._conn.commit()
+            return accepted
         except Exception:
             if outer_transaction:
                 cur.execute("ROLLBACK TO SAVEPOINT usage_record_append")
@@ -1071,6 +1155,27 @@ class SqlLedgerStore:
         with self._lock:
             return self._query_locked(start, end)
 
+    def existing_usage_record_ids(self, usage_record_ids: List[str]) -> set[str]:
+        """Return requested ids using indexed primary-key lookups."""
+        ids = list(dict.fromkeys(usage_record_ids))
+        if not ids:
+            return set()
+        placeholder = "?" if self._paramstyle == "qmark" else "%s"
+        found: set[str] = set()
+        with self._lock:
+            cur = self._conn.cursor()
+            # Keep each IN clause below SQLite's default bound-parameter limit.
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                placeholders = ", ".join(placeholder for _ in chunk)
+                cur.execute(
+                    "SELECT usage_record_id FROM llm_usage_records "
+                    f"WHERE usage_record_id IN ({placeholders})",
+                    tuple(chunk),
+                )
+                found.update(row[0] for row in cur.fetchall())
+        return found
+
     def _query_locked(
         self, start: Optional[int], end: Optional[int]
     ) -> List[Dict[str, Any]]:
@@ -1085,28 +1190,7 @@ class SqlLedgerStore:
             _USAGE_QUERY_SQL[(self._paramstyle, start is not None, end is not None)],
             tuple(params),
         )
-        rows = [dict(zip(_USAGE_COLUMNS, values, strict=True)) for values in cur.fetchall()]
-        inputs_by_record: Dict[str, List[Dict[str, str]]] = {
-            str(row["usage_record_id"]): [] for row in rows
-        }
-        if rows:
-            placeholder = "?" if self._paramstyle == "qmark" else "%s"
-            identifiers = tuple(str(row["usage_record_id"]) for row in rows)
-            cur.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- placeholders are fixed-count; values stay bound below
-                "SELECT usage_record_id, input_index, dimension_name, dimension_value "
-                "FROM usage_record_input_attributions WHERE usage_record_id IN ("
-                + ", ".join(placeholder for _ in identifiers)
-                + ") ORDER BY usage_record_id, input_index, dimension_name",
-                identifiers,
-            )
-            for usage_record_id, input_index, dimension_name, dimension_value in cur.fetchall():
-                inputs = inputs_by_record[str(usage_record_id)]
-                while len(inputs) <= input_index:
-                    inputs.append({})
-                inputs[input_index][dimension_name] = dimension_value
-        for row in rows:
-            row["input_attributions"] = inputs_by_record[str(row["usage_record_id"])]
-        return rows
+        return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
 def _within_window(created_at: int, start: Optional[int], end: Optional[int]) -> bool:
@@ -1133,6 +1217,7 @@ class CostLedger:
         telemetry_sink: Optional[UsageTelemetrySink] = None,
         non_blocking_store: Optional[bool] = None,
         store_queue_size: int = 1000,
+        usage_sink: Optional[UsageRecordSink] = None,
     ) -> None:
         self.price_book = price_book
         self.telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
@@ -1143,11 +1228,18 @@ class CostLedger:
                 base_store,
                 queue_size=store_queue_size,
                 telemetry_sink=self.telemetry_sink,
+                usage_record_sink=usage_sink,
             )
         else:
             self.store = base_store
         self._inline_health = UsageTelemetryHealth()
+        self._inline_health_lock = threading.Lock()
+        self._deferred_usage_exports: List[UsageRecord] = []
+        self._deferred_usage_exports_lock = threading.Lock()
         self._clock = clock or (lambda: int(time.time()))
+        self.usage_sink = usage_sink
+        if isinstance(self.store, NonBlockingLedgerStore) and usage_sink is not None:
+            self.store._usage_record_sink = usage_sink
 
     def record_usage(
         self,
@@ -1160,12 +1252,12 @@ class CostLedger:
         route_mode: Optional[str] = None,
         workflow_run_id: Optional[str] = None,
         attribution: Optional[AttributionDimensions | Dict[str, Any]] = None,
-        input_attributions: Optional[List[AttributionDimensions | Dict[str, Any]]] = None,
         measurement_status: str = "measured",
         created_at: Optional[int] = None,
         usage_record_id: Optional[str] = None,
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
+        self._flush_deferred_usage_exports()
         if isinstance(attribution, dict) or attribution is None:
             # Strip caller-controlled execution identity before mapping so a
             # client cannot spoof model/provider rollups (buyer-bill honesty).
@@ -1194,29 +1286,6 @@ class CostLedger:
         if provider:
             dims.upstream_api = provider
 
-        per_input: List[AttributionDimensions] = []
-        for item in input_attributions or []:
-            input_dims = (
-                AttributionDimensions.from_mapping(
-                    {
-                        key: value
-                        for key, value in item.items()
-                        if key not in {"model_name", "provider", "upstream_api"}
-                    }
-                )
-                if isinstance(item, dict)
-                else AttributionDimensions(
-                    account=item.account,
-                    service=item.service,
-                    team=item.team,
-                    group=item.group,
-                    company=item.company,
-                )
-            )
-            input_dims.model_name = model or UNATTRIBUTED
-            input_dims.upstream_api = provider or UNATTRIBUTED
-            per_input.append(input_dims)
-
         cost_amount, currency = self.price_book.compute_cost(
             provider, model, prompt_tokens, completion_tokens
         )
@@ -1237,10 +1306,12 @@ class CostLedger:
             currency_code=currency,
             measurement_status=measurement_status,
             attribution=dims,
-            input_attributions=tuple(per_input),
         )
+        accepted = False
         try:
-            self.store.append(record)
+            # ``None`` remains a successful result for legacy third-party
+            # stores; internal stores return an explicit bool.
+            accepted = self.store.append(record) is not False
         except Exception as exc:
             self._mark_inline_failure(type(exc).__name__)
             _emit_usage_event(
@@ -1252,24 +1323,49 @@ class CostLedger:
                 ),
             )
         else:
-            if not isinstance(self.store, NonBlockingLedgerStore):
+            if accepted and not isinstance(self.store, NonBlockingLedgerStore):
                 self._mark_inline_success()
                 _emit_usage_event(
                     self.telemetry_sink,
                     UsageTelemetryEvent.from_record(record, export_state="stored"),
                 )
+            elif not accepted and not isinstance(self.store, NonBlockingLedgerStore):
+                self._mark_inline_drop("duplicate")
+                _emit_usage_event(
+                    self.telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="duplicate",
+                    ),
+                )
+        if (
+            accepted
+            and self.usage_sink is not None
+            and not isinstance(self.store, NonBlockingLedgerStore)
+        ):
+            if self._store_has_open_transaction():
+                with self._deferred_usage_exports_lock:
+                    self._deferred_usage_exports.append(record)
+            else:
+                self._emit_usage_record(record)
         return record
 
     def flush(self, timeout: Optional[float] = None) -> bool:
-        """Wait for pending non-blocking usage writes, if any."""
+        """Wait for pending writes and release exports after caller commits."""
         flush = getattr(self.store, "flush", None)
         if callable(flush):
-            return bool(flush(timeout=timeout))
-        return True
+            complete = bool(flush(timeout=timeout))
+        else:
+            complete = True
+        if complete:
+            self._flush_deferred_usage_exports()
+        return complete
 
     def telemetry_health(self) -> Dict[str, Any]:
         """Return prompt-safe ledger export health counters."""
-        health = self._inline_health.as_dict()
+        with self._inline_health_lock:
+            health = self._inline_health.as_dict()
         store_health = getattr(self.store, "telemetry_health", None)
         if callable(store_health):
             for key, value in store_health().items():
@@ -1360,13 +1456,90 @@ class CostLedger:
         return self.store.query(start, end)
 
     def _mark_inline_success(self) -> None:
-        self._inline_health.records_accepted += 1
-        self._inline_health.records_stored += 1
+        with self._inline_health_lock:
+            self._inline_health.records_accepted += 1
+            self._inline_health.records_stored += 1
+
+    def _mark_inline_drop(self, error_type: str, *, was_stored: bool = False) -> None:
+        with self._inline_health_lock:
+            if was_stored:
+                self._inline_health.records_stored -= 1
+            self._inline_health.records_dropped += 1
+            self._inline_health.last_error_type = error_type
 
     def _mark_inline_failure(self, error_type: str) -> None:
-        self._inline_health.records_accepted += 1
-        self._inline_health.store_failures += 1
-        self._inline_health.last_error_type = error_type
+        with self._inline_health_lock:
+            self._inline_health.records_accepted += 1
+            self._inline_health.store_failures += 1
+            self._inline_health.last_error_type = error_type
+
+    def _mark_inline_store_failure(self, error_type: str) -> None:
+        """Record a deferred-store read failure without inventing acceptance."""
+        with self._inline_health_lock:
+            self._inline_health.store_failures += 1
+            self._inline_health.last_error_type = error_type
+
+    def _mark_inline_export_failure(self, error_type: str) -> None:
+        with self._inline_health_lock:
+            self._inline_health.export_failures += 1
+            self._inline_health.last_error_type = error_type
+
+    def _store_has_open_transaction(self) -> bool:
+        has_open_transaction = getattr(self.store, "has_open_transaction", None)
+        return bool(callable(has_open_transaction) and has_open_transaction())
+
+    def _flush_deferred_usage_exports(self) -> None:
+        if self._store_has_open_transaction():
+            return
+        with self._deferred_usage_exports_lock:
+            pending = self._deferred_usage_exports
+            self._deferred_usage_exports = []
+        if not pending:
+            return
+        try:
+            lookup = getattr(self.store, "existing_usage_record_ids", None)
+            if callable(lookup):
+                persisted_ids = set(lookup([record.usage_record_id for record in pending]))
+            else:
+                # Preserve compatibility with third-party stores that only implement
+                # the original append/query contract.
+                persisted_ids = {
+                    row.get("usage_record_id") for row in self.store.query(None, None)
+                }
+        except Exception as exc:
+            with self._deferred_usage_exports_lock:
+                self._deferred_usage_exports = pending + self._deferred_usage_exports
+            self._mark_inline_store_failure(type(exc).__name__)
+            return
+        for record in pending:
+            if record.usage_record_id in persisted_ids:
+                self._emit_usage_record(record)
+            else:
+                self._mark_inline_drop("caller_transaction_rollback", was_stored=True)
+                _emit_usage_event(
+                    self.telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="dropped",
+                        error_type="caller_transaction_rollback",
+                    ),
+                )
+
+    def _emit_usage_record(self, record: UsageRecord) -> None:
+        if self.usage_sink is None:
+            return
+        try:
+            self.usage_sink.emit_usage_record(record)
+        except Exception as exc:
+            self._mark_inline_export_failure(type(exc).__name__)
+            _emit_usage_event(
+                self.telemetry_sink,
+                UsageTelemetryEvent.from_record(
+                    record,
+                    export_state="export_error",
+                    error_type=type(exc).__name__,
+                ),
+            )
 
 
 def dimension_catalog() -> List[Dict[str, Any]]:
