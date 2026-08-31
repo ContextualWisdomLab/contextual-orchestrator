@@ -20,6 +20,7 @@ from contextual_orchestrator.credentials import NotConfigured  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     _ProviderCancellation,
+    _PROVIDER_DNS_SLOTS,
     _ProviderRequestCancelled,
     _chat_to_responses_payload,
     _is_local_provider_url,
@@ -917,6 +918,20 @@ def test_cancelled_dns_lookups_have_bounded_worker_ownership() -> None:
 
     assert all(not thread.is_alive() for thread in request_threads)
     assert len(errors) == 5
+
+
+def test_dns_slot_returns_when_resolver_thread_cannot_start() -> None:
+    call, _cancel = ModelClient().cancellable_call(
+        lambda: ModelClient._resolve_addresses("provider.example", 443)
+    )
+
+    with patch.object(threading.Thread, "start", side_effect=RuntimeError("no thread")), patch.object(
+        _PROVIDER_DNS_SLOTS, "release", wraps=_PROVIDER_DNS_SLOTS.release
+    ) as release:
+        with pytest.raises(RuntimeError, match="no thread"):
+            call()
+
+    release.assert_called_once_with()
 
 
 def test_cancellable_provider_call_ignores_connection_close_failure() -> None:

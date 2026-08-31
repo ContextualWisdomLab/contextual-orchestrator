@@ -1836,7 +1836,12 @@ class ModelClient:
                         finished.set()
                         _PROVIDER_DNS_SLOTS.release()
 
-                threading.Thread(target=resolve, daemon=True, name="provider-dns").start()
+                worker = threading.Thread(target=resolve, daemon=True, name="provider-dns")
+                try:
+                    worker.start()
+                except BaseException:
+                    _PROVIDER_DNS_SLOTS.release()
+                    raise
                 while not finished.wait(0.05):
                     cancellation.raise_if_cancelled()
                 cancellation.raise_if_cancelled()
