@@ -158,6 +158,16 @@ class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
     """
 
     request_queue_size = socket.SOMAXCONN
+    embedding_batch_backend: Any = None
+
+    def shutdown(self) -> None:
+        """Stop accepting requests and release embedding worker threads."""
+        try:
+            super().shutdown()
+        finally:
+            close = getattr(self.embedding_batch_backend, "close", None)
+            if callable(close):
+                close()
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -8328,7 +8338,9 @@ def build_server(
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
 
-    return ResponsiveThreadingHTTPServer((host, port), Handler)
+    server = ResponsiveThreadingHTTPServer((host, port), Handler)
+    server.embedding_batch_backend = coordinator.embedding_batch_backend
+    return server
 
 
 def serve(
@@ -8351,4 +8363,7 @@ def serve(
         release_authority=release_authority,
     )
     print(f"listening on http://{host}:{port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()

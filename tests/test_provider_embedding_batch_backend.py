@@ -18,6 +18,7 @@ from contextual_orchestrator import (
     TaskOrchestrator,
 )
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.token_counting import (
     TokenCountUnavailable,
     UnavailableEmbeddingTokenCounter,
@@ -174,6 +175,36 @@ def test_provider_batch_cancellation_preserves_the_reason() -> None:
     }
     release.set()
     backend.close()
+
+
+def test_server_shutdown_closes_embedding_workers() -> None:
+    class ClosingBackend:
+        name = "closing"
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    backend = ClosingBackend()
+    orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "embedding-model")])
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_token_counter=_SyntheticExactCounter(),
+        embedding_batch_backend=backend,
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="shutdown-token"),
+        coordinator=coordinator,
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    server.shutdown()
+    thread.join(timeout=1)
+
+    assert backend.closed is True
 
 
 def test_remote_embedding_member_selects_provider_backend() -> None:
