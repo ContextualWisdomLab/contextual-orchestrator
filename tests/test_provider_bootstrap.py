@@ -197,8 +197,8 @@ def test_provider_bootstrap_reuses_shared_chat_capability_policy(model_id, eligi
     assert eligible is is_general_chat_agent_model_id(model_id)
 
 
-def test_provider_bootstrap_collapses_nim_credentials_to_one_outage_domain():
-    """Primary and secondary NIM credentials cannot displace an independent provider."""
+def test_provider_bootstrap_keeps_nim_credentials_as_independent_accounts():
+    """Each credential account competes independently, even at the same vendor."""
     nim_primary = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "primary-model", 0.01)
     nim_secondary = _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "secondary-model", 0.02)
     independent = _model("bytez", "BYTEZ_API_KEY", "independent-model", 0.5)
@@ -209,7 +209,7 @@ def test_provider_bootstrap_collapses_nim_credentials_to_one_outage_domain():
 
     assert [(item.provider_name, item.model_id) for item in selected] == [
         ("nvidia_nim", "primary-model"),
-        ("bytez", "independent-model"),
+        ("nvidia_nim_sub", "secondary-model"),
     ]
 
 
@@ -281,6 +281,48 @@ def test_serving_tags_preserve_only_explicit_free_and_modality_evidence():
         "input:image",
         "output:text",
     } <= set(tags)
+
+
+def test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligible():
+    """A bootstrap-activated free vision agent stays out of orchestrator/free.
+
+    Third locus of ContextualWisdomLab/.github#1198's incident (Devin review
+    on PR #933): ``provider_bootstrap._active_agent_from_discovered`` (used by
+    ``bootstrap_provider_runtime`` and, through it,
+    ``provider_catalog_bootstrap.bootstrap_provider_catalog_runtime``) tags an
+    agent ``cost:free`` from raw price evidence alone, with no serving-pool
+    modality check -- exactly like the ``_auto_discover_runtime_agents`` path
+    this incident already fixed once. The fix lives in
+    ``TaskOrchestrator._is_general_free_agent`` (a single choke point every
+    *general-chat* ``FREE_MODEL`` selection path shares, including this one
+    and any future pool-construction path); ``_is_free_agent`` itself stays
+    price-only so the same honestly free agent remains reachable through its
+    own capability-scoped free route (Devin's PR #933 fourth-round finding).
+    Not in this tagging function: ``cost:free`` must keep meaning "honest
+    zero price" here, because
+    ``provider_catalog_store.py``'s durable catalog round trip reconstructs
+    ``DiscoveredModel.is_free`` from exactly this tag (see
+    ``test_serving_tags_preserve_only_explicit_free_and_modality_evidence`` and
+    ``test_last_known_good_restores_free_and_modality_evidence``).
+    """
+    vision_model = replace(
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "meta/llama-3.2-90b-vision-instruct", 0.0),
+        capabilities=("chat",),
+        input_modalities=("text", "image"),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+    agent = provider_bootstrap._active_agent_from_discovered(vision_model)
+    orchestrator = TaskOrchestrator([agent])
+
+    assert agent.disabled is False
+    assert "cost:free" in agent.tags
+    # Price-only: honestly free, and (Devin's PR #933 fourth-round finding)
+    # still reachable through its own capability-scoped free route.
+    assert orchestrator._is_free_agent(agent) is True
+    # The blind general-chat orchestrator/free pool must still exclude it.
+    assert orchestrator._is_general_free_agent(agent) is False
 
 
 def test_serving_tags_preserve_explicit_no_zdr_evidence():

@@ -10,6 +10,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Fixed
+
+- Model discovery now treats every KV credential as an independent account/catalog boundary, removes provider-family collapsing, and offers secret-free `--verbose` progress diagnostics. Logical equivalence and latency-based switching remain explicit `model_group` decisions only.
+- Model-group evidence now reports peak observed RPM and provider-reported TPM over a real 60-second completion window without generating probe traffic or inferring missing usage.
+
 ### Added
 
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
@@ -90,6 +95,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `TaskOrchestrator._invoke`'s route/Conduct primary chat call now classifies
+  a `ProviderUpstreamError` (5xx, 429, network) directly from its own
+  already-computed `retryable` flag (`tool_fallback.classify_provider_transport_failure`)
+  instead of `classify_tool_failure`'s tool-execution-oriented message-text
+  heuristics. A plain, side-effect-free completion request can always be
+  safely retried or handed to the next ranked candidate, so this classifier
+  never returns `fail_closed`; previously an upstream error body that
+  happened to also contain a tool-fallback keyword (e.g. a 500 whose message
+  said "invalid arguments") could be misclassified into an
+  `invalid_arguments`/permission/policy fail-closed row and stop
+  `orchestrator/free`/`orchestrator/auto` failover on a request that never
+  touched a tool. `orchestrator/free` still never advances into a priced
+  agent, and exhausting every free/auto candidate still fails closed with the
+  last classified provider error; `classify_tool_failure` itself, and the
+  provider's own `tool_execution_stopped` signal, are unchanged. See
+  [ADR 0001's amendment](docs/adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+  Motivated by the `orchestrator/free` review-sidecar reliability gap in
+  `ContextualWisdomLab/.github` PR #1433.
 - Discover chat models from metadata-free OpenAI-compatible gateways. A
   configured gateway whose `/v1/models` rows carry no modality/capability
   metadata previously produced empty-capability chat rows that runtime
@@ -138,9 +161,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Accept the standard Chat Completions `stream_options.include_usage=true`
   request and emit provider-reported usage in a usage-only SSE chunk when
   available after the terminal stop chunk; pass the option through live provider
-  streams, and reject structured `tools`/`response_format` passthrough before
-  execution because it cannot emit that SSE contract; keep unsupported
-  obfuscation flags fail-closed.
+  streams; keep unsupported obfuscation flags fail-closed.
+- Accept `stream_options.include_usage=true` for single-agent `tools`
+  passthrough streaming too (e.g. an OpenAI Agents SDK client such as Strix):
+  `_chat_response_sse_chunks` already frames the one non-streaming upstream
+  call's response into a correctly-shaped terminal SSE chunk alongside
+  `tool_call` deltas, honestly labeling usage `reported` when the provider
+  returned it and falling back to its existing `estimated` labeling (never
+  fabricated as `reported`) when a provider's JSON omits `usage` — the prior
+  blanket rejection covering this case was an overbroad validation gate, not
+  a genuine limitation of the passthrough itself. `response_format`-only
+  structured passthrough (conduct mode, whose usage comes from a multi-step
+  workflow's cost ledger and may be unmeasured with no per-field tag to
+  distinguish it) keeps rejecting the combination rather than risk that
+  estimate being framed as `reported`.
 - Billing usage-export failures now appear in the operator-safe telemetry health
   counters instead of only in emitted error events.
 - Billing usage export now follows accepted ledger writes and skips duplicate,
@@ -194,6 +228,71 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   production-default gate returns false on junk reports and on
   `measurement_status=estimated`. Access-list scope is a real ablation
   factor, not a duplicate label.
+- `free_discovered_models()` no longer admits a zero-priced model that
+  declares a non-text input modality (e.g. NVIDIA NIM's
+  `meta/llama-3.2-90b-vision-instruct`, whose Models.dev evidence reports
+  `cost: 0/0` and, misleadingly for this exact deployment, `tool_call: true`)
+  into the general-purpose `orchestrator/free` pool. That pool serves
+  arbitrary request shapes -- including Strix's tool/function-calling
+  requests -- without knowing in advance which capability a request needs, so
+  a free model whose only price-evidenced identity requires an extra input
+  modality is reserved for a caller that explicitly needs it, not a general
+  worker. Fixes the required Strix Security Scan failure reproduced in
+  `ContextualWisdomLab/.github` PR #1198 (run 33325907333, job 99295892400),
+  where every one of 3 independent scan attempts exhausted the pool against
+  this exact agent with an identical HTTP 400 `invalid_request_error`. A
+  model excluded here remains fully discovered and price-evidenced; it is
+  only withheld from the free/tool-calling default pool.
+- Devin's review on PR #933 found the fix above incomplete: `free_discovered_models()`
+  itself is now pure price-based inventory again (every zero-priced model
+  counts, restoring correct `--free-only`, `free_tier_count`, and free-tier
+  data-privacy totals), and a new, separately named selector,
+  `general_free_serving_candidates()`, carries the modality-based exclusion
+  for composing the blind `orchestrator/free` pool specifically. More
+  importantly, that exclusion previously lived only inside the one function
+  this PR touched: `_auto_discover_runtime_agents` (`--auto-discover-model-agents`)
+  and `provider_bootstrap._active_agent_from_discovered` (used by both
+  `bootstrap_provider_runtime` and, through it,
+  `provider_catalog_bootstrap.bootstrap_provider_catalog_runtime`) tag an
+  agent `cost:free` directly from raw price evidence and never consulted it,
+  so the incident model could still reach a live `cost:free` agent through
+  either path. The fix is now a single choke point, `TaskOrchestrator._is_free_agent`,
+  which every `orchestrator/free` selection path shares: an agent whose tags
+  declare a non-text input modality is never treated as free-pool eligible
+  there, regardless of which code built it or how old that agent-pool row is
+  -- while `cost:free` keeps meaning "honest zero price" everywhere else,
+  preserving `provider_catalog_store.py`'s durable `is_free` round trip.
+  Verified against three explicit modality fixtures (text-only, vision-only,
+  and text+image); evaluated and rejected narrowing the exclusion to spare a
+  model that "also declares text" (Devin's other suggestion) because the
+  incident model itself declares both `text` and `image` per Models.dev, so
+  that narrowing would have silently re-admitted it.
+- Devin's review on the fix above found it had overshot: `TaskOrchestrator._is_free_agent`
+  is also the predicate `_capability_agents` uses for every explicit
+  capability-scoped free route (`/v1/audio/transcriptions`, `/v1/videos`,
+  image, speech, rerank), where a free agent's non-text `input:<modality>`
+  tag is the capability's own expected shape, not a surprise -- so the
+  shared choke point made those genuinely free agents unreachable through
+  their own free route. `_is_free_agent` now reverts to plain, modality-blind
+  price evidence; a new, stricter `_is_general_free_agent` (price-blind
+  `_is_free_agent` plus the non-text-input exclusion) carries the exclusion
+  only at capability-blind general-chat call sites (`proxy_completion`,
+  `_orchestrated_provider_completion`, `route_once`, `conduct`,
+  `list_openai_models`'s advertising check, and `server.py`'s
+  capability-agnostic `_require_pool_model` branch). The discovery-time and
+  selection-time "what counts as non-text input" classification is now one
+  shared predicate, `chat_capability.requires_non_text_input`, so
+  `model_discovery._requires_non_text_input` and
+  `orchestrator._agent_requires_non_text_input` cannot drift apart.
+- Devin's next review pass found `general_free_serving_candidates()` still
+  overcounted: it admitted a zero-priced, text-input catalog row regardless
+  of whether it could ever actually become a serving agent, so an
+  `evidence_only` row (`agent_from_discovered` refuses to build an agent from
+  one) or a free non-chat-capable model (e.g. an embedding-only deployment)
+  both inflated `general_free_serving_count`. The selector now also requires
+  `is_routable_discovered_model` -- the same predicate `_auto_discover_runtime_agents`
+  and `provider_bootstrap` already require before promoting a discovered row
+  to an ordinary chat agent.
 
 ### Changed
 

@@ -97,15 +97,29 @@ jobs:
           python -m contextual_orchestrator.provider_catalog_bootstrap --model-limit 24 > provider-bootstrap-report.json
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           report = json.loads(Path('provider-bootstrap-report.json').read_text(encoding='utf-8'))
-          from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
+          # The credential-inventory verdict (hard-fail vs. tolerate-and-warn vs.
+          # fully healthy) is real, tested production logic -- not reimplemented
+          # here -- so its behavior has the package's own regression coverage
+          # (tests/test_provider_catalog_bootstrap*.py), not just a string match
+          # against this YAML. See its docstring for exactly which gaps still
+          # hard-fail (an unconfigured secret, an unexplained rollback, an
+          # authentication failure, or more than one provider degraded at once)
+          # versus the single isolated-provider-outage case
+          # `bootstrap_provider_catalog_runtime`'s own docstring says the design
+          # already tolerates (last-known-good models retained, pool still served).
+          from contextual_orchestrator.provider_catalog_bootstrap import (
+              evaluate_provider_credential_inventory,
+          )
 
-          expected = set(PROVIDER_CREDENTIAL_NAMES)
-          registered = set(report['registered_credentials'])
-          if registered != expected:
-              raise SystemExit(f'credential inventory mismatch: {sorted(expected - registered)}')
+          verdict = evaluate_provider_credential_inventory(report, os.environ)
+          if not verdict.ok:
+              raise SystemExit(verdict.hard_fail_reason)
+          if verdict.warning_message:
+              print(f'::warning title=Provider catalog degraded::{verdict.warning_message}')
           if report['catalog_backend'] != 'postgres':
               raise SystemExit('provider catalog is not PostgreSQL-backed')
           if report['catalog_model_count'] < 1 or report['eligible_model_count'] < 1:
@@ -115,7 +129,7 @@ jobs:
           if report['enabled_agent_ids'] or report['durable_agent_pool']:
               raise SystemExit('ephemeral Actions sync must not claim agent-pool activation')
           print(json.dumps({
-              'registered_credentials': sorted(registered),
+              'registered_credentials': sorted(report['registered_credentials']),
               'live_discovered_model_count': report['live_discovered_model_count'],
               'catalog_model_count': report['catalog_model_count'],
               'last_known_good_model_count': report['last_known_good_model_count'],
