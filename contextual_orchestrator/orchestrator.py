@@ -1834,7 +1834,8 @@ class ModelClient:
                 try:
                     worker.start()
                 except BaseException:  # thread never took ownership of the slot
-                    _DNS_RESOLVER_CAPACITY.release()
+                    if worker.ident is None:
+                        _DNS_RESOLVER_CAPACITY.release()
                     raise
                 if not completed.wait(timeout=max(0.0, deadline - time.monotonic())):
                     raise TimeoutError("provider DNS resolution deadline exceeded")

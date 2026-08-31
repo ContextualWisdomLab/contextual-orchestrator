@@ -1462,5 +1462,46 @@ def test_dns_thread_start_failure_does_not_leak_capacity(
         ]
 
 
+def test_interrupted_dns_thread_start_does_not_over_release_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ModelClient(timeout=1)
+    real_start = threading.Thread.start
+    resolver_started = threading.Event()
+    release_resolver = threading.Event()
+    workers: list[threading.Thread] = []
+    baseline_capacity = 0
+    while orchestrator_module._DNS_RESOLVER_CAPACITY.acquire(blocking=False):
+        baseline_capacity += 1
+    for _ in range(baseline_capacity):
+        orchestrator_module._DNS_RESOLVER_CAPACITY.release()
+
+    def interrupted_start(thread: threading.Thread) -> None:
+        workers.append(thread)
+        real_start(thread)
+        assert resolver_started.wait(timeout=1)
+        raise KeyboardInterrupt
+
+    def blocked_dns(*_args: object, **_kwargs: object) -> list[object]:
+        resolver_started.set()
+        release_resolver.wait(timeout=1)
+        return []
+
+    monkeypatch.setattr(threading.Thread, "start", interrupted_start)
+    monkeypatch.setattr(orchestrator_module.socket, "getaddrinfo", blocked_dns)
+    with client.request_settings(deadline=time.monotonic() + 0.1):
+        with pytest.raises(KeyboardInterrupt):
+            client._resolve_addresses("provider.example", 443)
+
+    acquired = 0
+    while orchestrator_module._DNS_RESOLVER_CAPACITY.acquire(blocking=False):
+        acquired += 1
+    for _ in range(acquired):
+        orchestrator_module._DNS_RESOLVER_CAPACITY.release()
+    assert acquired == baseline_capacity - 1
+    release_resolver.set()
+    workers[0].join(timeout=1)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
