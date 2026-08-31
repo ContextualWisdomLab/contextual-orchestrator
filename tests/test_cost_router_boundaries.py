@@ -140,6 +140,34 @@ def test_unpriced_batch_item_omits_cost() -> None:
     assert item["cost_amount"] is None
 
 
+def test_provider_confirmed_zero_usage_stays_measured_and_price_known() -> None:
+    class ZeroUsageBackend:
+        name = "zero-usage"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del requests, metadata
+            return BatchJob("zero-usage-job", self.name, request_count=1)
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            return [BatchResultItem(
+                "zero-result", "", prompt_tokens=0, completion_tokens=0,
+                model="unpriced-model", usage_valid=True,
+            )]
+
+    coordinator = _coordinator(batch_backend=ZeroUsageBackend())
+    job = coordinator.submit_batch([BatchRequest(
+        messages=[{"role": "user", "content": "ignored"}], model="unpriced-model"
+    )])
+
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+
+    assert item["prompt_tokens"] == item["completion_tokens"] == 0
+    assert item["measurement_status"] == "measured"
+    assert item["price_known"] is True
+    assert item["cost_amount"] == 0.0
+
+
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
     coordinator = _coordinator()
     with pytest.raises(TypeError, match="cache_bypass"):

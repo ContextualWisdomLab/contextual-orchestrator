@@ -205,6 +205,7 @@ class BatchResultItem:
     attribution: Dict[str, Any] = field(default_factory=dict)
     model: str = "contextual-orchestrator"
     mode: str = "auto"
+    usage_valid: Optional[bool] = None
 
 
 class BatchBackend(Protocol):
@@ -405,17 +406,26 @@ class PgLlmBatchBackend:
             body = (entry.get("response") or {}).get("body", {})
             answer = _extract_answer(body)
             usage = body.get("usage", {}) or {}
+            raw_prompt_tokens = usage.get("prompt_tokens")
+            raw_completion_tokens = usage.get("completion_tokens")
+            usage_valid = (
+                type(raw_prompt_tokens) is int
+                and raw_prompt_tokens >= 0
+                and type(raw_completion_tokens) is int
+                and raw_completion_tokens >= 0
+            )
             raw_request = tracked.get(custom_id)
             request = BatchRequest(**raw_request) if raw_request else None
             items.append(
                 BatchResultItem(
                     custom_id=custom_id,
                     answer=answer,
-                    prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                    completion_tokens=int(usage.get("completion_tokens", 0)),
+                    prompt_tokens=raw_prompt_tokens if usage_valid else 0,
+                    completion_tokens=raw_completion_tokens if usage_valid else 0,
                     attribution=dict(request.attribution) if request else {},
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",
+                    usage_valid=usage_valid,
                 )
             )
         return items

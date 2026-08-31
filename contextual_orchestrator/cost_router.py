@@ -715,6 +715,17 @@ class CostRoutingCoordinator:
         recorded: List[Dict[str, Any]] = []
         for item in items:
             provider_model = self._resolve_batch_provider_model(item)
+            usage_valid = (
+                item.prompt_tokens >= 0
+                and item.completion_tokens >= 0
+                and (
+                    item.usage_valid is True
+                    or (
+                        item.usage_valid is None
+                        and (item.prompt_tokens > 0 or item.completion_tokens > 0)
+                    )
+                )
+            )
             record = self._record_completion(
                 messages=[{"role": "user", "content": ""}],
                 answer=item.answer,
@@ -724,8 +735,8 @@ class CostRoutingCoordinator:
                 model_name=item.model,
                 provider_model=provider_model,
                 workflow_run_id=job.job_id,
-                prompt_tokens=item.prompt_tokens or None,
-                completion_tokens=item.completion_tokens or None,
+                prompt_tokens=item.prompt_tokens if usage_valid else None,
+                completion_tokens=item.completion_tokens if usage_valid else None,
             )
             recorded.append(
                 {
