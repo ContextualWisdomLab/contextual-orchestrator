@@ -155,7 +155,7 @@ def test_local_gateway_credential_cannot_be_attached_to_mlx_worker() -> None:
         )
 
 
-def test_provider_probe_bounds_registry_but_not_model_inference() -> None:
+def test_provider_probe_leaves_registry_and_model_inference_unbounded() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=2, local_max_retries=2, chat_template_args={"enable_thinking": False})
     seen: list[tuple[object, float | None]] = []
@@ -170,13 +170,14 @@ def test_provider_probe_bounds_registry_but_not_model_inference() -> None:
         })
 
     with patch.object(client, "_open_provider", side_effect=open_provider):
-        report = client.probe(agent, timeout=1.25)
+        report = client.probe(agent)
 
     assert report["status"] == "ready"
     assert report["usage"]["total_tokens"] == 7
     assert len(seen) == 2
     assert seen[0][0].get_method() == "GET"
     assert seen[0][0].full_url == "http://127.0.0.1:8080/v1/models"
+    assert seen[0][1] is None
     assert seen[1][0].get_method() == "POST"
     assert seen[1][1] is None
     import json
@@ -195,7 +196,7 @@ def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
         "_open_provider",
         return_value=_Response({"object": "list", "data": [{"id": "other-model"}]}),
     ) as open_provider:
-        report = client.probe(agent, timeout=0.5)
+        report = client.probe(agent)
 
     assert report["status"] == "not_ready"
     assert report["error_type"] == "RuntimeError"
@@ -208,7 +209,7 @@ def test_provider_probe_reports_timeout_without_retry() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=2, local_max_retries=2)
     with patch.object(client, "_open_provider", side_effect=TimeoutError("probe timeout")) as open_provider:
-        report = client.probe(agent, timeout=0.5)
+        report = client.probe(agent)
 
     assert report["status"] == "not_ready"
     assert report["error_type"] == "TimeoutError"
@@ -221,7 +222,7 @@ def test_provider_probe_does_not_serialize_provider_exception_text() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0)
     with patch.object(client, "_open_provider", side_effect=RuntimeError("provider-output-secret")):
-        report = client.probe(agent, timeout=0.5)
+        report = client.probe(agent)
 
     serialized = json.dumps(report)
     assert "provider-output-secret" not in serialized
@@ -237,14 +238,14 @@ def test_provider_readiness_report_keeps_liveness_unprobed_until_refresh() -> No
     ], client=client)
     with patch.object(client, "probe", return_value={"status": "ready", "agent_id": "ready_agent", "model": "ready-model"}) as probe:
         unprobed = orchestrator.provider_readiness_report()
-        refreshed = orchestrator.provider_readiness_report(refresh=True, timeout=2.0)
+        refreshed = orchestrator.provider_readiness_report(refresh=True)
 
     assert unprobed["status"] == "unprobed"
     assert unprobed["items"][0]["status"] == "unprobed"
     assert refreshed["status"] == "ready"
     assert refreshed["ready_agent_count"] == 1
     assert refreshed["items"][1]["status"] == "disabled"
-    probe.assert_called_once_with(orchestrator.agents[0], timeout=2.0)
+    probe.assert_called_once_with(orchestrator.agents[0])
 
 
 def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
@@ -257,8 +258,7 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     counters = {"active": 0, "max_active": 0}
     counter_lock = threading.Lock()
 
-    def probe(_agent, *, timeout):
-        del timeout
+    def probe(_agent):
         with counter_lock:
             counters["active"] += 1
             counters["max_active"] = max(counters["max_active"], counters["active"])
@@ -686,7 +686,7 @@ def test_https_provider_uses_verifying_connection_and_resolved_destination() -> 
 
     assert response.status == 200
     https_connection.assert_called_once_with(
-        "provider.example", 443, timeout=client.connect_timeout, context=client._ssl_context
+        "provider.example", 443, timeout=None, context=client._ssl_context
     )
     connection.sock.settimeout.assert_called_once_with(None)
     assert connection.request_args[0][0] == "POST"

@@ -95,12 +95,9 @@ _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
 )
-DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
-DEFAULT_PROVIDER_CONNECT_TIMEOUT = 30.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
 )
-MAX_PROVIDER_PROBE_TIMEOUT = 30.0
 _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "ConnectionError",
     "HTTPError",
@@ -180,18 +177,6 @@ def _safe_provider_probe_error_type(exc: Exception) -> str:
     """Keep provider diagnostics package-owned instead of echoing exception classes."""
     name = type(exc).__name__
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
-
-
-def _validate_provider_probe_timeout(timeout: float) -> float:
-    """Validate the finite, bounded timeout used by explicit readiness probes."""
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise ValueError("provider probe timeout must be a finite number")
-    value = float(timeout)
-    if not math.isfinite(value) or not 0.1 <= value <= MAX_PROVIDER_PROBE_TIMEOUT:
-        raise ValueError(
-            f"provider probe timeout must be between 0.1 and {MAX_PROVIDER_PROBE_TIMEOUT:g} seconds"
-        )
-    return value
 
 
 class BudgetExceededError(RuntimeError):
@@ -1334,7 +1319,6 @@ class ModelClient:
     def __init__(
         self,
         timeout: float | None = None,
-        connect_timeout: float = DEFAULT_PROVIDER_CONNECT_TIMEOUT,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
         local_max_retries: int = 0,
@@ -1348,9 +1332,6 @@ class ModelClient:
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
         self.timeout = timeout
-        if connect_timeout <= 0:
-            raise ValueError("connect_timeout must be positive")
-        self.connect_timeout = float(connect_timeout)
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -1596,16 +1577,15 @@ class ModelClient:
                 applied["reasoning"] = {"effort": applied.pop("reasoning_effort")}
         return applied
 
-    def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
+    def probe(self, agent: ModelAgent) -> dict[str, Any]:
         """Verify a local model registry, then run one unbounded completion probe.
 
         ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
         this verifies the configured local model and deliberately exercises the
-        chat path with one output token. The timeout bounds only the non-generating
-        local registry lookup; model inference is allowed to complete regardless of
-        wall-clock duration and is cancelled only by an explicit caller action.
+        chat path with one output token. Registry lookup and model inference are
+        allowed to complete regardless of wall-clock duration and are cancelled
+        only by an explicit caller action.
         """
-        probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
         if not is_chat_compatible_model_id(agent.model):
             return {
@@ -1629,9 +1609,7 @@ class ModelClient:
                         self._provider_url(agent, "/models"),
                         method="GET",
                     )
-                    with self._open_provider(
-                        registry_request, destination, timeout=probe_timeout
-                    ) as registry_response:
+                    with self._open_provider(registry_request, destination) as registry_response:
                         registry = json.loads(
                             registry_response.read().decode("utf-8")
                         )
@@ -1827,23 +1805,18 @@ class ModelClient:
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
         generation_timeout = self.timeout if timeout is None else timeout
-        connection_timeout = (
-            self.connect_timeout
-            if generation_timeout is None
-            else min(self.connect_timeout, generation_timeout)
-        )
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
             connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
                 parsed.hostname,
                 port,
-                timeout=connection_timeout,
+                timeout=generation_timeout,
                 context=self._ssl_context,
             )
         else:
             connection = http.client.HTTPConnection(
-                parsed.hostname, port, timeout=connection_timeout
+                parsed.hostname, port, timeout=generation_timeout
             )
         connection._create_connection = (  # type: ignore[attr-defined]
             lambda _address, timeout, source_address: self._connect_validated(
@@ -3572,12 +3545,10 @@ class TaskOrchestrator:
         self,
         *,
         refresh: bool = False,
-        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
     ) -> dict[str, Any]:
         """Report provider liveness separately from an explicit chat readiness probe."""
         if type(refresh) is not bool:
             raise ValueError("refresh must be a boolean")
-        probe_timeout = _validate_provider_probe_timeout(timeout)
         items: list[dict[str, Any]] = []
         with self._provider_readiness_lock:
             for agent in self.candidates:
@@ -3591,7 +3562,7 @@ class TaskOrchestrator:
                     })
                     continue
                 if refresh:
-                    item = dict(self.client.probe(agent, timeout=probe_timeout))
+                    item = dict(self.client.probe(agent))
                     item["provider"] = provider
                     items.append(redact_value(item))
                 else:
@@ -3608,7 +3579,6 @@ class TaskOrchestrator:
         return {
             "status": status,
             "probe": "refresh" if refresh else "none",
-            "timeout_seconds": probe_timeout,
             "checked_at": int(time.time()) if refresh else None,
             "agent_count": len(active),
             "ready_agent_count": sum(item["status"] == "ready" for item in active),

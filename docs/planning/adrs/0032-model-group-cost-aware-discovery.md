@@ -54,12 +54,11 @@ Model inference has no fixed wall-clock timeout. This applies to ordinary
 generation, the initial completion ping, warm-up, readiness probes, retries,
 and repair attempts; a slow model such as DeepSeek is not declared unavailable
 merely because it takes minutes or hours. Operators may cancel work, and a
-superseded request may be cancelled. Provider TCP/TLS establishment has a
-separate 30-second default bound; after connection, generation remains
-unbounded unless the caller supplies a timeout. Superseded races close registered
+superseded request may be cancelled. DNS resolution, TCP/TLS establishment,
+health/readiness checks, provider catalogs, and ZDR-list retrieval likewise have
+no fixed wall-clock deadline. Superseded races close registered
 loser sockets only when their reviewed equivalence contract declares cancellation
-support. Health checks and model-list discovery may remain separately bounded
-because they do not cap model generation time.
+support.
 
 OpenAI catalog rows also retain OpenAI's official data-controls documentation
 as policy evidence. Because approval and enablement are organization/project
@@ -117,9 +116,8 @@ sequenceDiagram
 ## Data, web, and operational boundaries
 
 Provider model-list and OpenRouter ZDR/policy/credit metadata have no default
-wall-clock timeout. DNS resolution is not governed by the socket timeout; TCP/TLS
-establishment retains its separate 30-second default bound. Model inference has
-no default generation timeout. A slow catalog or reasoning
+wall-clock timeout. DNS resolution, TCP/TLS establishment, local health/readiness
+checks, and model inference have no default timeout. A slow catalog or reasoning
 model is not evidence that the route is unavailable; cancellation is an
 explicit operator or superseded-request action. Retry counts may remain finite
 after an explicit transport failure, but elapsed time alone must not discard a
