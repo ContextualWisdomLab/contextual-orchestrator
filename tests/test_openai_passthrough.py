@@ -402,6 +402,27 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert body["echo"]["response_format"] == {"type": "json_object"}
 
 
+def test_lineage_structured_payload_accepts_session_without_provider_forwarding() -> None:
+    """Lineage correlation is gateway metadata, not a provider request field."""
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "Return synthetic JSON."}],
+                "response_format": {"type": "json_object"},
+                "session_id": "synthetic-lineage-session",
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+    assert status == 200
+    assert body["echo"]["response_format"] == {"type": "json_object"}
+    assert "session_id" not in body["echo"]
+
+
 def test_http_gateway_default_response_format_resolves_concrete_agent() -> None:
     """The virtual gateway default remains valid on provider-native passthrough."""
     server, port, token = _serve()

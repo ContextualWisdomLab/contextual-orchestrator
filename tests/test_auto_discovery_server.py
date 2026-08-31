@@ -9,21 +9,21 @@ from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
 
-def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
-    """Startup routing excludes discovered deployments without chat evidence."""
+def test_auto_discovery_activates_chat_and_embedding_capable_agents(monkeypatch) -> None:
+    """Startup retains a provider-declared embedding route beside chat."""
     chat = DiscoveredModel(
-        provider_name="openai",
+        provider_name="configured_gateway",
         model_id="chat-capable-model",
-        credential_name="OPENAI_API_KEY",
-        chat_base_url="https://api.openai.com/v1",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
         auth_scheme="Bearer",
         capabilities=("chat",),
     )
     embedding = DiscoveredModel(
-        provider_name="openai",
+        provider_name="configured_gateway",
         model_id="embedding-capable-model",
-        credential_name="OPENAI_API_KEY",
-        chat_base_url="https://api.openai.com/v1",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
         auth_scheme="Bearer",
         capabilities=("embedding",),
     )
@@ -38,12 +38,14 @@ def test_auto_discovery_activates_only_chat_capable_agents(monkeypatch) -> None:
 
     result = _auto_discover_runtime_agents(orchestrator)
 
-    assert len(result["added"]) == 1
-    agent = next(agent for agent in orchestrator.agents if agent.id == result["added"][0])
-    assert agent.model == chat.model_id
-    assert agent.disabled is False
-    assert "chat" in agent.tags
-    assert all(candidate.model != embedding.model_id for candidate in orchestrator.agents)
+    assert len(result["added"]) == 2
+    chat_agent = next(agent for agent in orchestrator.agents if agent.model == chat.model_id)
+    embedding_agent = next(agent for agent in orchestrator.agents if agent.model == embedding.model_id)
+    assert chat_agent.disabled is False
+    assert "chat" in chat_agent.tags
+    assert embedding_agent.disabled is False
+    assert "embedding" in embedding_agent.tags
+    assert orchestrator.select_capability_agent("embedding").id == embedding_agent.id
     assert all(not candidate.base_url.startswith("mock://") for candidate in orchestrator.agents)
     assert "bootstrap_agent" in result["updated"]
 
@@ -307,8 +309,8 @@ def test_auto_discovery_keeps_last_enabled_placeholder_for_disabled_gateway_mode
     assert orchestrator.agents == [placeholder]
 
 
-def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(monkeypatch) -> None:
-    """Startup fails closed without taking down an explicitly configured pool."""
+def test_auto_discovery_adds_embedding_without_disabling_configured_chat_pool(monkeypatch) -> None:
+    """A capability route coexists with an explicitly configured chat pool."""
     embedding = DiscoveredModel(
         provider_name="openai",
         model_id="embedding-capable-model",
@@ -324,8 +326,11 @@ def test_auto_discovery_leaves_pool_unchanged_without_chat_capability_evidence(m
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
 
-    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
-    assert [agent.id for agent in orchestrator.agents] == ["bootstrap_agent"]
+    result = _auto_discover_runtime_agents(orchestrator)
+    assert result == {"added": ["openai_embedding_capable_model"], "updated": []}
+    assert {agent.id for agent in orchestrator.agents} == {
+        "bootstrap_agent", "openai_embedding_capable_model"
+    }
 
 
 def test_unrelated_discovery_keeps_configured_gateway_placeholder(monkeypatch) -> None:
@@ -371,7 +376,11 @@ def test_auto_discovery_uses_explicit_capabilities_before_model_id_heuristics(mo
 
     orchestrator = TaskOrchestrator([ModelAgent("bootstrap_agent", "bootstrap-model")])
 
-    assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
+    result = _auto_discover_runtime_agents(orchestrator)
+    assert result["added"] == ["openai_generic_deployment"]
+    agent = orchestrator.select_capability_agent("embedding")
+    assert agent.model == "generic-deployment"
+    assert "chat" not in agent.tags
 
 
 def test_auto_discovery_preserves_sole_real_bootstrap_seed(monkeypatch) -> None:

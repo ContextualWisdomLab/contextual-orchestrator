@@ -183,6 +183,7 @@ PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "function
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing", "zdr_only",
+    "session_id",
     # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
     "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
@@ -6325,6 +6326,8 @@ def build_server(
                     for key in ("metadata", "client_metadata")
                     if isinstance((value := body.get(key)), dict)
                 ]
+                if "session_id" in body:
+                    metadata_values.append({"session_id": body["session_id"]})
                 request_session_id = session_id_from_request(self.headers, *metadata_values)
                 if request_session_id != current_session_id():
                     self._bind_session(request_session_id)

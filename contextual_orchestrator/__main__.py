@@ -418,11 +418,18 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         for model in discovered
         if not model.evidence_only and is_discovered_chat_candidate(model)
     ]
+    runtime_models = [
+        model
+        for model in discovered
+        if model in chat_models or "embedding" in model.capabilities
+    ]
     existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     agents = []
-    for model in chat_models:
+    for model in runtime_models:
         existing = existing_by_id.get(agent_id_for(model))
-        routable = is_routable_discovered_model(model)
+        routable = is_routable_discovered_model(model) or (
+            "embedding" in model.capabilities and model.spend_admitted
+        )
         if existing is None:
             agents.append(replace(agent_from_discovered(model), disabled=not routable))
         elif "discovered" not in existing.tags:
@@ -455,7 +462,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         if agents
         else {"added": [], "updated": []}
     )
-    if any(model.provider_name == "configured_gateway" for model in chat_models):
+    if any(model.provider_name == "configured_gateway" for model in runtime_models):
         for agent in tuple(orchestrator.candidates):
             if (
                 agent.provider_name == "configured_gateway"
