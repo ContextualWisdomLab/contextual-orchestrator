@@ -3708,6 +3708,7 @@ class TaskOrchestrator:
                 "worker",
                 free_only=requested_model == self.FREE_MODEL,
                 prompt_context=prompt_context,
+                effort_profile=effort_profile,
             )
         replica_agent_ids = (
             set.intersection(*(set(value) for value in file_replicas.values()))
@@ -3730,6 +3731,7 @@ class TaskOrchestrator:
                     "worker",
                     free_only=requested_model == self.FREE_MODEL,
                     prompt_context=prompt_context,
+                    effort_profile=effort_profile,
                     )
                     if candidate.id in replica_agent_ids
                 ),
@@ -3806,6 +3808,7 @@ class TaskOrchestrator:
             "worker",
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
+            effort_profile=effort_profile,
         )
         ranked_candidates = _eligible_role_effort_candidates(ranked_candidates, effort_profile)
         candidates: list[ModelAgent] = []
@@ -5686,17 +5689,29 @@ class TaskOrchestrator:
         back to the fixed template — a bad plan must never break the request.
         """
         planner = self._select_agent(task, "thinker")
+        roles = ("thinker", "worker", "verifier", "synthesizer")
+        eligible_by_role = {
+            role: {
+                agent.id
+                for agent in self._ranked_agents(task, role)
+                if role not in agent.provider_exclusions
+            }
+            for role in roles
+        }
         pool = "\n".join(
-            f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
+            f"- {agent.id}: model={agent.model}, "
+            f"roles={','.join(role for role in roles if agent.id in eligible_by_role[role])}, "
+            f"tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if _is_general_chat_agent(agent) and self._zdr_agent_allowed(agent)
+            if any(agent.id in eligible_by_role[role] for role in roles)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
             'Return ONLY a JSON object, no prose: {"steps": [{"id": 0, "role": "thinker|worker|verifier|synthesizer", '
             '"agent_id": "<agent id>", "subtask": "natural-language instruction", "access": [prior step ids]}]}\n'
             f"Rules: 2 to {self.policy.max_workflow_steps} steps; ids sequential from 0; access may list only earlier "
-            "step ids (each step sees ONLY the outputs it lists); the final step must produce the answer; include a "
+            "step ids (each step sees ONLY the outputs it lists); assign each step only to an agent listing that role; "
+            "the final step must produce the answer; include a "
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
@@ -5737,10 +5752,16 @@ class TaskOrchestrator:
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
             assigned = known_agents.get(agent_id)
+            eligible_ids = {
+                agent.id
+                for agent in self._ranked_agents(subtask, role)
+                if role not in agent.provider_exclusions
+            }
             if (
                 assigned is None
                 or not _is_general_chat_agent(assigned)
                 or not self._zdr_agent_allowed(assigned)
+                or assigned.id not in eligible_ids
             ):
                 # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
@@ -5805,6 +5826,7 @@ class TaskOrchestrator:
         chat_only: bool = True,
         candidate_pool: Iterable[ModelAgent] | None = None,
         prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> list[ModelAgent]:
         """Rank logical model groups, then measured provider members within each group.
 
@@ -5858,7 +5880,7 @@ class TaskOrchestrator:
         ]
         if chat_only:
             candidates = _eligible_role_effort_candidates(
-                candidates, self._role_effort_profile(role)
+                candidates, effort_profile or self._role_effort_profile(role)
             )
         if not candidates:
             if _REQUEST_ZDR_ONLY.get():
@@ -6217,6 +6239,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         prefer_tags: tuple[str, ...] = (),
         prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> ModelAgent:
         """Select one general-chat agent for a conversational role.
 
@@ -6236,6 +6259,7 @@ class TaskOrchestrator:
                 free_only=free_only,
                 required_tags=required_tags,
                 prompt_context=prompt_context,
+                effort_profile=effort_profile,
             )
             if _is_general_chat_agent(agent)
             and all(tag in agent.tags for tag in required_tags)
@@ -6818,6 +6842,7 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
         allowed_agent_ids: set[str] | None = None,
         prompt_context: str | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> list[ModelAgent]:
         try:
             ranked = self._ranked_agents(
@@ -6825,6 +6850,7 @@ class TaskOrchestrator:
                 role,
                 required_tags=required_tags,
                 prompt_context=prompt_context,
+                effort_profile=effort_profile,
             )
         except RuntimeError:
             if required_tags:

@@ -18,7 +18,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import (  # noqa: E402
+    ModelAgent,
+    TaskOrchestrator,
+    default_role_effort_catalog,
+)
 import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
@@ -112,6 +116,43 @@ def test_zdr_planner_prompt_lists_only_zdr_agents() -> None:
     assert "non_zdr_agent" not in planner_system
     assert "model=gpt-4o," not in planner_system
     assert "zdr_agent" in planner_system
+
+
+def test_planner_advertises_and_validates_role_effort_eligibility() -> None:
+    unsupported = ModelAgent(
+        "unsupported_agent", "model-u", priority=10, reasoning_effort_supported=False
+    )
+    supported = ModelAgent(
+        "supported_agent",
+        "model-s",
+        reasoning_effort_supported=True,
+        provider_exclusions=("verifier",),
+    )
+    orchestrator = TaskOrchestrator(
+        [unsupported, supported], role_effort_catalog=default_role_effort_catalog()
+    )
+    raw_plan = json.dumps(
+        {
+            "steps": [
+                {"id": 0, "role": "worker", "agent_id": unsupported.id, "subtask": "work", "access": []},
+                {"id": 1, "role": "synthesizer", "agent_id": unsupported.id, "subtask": "answer", "access": [0]},
+            ]
+        }
+    )
+    calls: list[list[dict]] = []
+
+    def scripted_chat(agent, messages, **kwargs):
+        del agent, kwargs
+        calls.append(messages)
+        return raw_plan
+
+    with patch.object(orchestrator.client, "chat", side_effect=scripted_chat):
+        steps = orchestrator._plan_generated("solve")
+
+    prompt = calls[0][0]["content"]
+    assert "unsupported_agent" not in prompt
+    assert "supported_agent: model=model-s, roles=thinker,worker,synthesizer" in prompt
+    assert [step.agent_id for step in steps] == [supported.id, supported.id]
 
 
 def test_generated_plan_stops_before_next_call_when_budget_is_spent() -> None:

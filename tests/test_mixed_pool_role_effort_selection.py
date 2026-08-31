@@ -1,31 +1,4 @@
-"""Mixed-pool regression coverage for the PR #958 round-2 Devin finding.
-
-``_require_eligible_role_effort_agents`` (``contextual_orchestrator/__main__.py``)
-only proves that *some* agent in the configured pool has
-``reasoning_effort_supported: true``. Before this fix, ordinary role-based
-selection (``route_once``, ``conduct``, ``stream_route``, ``batch_route``)
-could still rank or select an *unsupported* agent ahead of a supported one
-from a mixed pool:
-
-- ``route_once``/``conduct`` recovered by accident, via ``_invoke``'s generic
-  tool-failure classifier treating the resulting ``EffortProfileError`` as an
-  unknown failure and failing over to the next candidate (see
-  ``tool_fallback.classify_tool_failure``'s "Unknown exceptions retain the
-  existing sequential agent-failover behavior" docstring) -- correct, but
-  wasteful: an extra doomed provider call per request.
-- ``stream_route`` and ``batch_route`` call the provider directly with no
-  such recovery and would raise ``EffortProfileError`` straight through to
-  the caller, crashing the request outright.
-
-``TaskOrchestrator._ranked_agents`` now narrows role-based candidates to
-agents that prove ``reasoning_effort`` support (via
-``_eligible_role_effort_candidates``) whenever the role's
-``role_effort_catalog`` entry fails closed. These tests pin that an
-unsupported agent -- even one ranked ahead of a supported one by priority --
-is never dispatched to across all four paths, and that a supported agent
-still serves the request instead of the request crashing or wastefully
-failing over.
-"""
+"""Role-effort selection stays consistent across mixed provider pools."""
 
 from __future__ import annotations
 
