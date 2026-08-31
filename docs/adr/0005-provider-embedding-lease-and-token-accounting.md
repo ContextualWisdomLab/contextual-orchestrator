@@ -38,12 +38,12 @@ that operational boundary grounds the explicit terminal-publication fence here.
    ownership check. A failed renewal, an elapsed renewal deadline, an
    ownership-check error, or a negative ownership result marks the claim
    lost and fails closed.
-2. **Terminal publication is fenced.** A provider embedding worker checks
-   ownership before provider work, after provider work, and again by
-   refreshing its execution claim while holding the terminal-state lock.
-   Only then may it publish usage, results, and `completed`. A stale worker
-   leaves the job in recoverable `running` state; it does not overwrite a
-   successor's state or manufacture `failed`.
+2. **Terminal publication is fenced and atomic.** One Valkey Lua transaction
+   verifies the execution-claim token, accepts only `queued` or `running`, and
+   writes result/usage/error plus the terminal state together. The same fence
+   protects success and failure. A stale worker leaves recoverable `running`
+   state and retries claim acquisition while the backend remains live; it does
+   not overwrite a successor or require a process restart.
 3. **The provider call is not declared exactly-once.** A synchronous
    provider call cannot be cancelled retroactively when its lease is lost.
    Duplicate upstream execution remains possible during a partition. This

@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any, Dict
 
@@ -44,7 +45,9 @@ class FakeValkeyClient:
     def __init__(self) -> None:
         self.hashes: Dict[str, Dict[str, str]] = {}
         self.expirations: Dict[str, int] = {}
+        self.strings: Dict[str, Any] = {}
         self.execution_extension_attempted = threading.Event()
+        self.lose_execution_extension = True
 
     class LockNotOwnedError(RuntimeError):
         pass
@@ -52,17 +55,25 @@ class FakeValkeyClient:
     class _Lock:
         def __init__(self, client: "FakeValkeyClient", name: str) -> None:
             self._client = client
-            self._lose_on_extend = "provider_embedding_job_execution" in name
+            self.name = name
+            self.local = SimpleNamespace(token=f"token-{id(self)}".encode())
+            self._lose_on_extend = (
+                "provider_embedding_job_execution" in name
+                and client.lose_execution_extension
+            )
             self._owned = False
 
         def acquire(self) -> bool:
             self._owned = True
+            self._client.strings[self.name] = self.local.token
             return True
 
         def extend(self, _seconds: float, *, replace_ttl: bool) -> bool:
             assert replace_ttl is True
             if self._lose_on_extend:
                 self._owned = False
+                self._client.lose_execution_extension = False
+                self._client.strings.pop(self.name, None)
                 self._client.execution_extension_attempted.set()
                 return False
             return self._owned
@@ -74,6 +85,7 @@ class FakeValkeyClient:
             if not self._owned:
                 raise self._client.LockNotOwnedError("claim no longer owned")
             self._owned = False
+            self._client.strings.pop(self.name, None)
 
     def hget(self, key: str, field: str) -> Any:
         return self.hashes.get(key, {}).get(field)
@@ -108,6 +120,28 @@ class FakeValkeyClient:
 
     def lock(self, name: str, **_kwargs: Any) -> "FakeValkeyClient._Lock":
         return self._Lock(self, name)
+
+    def eval(self, _script: str, key_count: int, *values: Any) -> int:
+        keys = values[:key_count]
+        args = values[key_count:]
+        lock_key, states_key, results_key, usage_key, errors_key = keys
+        token, job_id, running, queued, terminal, results, usage, error, retention = args
+        if self.strings.get(lock_key) != token:
+            return 0
+        current = self.hashes.get(states_key, {}).get(job_id)
+        if current not in {running, queued}:
+            return 0
+        for key, value in (
+            (results_key, results),
+            (usage_key, usage),
+            (errors_key, error),
+        ):
+            if value != "":
+                self.hset(key, job_id, value)
+        self.hset(states_key, job_id, terminal)
+        for key in keys[1:]:
+            self.expire(key, int(retention))
+        return 1
 
 
 def test_mapping_round_trips_dataclasses_and_plain_values() -> None:
@@ -213,14 +247,18 @@ def test_renewal_loss_is_visible_to_the_claim_holder() -> None:
             claim.ensure_owned()
 
 
-def test_provider_result_is_not_published_after_claim_renewal_loss() -> None:
-    """A stale provider worker leaves recovery state for the succeeding claimant."""
+def test_provider_job_recovers_after_claim_renewal_loss_without_restart() -> None:
+    """A stale attempt cannot publish; the live worker reclaims and completes."""
     client = FakeValkeyClient()
     registry = JobRegistryFactory(client, retention_seconds=2)
 
+    calls = 0
+
     def runner(_requests):
+        nonlocal calls
+        calls += 1
         assert client.execution_extension_attempted.wait(timeout=1)
-        return [[1.0]], 1
+        return [[float(calls)]], calls
 
     backend = ProviderEmbeddingBatchBackend(
         runner,
@@ -231,10 +269,64 @@ def test_provider_result_is_not_published_after_claim_renewal_loss() -> None:
         [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
     )
 
-    assert backend.wait(job, timeout=1)["status"] == "running"
-    assert backend.retrieve(job) == []
-    assert backend.usage(job) == {}
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    assert calls == 2
+    assert backend.retrieve(job)[0].embedding == [2.0]
+    assert backend.usage(job) == {"prompt_tokens": 2}
     backend.close()
+
+
+def test_stale_provider_failure_is_fenced_before_live_recovery() -> None:
+    """A claim-losing failure cannot overwrite the succeeding attempt."""
+    client = FakeValkeyClient()
+    registry = JobRegistryFactory(client, retention_seconds=2)
+    calls = 0
+
+    def runner(_requests):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert client.execution_extension_attempted.wait(timeout=1)
+            raise RuntimeError("stale provider failure")
+        return [[2.0]], 2
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner, job_registry=registry, claim_lease_seconds=0.15
+    )
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="synthetic-model")]
+    )
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    assert backend.retrieve(job)[0].embedding == [2.0]
+    assert "provider_embedding_errors" not in client.hashes
+    backend.close()
+
+
+def test_terminal_transaction_rejects_a_transferred_claim_without_partial_writes() -> None:
+    """Claim transfer before EVAL leaves every terminal hash unchanged."""
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    registry = JobRegistryFactory(client)
+    states = registry.mapping("provider_embedding_states")
+    states["job"] = "running"
+    with registry.lock(
+        "provider_embedding_job_execution", "job", lease_seconds=1
+    ) as claim:
+        lock_name, _token = claim.atomic_identity()
+        client.strings[lock_name] = b"successor-token"
+        with pytest.raises(ClaimNotAcquired, match="before publication"):
+            registry.publish_provider_embedding_terminal(
+                claim,
+                "job",
+                status="completed",
+                results=[{"embedding": [1.0]}],
+                usage={"prompt_tokens": 1},
+            )
+
+    assert states["job"] == "running"
+    assert "batch_job_registry:provider_embedding_results" not in client.hashes
+    assert "batch_job_registry:provider_embedding_usage" not in client.hashes
 
 
 if __name__ == "__main__":

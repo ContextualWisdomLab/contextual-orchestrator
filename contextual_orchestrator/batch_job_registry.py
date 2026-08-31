@@ -91,6 +91,17 @@ class _ClaimLease:
             self.mark_lost()
             raise ClaimNotAcquired("durable job claim ownership was lost")
 
+    def atomic_identity(self) -> tuple[str, Any]:
+        """Return the Valkey lock key and token for one atomic fenced write."""
+        if self._claim is None:
+            raise ClaimNotAcquired("durable job claim identity is unavailable")
+        token = getattr(getattr(self._claim, "local", None), "token", None)
+        name = getattr(self._claim, "name", None)
+        if not name or token is None:
+            self.mark_lost()
+            raise ClaimNotAcquired("durable job claim identity is unavailable")
+        return str(name), token
+
 
 def _encode(value: Any) -> str:
     """Serialize one registry value (dataclasses included) to JSON."""
@@ -269,7 +280,56 @@ class JobRegistryFactory:
                 with lock:
                     yield _ClaimLease()
 
-            return acquired_local_claim()
+        return acquired_local_claim()
+
+    def publish_provider_embedding_terminal(
+        self,
+        claim: _ClaimLease,
+        job_id: str,
+        *,
+        status: str,
+        results: Any = None,
+        usage: Any = None,
+        error: Any = None,
+    ) -> None:
+        """Atomically publish one durable terminal state while its claim is owned."""
+        if self._client is None:
+            raise RuntimeError("atomic terminal publication requires a durable registry")
+        if status not in {"completed", "failed"}:
+            raise ValueError("terminal status must be completed or failed")
+        lock_name, token = claim.atomic_identity()
+        script = """
+        if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+        local current = redis.call('hget', KEYS[2], ARGV[2])
+        if current ~= ARGV[3] and current ~= ARGV[4] then return 0 end
+        if ARGV[6] ~= '' then redis.call('hset', KEYS[3], ARGV[2], ARGV[6]) end
+        if ARGV[7] ~= '' then redis.call('hset', KEYS[4], ARGV[2], ARGV[7]) end
+        if ARGV[8] ~= '' then redis.call('hset', KEYS[5], ARGV[2], ARGV[8]) end
+        redis.call('hset', KEYS[2], ARGV[2], ARGV[5])
+        for index = 2, 5 do redis.call('expire', KEYS[index], ARGV[9]) end
+        return 1
+        """
+        published = self._client.eval(
+            script,
+            5,
+            lock_name,
+            "batch_job_registry:provider_embedding_states",
+            "batch_job_registry:provider_embedding_results",
+            "batch_job_registry:provider_embedding_usage",
+            "batch_job_registry:provider_embedding_errors",
+            token,
+            job_id,
+            _encode("running"),
+            _encode("queued"),
+            _encode(status),
+            "" if results is None else _encode(results),
+            "" if usage is None else _encode(usage),
+            "" if error is None else _encode(error),
+            self._retention_seconds,
+        )
+        if not published:
+            claim.mark_lost()
+            raise ClaimNotAcquired("durable job claim ownership was lost before publication")
 
     @property
     def durable(self) -> bool:

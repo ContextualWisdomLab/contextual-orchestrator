@@ -630,6 +630,7 @@ class ProviderEmbeddingBatchBackend:
         self._max_concurrency = max_concurrency
         self._executor: ThreadPoolExecutor | None = None
         self._executor_lock = threading.Lock()
+        self._closed = threading.Event()
         self._registry = job_registry or JobRegistryFactory()
         if self._registry.durable and (
             claim_lease_seconds is None or claim_lease_seconds <= 0
@@ -690,6 +691,7 @@ class ProviderEmbeddingBatchBackend:
 
     def close(self) -> None:
         """Release the bounded worker pool owned by this backend."""
+        self._closed.set()
         with self._executor_lock:
             executor, self._executor = self._executor, None
         if executor is not None:
@@ -711,6 +713,8 @@ class ProviderEmbeddingBatchBackend:
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:
         """Persist a queued job and return immediately with a pollable handle."""
+        if self._closed.is_set():
+            raise RuntimeError("provider embedding backend is closed")
         job_id = f"providerembed_{uuid.uuid4().hex}"
         self._requests[job_id] = list(requests)
         self._deadlines[job_id] = time.time() + self._registry.retention_seconds
@@ -724,81 +728,119 @@ class ProviderEmbeddingBatchBackend:
         return BatchJob(job_id=job_id, backend=self.name, status="queued", request_count=len(requests))
 
     def _run_job(self, job_id: str) -> None:
-        """Execute one persisted job inside the bounded provider worker pool."""
-        try:
-            deadline_epoch = float(
-                self._deadlines.get(
-                    job_id, time.time() + self._registry.retention_seconds
-                )
-            )
-            self._deadlines[job_id] = deadline_epoch
-            with self._registry.lock(
-                "provider_embedding_job_execution", job_id,
-                lease_seconds=self._claim_lease_seconds,
-                renew_until_epoch=deadline_epoch,
-            ) as execution_claim:
-                execution_claim.ensure_owned()
+        """Execute or reclaim one persisted job until it becomes terminal."""
+        deadline_epoch = float(
+            self._deadlines.get(job_id, time.time() + self._registry.retention_seconds)
+        )
+        self._deadlines[job_id] = deadline_epoch
+        while (
+            not self._closed.is_set()
+            and self._states.get(job_id) in {"queued", "running"}
+            and time.time() < deadline_epoch
+        ):
+            try:
                 with self._registry.lock(
-                    "provider_embedding_job_states", job_id,
+                    "provider_embedding_job_execution",
+                    job_id,
                     lease_seconds=self._claim_lease_seconds,
-                ):
-                    if self._states.get(job_id) not in {"queued", "running"}:
-                        return
-                    self._states[job_id] = "running"
-                requests = list(self._requests[job_id])
-                vectors, prompt_tokens = self._runner(requests)
-                execution_claim.ensure_owned()
-                if self._states.get(job_id) == "cancelled":
-                    return
-                if len(vectors) != len(requests):
-                    raise ValueError("provider embedding batch result count did not match inputs")
-                dimensions = {len(vector) for vector in vectors}
-                if vectors and (dimensions == {0} or len(dimensions) != 1):
-                    raise ValueError("provider embedding batch dimensions were inconsistent")
-                items = []
-                for index, (request, vector) in enumerate(zip(requests, vectors, strict=True)):
-                    items.append(
-                        EmbeddingBatchResultItem(
-                            custom_id=request.custom_id,
-                            index=index,
-                            embedding=vector,
-                            prompt_tokens=0,
-                            model=request.model,
-                        )
-                    )
-                with self._registry.lock(
-                    "provider_embedding_job_states", job_id,
-                    lease_seconds=self._claim_lease_seconds,
-                ):
-                    # Refresh while holding the terminal-state lock. A stale
-                    # worker must never publish after another worker can claim
-                    # the same provider job.
-                    execution_claim.ensure_owned(refresh=True)
-                    if self._states.get(job_id) == "cancelled":
-                        return
-                    self._usage[job_id] = {"prompt_tokens": int(prompt_tokens)}
-                    self._results[job_id] = items
-                    self._states[job_id] = "completed"
-        except ClaimNotAcquired:
-            return
-        except Exception as exc:  # noqa: BLE001 - polling exposes a bounded terminal state
-            with self._registry.lock(
-                "provider_embedding_job_states", job_id,
-                lease_seconds=self._claim_lease_seconds,
-            ):
-                if self._states.get(job_id) not in {"cancelled", "completed"}:
-                    self._errors[job_id] = {
-                        "error_type": type(exc).__name__,
-                        "http_status": getattr(exc, "status_code", None),
-                        "provider_code": getattr(exc, "provider_code", None),
-                        "retryable": bool(getattr(exc, "retryable", False)),
-                        "failed_shard_index": getattr(exc, "failed_shard_index", None),
-                    }
-                    self._states[job_id] = "failed"
-        finally:
+                    renew_until_epoch=deadline_epoch,
+                ) as execution_claim:
+                    self._run_claimed_job(job_id, execution_claim)
+            except ClaimNotAcquired:
+                remaining = max(0.0, deadline_epoch - time.time())
+                threading.Event().wait(min(0.05, remaining))
+        if self._states.get(job_id) in {"completed", "failed", "cancelled"}:
             event = self._terminal_events.pop(job_id, None)
             if event is not None:
                 event.set()
+
+    def _run_claimed_job(self, job_id: str, execution_claim: Any) -> None:
+        """Run one claim attempt and atomically publish its terminal outcome."""
+        execution_claim.ensure_owned()
+        with self._registry.lock(
+            "provider_embedding_job_states",
+            job_id,
+            lease_seconds=self._claim_lease_seconds,
+        ):
+            if self._states.get(job_id) not in {"queued", "running"}:
+                return
+            self._states[job_id] = "running"
+        requests = list(self._requests[job_id])
+        try:
+            vectors, prompt_tokens = self._runner(requests)
+            execution_claim.ensure_owned()
+            if len(vectors) != len(requests):
+                raise ValueError("provider embedding batch result count did not match inputs")
+            dimensions = {len(vector) for vector in vectors}
+            if vectors and (dimensions == {0} or len(dimensions) != 1):
+                raise ValueError("provider embedding batch dimensions were inconsistent")
+            items = [
+                EmbeddingBatchResultItem(
+                    custom_id=request.custom_id,
+                    index=index,
+                    embedding=vector,
+                    prompt_tokens=0,
+                    model=request.model,
+                )
+                for index, (request, vector) in enumerate(zip(requests, vectors, strict=True))
+            ]
+            self._publish_terminal(
+                job_id,
+                execution_claim,
+                status="completed",
+                results=items,
+                usage={"prompt_tokens": int(prompt_tokens)},
+            )
+        except ClaimNotAcquired:
+            raise
+        except Exception as exc:  # noqa: BLE001 - polling exposes bounded failure metadata
+            error = {
+                "error_type": type(exc).__name__,
+                "http_status": getattr(exc, "status_code", None),
+                "provider_code": getattr(exc, "provider_code", None),
+                "retryable": bool(getattr(exc, "retryable", False)),
+                "failed_shard_index": getattr(exc, "failed_shard_index", None),
+            }
+            self._publish_terminal(
+                job_id, execution_claim, status="failed", error=error
+            )
+
+    def _publish_terminal(
+        self,
+        job_id: str,
+        execution_claim: Any,
+        *,
+        status: str,
+        results: Any = None,
+        usage: Any = None,
+        error: Any = None,
+    ) -> None:
+        """Publish terminal state atomically for durable registries."""
+        if self._registry.durable:
+            self._registry.publish_provider_embedding_terminal(
+                execution_claim,
+                job_id,
+                status=status,
+                results=results,
+                usage=usage,
+                error=error,
+            )
+            return
+        with self._registry.lock(
+            "provider_embedding_job_states",
+            job_id,
+            lease_seconds=self._claim_lease_seconds,
+        ):
+            execution_claim.ensure_owned()
+            if self._states.get(job_id) not in {"queued", "running"}:
+                raise ClaimNotAcquired("provider embedding job is already terminal")
+            if results is not None:
+                self._results[job_id] = results
+            if usage is not None:
+                self._usage[job_id] = usage
+            if error is not None:
+                self._errors[job_id] = error
+            self._states[job_id] = status
 
     def wait(self, job: BatchJob, *, timeout: float) -> Dict[str, Any]:
         """Wait within the caller's explicit deadline for a terminal state."""
