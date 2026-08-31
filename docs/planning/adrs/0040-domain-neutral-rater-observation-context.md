@@ -142,6 +142,14 @@ infrastructure concerns and cannot be the product's ubiquitous language.
 ## References
 
 Evans, E. (2003). *Domain-driven design: Tackling complexity in the heart of
-software*. Addison-Wesley.
+software*. Addison-Wesley. https://www.pearson.com/en-gb/subject-catalog/p/domain-driven-design-tackling-complexity-in-the-heart-of-software/P200000009375
 
 Vernon, V. (2013). *Implementing domain-driven design*. Addison-Wesley.
+https://www.informit.com/store/implementing-domain-driven-design-0133039897
+
+These are copyrighted commercial books, so no redistributable full-text PDF is
+committed. The official publisher pages above are linked instead. Evans grounds
+the bounded-context, ubiquitous-language, and Anti-Corruption Layer choices;
+Vernon grounds the small aggregate and invariant boundary used here. An official
+publisher excerpt on aggregates is also available at
+https://www.informit.com/articles/article.aspx?p=2020371.

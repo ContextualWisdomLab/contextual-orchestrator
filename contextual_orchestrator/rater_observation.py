@@ -8,7 +8,7 @@ evidence references while structurally rejecting scores and decisions.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -172,7 +172,9 @@ class RaterConfigurationIdentity:
                 "missing_field",
                 f"configuration is missing required fields: {sorted(missing)}",
             )
-        return cls(**{field_name: payload[field_name] for field_name in _CONFIGURATION_FIELDS})
+        return cls(
+            **{field_name: payload[field_name] for field_name in _CONFIGURATION_FIELDS}
+        )
 
     def to_payload(self) -> dict[str, str]:
         """Return the published-language representation."""
@@ -200,7 +202,9 @@ class CriterionObservation:
     reason_ref: str | None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "criterion_ref", _reference(self.criterion_ref, "criterion_ref"))
+        object.__setattr__(
+            self, "criterion_ref", _reference(self.criterion_ref, "criterion_ref")
+        )
         if type(self.status) is not str or self.status not in {"observed", "abstained"}:
             raise RaterObservationError(
                 "invalid_status", "status must be observed or abstained"
@@ -235,7 +239,8 @@ class CriterionObservation:
             )
             if self.reason_ref is not None:
                 raise RaterObservationError(
-                    "invalid_observed_state", "observed criteria must not have a reason_ref"
+                    "invalid_observed_state",
+                    "observed criteria must not have a reason_ref",
                 )
         else:
             if self.category_anchor_ref is not None or evidence:
@@ -243,7 +248,9 @@ class CriterionObservation:
                     "invalid_abstention_state",
                     "abstentions must not contain a category or evidence",
                 )
-            object.__setattr__(self, "reason_ref", _reference(self.reason_ref, "reason_ref"))
+            object.__setattr__(
+                self, "reason_ref", _reference(self.reason_ref, "reason_ref")
+            )
 
     @classmethod
     def from_mapping(cls, value: Any) -> CriterionObservation:
@@ -260,13 +267,9 @@ class CriterionObservation:
             criterion_ref=payload["criterion_ref"],
             status=payload["status"],
             category_anchor_ref=payload["category_anchor_ref"],
-            evidence_reference_ids=tuple(payload["evidence_reference_ids"])
-            if isinstance(payload["evidence_reference_ids"], (list, tuple))
-            else payload["evidence_reference_ids"],
+            evidence_reference_ids=payload["evidence_reference_ids"],
             uncertainty=payload["uncertainty"],
-            review_signal_refs=tuple(payload["review_signal_refs"])
-            if isinstance(payload["review_signal_refs"], (list, tuple))
-            else payload["review_signal_refs"],
+            review_signal_refs=payload["review_signal_refs"],
             reason_ref=payload["reason_ref"],
         )
 
@@ -313,12 +316,16 @@ class RaterInvocation:
             raise RaterObservationError(
                 "invalid_configuration", "configuration has the wrong domain type"
             )
-        observations = tuple(self.observations)
-        if not observations or len(observations) > MAX_RATER_OBSERVATIONS:
+        if (
+            not isinstance(self.observations, (list, tuple))
+            or not self.observations
+            or len(self.observations) > MAX_RATER_OBSERVATIONS
+        ):
             raise RaterObservationError(
                 "invalid_observations",
                 f"observations must contain 1..{MAX_RATER_OBSERVATIONS} criteria",
             )
+        observations = tuple(self.observations)
         if any(type(item) is not CriterionObservation for item in observations):
             raise RaterObservationError(
                 "invalid_observation", "observations contain the wrong domain type"
@@ -326,7 +333,8 @@ class RaterInvocation:
         criterion_refs = [item.criterion_ref for item in observations]
         if len(set(criterion_refs)) != len(criterion_refs):
             raise RaterObservationError(
-                "duplicate_criterion", "an invocation has at most one observation per criterion"
+                "duplicate_criterion",
+                "an invocation has at most one observation per criterion",
             )
         object.__setattr__(self, "observations", observations)
 
@@ -342,11 +350,14 @@ class RaterInvocation:
                 f"invocation is missing required fields: {sorted(missing)}",
             )
         raw_observations = payload["observations"]
-        if not isinstance(raw_observations, Sequence) or isinstance(
-            raw_observations, (str, bytes, bytearray)
-        ):
+        if not isinstance(raw_observations, (list, tuple)):
             raise RaterObservationError(
                 "invalid_observations", "observations must be an array"
+            )
+        if not raw_observations or len(raw_observations) > MAX_RATER_OBSERVATIONS:
+            raise RaterObservationError(
+                "invalid_observations",
+                f"observations must contain 1..{MAX_RATER_OBSERVATIONS} criteria",
             )
         return cls(
             contract_id=payload["contract_id"],

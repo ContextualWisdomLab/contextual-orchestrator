@@ -24,6 +24,7 @@ from fuzz.targets import (
     exercise_pii_key,
     exercise_provider_model_payload,
     exercise_reasoning_effort_profile,
+    exercise_rater_observation,
     exercise_redaction,
     exercise_request_body,
     exercise_structured_output_error,
@@ -33,10 +34,19 @@ from fuzz.targets import (
 _SETTINGS = settings(max_examples=200, deadline=None)
 
 # JSON-ish values Hypothesis can build without recursion blowups.
-_json_scalars = st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False, allow_infinity=False) | st.text()
+_json_scalars = (
+    st.none()
+    | st.booleans()
+    | st.integers()
+    | st.floats(allow_nan=False, allow_infinity=False)
+    | st.text()
+)
 _json_values = st.recursive(
     _json_scalars,
-    lambda children: st.lists(children, max_size=6) | st.dictionaries(st.text(max_size=12), children, max_size=6),
+    lambda children: (
+        st.lists(children, max_size=6)
+        | st.dictionaries(st.text(max_size=12), children, max_size=6)
+    ),
     max_leaves=25,
 )
 
@@ -57,11 +67,15 @@ def test_request_body_never_crashes_on_valid_json(raw: bytes) -> None:
 @given(
     st.fixed_dictionaries(
         {
-            "run_mode": st.sampled_from(["auto", "route", "conduct", "bogus", "", 3, None]),
+            "run_mode": st.sampled_from(
+                ["auto", "route", "conduct", "bogus", "", 3, None]
+            ),
             "messages": st.lists(
                 st.fixed_dictionaries(
                     {
-                        "role": st.sampled_from(["user", "system", "assistant", "tool", "root", 1]),
+                        "role": st.sampled_from(
+                            ["user", "system", "assistant", "tool", "root", 1]
+                        ),
                         "content": st.text() | st.integers() | st.none(),
                     }
                 ),
@@ -83,6 +97,12 @@ def test_request_body_rejects_unhashable_message_role() -> None:
 @given(_json_values)
 def test_agent_config_parser(value: object) -> None:
     exercise_agent_config(value)
+
+
+@_SETTINGS
+@given(_json_values)
+def test_rater_observation_parser_never_crashes(value: object) -> None:
+    exercise_rater_observation(value)
 
 
 @_SETTINGS
@@ -109,7 +129,9 @@ def test_provider_model_payload_parser_never_crashes(value: object) -> None:
 
 @_SETTINGS
 @given(_json_values)
-def test_models_dev_cost_classifier_never_crashes_or_over_claims_free(value: object) -> None:
+def test_models_dev_cost_classifier_never_crashes_or_over_claims_free(
+    value: object,
+) -> None:
     exercise_models_dev_cost(value)
 
 
@@ -142,7 +164,9 @@ def test_model_judge_parser_rejects_or_validates_arbitrary_text(reply: str) -> N
 
 @_SETTINGS
 @given(st.text(max_size=4096), _json_values)
-def test_structured_output_validation_never_crashes(content: str, schema: object) -> None:
+def test_structured_output_validation_never_crashes(
+    content: str, schema: object
+) -> None:
     exercise_structured_output_error(content, schema)
 
 

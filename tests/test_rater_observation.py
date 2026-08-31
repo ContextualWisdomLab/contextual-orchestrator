@@ -73,6 +73,13 @@ def _error_code(callable_object) -> str:
     return exc_info.value.code
 
 
+class _OversizedList(list[object]):
+    """List whose contents must not be traversed after its size is rejected."""
+
+    def __iter__(self):
+        raise AssertionError("oversized input was traversed")
+
+
 def test_round_trip_preserves_observations_without_decision_fields() -> None:
     invocation = RaterInvocation.from_mapping(_invocation())
     payload = invocation.to_payload()
@@ -96,9 +103,9 @@ def test_top_level_score_or_decision_fields_are_rejected_explicitly() -> None:
     for field_name in ("score", "placement", "employment_decision"):
         payload = _invocation()
         payload[field_name] = "forbidden"
-        assert _error_code(lambda payload=payload: RaterInvocation.from_mapping(payload)) == (
-            "decision_leakage"
-        )
+        assert _error_code(
+            lambda payload=payload: RaterInvocation.from_mapping(payload)
+        ) == ("decision_leakage")
 
 
 def test_unknown_and_missing_top_level_fields_fail_closed() -> None:
@@ -117,7 +124,10 @@ def test_unknown_and_missing_top_level_fields_fail_closed() -> None:
 
 
 def test_configuration_requires_exact_fields_and_bounded_references() -> None:
-    assert RaterConfigurationIdentity.from_mapping(_configuration()).provider_ref == "provider"
+    assert (
+        RaterConfigurationIdentity.from_mapping(_configuration()).provider_ref
+        == "provider"
+    )
 
     unknown = _configuration()
     unknown["temperature"] = "1"
@@ -189,24 +199,27 @@ def test_observation_schema_is_exact_and_status_is_bounded() -> None:
 
     invalid_uncertainty = _observed()
     invalid_uncertainty["uncertainty"] = "certain"
-    assert _error_code(lambda: CriterionObservation.from_mapping(invalid_uncertainty)) == (
-        "invalid_uncertainty"
-    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(invalid_uncertainty)
+    ) == ("invalid_uncertainty")
 
     for invalid_value in ([], {}):
         invalid_status = _observed()
         invalid_status["status"] = invalid_value
-        assert _error_code(lambda: CriterionObservation.from_mapping(invalid_status)) == (
-            "invalid_status"
-        )
+        assert _error_code(
+            lambda: CriterionObservation.from_mapping(invalid_status)
+        ) == ("invalid_status")
 
         invalid_uncertainty = _observed()
         invalid_uncertainty["uncertainty"] = invalid_value
-        assert _error_code(
-            lambda: CriterionObservation.from_mapping(invalid_uncertainty)
-        ) == "invalid_uncertainty"
+        assert (
+            _error_code(lambda: CriterionObservation.from_mapping(invalid_uncertainty))
+            == "invalid_uncertainty"
+        )
 
-    assert _error_code(lambda: CriterionObservation.from_mapping([])) == "invalid_object"
+    assert (
+        _error_code(lambda: CriterionObservation.from_mapping([])) == "invalid_object"
+    )
 
 
 def test_observed_state_requires_unique_bounded_evidence_and_no_reason() -> None:
@@ -218,23 +231,23 @@ def test_observed_state_requires_unique_bounded_evidence_and_no_reason() -> None
 
     duplicate_evidence = _observed()
     duplicate_evidence["evidence_reference_ids"] = ["same", "same"]
-    assert _error_code(lambda: CriterionObservation.from_mapping(duplicate_evidence)) == (
-        "duplicate_reference"
-    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(duplicate_evidence)
+    ) == ("duplicate_reference")
 
     bad_evidence_type = _observed()
     bad_evidence_type["evidence_reference_ids"] = "not-an-array"
-    assert _error_code(lambda: CriterionObservation.from_mapping(bad_evidence_type)) == (
-        "invalid_references"
-    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(bad_evidence_type)
+    ) == ("invalid_references")
 
     oversized_evidence = _observed()
     oversized_evidence["evidence_reference_ids"] = [
         f"evidence-{index}" for index in range(MAX_RATER_EVIDENCE_REFERENCES + 1)
     ]
-    assert _error_code(lambda: CriterionObservation.from_mapping(oversized_evidence)) == (
-        "invalid_references"
-    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(oversized_evidence)
+    ) == ("invalid_references")
 
     reason = _observed()
     reason["reason_ref"] = "should-not-exist"
@@ -266,23 +279,23 @@ def test_abstention_has_reason_but_no_category_or_evidence() -> None:
 
     duplicate_signals = _abstained()
     duplicate_signals["review_signal_refs"] = ["review", "review"]
-    assert _error_code(lambda: CriterionObservation.from_mapping(duplicate_signals)) == (
-        "duplicate_reference"
-    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(duplicate_signals)
+    ) == ("duplicate_reference")
 
     wrong_signal_type = _abstained()
     wrong_signal_type["review_signal_refs"] = "review"
-    assert _error_code(lambda: CriterionObservation.from_mapping(wrong_signal_type)) == (
-        "invalid_references"
-    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(wrong_signal_type)
+    ) == ("invalid_references")
 
     oversized_signals = _abstained()
     oversized_signals["review_signal_refs"] = [
         f"signal-{index}" for index in range(MAX_RATER_REVIEW_SIGNALS + 1)
     ]
-    assert _error_code(lambda: CriterionObservation.from_mapping(oversized_signals)) == (
-        "invalid_references"
-    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(oversized_signals)
+    ) == ("invalid_references")
 
 
 def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> None:
@@ -318,6 +331,30 @@ def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> No
         "invalid_observations"
     )
 
+
+def test_collection_limits_are_checked_before_untrusted_values_are_traversed() -> None:
+    invocation = _invocation()
+    invocation["observations"] = _OversizedList([None] * (MAX_RATER_OBSERVATIONS + 1))
+    assert _error_code(lambda: RaterInvocation.from_mapping(invocation)) == (
+        "invalid_observations"
+    )
+
+    oversized_evidence = _observed()
+    oversized_evidence["evidence_reference_ids"] = _OversizedList(
+        [None] * (MAX_RATER_EVIDENCE_REFERENCES + 1)
+    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(oversized_evidence)
+    ) == ("invalid_references")
+
+    oversized_signals = _abstained()
+    oversized_signals["review_signal_refs"] = _OversizedList(
+        [None] * (MAX_RATER_REVIEW_SIGNALS + 1)
+    )
+    assert _error_code(
+        lambda: CriterionObservation.from_mapping(oversized_signals)
+    ) == ("invalid_references")
+
     wrong_observation = _invocation()
     wrong_observation["observations"] = ["observation"]
     assert _error_code(lambda: RaterInvocation.from_mapping(wrong_observation)) == (
@@ -335,27 +372,33 @@ def test_direct_domain_construction_rejects_wrong_types() -> None:
     configuration = RaterConfigurationIdentity.from_mapping(_configuration())
     observation = CriterionObservation.from_mapping(_observed())
 
-    assert _error_code(
-        lambda: RaterInvocation(
-            invocation_ref="invocation",
-            configuration="wrong",  # type: ignore[arg-type]
-            task_revision_ref="task",
-            rubric_revision_ref="rubric",
-            response_evidence_ref="response",
-            observations=(observation,),
+    assert (
+        _error_code(
+            lambda: RaterInvocation(
+                invocation_ref="invocation",
+                configuration="wrong",  # type: ignore[arg-type]
+                task_revision_ref="task",
+                rubric_revision_ref="rubric",
+                response_evidence_ref="response",
+                observations=(observation,),
+            )
         )
-    ) == "invalid_configuration"
+        == "invalid_configuration"
+    )
 
-    assert _error_code(
-        lambda: RaterInvocation(
-            invocation_ref="invocation",
-            configuration=configuration,
-            task_revision_ref="task",
-            rubric_revision_ref="rubric",
-            response_evidence_ref="response",
-            observations=("wrong",),  # type: ignore[arg-type]
+    assert (
+        _error_code(
+            lambda: RaterInvocation(
+                invocation_ref="invocation",
+                configuration=configuration,
+                task_revision_ref="task",
+                rubric_revision_ref="rubric",
+                response_evidence_ref="response",
+                observations=("wrong",),  # type: ignore[arg-type]
+            )
         )
-    ) == "invalid_observation"
+        == "invalid_observation"
+    )
 
 
 def test_mapping_inputs_are_snapshotted_into_immutable_domain_values() -> None:
