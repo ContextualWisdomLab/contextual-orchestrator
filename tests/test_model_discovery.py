@@ -1251,6 +1251,16 @@ def test_model_group_name_preserves_distinct_exact_model_identities() -> None:
     assert model_group_name_for(first) != model_group_name_for(second)
 
 
+def test_model_group_name_preserves_case_sensitive_model_identities() -> None:
+    first = DiscoveredModel(
+        "openai", "Vendor/Model", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer"
+    )
+
+    assert model_group_name_for(first) != model_group_name_for(
+        replace(first, model_id="vendor/model")
+    )
+
+
 def test_opencode_zen_metadata_failure_keeps_availability_but_not_free_suffix() -> None:
     register_credential("OPENCODE_ZEN_API_KEY", "zen-key")
     source = next(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "opencode_zen")

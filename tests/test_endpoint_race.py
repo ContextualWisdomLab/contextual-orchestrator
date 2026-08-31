@@ -57,6 +57,38 @@ def test_slow_valid_primary_loses_to_fast_valid_completion() -> None:
     assert outcome.cancellation_outcomes == (("primary_endpoint", "safe_drain"),)
 
 
+def test_winner_cancels_and_reaps_running_loser_without_generation_deadline() -> None:
+    release = threading.Event()
+    loser_started = threading.Event()
+
+    def loser() -> str:
+        loser_started.set()
+        release.wait()
+        return "late"
+
+    outcome = race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(), loser,
+                cancellation_supported=True, cancel=release.set,
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(),
+                lambda: loser_started.wait(1) and "complete",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+
+    assert outcome.cancellation_outcomes == (("slow_endpoint", "cancelled"),)
+    deadline = time.monotonic() + 1
+    while any(thread.name.startswith("equivalent_endpoint_race") for thread in threading.enumerate()):
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+
+
 def test_fast_invalid_completion_does_not_suppress_valid_result() -> None:
     def valid() -> str:
         time.sleep(0.01)

@@ -96,6 +96,7 @@ _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
     "each tool.function.description must be at most 1024 characters"
 )
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
+DEFAULT_PROVIDER_CONNECT_TIMEOUT = 30.0
 MODEL_CAPABILITIES = frozenset(
     {"text", "image", "video", "speech", "transcription", "embedding", "rerank", "audio"}
 )
@@ -112,6 +113,50 @@ _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "URLError",
     "ValueError",
 })
+
+
+class _ProviderCancellation:
+    """Close stdlib HTTP connections owned by one cancellable provider call."""
+
+    def __init__(self) -> None:
+        self._connections: set[http.client.HTTPConnection] = set()
+        self._lock = threading.Lock()
+        self._cancelled = False
+
+    def register(self, connection: http.client.HTTPConnection) -> None:
+        with self._lock:
+            if not self._cancelled:
+                self._connections.add(connection)
+                return
+        connection.close()
+        raise RuntimeError("provider request was cancelled")
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            connections = tuple(self._connections)
+            self._connections.clear()
+        for connection in connections:
+            sock = connection.sock
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+            connection.close()
+
+    def run(self, call: Callable[[], Any]) -> Any:
+        token = _PROVIDER_CANCELLATION.set(self)
+        try:
+            return call()
+        finally:
+            _PROVIDER_CANCELLATION.reset(token)
+            self.cancel()
+
+
+_PROVIDER_CANCELLATION: ContextVar[_ProviderCancellation | None] = ContextVar(
+    "provider_cancellation", default=None
+)
 
 
 def _safe_provider_probe_error_type(exc: Exception) -> str:
@@ -1272,6 +1317,7 @@ class ModelClient:
     def __init__(
         self,
         timeout: float | None = None,
+        connect_timeout: float = DEFAULT_PROVIDER_CONNECT_TIMEOUT,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
         local_max_retries: int = 0,
@@ -1285,6 +1331,9 @@ class ModelClient:
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
         self.timeout = timeout
+        if connect_timeout <= 0:
+            raise ValueError("connect_timeout must be positive")
+        self.connect_timeout = float(connect_timeout)
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
@@ -1311,11 +1360,18 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
+
         if not verify_tls:
             raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
         # TLS trust for provider egress. The system trust store is the default;
         # ca_bundle points at a custom CA for a reviewed corporate gateway.
         self._ssl_context = self._build_ssl_context(ca_bundle)
+
+    @staticmethod
+    def cancellable_call(call: Callable[[], Any]) -> tuple[Callable[[], Any], Callable[[], None]]:
+        """Wrap one provider call with socket-closing cooperative cancellation."""
+        cancellation = _ProviderCancellation()
+        return lambda: cancellation.run(call), cancellation.cancel
 
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None) -> ssl.SSLContext:
@@ -1753,7 +1809,12 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
-        connection_timeout = self.timeout if timeout is None else timeout
+        generation_timeout = self.timeout if timeout is None else timeout
+        connection_timeout = (
+            self.connect_timeout
+            if generation_timeout is None
+            else min(self.connect_timeout, generation_timeout)
+        )
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
@@ -1764,7 +1825,9 @@ class ModelClient:
                 context=self._ssl_context,
             )
         else:
-            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=connection_timeout)
+            connection = http.client.HTTPConnection(
+                parsed.hostname, port, timeout=connection_timeout
+            )
         connection._create_connection = (  # type: ignore[attr-defined]
             lambda _address, timeout, source_address: self._connect_validated(
                 destination, timeout, source_address
@@ -1772,6 +1835,12 @@ class ModelClient:
         )
         target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
         try:
+            connection.connect()
+            if connection.sock is not None:
+                connection.sock.settimeout(generation_timeout)
+            cancellation = _PROVIDER_CANCELLATION.get()
+            if cancellation is not None:
+                cancellation.register(connection)
             connection.request(
                 request.get_method(),
                 target,
@@ -6392,17 +6461,15 @@ class TaskOrchestrator:
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector(capability)
+            def attempt(agent: ModelAgent) -> EndpointAttempt[Any]:
+                provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
+                return EndpointAttempt(
+                    agent.id, contract, provider_call,
+                    cancellation_supported=True, cancel=cancel,
+                )
             try:
                 outcome = race_first_valid(
-                    [
-                        EndpointAttempt(
-                            agent.id,
-                            contract,
-                            lambda agent=agent: call(agent),
-                            cancellation_supported=False,
-                        )
-                        for agent in race_members
-                    ],
+                    [attempt(agent) for agent in race_members],
                     validate=(
                         (
                             lambda value: isinstance(value, tuple)
@@ -6535,16 +6602,15 @@ class TaskOrchestrator:
 
             contract = EndpointEquivalenceContract(**race_members[0].endpoint_equivalence)  # type: ignore[arg-type]
             attempt_completed, finalize_attempts = self._race_attempt_collector("text")
+            def attempt(agent: ModelAgent) -> EndpointAttempt[Any]:
+                provider_call, cancel = self.client.cancellable_call(lambda: call(agent))
+                return EndpointAttempt(
+                    agent.id, contract, provider_call,
+                    cancellation_supported=True, cancel=cancel,
+                )
             try:
                 outcome = race_first_valid(
-                [
-                    EndpointAttempt(
-                        agent.id,
-                        contract,
-                        lambda agent=agent: call(agent),
-                    )
-                    for agent in race_members
-                    ],
+                    [attempt(agent) for agent in race_members],
                     validate=lambda value: isinstance(value[0], str) and bool(value[0]),
                     deadline_seconds=self.client.timeout,
                     max_concurrency=len(race_members),

@@ -26,7 +26,7 @@ import urllib.error
 import urllib.request
 import certifi
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import (
@@ -1415,9 +1415,8 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 def model_group_name_for(discovered: DiscoveredModel) -> str:
     """Use the provider-declared exact model identity as the logical group."""
-    identity = discovered.model_id.casefold()
-    fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
-    return f"model_{_slug(identity)}_{fingerprint}"
+    fingerprint = hashlib.sha256(discovered.model_id.encode("utf-8")).hexdigest()[:10]
+    return f"model_{_slug(discovered.model_id)}_{fingerprint}"
 
 
 def privacy_tags_for_discovered(discovered: DiscoveredModel) -> tuple[str, ...]:

@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import socket
 import sys
+import threading
 import urllib.request
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -655,6 +656,10 @@ def test_https_provider_uses_verifying_connection_and_resolved_destination() -> 
             self.args = args
             self.kwargs = kwargs
             self.request_args = None
+            self.sock = None
+
+        def connect(self):
+            self.sock = Mock()
 
         def request(self, *args, **kwargs):
             self.request_args = (args, kwargs)
@@ -679,9 +684,69 @@ def test_https_provider_uses_verifying_connection_and_resolved_destination() -> 
 
     assert response.status == 200
     https_connection.assert_called_once_with(
-        "provider.example", 443, timeout=client.timeout, context=client._ssl_context
+        "provider.example", 443, timeout=client.connect_timeout, context=client._ssl_context
     )
+    connection.sock.settimeout.assert_called_once_with(None)
     assert connection.request_args[0][0] == "POST"
+
+
+def test_cancellable_provider_call_closes_blocked_transport_without_generation_timeout() -> None:
+    entered = threading.Event()
+    released = threading.Event()
+
+    class Socket:
+        def settimeout(self, value):
+            assert value is None
+
+        def shutdown(self, _how):
+            released.set()
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            self.sock = Socket()
+            self.closed = False
+
+        def connect(self):
+            return None
+
+        def request(self, *_args, **_kwargs):
+            return None
+
+        def getresponse(self):
+            entered.set()
+            assert released.wait(timeout=1)
+            raise OSError("cancelled")
+
+        def close(self):
+            self.closed = True
+
+    client = ModelClient(timeout=None)
+    connection = Connection()
+    request = urllib.request.Request("http://provider.example/v1/chat/completions")
+    call, cancel = client.cancellable_call(
+        lambda: client._open_provider(request, (socket.AF_INET, ("127.0.0.1", 80)))
+    )
+    errors = []
+
+    def run():
+        try:
+            call()
+        except OSError as exc:
+            errors.append(exc)
+
+    with patch(
+        "contextual_orchestrator.orchestrator.http.client.HTTPConnection",
+        return_value=connection,
+    ):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert entered.wait(timeout=1)
+        cancel()
+        thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert errors
+    assert connection.closed
 
 
 def test_validated_connect_binds_source_address() -> None:

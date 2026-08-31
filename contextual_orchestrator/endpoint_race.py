@@ -62,6 +62,7 @@ class EndpointAttempt(Generic[T]):
     contract: EndpointEquivalenceContract
     call: Callable[[], T]
     cancellation_supported: bool = False
+    cancel: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,9 @@ def race_first_valid(
                     if loser_future is future:
                         continue
                     cancelled = loser_future.cancel()
+                    if not cancelled and loser.cancel is not None:
+                        loser.cancel()
+                        cancelled = True
                     outcome = "cancelled" if cancelled else "safe_drain"
                     cancellations.append((loser.endpoint_id, outcome))
                 pool.shutdown(wait=False, cancel_futures=True)
@@ -161,5 +165,10 @@ def race_first_valid(
                     completion_ms=round((time.monotonic() - started) * 1000, 3),
                 )
     finally:
+        for future in pending:
+            future.cancel()
+            attempt = futures[future][1]
+            if attempt.cancel is not None:
+                attempt.cancel()
         pool.shutdown(wait=False, cancel_futures=True)
     raise RuntimeError("all equivalent endpoints failed validation") from last_error
