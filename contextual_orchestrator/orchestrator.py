@@ -4126,6 +4126,13 @@ class TaskOrchestrator:
                             "request body exceeds provider limit"
                         ) from exc
                     if not request_too_large:
+                        if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
+                            raise classify_provider_failure(
+                                exc,
+                                agent_id=candidate.id,
+                                model=candidate.model,
+                                transport="structured_synthesis",
+                            ) from None
                         raise
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"

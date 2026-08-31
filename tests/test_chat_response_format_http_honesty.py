@@ -83,6 +83,44 @@ def test_http_chat_accepts_response_format_json_object() -> None:
         thread.join(timeout=5)
 
 
+def test_http_structured_synthesis_classifies_upstream_404() -> None:
+    """Final synthesis provider rejection is typed and never a raw 500."""
+    orchestrator = build()
+
+    def reject_synthesis(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://provider.synthetic.invalid/v1/chat/completions",
+            404,
+            "not found",
+            {},
+            None,
+        )
+
+    orchestrator.client.proxy_send = reject_synthesis
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "json object mode"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 404, body
+        assert body["error"]["code"] == "model_not_found"
+        assert body["error"]["detail"]["transport"] == "structured_synthesis"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_structured_chat_rejects_batch_routing() -> None:
     """Provider-native structured synthesis has no batch execution contract."""
     server, thread, port = _server()
