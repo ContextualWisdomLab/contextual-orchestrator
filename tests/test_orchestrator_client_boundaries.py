@@ -131,7 +131,9 @@ def test_proxy_completion_applies_explicit_effort_profile() -> None:
 
 def test_judge_adapter_validates_mode_and_response_format() -> None:
     orch = _orch(_agent())
-    adapter = _FastMLSIJudgeAdapter(orchestrator=orch, text="task", judge="planner_agent")
+    adapter = _FastMLSIJudgeAdapter(
+        orchestrator=orch, text="task", judge="planner_agent"
+    )
 
     with pytest.raises(ValueError, match="mode must be auto, route, or conduct"):
         adapter.complete([{"role": "user", "content": "hi"}], mode="bogus")
@@ -259,7 +261,9 @@ def test_ssl_context_requires_loadable_ca_bundle(tmp_path) -> None:
         ([""], "bare host names"),
     ],
 )
-def test_allowed_provider_hosts_normalization_rejects_bad_input(hosts, fragment) -> None:
+def test_allowed_provider_hosts_normalization_rejects_bad_input(
+    hosts, fragment
+) -> None:
     with pytest.raises(ValueError, match=fragment):
         ModelClient(allowed_provider_hosts=hosts)
 
@@ -299,8 +303,9 @@ def test_probe_against_https_provider_skips_registry_and_reports_ready() -> None
         credential_key="REMOTE_API_KEY",
     )
     client = ModelClient()
-    with patch.object(client, "_validate_provider", return_value=None), patch.object(
-        client, "_send", return_value="OK"
+    with (
+        patch.object(client, "_validate_provider", return_value=None),
+        patch.object(client, "_send", return_value="OK"),
     ):
         report = client.probe(agent, timeout=1.0)
     assert report["status"] == "ready"
@@ -340,17 +345,24 @@ def test_probe_registry_check_passes_for_registered_local_model(
         base_url=base_url,
     )
     registry_payload = {"data": [{"id": "registered-local-model"}, {"id": "other"}]}
-    with patch.object(client, "_validate_provider", return_value=None), patch.object(
-        client, "_open_provider", return_value=_RegistryResponse(registry_payload)
-    ), patch.object(client, "_send", return_value="OK"):
+    with (
+        patch.object(client, "_validate_provider", return_value=None),
+        patch.object(
+            client, "_open_provider", return_value=_RegistryResponse(registry_payload)
+        ),
+        patch.object(client, "_send", return_value="OK"),
+    ):
         report = client.probe(agent, timeout=1.0)
     assert report["status"] == "ready"
 
     missing_client = ModelClient()
-    with patch.object(missing_client, "_validate_provider", return_value=None), patch.object(
-        missing_client,
-        "_open_provider",
-        return_value=_RegistryResponse({"data": [{"id": "other"}]}),
+    with (
+        patch.object(missing_client, "_validate_provider", return_value=None),
+        patch.object(
+            missing_client,
+            "_open_provider",
+            return_value=_RegistryResponse({"data": [{"id": "other"}]}),
+        ),
     ):
         missing = missing_client.probe(agent, timeout=1.0)
     assert missing["status"] == "not_ready"
@@ -393,9 +405,7 @@ def test_stream_survives_noise_and_stream_without_done_marker() -> None:
         b'data: {"choices":[{"delta":{"content":"hel"}}]}',
         b'data: {"choices":[{"delta":{"content":"lo"}}]}',
     ]
-    with patch.object(
-        client, "_open_provider", return_value=_StreamResponse(lines)
-    ):
+    with patch.object(client, "_open_provider", return_value=_StreamResponse(lines)):
         deltas = list(client._stream_send(agent, {}))
     assert deltas == ["hel", "lo"]
 
@@ -454,9 +464,7 @@ def test_stream_wraps_mid_stream_transport_failure_without_provider_text() -> No
             yield b'data: {"choices":[{"delta":{"content":"par"}}]}'
             raise urllib.error.URLError("connection reset by provider")
 
-    with patch.object(
-        client, "_open_provider", return_value=_ExplodingStream()
-    ):
+    with patch.object(client, "_open_provider", return_value=_ExplodingStream()):
         iterator = client._stream_send(agent, {})
         assert next(iterator) == "par"
         with pytest.raises(ProviderUpstreamError) as excinfo:
@@ -546,7 +554,9 @@ def test_send_pins_openrouter_zdr_on_the_wire() -> None:
     agent = _openrouter_agent()
     client = ModelClient()
     captured: dict[str, Any] = {}
-    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+    with patch.object(
+        client, "_open_provider", side_effect=_capture_request_body(captured)
+    ):
         token = _REQUEST_ZDR_ONLY.set(True)
         try:
             client._send(agent, {"model": agent.model, "messages": []})
@@ -568,7 +578,11 @@ def test_stream_send_pins_openrouter_zdr_on_the_wire() -> None:
     with patch.object(client, "_open_provider", side_effect=_fake_open_provider):
         token = _REQUEST_ZDR_ONLY.set(True)
         try:
-            list(client._stream_send(agent, {"model": agent.model, "messages": [], "stream": True}))
+            list(
+                client._stream_send(
+                    agent, {"model": agent.model, "messages": [], "stream": True}
+                )
+            )
         finally:
             _REQUEST_ZDR_ONLY.reset(token)
     assert captured["body"]["provider"] == {"zdr": True}
@@ -579,10 +593,14 @@ def test_send_raw_pins_openrouter_zdr_on_the_wire() -> None:
     agent = _openrouter_agent()
     client = ModelClient()
     captured: dict[str, Any] = {}
-    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+    with patch.object(
+        client, "_open_provider", side_effect=_capture_request_body(captured)
+    ):
         token = _REQUEST_ZDR_ONLY.set(True)
         try:
-            client._send_raw(agent, "chat/completions", {"model": agent.model, "messages": []})
+            client._send_raw(
+                agent, "chat/completions", {"model": agent.model, "messages": []}
+            )
         finally:
             _REQUEST_ZDR_ONLY.reset(token)
     assert captured["body"]["provider"] == {"zdr": True}
@@ -593,7 +611,9 @@ def test_send_does_not_pin_zdr_outside_zdr_only_context() -> None:
     agent = _openrouter_agent()
     client = ModelClient()
     captured: dict[str, Any] = {}
-    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+    with patch.object(
+        client, "_open_provider", side_effect=_capture_request_body(captured)
+    ):
         client._send(agent, {"model": agent.model, "messages": []})
     assert "provider" not in captured["body"]
 
@@ -610,11 +630,14 @@ def test_batch_chat_success_on_https_provider_returns_validated_results() -> Non
     )
     client = ModelClient()
     requests = {"task_0": [{"role": "user", "content": "hi"}]}
-    with patch.object(client, "_validate_provider", return_value=None), patch.object(
-        client,
-        "_batch_run",
-        return_value={"task_0": {"content": "done", "usage": None}},
-    ) as run:
+    with (
+        patch.object(client, "_validate_provider", return_value=None),
+        patch.object(
+            client,
+            "_batch_run",
+            return_value={"task_0": {"content": "done", "usage": None}},
+        ) as run,
+    ):
         results = client.batch_chat(agent, requests)
     assert results == {"task_0": {"content": "done", "usage": None}}
     run.assert_called_once()
@@ -629,8 +652,11 @@ def test_batch_chat_wraps_provider_failures_without_provider_text() -> None:
     )
     client = ModelClient()
     requests = {"task_0": [{"role": "user", "content": "hi"}]}
-    with patch.object(client, "_validate_provider", return_value=None), patch.object(
-        client, "_batch_run", side_effect=ValueError("provider secret detail")
+    with (
+        patch.object(client, "_validate_provider", return_value=None),
+        patch.object(
+            client, "_batch_run", side_effect=ValueError("provider secret detail")
+        ),
     ):
         with pytest.raises(ProviderUpstreamError) as excinfo:
             client.batch_chat(agent, requests)
@@ -700,10 +726,10 @@ def test_batch_run_skips_blank_lines_in_output_content() -> None:
             return {"id": "batch_1"}
         return {"status": "completed", "output_file_id": "file_9"}
 
-    with patch.object(
-        client, "_batch_upload", return_value="file_1"
-    ), patch.object(client, "_batch_json", side_effect=batch_json), patch.object(
-        client, "_batch_raw", return_value=raw
+    with (
+        patch.object(client, "_batch_upload", return_value="file_1"),
+        patch.object(client, "_batch_json", side_effect=batch_json),
+        patch.object(client, "_batch_raw", return_value=raw),
     ):
         results = client._batch_run(
             agent,
@@ -714,6 +740,47 @@ def test_batch_run_skips_blank_lines_in_output_content() -> None:
         )
     assert results["task_0"]["content"] == "ok"
     assert results["task_0"]["usage"] == {"prompt_tokens": 3}
+
+
+def test_batch_run_pins_openrouter_zdr_in_uploaded_jsonl() -> None:
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    raw = b'{"custom_id":"task_0","response":{"body":{"choices":[{"message":{"content":"ok"}}]}}}\n'
+
+    def capture_upload(_agent, content, _destination):
+        captured["line"] = json.loads(content.decode("utf-8"))
+        return "file_1"
+
+    def batch_json(_agent, method, _path, payload=None, destination=None):
+        del payload, destination
+        return (
+            {"id": "batch_1"}
+            if method == "POST"
+            else {
+                "status": "completed",
+                "output_file_id": "file_9",
+            }
+        )
+
+    with (
+        patch.object(client, "_batch_upload", side_effect=capture_upload),
+        patch.object(client, "_batch_json", side_effect=batch_json),
+        patch.object(client, "_batch_raw", return_value=raw),
+    ):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._batch_run(
+                agent,
+                {"task_0": [{"role": "user", "content": "hi"}]},
+                None,
+                0.01,
+                5.0,
+            )
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+
+    assert captured["line"]["body"]["provider"] == {"zdr": True}
 
 
 # -- Responses input coercion shapes -------------------------------------------------
