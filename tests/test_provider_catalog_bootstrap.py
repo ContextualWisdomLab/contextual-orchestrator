@@ -206,6 +206,57 @@ def test_empty_catalog_preserves_lkg_but_nonchat_success_withdraws_it() -> None:
         set_backend(None)
 
 
+def test_all_retired_nvidia_nim_refresh_withdraws_stale_persisted_model() -> None:
+    """A live listing narrowed to only retired ids clears the stale LKG row.
+
+    contextual-orchestrator#979 review: NVIDIA NIM's denylist
+    (``model_discovery._NVIDIA_NIM_RETIRED_MODEL_IDS``) is enforced in
+    ``is_routable_discovered_model`` (eligibility), not at parse time,
+    specifically so that an account whose entire live listing happens to be
+    denylisted ids is still a real, non-empty ``record_success`` -- never
+    the ``empty_provider_catalog`` failure path, whose last-known-good
+    fallback would otherwise resurrect an already-persisted retired model
+    seeded before this denylist existed.
+    """
+    set_backend(InMemoryCredentialBackend())
+    try:
+        nvidia_nim = _source("nvidia_nim", "NVIDIA_NIM_API_KEY")
+        openai = _source("openai", "OPENAI_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        retired = _model(nvidia_nim, "google/gemma-3-12b-it")
+
+        # Seed a pre-fix persisted state where the retired model was still
+        # recorded eligible (bypassing eligibility, as older code would have).
+        store.record_success(
+            nvidia_nim,
+            [retired],
+            eligible_model_ids={"google/gemma-3-12b-it"},
+            serving_tags={},
+        )
+        assert [model.model_id for model in store.serving_models(nvidia_nim)] == [
+            "google/gemma-3-12b-it"
+        ]
+
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(nvidia_nim, openai),
+            discovery=lambda _sources: (
+                [retired, _model(openai, "gpt-live")],
+                [],
+            ),
+            model_limit=2,
+        )
+
+        assert "nvidia_nim" not in report.providers_with_errors
+        assert store.serving_models(nvidia_nim) == []
+        assert "google/gemma-3-12b-it" not in {
+            model.model_id for model in store.serving_models(nvidia_nim)
+        }
+    finally:
+        set_backend(None)
+
+
 def test_privacy_analysis_success_persists_and_empty_failure_preserves_lkg() -> None:
     """The opt-in bootstrap stores grounded evidence without erasing it on failure."""
     set_backend(InMemoryCredentialBackend())

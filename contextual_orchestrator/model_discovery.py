@@ -73,6 +73,20 @@ _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/Contextua
 # completion), so a hand-maintained denylist is the honest interim fix.
 # Scoped to nvidia_nim/nvidia_nim_sub specifically so it can never suppress
 # an unrelated provider serving a same-named id.
+#
+# Enforced in ``is_routable_discovered_model`` (the shared serving-eligibility
+# gate), not at parse time: filtering a retired id out of the raw discovered
+# rows here would make a NVIDIA NIM account whose live listing happens to be
+# denylisted models only look identical, to
+# ``provider_catalog_bootstrap.refresh_persisted_provider_catalog``, to a
+# genuinely empty/failed provider response -- which triggers its
+# last-known-good fallback and can resurrect an already-persisted retired
+# model instead of clearing it (contextual-orchestrator#979 review). Keeping
+# denylisted rows in the raw catalog (so a real, non-empty response is always
+# recorded as a real success) while excluding them only from eligibility
+# means every successful refresh replaces the persisted eligible set and
+# drops any previously-served retired model, even in that all-denylisted
+# edge case.
 _NVIDIA_NIM_RETIRED_MODEL_IDS = frozenset({
     "google/gemma-3-12b-it",
     "google/gemma-3-4b-it",
@@ -951,11 +965,6 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         model_id = row.get("id")
         if type(model_id) is not str or not model_id:
             continue
-        if (
-            source.provider_name in _NVIDIA_NIM_PROVIDER_NAMES
-            and model_id in _NVIDIA_NIM_RETIRED_MODEL_IDS
-        ):
-            continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}
         supported_parameters = (
@@ -1462,6 +1471,18 @@ def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
     )
 
 
+def _is_retired_nvidia_nim_model(discovered: DiscoveredModel) -> bool:
+    """Return whether a catalog row is a known-retired NVIDIA NIM model id.
+
+    See ``_NVIDIA_NIM_RETIRED_MODEL_IDS`` for the live 404 evidence and why
+    this is checked here (eligibility) rather than at parse time.
+    """
+    return (
+        discovered.provider_name in _NVIDIA_NIM_PROVIDER_NAMES
+        and discovered.model_id in _NVIDIA_NIM_RETIRED_MODEL_IDS
+    )
+
+
 def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
     """Return whether a discovered row may become an ordinary chat agent.
 
@@ -1472,6 +1493,7 @@ def is_routable_discovered_model(discovered: DiscoveredModel) -> bool:
     return (
         not discovered.evidence_only
         and discovered.spend_admitted
+        and not _is_retired_nvidia_nim_model(discovered)
         and is_discovered_chat_candidate(discovered)
     )
 

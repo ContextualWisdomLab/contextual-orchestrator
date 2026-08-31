@@ -406,8 +406,8 @@ def test_openai_bare_list_promotes_transport_compatible_ids_to_chat() -> None:
     assert "text-embedding-3-large" not in by_id
 
 
-def test_nvidia_nim_parse_excludes_known_retired_model_ids() -> None:
-    """A hand-maintained denylist keeps a retired NIM catalog id out of discovery.
+def test_nvidia_nim_parse_keeps_retired_model_ids_as_raw_catalog_evidence() -> None:
+    """Parsing never drops a retired NIM catalog id -- only eligibility does.
 
     ContextualWisdomLab/contextual-orchestrator#957 and #961 (2026-08-31):
     NVIDIA NIM's /v1/models still lists ``google/gemma-3-12b-it`` and
@@ -416,12 +416,18 @@ def test_nvidia_nim_parse_excludes_known_retired_model_ids() -> None:
     runs, in both cases -- while discovery keeps selecting them into the
     orchestrator/free preflight candidate pool every run, burning preflight
     budget and denying diversity margin to routes that would actually
-    succeed. A catalog listing is not evidence a model is still servable;
-    excluding these ids at parse time keeps every downstream consumer
-    (general_free_serving_candidates, select_bootstrap_discovered_agents,
-    the Postgres catalog sync) from re-selecting them. Scoped to
-    nvidia_nim/nvidia_nim_sub only, so an unrelated provider serving a
-    same-named id is unaffected.
+    succeed. A catalog listing is not evidence a model is still servable.
+
+    The exclusion is enforced in ``is_routable_discovered_model``, not here
+    at parse time (see #979 review): dropping a denylisted id out of the raw
+    discovered rows would make a NVIDIA NIM account whose live listing
+    happens to be denylisted models only look, to
+    ``provider_catalog_bootstrap.refresh_persisted_provider_catalog``,
+    identical to a genuinely empty/failed provider response -- which
+    triggers its last-known-good fallback and can resurrect an
+    already-persisted retired model instead of clearing it. Parsing must
+    keep every row so a real, non-empty response is always recorded as a
+    real success.
     """
     nvidia_nim_source = next(
         item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim"
@@ -438,12 +444,45 @@ def test_nvidia_nim_parse_excludes_known_retired_model_ids() -> None:
     nim_discovered = _parse_openai_compatible(payload, nvidia_nim_source)
     nim_sub_discovered = _parse_openai_compatible(payload, nvidia_nim_sub_source)
 
-    assert [model.model_id for model in nim_discovered] == ["meta/llama-3.1-8b-instruct"]
-    assert [model.model_id for model in nim_sub_discovered] == ["meta/llama-3.1-8b-instruct"]
-    # The same id from an unrelated provider must not be caught by this
-    # NVIDIA-scoped denylist.
-    other_discovered = _parse_openai_compatible(payload, OPENAI_SOURCE)
-    assert "google/gemma-3-12b-it" in {model.model_id for model in other_discovered}
+    assert {model.model_id for model in nim_discovered} == {
+        "google/gemma-3-12b-it",
+        "google/gemma-3-4b-it",
+        "meta/llama-3.1-8b-instruct",
+    }
+    assert {model.model_id for model in nim_sub_discovered} == {
+        "google/gemma-3-12b-it",
+        "google/gemma-3-4b-it",
+        "meta/llama-3.1-8b-instruct",
+    }
+
+
+def test_nvidia_nim_retired_model_ids_are_not_routable() -> None:
+    """The shared eligibility gate excludes only NIM's known-retired ids.
+
+    Scoped to nvidia_nim/nvidia_nim_sub only, so an unrelated provider
+    serving a same-named id is unaffected.
+    """
+    retired = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="google/gemma-3-12b-it",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    retired_sub = replace(retired, provider_name="nvidia_nim_sub", credential_name="NVIDIA_NIM_API_KEY_SUB")
+    live = replace(retired, model_id="meta/llama-3.1-8b-instruct")
+    same_id_other_provider = replace(
+        retired,
+        provider_name="openai",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+    )
+
+    assert is_routable_discovered_model(retired) is False
+    assert is_routable_discovered_model(retired_sub) is False
+    assert is_routable_discovered_model(live) is True
+    assert is_routable_discovered_model(same_id_other_provider) is True
 
 
 def test_openai_parse_preserves_explicit_capability_evidence() -> None:

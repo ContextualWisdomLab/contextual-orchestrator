@@ -23,12 +23,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retirement. Rediscovering and reselecting them every run burned preflight
   budget and denied diversity margin to routes that would have actually
   succeeded, directly contributing to review-gate timeouts when too few
-  surviving routes were left to absorb one. `_parse_openai_compatible` now
-  excludes them via a small, provider-scoped, hand-maintained denylist
-  (`_NVIDIA_NIM_RETIRED_MODEL_IDS`) — scoped to `nvidia_nim`/`nvidia_nim_sub`
-  specifically so an unrelated provider serving a same-named id is
-  unaffected. This is a hand-maintained interim fix, not a self-healing
-  breaker; a future retirement still needs a human to add it here.
+  surviving routes were left to absorb one. `is_routable_discovered_model`
+  (the shared serving-eligibility gate) now excludes them via a small,
+  provider-scoped, hand-maintained denylist (`_NVIDIA_NIM_RETIRED_MODEL_IDS`)
+  — scoped to `nvidia_nim`/`nvidia_nim_sub` specifically so an unrelated
+  provider serving a same-named id is unaffected. This is a hand-maintained
+  interim fix, not a self-healing breaker; a future retirement still needs a
+  human to add it here. The exclusion is deliberately enforced in
+  eligibility, not at `_parse_openai_compatible` parse time (contextual-
+  orchestrator#979 review): dropping a denylisted row out of the raw
+  discovered rows would make an account whose live listing happens to be
+  denylisted-only models look, to `provider_catalog_bootstrap.refresh_persisted_provider_catalog`,
+  identical to a genuinely empty/failed provider response — triggering its
+  last-known-good fallback and resurrecting an already-persisted retired
+  model instead of clearing it. Keeping denylisted rows in the raw catalog
+  means a real, non-empty response is always recorded as a real success, so
+  every refresh replaces (not merges) the persisted eligible set and drops
+  any previously-served retired model, even in that all-denylisted edge
+  case.
 - `review_gateway.build_review_orchestrator()` now also excludes a
   candidate whose catalog evidence declares a required non-text input
   modality (image/audio/video), the same rule `general_free_serving_candidates`
