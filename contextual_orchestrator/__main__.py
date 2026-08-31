@@ -24,6 +24,7 @@ from .model_discovery import (
     discover_all_models,
     free_discovered_models,
     general_free_serving_candidates,
+    is_discovered_chat_candidate,
     is_routable_discovered_model,
     refresh_price_book,
     select_bootstrap_discovered_agents,
@@ -550,16 +551,43 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         _runtime_discovery_sources(orchestrator),
         ca_bundle=orchestrator.client.ca_bundle,
     )
-    chat_models = [model for model in discovered if is_routable_discovered_model(model)]
-    existing_ids = {agent.id for agent in orchestrator.candidates}
-    agents = [
-        replace(
-            agent_from_discovered(model),
-            disabled=False,
-        )
-        for model in chat_models
-        if agent_id_for(model) not in existing_ids
+    chat_models = [
+        model
+        for model in discovered
+        if not model.evidence_only and is_discovered_chat_candidate(model)
     ]
+    existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
+    agents = []
+    for model in chat_models:
+        existing = existing_by_id.get(agent_id_for(model))
+        routable = is_routable_discovered_model(model)
+        if existing is None:
+            agents.append(replace(agent_from_discovered(model), disabled=not routable))
+        elif "discovered" not in existing.tags:
+            continue
+        elif not routable:
+            tags = (*existing.tags, "spend:blocked")
+            if existing.disabled and "spend:blocked" not in existing.tags:
+                tags = (*tags, "spend:blocked:preserve-disabled")
+            agents.append(
+                replace(
+                    existing,
+                    disabled=True,
+                    tags=tuple(dict.fromkeys(tags)),
+                )
+            )
+        elif "spend:blocked" in existing.tags:
+            agents.append(
+                replace(
+                    existing,
+                    disabled="spend:blocked:preserve-disabled" in existing.tags,
+                    tags=tuple(
+                        tag
+                        for tag in existing.tags
+                        if tag not in {"spend:blocked", "spend:blocked:preserve-disabled"}
+                    ),
+                )
+            )
     result = (
         orchestrator.sync_discovered_agents(agents)
         if agents
