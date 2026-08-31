@@ -62,11 +62,11 @@ def exercise_runtime(orchestrator: TaskOrchestrator) -> None:
     orchestrator.run_evaluation(["Replay this commercial readiness prompt."], mode="route")
 
 
-def test_buyer_evidence_manifest_report_indexes_runtime_and_caveat_evidence() -> None:
+def test_commercial_evidence_manifest_report_indexes_runtime_and_caveat_evidence() -> None:
     orchestrator = build()
     exercise_runtime(orchestrator)
 
-    report = orchestrator.buyer_evidence_manifest_report(
+    report = orchestrator.commercial_evidence_manifest_report(
         target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW,
         locale_bundles=ADMIN_TRANSLATIONS,
         security_profile={
@@ -160,14 +160,7 @@ def test_buyer_evidence_manifest_endpoint_openapi_admin_and_docs_contract() -> N
     assert legacy_manifest == manifest
 
 
-def test_deprecated_python_manifest_alias_preserves_payload() -> None:
-    orchestrator = build()
-    assert orchestrator.buyer_evidence_manifest_report() == (
-        orchestrator.commercial_evidence_manifest_report()
-    )
-
-
 if __name__ == "__main__":  # pragma: no cover
-    test_buyer_evidence_manifest_report_indexes_runtime_and_caveat_evidence()
+    test_commercial_evidence_manifest_report_indexes_runtime_and_caveat_evidence()
     test_buyer_evidence_manifest_endpoint_openapi_admin_and_docs_contract()
     print("ok")

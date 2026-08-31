@@ -8131,32 +8131,6 @@ class TaskOrchestrator:
             },
         }
 
-    def buyer_evidence_manifest_report(
-        self,
-        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
-        locale_bundles: dict[str, dict[str, str]] | None = None,
-        security_profile: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Return the deprecated manifest alias for existing Python consumers."""
-        return self.commercial_evidence_manifest_report(
-            target_contract_value_krw=target_contract_value_krw,
-            locale_bundles=locale_bundles,
-            security_profile=security_profile,
-        )
-
-    def buyer_handoff_bundle_report(
-        self,
-        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
-        locale_bundles: dict[str, dict[str, str]] | None = None,
-        security_profile: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Return the deprecated handoff alias for existing Python consumers."""
-        return self.commercial_handoff_bundle_report(
-            target_contract_value_krw=target_contract_value_krw,
-            locale_bundles=locale_bundles,
-            security_profile=security_profile,
-        )
-
     def saleability_decision_report(
         self,
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,

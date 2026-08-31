@@ -62,11 +62,11 @@ def exercise_runtime(orchestrator: TaskOrchestrator) -> None:
     orchestrator.run_evaluation(["Replay this buyer handoff prompt."], mode="route")
 
 
-def test_buyer_handoff_bundle_report_packages_sale_evidence() -> None:
+def test_commercial_handoff_bundle_report_packages_sale_evidence() -> None:
     orchestrator = build()
     exercise_runtime(orchestrator)
 
-    report = orchestrator.buyer_handoff_bundle_report(
+    report = orchestrator.commercial_handoff_bundle_report(
         target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW,
         locale_bundles=ADMIN_TRANSLATIONS,
         security_profile={
@@ -168,14 +168,7 @@ def test_buyer_handoff_bundle_endpoint_openapi_admin_and_docs_contract() -> None
     assert legacy_bundle == bundle
 
 
-def test_deprecated_python_handoff_alias_preserves_payload() -> None:
-    orchestrator = build()
-    assert orchestrator.buyer_handoff_bundle_report() == (
-        orchestrator.commercial_handoff_bundle_report()
-    )
-
-
 if __name__ == "__main__":  # pragma: no cover
-    test_buyer_handoff_bundle_report_packages_sale_evidence()
+    test_commercial_handoff_bundle_report_packages_sale_evidence()
     test_buyer_handoff_bundle_endpoint_openapi_admin_and_docs_contract()
     print("ok")
