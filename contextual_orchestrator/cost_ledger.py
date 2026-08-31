@@ -334,6 +334,7 @@ class UsageTelemetryEvent:
             "contextual_orchestrator.usage_record_id": record.usage_record_id,
             "contextual_orchestrator.request_channel": record.request_channel,
             "contextual_orchestrator.usage.export_state": export_state,
+            "contextual_orchestrator.usage.measurement_status": record.measurement_status,
         }
         if record.workflow_run_id:
             attributes["contextual_orchestrator.workflow_run_id"] = record.workflow_run_id
@@ -344,13 +345,16 @@ class UsageTelemetryEvent:
         if error_type:
             attributes["error.type"] = error_type
 
-        metrics = {
-            "gen_ai.usage.input_tokens": float(record.prompt_tokens),
-            "gen_ai.usage.output_tokens": float(record.completion_tokens),
-            "gen_ai.usage.total_tokens": float(record.total_tokens),
-            "gen_ai.usage.cost": float(record.cost_amount),
-            "contextual_orchestrator.usage.records": 1.0,
-        }
+        metrics = {"contextual_orchestrator.usage.records": 1.0}
+        if record.measurement_status != "unavailable":
+            metrics.update(
+                {
+                    "gen_ai.usage.input_tokens": float(record.prompt_tokens),
+                    "gen_ai.usage.output_tokens": float(record.completion_tokens),
+                    "gen_ai.usage.total_tokens": float(record.total_tokens),
+                    "gen_ai.usage.cost": float(record.cost_amount),
+                }
+            )
         if error_type:
             metrics["contextual_orchestrator.usage.export_failures"] = 1.0
         return cls(
@@ -1407,6 +1411,7 @@ class CostLedger:
                     "total_tokens": 0,
                     "cost_amount": Decimal("0"),
                     "currency_code": row.get("currency_code", "USD"),
+                    "_measurement_statuses": set(),
                 },
             )
             bucket["record_count"] += 1
@@ -1414,9 +1419,24 @@ class CostLedger:
             bucket["completion_tokens"] += int(row.get("completion_tokens", 0))
             bucket["total_tokens"] += int(row.get("total_tokens", 0))
             bucket["cost_amount"] += Decimal(str(row.get("cost_amount", 0)))
+            bucket["_measurement_statuses"].add(
+                row.get("measurement_status", "unavailable")
+            )
         for bucket in buckets.values():
-            bucket["cost_amount"] = float(
-                bucket["cost_amount"].quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+            statuses = bucket.pop("_measurement_statuses")
+            bucket["measurement_status"] = (
+                "unavailable" if "unavailable" in statuses
+                else "estimated" if "estimated" in statuses
+                else "measured"
+            )
+            bucket["cost_amount"] = (
+                None
+                if bucket["measurement_status"] == "unavailable"
+                else float(
+                    bucket["cost_amount"].quantize(
+                        Decimal("0.000001"), rounding=ROUND_HALF_UP
+                    )
+                )
             )
         return buckets
 
@@ -1429,7 +1449,12 @@ class CostLedger:
         """Return a report envelope: per-value rollup plus a grand total."""
         buckets = self.rollup(dimension, start, end)
         items = sorted(
-            buckets.values(), key=lambda item: item["cost_amount"], reverse=True
+            buckets.values(),
+            key=lambda item: (
+                item["cost_amount"] is not None,
+                item["cost_amount"] or 0.0,
+            ),
+            reverse=True,
         )
         grand_total = self.total(start, end)
         return {
@@ -1443,12 +1468,23 @@ class CostLedger:
         """Return grand totals (cost + tokens + record count) over the window."""
         rows = self.store.query(start, end)
         cost = sum((Decimal(str(row.get("cost_amount", 0))) for row in rows), Decimal("0"))
+        statuses = {row.get("measurement_status", "unavailable") for row in rows}
+        measurement_status = (
+            "unavailable" if "unavailable" in statuses
+            else "estimated" if "estimated" in statuses
+            else "measured"
+        )
         return {
             "record_count": len(rows),
             "prompt_tokens": sum(int(row.get("prompt_tokens", 0)) for row in rows),
             "completion_tokens": sum(int(row.get("completion_tokens", 0)) for row in rows),
             "total_tokens": sum(int(row.get("total_tokens", 0)) for row in rows),
-            "cost_amount": float(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+            "cost_amount": (
+                None
+                if measurement_status == "unavailable"
+                else float(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+            ),
+            "measurement_status": measurement_status,
         }
 
     def records(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
