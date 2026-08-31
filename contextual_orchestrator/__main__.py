@@ -548,16 +548,25 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         if agents
         else {"added": [], "updated": []}
     )
-    if any(model.provider_name == "configured_gateway" for model in runtime_models):
+    # Once the configured endpoint returned a concrete catalog, its blank
+    # bootstrap row must never remain callable.  In particular, if every
+    # catalog row fails the structured/auth readiness probe, retaining the
+    # unprobed blank seed would route virtual traffic around that fail-closed
+    # decision and repeatedly surface the same authentication failure.
+    if any(model.provider_name == "configured_gateway" for model in discovered):
         for agent in tuple(orchestrator.candidates):
+            has_ready_discovered_chat = any(
+                candidate.id != agent.id
+                and not candidate.disabled
+                and candidate.id in discovered_chat_agent_ids
+                for candidate in orchestrator.candidates
+            )
             if (
                 agent.provider_name == "configured_gateway"
                 and not agent.model.strip()
-                and any(
-                    candidate.id != agent.id
-                    and not candidate.disabled
-                    and candidate.id in discovered_chat_agent_ids
-                    for candidate in orchestrator.candidates
+                and (
+                    has_ready_discovered_chat
+                    or bool(failed_configured_gateway_probe_ids)
                 )
             ):
                 orchestrator.remove_agent("default", agent.id)

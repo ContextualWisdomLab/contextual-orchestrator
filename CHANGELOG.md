@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Configured-gateway discovery now removes its blank bootstrap row after a
+  concrete catalog's chat candidates fail bounded readiness, so virtual
+  requests cannot bypass an authentication failure through an unprobed seed;
+  explicit model pins still return their own typed authentication error.
 - Queued embedding admissions now carry the durable registry's result
   retention and the selected backend's polling cadence, so clients can poll
   within the actual job lifecycle instead of guessing or failing closed on

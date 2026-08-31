@@ -134,6 +134,53 @@ def test_configured_gateway_discovery_retains_only_structured_probe_successes(
     assert all(agent.model != "stale-model" for agent in orchestrator.agents)
 
 
+def test_failed_gateway_catalog_probes_remove_unprobed_blank_seed(monkeypatch) -> None:
+    """A catalog-wide auth failure cannot fall through to the blank seed row."""
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="auth-failing-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    live_model = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="synthetic-live-model",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    seed = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        base_url="https://gateway.synthetic.example/v1",
+        provider_name="configured_gateway",
+        credential_key="LLM_GATEWAY_API_KEY",
+        tags=("bootstrap_seed",),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: "present"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([model, live_model], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: False,
+    )
+    orchestrator = TaskOrchestrator([seed])
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert all(agent.id != seed.id for agent in orchestrator.candidates)
+    selected = orchestrator._select_agent("task", "synthesizer")
+    assert selected.provider_name == "openrouter"
+    assert selected.model == live_model.model_id
+
+
 def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
     monkeypatch, tmp_path
 ) -> None:

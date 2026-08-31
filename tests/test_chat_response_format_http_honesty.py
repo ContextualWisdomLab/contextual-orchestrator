@@ -359,6 +359,39 @@ def test_explicit_structured_model_preserves_model_not_found() -> None:
         thread.join(timeout=5)
 
 
+def test_explicit_structured_model_preserves_authentication_error() -> None:
+    """An explicit model pin returns its own 401 and never changes endpoints."""
+    orchestrator = TaskOrchestrator([
+        ModelAgent("auth_failing", "pinned-model", "mock://pinned", tags=("reasoning", "writing")),
+        ModelAgent("other_endpoint", "other-model", "mock://other", tags=("reasoning", "writing")),
+    ])
+    calls = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        raise urllib.error.HTTPError("https://synthetic.invalid", 401, "unauthorized", {}, None)
+
+    orchestrator.client.proxy_send = send
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": "pinned-model",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 401
+        assert body["error"]["code"] == "authentication_error"
+        assert calls and set(calls) == {"auth_failing"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_virtual_missing_models_record_each_circuit_failure_once() -> None:
     """Same-endpoint model replacement does not double-count its final 404."""
     agents = [
