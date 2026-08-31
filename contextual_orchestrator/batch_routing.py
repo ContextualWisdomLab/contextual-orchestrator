@@ -817,6 +817,8 @@ class ProviderEmbeddingBatchBackend:
         }
         if status == "failed":
             document["failure"] = dict(self._errors.get(job.job_id, {}))
+        elif status == "cancelled":
+            document["cancellation"] = dict(self._cancellations.get(job.job_id, {}))
         return document
 
     def cancel(self, job: BatchJob, *, reason: str) -> Dict[str, Any]:

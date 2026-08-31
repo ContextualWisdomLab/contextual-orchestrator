@@ -148,17 +148,27 @@ class CostRoutingCoordinator:
                         for request in requests
                     ):
                         raise RuntimeError("provider embedding batch must retain one selected route")
-                    prompt_tokens = sum(
-                        int(
-                            self.embedding_token_counter.count_text(
-                                request.input_text, request.model
+                    max_tokens, _max_chars = self._embedding_request_limits()
+                    vectors: List[List[float]] = []
+                    prompt_tokens = 0
+                    shard: List[EmbeddingBatchRequest] = []
+                    shard_tokens = 0
+                    for request in requests:
+                        if shard and shard_tokens + request.token_count > max_tokens:
+                            vectors.extend(
+                                orchestrator.client.embed(
+                                    agent, [item.input_text for item in shard]
+                                )
                             )
+                            shard = []
+                            shard_tokens = 0
+                        shard.append(request)
+                        shard_tokens += request.token_count
+                        prompt_tokens += request.token_count
+                    if shard:
+                        vectors.extend(
+                            orchestrator.client.embed(agent, [item.input_text for item in shard])
                         )
-                        for request in requests
-                    )
-                    vectors = orchestrator.client.embed(
-                        agent, [request.input_text for request in requests]
-                    )
                     return vectors, prompt_tokens
 
                 self.embedding_batch_backend = ProviderEmbeddingBatchBackend(
@@ -1068,6 +1078,20 @@ class CostRoutingCoordinator:
                 "model": model_name,
                 "embeddings": None,
             }
+        terminal_status = str(status.get("status") or "failed")
+        if terminal_status != "completed":
+            document = {
+                "batch_id": batch_id,
+                "status": terminal_status,
+                "backend": job.backend,
+                "model": model_name,
+                "embeddings": None,
+            }
+            for detail in ("failure", "cancellation"):
+                if status.get(detail) is not None:
+                    document[detail] = status[detail]
+            self._embedding_documents[batch_id] = document
+            return document
 
         items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
         request_by_custom_id = {request.custom_id: request for request in requests}
@@ -1093,6 +1117,7 @@ class CostRoutingCoordinator:
                     "prompt_tokens": max(0, prompt_tokens),
                     "model": item.model,
                     "attribution": dict(request.attribution) if request else {},
+                    "agent_id": request.agent_id if request else None,
                 }
             )
 
@@ -1109,9 +1134,15 @@ class CostRoutingCoordinator:
             attribution = dict(parts[0]["attribution"])
             prompt_tokens = sum(int(part["prompt_tokens"]) for part in parts)
             model_name = str(parts[0]["model"])
-            provider = str(
-                attribution.get("provider") or attribution.get("upstream_api") or "unknown"
-            )
+            agent_id = parts[0]["agent_id"]
+            if agent_id:
+                provider, model_name = self._agent_provider_model(
+                    self.orchestrator._agent(agent_id), model_name
+                )
+            else:
+                provider = str(
+                    attribution.get("provider") or attribution.get("upstream_api") or "unknown"
+                )
             record = self.ledger.record_usage(
                 provider=provider,
                 model=model_name,
@@ -1164,13 +1195,13 @@ class CostRoutingCoordinator:
         metadata: Optional[Dict[str, Any]] = None,
         zdr_only: bool = False,
         agent_id: Optional[str] = None,
+        wait_timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Submit an embeddings batch and return its document (one round-trip).
 
-        For the local/in-process backend the batch completes synchronously, so
-        this returns the finished ``completed`` document with vectors and cost.
-        For an async backend (pg-llm-batch) it returns a ``{batch_id, status}``
-        envelope the caller then polls via :meth:`embeddings_batch_document`.
+        Local backends complete immediately. Callers that require a synchronous
+        provider result pass ``wait_timeout``; a timed-out queued job is
+        cancelled so the synchronous surface does not leave orphaned work.
         """
         job = self.submit_embeddings_batch(
             inputs,
@@ -1180,6 +1211,10 @@ class CostRoutingCoordinator:
             zdr_only=zdr_only,
             agent_id=agent_id,
         )
+        if wait_timeout is not None and hasattr(self.embedding_batch_backend, "wait"):
+            status = self.embedding_batch_backend.wait(job, timeout=wait_timeout)
+            if not status.get("is_complete") and hasattr(self.embedding_batch_backend, "cancel"):
+                self.embedding_batch_backend.cancel(job, reason="synchronous request deadline elapsed")
         return self.embeddings_batch_document(job.job_id)
 
     def _require_embedding_job(self, batch_id: str) -> BatchJob:

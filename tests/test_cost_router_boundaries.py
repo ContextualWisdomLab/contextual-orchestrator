@@ -11,6 +11,7 @@ from contextual_orchestrator import (
     InMemoryConfigStore,
     ModelAgent,
     PriceBook,
+    PriceEntry,
     TaskOrchestrator,
 )
 from contextual_orchestrator.batch_routing import (
@@ -365,6 +366,62 @@ def test_embeddings_document_incomplete_status_has_no_vectors() -> None:
     document = coordinator.embeddings_batch_document(job.job_id)
     assert document["embeddings"] is None
     assert document["status"] == "in_progress"
+
+
+def test_embeddings_document_preserves_failed_terminal_state_without_cost() -> None:
+    class _FailedBackend(_DroppingEmbeddingBackend):
+        def poll(self, job: BatchJob) -> Dict[str, Any]:
+            return {
+                "job_id": job.job_id,
+                "status": "failed",
+                "is_complete": True,
+                "failure": {"error_type": "ProviderError", "retryable": False},
+            }
+
+        def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+            raise AssertionError("failed jobs have no result payload")
+
+    coordinator = _coordinator(embedding_batch_backend=_FailedBackend())
+    job = coordinator.submit_embeddings_batch(["never billed"])
+
+    document = coordinator.embeddings_batch_document(job.job_id)
+
+    assert document["status"] == "failed"
+    assert document["embeddings"] is None
+    assert document["failure"]["error_type"] == "ProviderError"
+    assert coordinator.ledger.records() == []
+
+
+def test_embeddings_document_bills_the_selected_agent_not_caller_attribution() -> None:
+    agent = ModelAgent(
+        id="embedding_worker",
+        model="embedding-v1",
+        base_url="mock://embed",
+        provider_name="trusted-provider",
+        tags=("embedding",),
+    )
+    orchestrator = TaskOrchestrator([agent])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("trusted-provider", "embedding-v1", 2.0, 0.0))
+    coordinator = Coordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=HeuristicTokenCounter(),
+        embedding_batch_backend=_DroppingEmbeddingBackend(),
+    )
+
+    coordinator.complete_embeddings_batch(
+        ["bill selected route"],
+        model="embedding-v1",
+        agent_id=agent.id,
+        attribution={"provider": "spoofed-provider"},
+    )
+
+    row = coordinator.ledger.records()[0]
+    assert row["provider_name"] == "trusted-provider"
+    assert row["model_name"] == "embedding-v1"
 
 
 def test_cost_report_delegates_to_ledger_window() -> None:
