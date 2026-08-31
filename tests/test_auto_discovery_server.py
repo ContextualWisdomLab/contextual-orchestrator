@@ -1,5 +1,6 @@
 """Server-startup model discovery activates discovered runtime agents."""
 
+from dataclasses import replace
 import os
 from unittest.mock import patch
 
@@ -416,6 +417,121 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
 
     assert _auto_discover_runtime_agents(orchestrator) == {"added": [], "updated": []}
     assert orchestrator.candidates == [bootstrap, existing]
+
+
+def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_credit(
+    monkeypatch,
+) -> None:
+    discovered = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([discovered], []),
+    )
+    existing = ModelAgent(
+        "openrouter_provider_paid",
+        discovered.model_id,
+        base_url="https://custom.example/v1",
+        provider_name="openrouter",
+        tags=("discovered", "chat", "operator-tag"),
+        priority=17,
+    )
+    orchestrator = TaskOrchestrator([existing])
+
+    result = _auto_discover_runtime_agents(orchestrator)
+
+    assert result == {"added": [], "updated": [existing.id]}
+    blocked = orchestrator.candidates[0]
+    assert blocked.disabled is True
+    assert blocked.base_url == existing.base_url
+    assert blocked.priority == 17
+    assert blocked.tags == (*existing.tags, "spend:blocked")
+
+    _auto_discover_runtime_agents(orchestrator)
+    assert orchestrator.candidates[0] == blocked
+
+    recovered = replace(discovered, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert orchestrator.candidates[0] == existing
+
+
+def test_auto_discovery_recovers_model_first_discovered_while_spend_blocked(
+    monkeypatch,
+) -> None:
+    blocked = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([blocked], []),
+    )
+    orchestrator = TaskOrchestrator([], allow_empty_agents=True)
+    _auto_discover_runtime_agents(orchestrator)
+    assert orchestrator.candidates[0].disabled is True
+
+    recovered = replace(blocked, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert orchestrator.candidates[0].disabled is False
+    assert "spend:blocked" not in orchestrator.candidates[0].tags
+
+
+def test_auto_discovery_preserves_operator_disable_across_spend_recovery(
+    monkeypatch,
+) -> None:
+    blocked = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/paid",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    existing = ModelAgent(
+        "openrouter_provider_paid",
+        blocked.model_id,
+        provider_name="openrouter",
+        tags=("discovered", "chat"),
+        disabled=True,
+    )
+    orchestrator = TaskOrchestrator([existing], allow_empty_agents=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([blocked], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    recovered = replace(blocked, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+    _auto_discover_runtime_agents(orchestrator)
+
+    assert orchestrator.candidates[0] == existing
 
 
 def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -> None:
