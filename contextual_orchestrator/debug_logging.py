@@ -22,6 +22,42 @@ import json
 import logging
 from typing import Callable
 
+#: Redaction marker used in place of any value found under a credential-shaped
+#: JSON key. Matches the marker `redact_value`/`redact_text` already use
+#: elsewhere in this codebase, so a reader sees one consistent redaction
+#: convention regardless of which pass caught a given secret.
+REDACTED_MARKER = "[REDACTED]"
+
+#: Dict key names (case-insensitive, exact match) treated as always carrying
+#: a credential, regardless of what the value looks like. This is
+#: deliberately broad and shape-agnostic: `redact_value`/`redact_text` only
+#: catch secrets by pattern-matching the *value*'s in-string shape (e.g.
+#: "api_key=..." or "Bearer ..."), so they never look at the JSON key a
+#: string is nested under -- a field like {"private_key": "-----BEGIN
+#: PRIVATE KEY-----..."} or {"key": "AIzaSy..."} sails through unredacted.
+#: This set closes that blind spot at the JSON-structure level instead.
+CREDENTIAL_SHAPED_KEY_NAMES = frozenset(
+    {
+        "key",
+        "api_key",
+        "apikey",
+        "token",
+        "access_token",
+        "refresh_token",
+        "secret",
+        "client_secret",
+        "password",
+        "credential",
+        "credentials",
+        "auth",
+        "authorization",
+        "private_key",
+        "public_key",
+        "signing_key",
+        "pem",
+    }
+)
+
 #: Recognized stdlib logging level names, most to least verbose.
 LOG_LEVEL_NAMES: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -146,11 +182,18 @@ def summarize_request_for_log(
     """Format one body-free HTTP request/response summary line for INFO logging.
 
     Carries method, path, status, and latency only -- never headers, a query
-    string beyond the raw path, or a request/response body.
+    string beyond the raw path, or a request/response body. Any query string
+    on ``path`` is stripped here, defensively, regardless of what the caller
+    passed in: a caller could plausibly put a token in a query parameter (a
+    common client habit) even though this server's own auth is header-only,
+    so this helper never trusts a caller to have already done that stripping
+    -- it enforces its own "body-free" contract itself.
 
     Args:
         method: The HTTP method, e.g. ``"POST"``.
-        path: The request path as received (already excludes any body).
+        path: The request path as received (already excludes any body), with
+            or without a query string -- either is accepted, but only the
+            bare path before any ``?`` is ever logged.
         status: The HTTP status code that was sent, or ``None`` when a
             response was never sent (e.g. the connection dropped first).
         latency_ms: Elapsed wall-clock time for the request, in milliseconds.
@@ -161,12 +204,58 @@ def summarize_request_for_log(
     Returns:
         One single-line, `%`-free summary string ready to hand to a logger.
     """
+    bare_path = path.split("?", 1)[0]
     return (
-        f"http_request method={method} path={path} "
+        f"http_request method={method} path={bare_path} "
         f"status={'-' if status is None else status} "
         f"latency_ms={latency_ms:.1f} "
         f"session_id_hash={session_id_hash or '-'}"
     )
+
+
+def redact_credential_shaped_keys(value: object) -> object:
+    """Recursively replace any dict value whose key looks like a credential.
+
+    This is a separate, additional pass from
+    `contextual_orchestrator.orchestrator.redact_value`/`redact_text`, which
+    only pattern-match a secret's in-string *value* shape (e.g.
+    ``api_key=...`` or ``Bearer ...``) and never inspect the JSON key a
+    string is nested under. A logging call site should apply both: this
+    catches ``{"private_key": "-----BEGIN PRIVATE KEY-----..."}``,
+    ``{"key": "AIzaSy..."}``, ``{"auth": "sk-live..."}``, or
+    ``{"credential": "..."}`` regardless of whether the value happens to
+    match any known secret pattern; `redact_value`/`redact_text` still catch
+    secret-shaped values nested under an unremarkable key name.
+
+    A matched key's entire value is replaced with :data:`REDACTED_MARKER`
+    regardless of its shape or content -- a nested dict or list under a
+    credential-shaped key is not recursed into and explained away as
+    "probably fine": it is dropped wholesale, since a credential-shaped key
+    has no legitimate reason to carry structured data a log line needs.
+
+    Args:
+        value: A JSON-like structure -- some combination of ``dict``,
+            ``list``, ``str``, ``int``, ``float``, ``bool``, and ``None``.
+            Any other type is returned unchanged.
+
+    Returns:
+        A new structure of the same shape, with every credential-shaped
+        dict key's value replaced. The input is never mutated in place, so
+        it remains safe to keep using the original for anything other than
+        logging (e.g. the actual HTTP response body).
+    """
+    if isinstance(value, dict):
+        return {
+            key: (
+                REDACTED_MARKER
+                if isinstance(key, str) and key.strip().casefold() in CREDENTIAL_SHAPED_KEY_NAMES
+                else redact_credential_shaped_keys(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_credential_shaped_keys(item) for item in value]
+    return value
 
 
 def summarize_payload_for_log(

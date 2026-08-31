@@ -379,6 +379,43 @@ def test_response_payload_debug_log_reuses_redacted_payload_never_raw_secret(cap
     assert fake_secret not in caplog.text
 
 
+def test_response_payload_debug_log_redacts_credential_shaped_json_keys(caplog):
+    """Key-name-aware redaction catches secrets `redact_value` cannot see.
+
+    `redact_value`/`redact_text` only pattern-match the literal in-string
+    shape `(api[_-]?key|token|secret|password)[:=]<value>` or `bearer
+    <value>` -- they never inspect the JSON *key name* a string value is
+    nested under. A response payload shaped like `{"private_key": "..."}`,
+    `{"key": "..."}`, `{"auth": "..."}`, or `{"credential": "..."}` must
+    still be caught by an additional key-name-based redaction pass applied
+    at this logging call site, independent of whether the value itself
+    matches any known secret shape.
+    """
+    fake_private_key = "-----BEGIN PRIVATE KEY-----\nMIIFAKEFAKEFAKE\n-----END PRIVATE KEY-----"
+    fake_api_key = "AIzaSyFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE12"
+    fake_auth = "sk-live-FAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+    fake_credential = "ghp_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE"
+    payload = {
+        "choices": [{"message": {"content": "ok"}}],
+        "metadata": {
+            "private_key": fake_private_key,
+            "key": fake_api_key,
+            "auth": fake_auth,
+        },
+        "credential": fake_credential,
+    }
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.server"):
+        server_module._response_payload(payload, include_trace=True)
+
+    assert "response_summary" in caplog.text
+    assert fake_private_key not in caplog.text
+    assert fake_api_key not in caplog.text
+    assert fake_auth not in caplog.text
+    assert fake_credential not in caplog.text
+    assert "[REDACTED]" in caplog.text
+
+
 def test_response_payload_debug_log_is_silent_without_debug(caplog):
     payload = {"choices": [{"message": {"content": "ok"}}]}
 
@@ -410,6 +447,40 @@ def test_per_request_info_summary_reports_method_path_and_status(caplog):
     assert "method=GET" in caplog.text
     assert "path=/healthz" in caplog.text
     assert "status=200" in caplog.text
+
+
+def test_per_request_info_summary_never_includes_query_string(caplog):
+    """The INFO per-request summary logs the bare path only, never a query string.
+
+    A caller could plausibly put a token in a query parameter (a common
+    client habit) even though this server's own auth is header-only; the
+    summary line's own docstring already claims to be body-free and never
+    carry "a query string beyond the raw path", so the raw query string
+    (and anything in it) must never reach this log line.
+    """
+    import threading
+    import urllib.request
+
+    fake_token = "sk-FAKEFAKEFAKEFAKEFAKEQUERYSTRING123"
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with caplog.at_level("INFO", logger="contextual_orchestrator.server"):
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/healthz?api_key={fake_token}", timeout=5
+            ) as response:
+                assert response.status == 200
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert "http_request" in caplog.text
+    assert "path=/healthz" in caplog.text
+    assert fake_token not in caplog.text
+    assert "?" not in caplog.text
 
 
 def test_per_request_info_summary_absent_below_info(caplog):

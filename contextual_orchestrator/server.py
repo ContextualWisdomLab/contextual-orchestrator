@@ -33,7 +33,11 @@ from .cost_router import (
     InvalidBatchModelError,
 )
 from .batch_routing import BatchRequest
-from .debug_logging import summarize_payload_for_log, summarize_request_for_log
+from .debug_logging import (
+    redact_credential_shaped_keys,
+    summarize_payload_for_log,
+    summarize_request_for_log,
+)
 from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
@@ -5051,9 +5055,17 @@ def _strip_internal_fields(value: Any) -> Any:
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
     if _LOGGER.isEnabledFor(logging.DEBUG):
-        # Reuses this SAME already-redacted safe_payload -- never a second,
-        # separate, possibly-unredacted copy of the response body.
-        _LOGGER.debug(summarize_payload_for_log("response", safe_payload))
+        # Reuses this SAME already-redacted safe_payload as the base -- never
+        # a second, separate, possibly-unredacted copy of the response body
+        # -- but redact_value/redact_text only pattern-match a secret's
+        # in-string *value* shape; they never inspect the JSON key a string
+        # is nested under, so a field like {"private_key": "..."} would
+        # otherwise still leak here verbatim. This additional, log-only pass
+        # closes that gap by key name; it never affects what
+        # _response_payload returns to actual HTTP callers below, only what
+        # gets logged.
+        log_safe_payload = redact_credential_shaped_keys(safe_payload)
+        _LOGGER.debug(summarize_payload_for_log("response", log_safe_payload))
     public_payload = _strip_internal_fields(safe_payload)
     if include_trace:
         return public_payload

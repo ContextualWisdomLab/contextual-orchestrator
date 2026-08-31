@@ -120,6 +120,56 @@ def _configure_logging_from_cli(arguments: list[str]) -> None:
     configure_logging(effective_level, redactor=redact_text)
 
 
+#: Global logging flags recognized by `_subcommand_token_index` while
+#: scanning past them -- must stay in sync with what `_add_log_level_arguments`
+#: declares (`--verbose`/`--debug` take no value; `--log-level` takes one,
+#: either as a separate token or via `--log-level=...`).
+_LOG_LEVEL_BOOLEAN_FLAGS = ("--verbose", "--debug")
+_LOG_LEVEL_VALUE_FLAG = "--log-level"
+
+
+def _subcommand_token_index(arguments: list[str]) -> int | None:
+    """Find the index of the subcommand token, skipping leading logging flags.
+
+    `main` dispatches `register-credential`, `discover-models`, and
+    `check-fast-mlsirm` by checking a single argument token against each
+    subcommand name. Without this scan, a global logging flag placed before
+    the subcommand (e.g. ``--verbose discover-models``) would occupy that
+    checked position instead, so the subcommand name would fall through
+    unrecognized into the default one-shot completion parser and be treated
+    as a prompt string. Recognized flags are only skipped for the purpose of
+    *locating* the subcommand token here -- callers must still pass the
+    complete, unmodified argument list on to whichever parser handles the
+    dispatch, so each subcommand's own parser (and the pre-scan in
+    :func:`_configure_logging_from_cli`) still sees every flag.
+
+    Args:
+        arguments: The full CLI argument list (excluding the program name).
+
+    Returns:
+        The index of the first token that is not a recognized global logging
+        flag or its value, or ``None`` if every token is one of those (there
+        is no subcommand token to find).
+    """
+    index = 0
+    length = len(arguments)
+    while index < length:
+        token = arguments[index]
+        if token in _LOG_LEVEL_BOOLEAN_FLAGS:
+            index += 1
+            continue
+        if token == _LOG_LEVEL_VALUE_FLAG:
+            index += 1
+            if index < length:
+                index += 1  # skip the level name token, e.g. "DEBUG"
+            continue
+        if token.startswith(_LOG_LEVEL_VALUE_FLAG + "="):
+            index += 1
+            continue
+        return index
+    return None
+
+
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
     """Load non-secret OTEL deployment settings into the process KV at startup."""
     config = InMemoryConfigStore()
@@ -345,11 +395,6 @@ def _discover_models_command(argv: list[str]) -> None:
         description="Discover models from every provider with a KV-registered credential.",
     )
     parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Emit secret-free provider discovery diagnostics to stderr.",
-    )
-    parser.add_argument(
         "--agents-db",
         default=None,
         help="Persist discovered agents (added disabled; enable via the admin API) into this sqlite agent-pool file.",
@@ -383,8 +428,6 @@ def _discover_models_command(argv: list[str]) -> None:
     )
     _add_log_level_arguments(parser)
     args = parser.parse_args(argv)
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
@@ -535,13 +578,23 @@ def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     _configure_logging_from_cli(arguments)
-    if arguments and arguments[0] == "register-credential":
-        _register_credential_command(arguments[1:])
+    subcommand_index = _subcommand_token_index(arguments)
+    subcommand = arguments[subcommand_index] if subcommand_index is not None else None
+    # Leading logging flags are skipped only to *find* the subcommand token --
+    # they stay in the list handed to that subcommand's own parser (see
+    # _subcommand_token_index's docstring).
+    arguments_after_subcommand = (
+        arguments[:subcommand_index] + arguments[subcommand_index + 1 :]
+        if subcommand_index is not None
+        else arguments
+    )
+    if subcommand == "register-credential":
+        _register_credential_command(arguments_after_subcommand)
         return
-    if arguments and arguments[0] == "discover-models":
-        _discover_models_command(arguments[1:])
+    if subcommand == "discover-models":
+        _discover_models_command(arguments_after_subcommand)
         return
-    if arguments and arguments[0] == "check-fast-mlsirm":
+    if subcommand == "check-fast-mlsirm":
         _check_fast_mlsirm_command()
         return
 
@@ -552,11 +605,6 @@ def main(argv: list[str] | None = None) -> None:
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Emit secret-free runtime and model-discovery diagnostics to stderr.",
-    )
     parser.add_argument(
         "--release-authority-json",
         default=None,
@@ -647,8 +695,6 @@ def main(argv: list[str] | None = None) -> None:
     )
     _add_log_level_arguments(parser)
     args = parser.parse_args(arguments)
-    if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,

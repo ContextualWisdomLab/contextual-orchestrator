@@ -261,6 +261,104 @@ def test_check_fast_mlsirm_path_configures_logging() -> None:
         assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
 
 
+def test_leading_verbose_flag_before_discover_models_still_dispatches() -> None:
+    """A logging flag before the subcommand must not bypass subcommand dispatch.
+
+    `main` used to locate the subcommand by checking only `arguments[0]`; a
+    global logging flag placed first (e.g.
+    ``python -m contextual_orchestrator --verbose discover-models``) would
+    then occupy that position, so the actual subcommand name fell through
+    unrecognized into the default one-shot completion parser and was parsed
+    as if it were a prompt string instead.
+    """
+    stdout = StringIO()
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(sys, "argv", ["contextual-orchestrator", "--verbose", "discover-models", "--help"]),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 0
+        else:  # pragma: no cover
+            raise AssertionError("--help must exit")
+    help_text = stdout.getvalue()
+    assert "python -m contextual_orchestrator discover-models" in help_text
+    assert "--agents-db" in help_text
+
+
+def test_leading_log_level_flag_before_register_credential_still_dispatches() -> None:
+    """Same bypass, exercised with `--log-level` (a value-taking flag) instead of a boolean one."""
+    stdout = StringIO()
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "--log-level", "DEBUG", "register-credential", "--help"],
+        ),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 0
+        else:  # pragma: no cover
+            raise AssertionError("--help must exit")
+    help_text = stdout.getvalue()
+    assert "python -m contextual_orchestrator register-credential" in help_text
+    assert "--name NAME" in help_text
+
+
+def test_leading_debug_flag_before_check_fast_mlsirm_still_dispatches() -> None:
+    """`check-fast-mlsirm` takes no args of its own, but must still be reached."""
+    stdout = StringIO()
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(sys, "argv", ["contextual-orchestrator", "--debug", "check-fast-mlsirm"]),
+        patch.object(sys, "stdout", stdout),
+    ):
+        try:
+            main()
+        except SystemExit:
+            pass
+    # _fast_mlsirm_runtime_status() always reports this key, whether or not
+    # the optional fast-mlsirm dependency is installed in this interpreter --
+    # its presence proves check-fast-mlsirm actually ran, rather than
+    # "check-fast-mlsirm" being swallowed as a one-shot completion prompt.
+    assert '"package": "fast-mlsirm"' in stdout.getvalue()
+
+
+def test_leading_log_level_flag_before_serve_still_configures_and_serves() -> None:
+    """`--serve` is a plain optional flag on the main parser, so it is unaffected by the
+    subcommand-token bypass -- this locks that in as a regression guard.
+    """
+    with (
+        _restored_root_logger(),
+        _no_log_level_env(),
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--log-level",
+                "DEBUG",
+                "--serve",
+                "--auth-token",
+                "local-token",
+            ],
+        ),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main()
+        assert serve.called
+        assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_help_text_lists_log_level_flag()
     test_register_credential_help_lists_log_level_flag()

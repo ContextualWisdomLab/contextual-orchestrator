@@ -23,10 +23,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   env-var default (default unchanged: `WARNING`), and new instrumentation at
   the provider retry loop, per-agent circuit breaker, evidence-based ranking
   (`_ranked_agents`/`_select_agent`), model discovery, and one body-free
-  per-request summary line in `server.py`. Two-layer redaction (explicit
-  `redact_text`/`redact_value` call sites plus a handler-level filter safety
+  per-request summary line in `server.py`. Three-layer redaction (explicit
+  `redact_text`/`redact_value` call sites, a new key-name-aware
+  `debug_logging.redact_credential_shaped_keys` pass over the DEBUG
+  response-body summary that catches a secret nested under a credential-shaped
+  JSON key regardless of its value's shape, and a handler-level filter safety
   net) keeps credential-shaped content out of DEBUG output; raw prompt/answer
-  text is never logged, only lengths and identifiers.
+  text is never logged, only lengths and identifiers. The INFO per-request
+  summary strips any query string before logging, and a `--log-level`/
+  `--verbose`/`--debug` flag placed before a subcommand (`register-credential`,
+  `discover-models`, `check-fast-mlsirm`) no longer bypasses subcommand
+  dispatch.
 - Generalized the Models.dev free-cost cross-reference (ADR 0032) beyond
   `opencode_zen` to `nvidia_nim`, `nvidia_nim_sub`, and `openai` via a new
   declared `ProviderModelSource.models_dev_provider_id` field, and hoisted
