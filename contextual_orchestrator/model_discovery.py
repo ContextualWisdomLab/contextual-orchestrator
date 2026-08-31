@@ -39,6 +39,7 @@ from .orchestrator import (
     ModelAgent,
     ModelClient,
     format_authorization_header,
+    is_transient_error,
 )
 
 if TYPE_CHECKING:
@@ -46,6 +47,15 @@ if TYPE_CHECKING:
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 _LOGGER = logging.getLogger(__name__)
+# One bounded retry for a provider's primary model-list fetch, reusing the same
+# transient-vs-terminal classification completion calls already trust
+# (is_transient_error). A short, fixed delay and a shortened retry timeout keep
+# the added worst case small and predictable for CI callers with their own
+# overall time budget (see ContextualWisdomLab/.github's review sidecar).
+# Non-transient failures (auth/config errors, malformed responses) are never
+# retried — a retry cannot fix those and would only waste the time budget.
+_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
+_DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
 # bot signature. A stable, identifying user agent is not a credential and is
@@ -87,10 +97,17 @@ def _provider_discovery_error_code(exc: Exception) -> str:
         return "transport_error"
     if isinstance(exc, ValueError):
         return "invalid_response"
+    if isinstance(exc, RuntimeError):
+        # The configured-gateway transport (ModelClient._resolve_addresses /
+        # _open_provider) wraps DNS resolution and request-validation
+        # failures as plain RuntimeError, not an OSError subclass. Still a
+        # transport-level failure from the caller's perspective.
+        return "transport_error"
     # The sole caller catches exactly (URLError, TimeoutError, ValueError,
-    # OSError) plus HTTPError (a URLError subtype), every one of which is
-    # classified above. Reaching this point means the catch tuple drifted;
-    # fail loudly instead of silently labeling an unclassified failure.
+    # OSError, RuntimeError) plus HTTPError (a URLError subtype), every one
+    # of which is classified above. Reaching this point means the catch
+    # tuple drifted; fail loudly instead of silently labeling an
+    # unclassified failure.
     raise AssertionError(f"unclassified provider discovery failure: {exc!r}")
 
 
@@ -1148,6 +1165,13 @@ def discover_provider_models(
     this call does not repeat the fetch. Leaving it at the default sentinel
     preserves this function's existing lazy, per-call fetch-on-demand
     behavior for every other caller, tests included.
+
+    The primary model-list fetch gets one bounded retry (short fixed delay,
+    shortened timeout) when the failure is transient (5xx/timeout/connection
+    reset, per :func:`~contextual_orchestrator.orchestrator.is_transient_error`)
+    — a single provider's momentary blip no longer has to zero out that
+    provider's entire contribution for this discovery pass. A non-transient
+    failure (bad credential, malformed response) is never retried.
     """
     api_key = get_credential(source.credential_name)
     if not api_key:
@@ -1163,24 +1187,37 @@ def discover_provider_models(
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
-    try:
-        fetch = (
-            _fetch_configured_gateway_json
-            if source.provider_name == "configured_gateway"
-            else _fetch_json
-        )
-        payload = fetch(
-            url,
-            api_key=api_key,
-            auth_scheme=source.auth_scheme,
-            timeout=timeout,
-            **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
-        )
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        # OSError covers ConnectionError/reset failures that are not URLError
-        # subclasses, so a raw provider transport failure can never escape the
-        # discovery boundary with provider text attached.
-        error_code = _provider_discovery_error_code(exc)
+    fetch = (
+        _fetch_configured_gateway_json
+        if source.provider_name == "configured_gateway"
+        else _fetch_json
+    )
+    fetch_kwargs = {
+        "api_key": api_key,
+        "auth_scheme": source.auth_scheme,
+        **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
+    }
+    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
+    payload: Any = None
+    last_exc: Exception | None = None
+    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
+        try:
+            payload = fetch(url, timeout=attempt_timeout, **fetch_kwargs)
+            last_exc = None
+            break
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError) as exc:
+            # OSError covers ConnectionError/reset failures that are not URLError
+            # subclasses, and RuntimeError covers the configured-gateway transport's
+            # (ModelClient._resolve_addresses / _open_provider) DNS and request-
+            # validation failures, so a raw provider transport failure can never
+            # escape the discovery boundary with provider text attached.
+            last_exc = exc
+            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
+            if is_last_attempt or not is_transient_error(exc):
+                break
+            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    if last_exc is not None:
+        error_code = _provider_discovery_error_code(last_exc)
         _LOGGER.debug(
             "model discovery failed account=%s error_code=%s",
             source.provider_name,
