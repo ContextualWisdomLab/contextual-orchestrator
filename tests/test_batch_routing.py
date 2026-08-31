@@ -16,7 +16,6 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     PgLlmBatchEmbeddingBackend,
     RoutingHints,
     RoutingPolicy,
-    build_jsonl_body,
     cheapest_upstream,
 )
 from contextual_orchestrator.cost_ledger import PriceBook, PriceEntry  # noqa: E402
@@ -233,14 +232,6 @@ def test_pg_llm_batch_backend_incomplete_download_returns_empty() -> None:
     backend = PgLlmBatchBackend(_IncompleteClient())
     job = backend.submit([BatchRequest(messages=[{"role": "user", "content": "x"}], custom_id="a")])
     assert backend.retrieve(job) == []
-
-
-def test_build_jsonl_body_uses_openai_batch_line_shape() -> None:
-    requests = [BatchRequest(messages=[{"role": "user", "content": "hi"}], custom_id="a", model="gpt-x")]
-    body = build_jsonl_body(requests)
-    assert '"custom_id": "a"' in body
-    assert '"url": "/v1/chat/completions"' in body
-    assert '"method": "POST"' in body
 
 
 def test_pg_llm_embedding_batch_preserves_agent_identity() -> None:

@@ -427,11 +427,6 @@ def _extract_answer(body: Dict[str, Any]) -> str:
     return str(message.get("content", ""))
 
 
-def build_jsonl_body(requests: List[BatchRequest], endpoint: str = "/v1/chat/completions") -> str:
-    """Serialize batch requests into an OpenAI Batch API JSONL body."""
-    return "\n".join(json.dumps(request.to_jsonl_line(endpoint)) for request in requests)
-
-
 # ---------------------------------------------------------------------------
 # Embeddings batch requests / results / backends
 # ---------------------------------------------------------------------------
