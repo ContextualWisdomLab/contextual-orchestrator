@@ -35,6 +35,7 @@ from .model_discovery import (
     discover_all_models,
     privacy_tags_for_discovered,
     is_routable_discovered_model,
+    legacy_agent_id_for,
     model_group_name_for,
     refresh_price_book,
 )
@@ -275,6 +276,18 @@ def _synchronize_durable_agent_pool(
         allow_empty_agents=True,
     )
     try:
+        protected_ids = {
+            candidate.id
+            for candidate in bootstrap.candidates
+            if "discovered" not in candidate.tags
+        }
+        if any(
+            {agent.id, legacy_agent_id_for(model)} & protected_ids
+            for agent, model in zip(agents, selected, strict=True)
+        ):
+            raise ProviderBootstrapError(
+                "selected discovered models conflict with operator-managed agent identities"
+            )
         selected_ids = {agent.id for agent in agents}
         bootstrap.sync_discovered_agents(agents)
         selected_ids = set()

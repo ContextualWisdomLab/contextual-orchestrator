@@ -375,6 +375,34 @@ def test_durable_pool_does_not_replace_manual_exact_id_collision(tmp_path: Any) 
     restarted.close()
 
 
+def test_durable_pool_collision_preflight_prevents_partial_activation(tmp_path: Any) -> None:
+    """A mixed valid/collision selection must write nothing before failing."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "mixed_collision.db")
+    collision = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    manual = replace(
+        pb._active_agent_from_discovered(collision),
+        id="openrouter_vendor_model",
+        base_url="https://manual.example/v1",
+        disabled=True,
+        tags=("manual",),
+    )
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+
+    valid = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "valid-model")
+    with pytest.raises(pb.ProviderBootstrapError, match="operator-managed agent identities"):
+        pb._synchronize_durable_agent_pool(agents_db, [valid, collision])
+
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert restarted.candidates == [manual]
+    restarted.close()
+
+
 def test_durable_pool_sync_closes_temporary_orchestrator(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
