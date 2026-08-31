@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -178,8 +181,6 @@ def test_mixed_pool_omit_fallback_role_does_not_filter() -> None:
     filter must leave ranking alone and the naturally top-ranked (by
     priority) agent -- unsupported or not -- must still be selected.
     """
-    from dataclasses import replace
-
     unsupported, supported = _mixed_pool()
     catalog = {
         **default_role_effort_catalog(),
@@ -204,6 +205,40 @@ def test_mixed_pool_omit_fallback_role_does_not_filter() -> None:
     # out for an "omit" role, so it is the one actually dispatched to.
     assert calls == ["unsupported_agent"]
     assert result["trace"][0]["agent_id"] == "unsupported_agent"
+
+
+@pytest.mark.parametrize("mutation", ["disable", "remove", "discovery_sync"])
+def test_runtime_pool_mutation_cannot_remove_the_last_role_effort_prover(
+    mutation: str,
+) -> None:
+    """The server's startup invariant must survive later admin pool changes."""
+    unsupported, supported = _mixed_pool()
+    orchestrator = TaskOrchestrator(
+        [unsupported, supported], role_effort_catalog=default_role_effort_catalog()
+    )
+
+    with pytest.raises(ValueError, match="fail-closed role-effort roles"):
+        if mutation == "disable":
+            orchestrator.patch_agent(
+                "default", supported.id, {"status": "disabled"}
+            )
+        elif mutation == "remove":
+            orchestrator.remove_agent("default", supported.id)
+        else:
+            orchestrator.sync_discovered_agents(
+                [
+                    replace(
+                        supported,
+                        disabled=True,
+                        reasoning_effort_supported=None,
+                    )
+                ]
+            )
+
+    assert [agent.id for agent in orchestrator.agents] == [
+        unsupported.id,
+        supported.id,
+    ]
 
 
 if __name__ == "__main__":

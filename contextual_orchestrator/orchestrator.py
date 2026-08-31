@@ -4994,14 +4994,7 @@ class TaskOrchestrator:
         }
 
     def patch_agent(self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        """Apply governance updates to an agent and emit an audit event.
-
-        Known limitation: disabling an agent here (``status`` -> disabled)
-        has the same unrevalidated-catalog gap documented on
-        :meth:`remove_agent` -- disabling the pool's last
-        ``reasoning_effort``-proving agent while a fail-closed
-        ``role_effort_catalog`` role is active is not rejected here.
-        """
+        """Apply governance updates without invalidating the active effort catalog."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
         current = self._agent_in_pool(agent_pool_id, worker_agent_id)
@@ -5037,6 +5030,7 @@ class TaskOrchestrator:
         updated_agents = [agent for agent in updated_candidates if not agent.disabled]
         if not updated_agents:
             raise ValueError("cannot disable the last enabled agent")
+        self._require_role_effort_pool(updated_candidates)
         self.candidates = updated_candidates
         self.agents = updated_agents
         self._rebuild_budget_meter()
@@ -5221,7 +5215,9 @@ class TaskOrchestrator:
                 )
                 updated_candidates[index] = agent
                 updated.append(agent.id)
-            if self._pool_store is not None:
+        self._require_role_effort_pool(updated_candidates)
+        if self._pool_store is not None:
+            for agent in discovered_agents:
                 self._pool_store.save(agent)
         self.candidates = updated_candidates
         self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
@@ -5240,26 +5236,16 @@ class TaskOrchestrator:
         return {"added": added, "updated": updated}
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
-        """Remove a worker agent from the pool; the pool must keep at least one enabled agent.
-
-        Known limitation: this only guards the enabled-agent count, not the
-        active ``role_effort_catalog``'s eligibility invariant enforced once
-        at startup by ``__main__._require_eligible_role_effort_agents``.
-        Removing the pool's last agent that proves ``reasoning_effort``
-        support (see ``agent_proves_reasoning_effort_support``) succeeds here
-        even while a fail-closed catalog role is active, leaving every
-        subsequent request for that role to raise ``EffortProfileError``
-        (route/conduct recover via failover if another candidate exists;
-        ``stream_route``/``batch_route``/structured synthesis do not).
-        Revalidating the catalog on every runtime pool mutation is left out
-        of scope for this change; an operator changing the pool while a
-        role-effort catalog is live should re-check eligibility manually.
-        """
+        """Remove an agent while preserving enabled and role-effort invariants."""
         target = self._agent_in_pool(agent_pool_id, worker_agent_id)
         remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
-        self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
+        remaining_candidates = [
+            agent for agent in self.candidates if agent.id != worker_agent_id
+        ]
+        self._require_role_effort_pool(remaining_candidates)
+        self.candidates = remaining_candidates
         self.agents = [agent for agent in self.candidates if not agent.disabled]
         self._rebuild_budget_meter()
         self._routers_forget_members({agent.id for agent in self.candidates})
@@ -5665,6 +5651,41 @@ class TaskOrchestrator:
             },
         )
         return record
+
+    def _unsupported_role_effort_roles(
+        self, candidates: list[ModelAgent] | None = None
+    ) -> list[str]:
+        """Return fail-closed catalog roles lacking an eligible proving agent."""
+        if self.role_effort_catalog is None:
+            return []
+        pool = self.candidates if candidates is None else candidates
+        chat_agents = [
+            agent
+            for agent in pool
+            if not agent.disabled and _is_general_chat_agent(agent)
+        ]
+        return sorted(
+            role
+            for role, profile in self.role_effort_catalog.items()
+            if profile.unsupported_provider_fallback != "omit"
+            and not any(
+                agent_proves_reasoning_effort_support(agent)
+                for agent in chat_agents
+                if role not in agent.provider_exclusions
+            )
+        )
+
+    def _require_role_effort_pool(
+        self, candidates: list[ModelAgent] | None = None
+    ) -> None:
+        """Reject a pool mutation that would strand a fail-closed catalog role."""
+        unsupported_roles = self._unsupported_role_effort_roles(candidates)
+        if unsupported_roles:
+            raise ValueError(
+                "agent pool mutation would leave fail-closed role-effort roles "
+                "without an enabled eligible agent that proves native support: "
+                + ", ".join(unsupported_roles)
+            )
 
     def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
         """Return the opt-in profile bound to one workflow role."""

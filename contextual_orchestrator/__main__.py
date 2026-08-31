@@ -33,9 +33,6 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     ModelClient,
     TaskOrchestrator,
-    _eligible_role_effort_candidates,
-    _is_general_chat_agent,
-    agent_proves_reasoning_effort_support,
     load_agents,
 )
 from .privacy_policy_analysis import (
@@ -105,13 +102,11 @@ def _require_eligible_role_effort_agents(
     time -- either ``EffortProfileError`` (no proving candidate was ever
     offered) or ``RuntimeError("no eligible agent available for
     role=...")`` (the only proving candidate was role-excluded). So this
-    reapplies the same general-chat and ``provider_exclusions`` eligibility
-    rules used by role selection, and the same
-    ``agent_proves_reasoning_effort_support`` /
-    ``_eligible_role_effort_candidates`` proof round 2 added, once per
-    active fail-closed role: a pool that passes this guard is guaranteed at
-    least one eligible, proving agent for each such role at request time
-    too. Deliberately does NOT reapply ``_zdr_agent_allowed``: that gate
+    delegates to the orchestrator's shared pool-invariant check, which applies
+    the same general-chat, ``provider_exclusions``, and native-support rules
+    both here and on later runtime pool mutations. A pool that passes this
+    guard has at least one eligible, proving agent for each active fail-closed
+    role. The invariant deliberately does NOT reapply ``_zdr_agent_allowed``: that gate
     depends on per-request privacy-policy state
     (``request_policy(zdr_only=...)``), not a static pool property, so it
     cannot be evaluated once at startup without assuming every future
@@ -120,25 +115,7 @@ def _require_eligible_role_effort_agents(
     catalog = orchestrator.role_effort_catalog
     if catalog is None:
         return
-    fail_closed_roles = sorted(
-        role for role, profile in catalog.items() if profile.unsupported_provider_fallback != "omit"
-    )
-    if not fail_closed_roles:
-        return
-    chat_agents = [
-        agent for agent in orchestrator.agents if not agent.disabled and _is_general_chat_agent(agent)
-    ]
-    unsupported_roles = [
-        role
-        for role in fail_closed_roles
-        if not any(
-            agent_proves_reasoning_effort_support(agent)
-            for agent in _eligible_role_effort_candidates(
-                [agent for agent in chat_agents if role not in agent.provider_exclusions],
-                catalog[role],
-            )
-        )
-    ]
+    unsupported_roles = orchestrator._unsupported_role_effort_roles()
     if not unsupported_roles:
         return
     orchestrator.close()

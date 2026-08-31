@@ -52,11 +52,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   supporting agent). This mirrors the equivalent filter already applied on
   `proxy_completion`'s passthrough failover, which now shares the same
   `_eligible_role_effort_candidates` helper instead of a duplicated inline
-  check. Known limitation (unchanged by this fix, tracked as
-  informational): the eligibility check runs at startup only — an operator
-  removing or disabling the pool's last supporting agent at runtime via
-  `remove_agent`/`patch_agent` is not revalidated against an active catalog;
-  see the docstrings on those two methods.
+  check. Runtime agent patch, removal, and discovery synchronization now
+  revalidate the same catalog invariant before committing a pool mutation,
+  so a live server cannot disable or remove its last eligible supporting
+  agent and strand a fail-closed role after startup.
 - The startup guard above still only proved that *some enabled agent
   anywhere* in the pool supports `reasoning_effort`, which is weaker than
   what role-based selection actually requires: `_ranked_agents`/
