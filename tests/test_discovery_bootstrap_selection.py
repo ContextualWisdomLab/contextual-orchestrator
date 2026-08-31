@@ -323,8 +323,11 @@ def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> No
     assert selected == [router_cheapest, nim_model, openai_model]
 
 
-def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() -> None:
-    """Two NIM keys must not displace an independently hosted provider."""
+def test_bootstrap_selector_keeps_nim_primary_and_sub_independent() -> None:
+    """A shared vendor endpoint does not collapse independent credential
+    accounts: nim_primary and nim_sub each win their own diversity slot ahead
+    of the unrelated, costlier openrouter candidate.
+    """
     selector = getattr(
         model_discovery,
         "select_bootstrap_discovered_agents",
@@ -346,7 +349,7 @@ def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() ->
         2,
     )
 
-    assert selected == [nim_primary, openrouter]
+    assert selected == [nim_primary, nim_sub]
 
 
 def test_bootstrap_selector_is_deterministic_when_every_model_is_unpriced() -> None:
