@@ -4096,6 +4096,7 @@ class TaskOrchestrator:
             preferred = final_agent
             preferred_endpoint = preferred.base_url.rstrip("/").casefold()
             last_model_not_found: ProviderUpstreamError | None = None
+            saw_request_too_large = False
             ordered_candidates = [
                 preferred,
                 *(
@@ -4140,6 +4141,7 @@ class TaskOrchestrator:
                     return send(candidate, endpoint, candidate_payload), candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     request_too_large = _is_request_too_large_error(exc)
+                    saw_request_too_large = saw_request_too_large or request_too_large
                     if request_too_large and not virtual_model:
                         raise ProviderRequestTooLargeError(
                             "request body exceeds provider limit"
@@ -4162,7 +4164,7 @@ class TaskOrchestrator:
                                 continue
                             raise classified from None
                         raise
-            if last_model_not_found is not None:
+            if last_model_not_found is not None and not saw_request_too_large:
                 raise last_model_not_found
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"

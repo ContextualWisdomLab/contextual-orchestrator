@@ -50,6 +50,43 @@ def test_auto_discovery_activates_chat_and_embedding_capable_agents(monkeypatch)
     assert "bootstrap_agent" in result["updated"]
 
 
+def test_embedding_only_discovery_keeps_chat_fallbacks(monkeypatch) -> None:
+    embedding = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="text-embedding-only",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("embedding",),
+        spend_admitted=True,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([embedding], []),
+    )
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "configured_gateway_placeholder",
+                "",
+                provider_name="configured_gateway",
+                base_url="https://gateway.synthetic.example/v1",
+            ),
+            ModelAgent(
+                "bootstrap_chat_agent",
+                "bootstrap-chat-model",
+                tags=("bootstrap_seed",),
+            ),
+        ]
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    by_id = {agent.id: agent for agent in orchestrator.candidates}
+    assert "configured_gateway_placeholder" in by_id
+    assert by_id["bootstrap_chat_agent"].disabled is False
+
+
 def test_auto_discovery_activates_a_free_vision_model_but_free_pool_excludes_it(
     monkeypatch,
 ) -> None:

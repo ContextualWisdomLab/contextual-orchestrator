@@ -9,6 +9,7 @@ import os
 import sys
 from dataclasses import replace
 
+from .chat_capability import is_chat_compatible_model_id
 from .cost_ledger import PriceBook
 from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
@@ -424,6 +425,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         if not model.evidence_only
         and (model in chat_models or "embedding" in model.capabilities)
     ]
+    discovered_chat_agent_ids = {agent_id_for(model) for model in chat_models}
     existing_by_id = {agent.id: agent for agent in orchestrator.candidates}
     agents = []
     for model in runtime_models:
@@ -469,7 +471,9 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 agent.provider_name == "configured_gateway"
                 and not agent.model.strip()
                 and any(
-                    candidate.id != agent.id and not candidate.disabled
+                    candidate.id != agent.id
+                    and not candidate.disabled
+                    and candidate.id in discovered_chat_agent_ids
                     for candidate in orchestrator.candidates
                 )
             ):
@@ -478,6 +482,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
         not candidate.disabled
         and not candidate.base_url.startswith("mock://")
         and "bootstrap_seed" not in candidate.tags
+        and is_chat_compatible_model_id(candidate.model)
         for candidate in orchestrator.agents
     )
     for candidate in tuple(orchestrator.agents):

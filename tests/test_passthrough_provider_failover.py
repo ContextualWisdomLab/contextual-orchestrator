@@ -637,6 +637,33 @@ def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> 
         )
 
 
+def test_stale_model_then_size_failure_preserves_request_too_large() -> None:
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _http_error(404),
+            "fallback_agent": _http_error(413),
+        }
+    )
+
+    orchestrator = _build(client)
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+
+    with pytest.raises(ProviderRequestTooLargeError, match="every eligible provider"):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "large request"}],
+                "response_format": {"type": "json_object"},
+            },
+            single_agent=False,
+        )
+
+
 def test_mixed_failures_surface_the_final_classified_provider_failure() -> None:
     """Mixed exhaustion keeps the final provider's actionable typed failure."""
     client = SequencedProxyClient(
