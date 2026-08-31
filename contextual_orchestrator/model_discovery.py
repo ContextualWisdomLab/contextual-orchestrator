@@ -1689,17 +1689,16 @@ def _discovery_price_key(
 ) -> tuple[int, float, str, str]:
     """Rank comparable trustworthy prices first, then deterministic unknowns."""
     unknown = (1, 0.0, model.provider_name, model.model_id)
-    # An exact provider-declared zero price is comparable across billing units:
-    # zero GPU-second spend and zero token spend are both exactly zero. Bytez
-    # therefore remains rankable even though its honest discovery row has no
-    # fabricated per-token prices.
-    if model.is_free:
-        return (0, 0.0, model.provider_name, model.model_id)
     try:
         entry = price_book.get_price(model.provider_name, model.model_id)
     except (TypeError, ValueError, OverflowError):
         return unknown
     if entry is None:
+        # An exact provider-declared zero price is comparable across billing
+        # units, but an operator-configured model or wildcard price remains
+        # authoritative when present.
+        if model.is_free:
+            return (0, 0.0, model.provider_name, model.model_id)
         if not (
             _valid_price_component(model.prompt_price_per_1k)
             and _valid_price_component(model.completion_price_per_1k)

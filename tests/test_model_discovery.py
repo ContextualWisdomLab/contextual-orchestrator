@@ -2303,6 +2303,27 @@ def test_bytez_zero_meter_price_ranks_as_known_free_without_token_prices() -> No
     assert select_cheapest_discovered_agent([paid, bytez_free], price_book) is bytez_free
 
 
+@pytest.mark.parametrize("configured_model", ["free", "*"])
+def test_configured_price_overrides_stale_free_discovery_flag(
+    configured_model: str,
+) -> None:
+    from contextual_orchestrator.cost_ledger import PriceEntry
+
+    price_book = PriceBook(InMemoryConfigStore())
+    configured = DiscoveredModel(
+        "bytez", "free", "BYTEZ_API_KEY", "https://api.bytez.com/models/v2",
+        AUTH_SCHEME_RAW_TOKEN, is_free=True,
+    )
+    cheaper = DiscoveredModel(
+        "openrouter", "cheaper", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    price_book.set_price(PriceEntry("bytez", configured_model, 1.0, 1.0))
+    price_book.set_price(PriceEntry("openrouter", "cheaper", 0.1, 0.1))
+
+    assert select_cheapest_discovered_agent([configured, cheaper], price_book) is cheaper
+
+
 def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
     price_book = PriceBook(InMemoryConfigStore())
     expensive = DiscoveredModel(
