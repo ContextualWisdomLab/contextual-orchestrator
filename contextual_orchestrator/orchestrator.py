@@ -3499,16 +3499,18 @@ class TaskOrchestrator:
             return self._provider_readiness_report_for(candidates, False, probe_timeout)
 
         with self._provider_readiness_refresh_lock:
-            for _attempt in range(2):
-                with self._provider_readiness_lock:
-                    candidates = list(self.candidates)
-                    generation = self._provider_readiness_generation
-                report = self._provider_readiness_report_for(candidates, True, probe_timeout)
-                with self._provider_readiness_lock:
-                    if generation == self._provider_readiness_generation:
-                        self._latest_provider_readiness_report = json.loads(json.dumps(report))
-                        return report
-        raise RuntimeError("provider pool changed repeatedly during readiness refresh")
+            with self._provider_readiness_lock:
+                candidates = list(self.candidates)
+                generation = self._provider_readiness_generation
+            report = self._provider_readiness_report_for(candidates, True, probe_timeout)
+            with self._provider_readiness_lock:
+                if generation == self._provider_readiness_generation:
+                    self._latest_provider_readiness_report = json.loads(json.dumps(report))
+                    return report
+                current_candidates = list(self.candidates)
+        return self._provider_readiness_report_for(
+            current_candidates, False, probe_timeout
+        )
 
     def _provider_readiness_report_for(
         self,

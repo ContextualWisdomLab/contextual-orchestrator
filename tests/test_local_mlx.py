@@ -318,8 +318,10 @@ def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> No
     release = threading.Event()
     mutation_done = threading.Event()
     refreshed = []
+    probed: list[str] = []
 
     def probe(agent, **_kwargs):
+        probed.append(agent.id)
         entered.set()
         release.wait(timeout=2)
         return {"status": "ready", "agent_id": agent.id, "model": agent.model}
@@ -346,10 +348,11 @@ def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> No
 
     report = orchestrator.provider_readiness_report()
     assert refreshed == [report]
-    assert report["status"] == "ready"
+    assert report["status"] == "unprobed"
     assert {item["agent_id"] for item in report["items"]} == {
         "ready_agent", "backup_agent", "added_agent"
     }
+    assert probed == ["ready_agent", "backup_agent"]
 
 
 def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
