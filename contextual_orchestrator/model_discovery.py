@@ -1057,18 +1057,10 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
     (a missing unit, e.g. ``"0 /"``, or an extra separator, e.g.
     ``"0 / sec / token"``) still read as ``"0"`` and get confidently
     classified free; an unexpected shape is itself a signal something about
-    the row is wrong, so it fails closed instead. The *unit* is deliberately
-    not required to equal ``"sec"``: a rate of exactly zero cost is zero
-    regardless of its time unit (``"0 / hour"`` is exactly as free as
-    ``"0 / sec"``), so this only validates the shape, never the unit name.
+    the row is wrong, so it fails closed instead. The unit must be ``sec`` as
+    documented by Bytez; bare numeric values and unexpected units omit or
+    contradict the provider's billing evidence and therefore remain unknown.
     """
-    if isinstance(meter_price, bool):
-        return False
-    if isinstance(meter_price, (int, float)):
-        try:
-            return Decimal(str(meter_price)) == 0
-        except (ArithmeticError, ValueError):
-            return False
     if not isinstance(meter_price, str):
         return False
     segments = meter_price.split("/")
@@ -1077,7 +1069,7 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
         # "<rate> / <unit>" shape -- trust nothing from it, zero included.
         return False
     rate, unit = (segment.strip() for segment in segments)
-    if not rate or not unit:
+    if not rate or unit.casefold() != "sec":
         return False
     try:
         return Decimal(rate) == 0
@@ -1697,6 +1689,12 @@ def _discovery_price_key(
 ) -> tuple[int, float, str, str]:
     """Rank comparable trustworthy prices first, then deterministic unknowns."""
     unknown = (1, 0.0, model.provider_name, model.model_id)
+    # An exact provider-declared zero price is comparable across billing units:
+    # zero GPU-second spend and zero token spend are both exactly zero. Bytez
+    # therefore remains rankable even though its honest discovery row has no
+    # fabricated per-token prices.
+    if model.is_free:
+        return (0, 0.0, model.provider_name, model.model_id)
     try:
         entry = price_book.get_price(model.provider_name, model.model_id)
     except (TypeError, ValueError, OverflowError):

@@ -1716,8 +1716,10 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
         ("0 / sec", True),
         ("0/sec", True),
         ("0.0000 / sec", True),
-        (0, True),
-        (0.0, True),
+        # Official Bytez catalog evidence is a unit-bearing string. Bare
+        # numbers omit the documented billing unit and remain unknown.
+        (0, False),
+        (0.0, False),
         (0.0006, False),
         (None, False),
         ("", False),
@@ -1726,9 +1728,7 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
         (True, False),
         (False, False),
         ("-0 / sec", True),
-        # A zero rate is exactly as free regardless of its time unit -- the
-        # documented grammar constrains shape, not which unit word appears.
-        ("0 / hour", True),
+        ("0 / hour", False),
         # Genuinely malformed shapes must fail closed (unknown, not free),
         # never trust a numeric-looking prefix pulled out of an unexpected
         # overall shape.
@@ -2284,6 +2284,23 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
 
     assert select_cheapest_discovered_agent([unknown, known], price_book) is known
     assert select_top_n_cheapest_discovered_agents([unknown, known], price_book, 2) == [known, unknown]
+
+
+def test_bytez_zero_meter_price_ranks_as_known_free_without_token_prices() -> None:
+    from contextual_orchestrator.cost_ledger import PriceEntry
+
+    price_book = PriceBook(InMemoryConfigStore())
+    paid = DiscoveredModel(
+        "openrouter", "paid", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer",
+    )
+    bytez_free = DiscoveredModel(
+        "bytez", "free", "BYTEZ_API_KEY", "https://api.bytez.com/models/v2",
+        AUTH_SCHEME_RAW_TOKEN, is_free=True,
+    )
+    price_book.set_price(PriceEntry("openrouter", "paid", 0.01, 0.01))
+
+    assert select_cheapest_discovered_agent([paid, bytez_free], price_book) is bytez_free
 
 
 def test_top_n_uses_discovery_price_before_price_book_refresh() -> None:
