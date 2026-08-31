@@ -2056,6 +2056,7 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> tuple[bytes, str]:
         """Passthrough a provider response whose body is binary media."""
+        payload = _pin_openrouter_zdr(agent, payload)
         if agent.base_url.startswith("mock://"):
             return b"mock audio", "audio/mpeg"
         api_key = _provider_credential(agent)  # pragma: no cover

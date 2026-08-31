@@ -2450,7 +2450,8 @@ enforcement -- `"provider": {"zdr": true}` in the request body
 agent can reach under an active `zdr_only` request scope: `_send` (the
 `route`/`conduct` chat path), `_stream_send` (SSE streaming), and
 `_send_raw` (the tools/structured-output passthrough path both
-`proxy_send` and `proxy_send_once` funnel through). This is OpenRouter's own
+`proxy_send` and `proxy_send_once` funnel through), plus `proxy_send_bytes`
+(binary speech responses whose request body is still JSON). This is OpenRouter's own
 server-side enforcement for the request being sent right now, not a
 client-side prediction — strictly stronger than what discovery-time
 filtering could ever guarantee.

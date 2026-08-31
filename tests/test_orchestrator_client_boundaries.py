@@ -541,6 +541,16 @@ def _capture_request_body(sink: dict) -> Any:
     return _fake_open_provider
 
 
+def _capture_binary_request_body(sink: dict) -> Any:
+    def _fake_open_provider(request, *_args, **_kwargs):
+        sink["body"] = json.loads(request.data.decode("utf-8"))
+        response = _RegistryResponse({})
+        response.headers = types.SimpleNamespace(get_content_type=lambda: "audio/mpeg")
+        return response
+
+    return _fake_open_provider
+
+
 def test_send_pins_openrouter_zdr_on_the_wire() -> None:
     """``_send`` (the normal chat transport) actually applies the pin, not just the helper."""
     agent = _openrouter_agent()
@@ -595,6 +605,28 @@ def test_send_does_not_pin_zdr_outside_zdr_only_context() -> None:
     captured: dict[str, Any] = {}
     with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
         client._send(agent, {"model": agent.model, "messages": []})
+    assert "provider" not in captured["body"]
+
+
+def test_proxy_send_bytes_pins_openrouter_zdr_only_in_policy_scope() -> None:
+    """Binary speech transport applies the same request-time ZDR boundary."""
+    agent = _openrouter_agent()
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_open_provider", side_effect=_capture_binary_request_body(captured)
+    ):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client.proxy_send_bytes(agent, "audio/speech", {"input": "hello"})
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client, "_open_provider", side_effect=_capture_binary_request_body(captured)
+    ):
+        client.proxy_send_bytes(agent, "audio/speech", {"input": "hello"})
     assert "provider" not in captured["body"]
 
 
