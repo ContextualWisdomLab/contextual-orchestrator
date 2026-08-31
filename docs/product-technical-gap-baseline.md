@@ -1164,9 +1164,9 @@ future regen cannot drift again. Full suite at exact head: **2428 passed**;
 Hypothesis, Atheris, and devin/opencode/noema reviews all pass.
 
 Merged to protected `main` as `5b3069d4`; protected-main runs for #887, #893,
-#883, #889 then landed, delivering bounded tool descriptions, the React +
-Storybook web admin, provider-affine video job ownership, and fail-closed
-commercial release authorization on one linear main sequence.
+#883, #889 then landed, delivering bounded tool descriptions, an unwired
+React + Storybook scaffold, provider-affine video job ownership, and
+fail-closed commercial release authorization on one linear main sequence.
 
 **Open queue:** `#879` (provider-failure taxonomy/telemetry, `BEHIND`), `#857`
 (provider-backed embeddings, `DIRTY`), `#868` (gateway-default chat surfaces,
@@ -1911,7 +1911,7 @@ live work item.
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
 | P2 | LineageWeave has no protected-main consumer acceptance gate. | [#801](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/801) added explicit CLI `argv` only to a non-main stack. Main-target [#823](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/823) has the explicit contract at `6bb3fe2c54cda9f574cd239922bc91ece5ea2585`, but remains `REVIEW_REQUIRED`/blocked despite terminal hosted checks; documented protected main still exposes `contextual_orchestrator.__main__.main()` without an `argv` argument. LineageWeave `main@ef6f5a5f` still assigns `sys.argv` in `docker/contextual-orchestrator/start.py`, and its bootstrap test observes that mutation; open LineageWeave [#468](https://github.com/ContextualWisdomLab/LineageWeave/pull/468) retains it. Its opt-in real-provider test bypasses that bootstrap, so neither it nor #823's mocked-server unit test is authenticated consumer proof. | PR #823 explicit CLI invocation contract is merged to protected main and update LineageWeave at that exact upstream pin to invoke the server with explicit arguments rather than mutating process arguments. Then run a LineageWeave-owned authenticated `/v1/chat/completions` end-to-end test that proves process `sys.argv` is unchanged; retain authorization and chat-completion evidence against the exact protected main SHA. |
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | test_naruon_ecosystem_connector.py proves the exact JSON schema and endpoint consumption without speculatively extracting the codebase. |
-| P2 | Frontend component inventory is not applicable here. | This repository is a backend stdlib lab and has no frontend/Storybook tree. | Keep the existing Figma artifact record; introduce Storybook only when a frontend package is actually added. |
+| P2 | Frontend component inventory is not applicable to the operative admin console. | An unwired `admin_ui/` React + Storybook scaffold and workspace entry exist, but the inline stdlib admin remains the served interface. | Keep the existing Figma artifact record; defer Storybook adoption until the frontend is built and wired under ADR 0033's triggers. |
 
 ## 7. Delivery gates
 
