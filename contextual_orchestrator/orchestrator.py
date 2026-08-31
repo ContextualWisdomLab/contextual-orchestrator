@@ -260,10 +260,20 @@ def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str,
     applied here rather than trusted to have been decided correctly upstream.
     A caller-supplied ``provider`` object (e.g. explicit routing preferences)
     is preserved and only gains the ``zdr`` key.
+
+    ``provider`` is an optional caller passthrough field reaching this shared
+    choke point unvalidated from every call site (chat, streaming, tools and
+    binary-media passthrough, and the batch JSONL path). A malformed truthy
+    non-mapping value (an int, bool, list, or string) must fail with a named,
+    caller-actionable validation error here rather than an opaque ``TypeError``
+    from ``dict()`` deep inside provider-transport code (Devin review on #953).
     """
     if not _REQUEST_ZDR_ONLY.get() or agent.provider_name != "openrouter":
         return payload
-    provider_routing = dict(payload.get("provider") or {})
+    provider_routing = payload.get("provider")
+    if provider_routing is not None and not isinstance(provider_routing, dict):
+        raise ValueError("provider must be an object with optional OpenRouter routing keys")
+    provider_routing = dict(provider_routing or {})
     provider_routing["zdr"] = True
     return {**payload, "provider": provider_routing}
 

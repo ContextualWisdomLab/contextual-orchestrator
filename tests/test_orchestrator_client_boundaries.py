@@ -531,6 +531,22 @@ def test_pin_openrouter_zdr_preserves_caller_supplied_provider_routing() -> None
     }
 
 
+@pytest.mark.parametrize("malformed_provider", [5, True, ["order"], "openrouter", 0, ""])
+def test_pin_openrouter_zdr_rejects_non_mapping_provider(malformed_provider: Any) -> None:
+    """A non-object ``provider`` under zdr_only fails closed with a named
+    validation error, not the bare ``TypeError`` ``dict()`` would raise
+    (Devin review on #953: malformed speech routing returned server errors).
+    """
+    agent = _openrouter_agent()
+    payload = {"model": agent.model, "messages": [], "provider": malformed_provider}
+    token = _REQUEST_ZDR_ONLY.set(True)
+    try:
+        with pytest.raises(ValueError, match="provider must be an object"):
+            _pin_openrouter_zdr(agent, payload)
+    finally:
+        _REQUEST_ZDR_ONLY.reset(token)
+
+
 def _capture_request_body(sink: dict) -> Any:
     """Return an ``_open_provider`` stand-in that records the outgoing JSON body."""
 
