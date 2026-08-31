@@ -3537,15 +3537,24 @@ class TaskOrchestrator:
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
             # A batch_route row persisted before judging (see batch_route's
-            # own pending-record comment) intentionally never reaches
+            # own pending-record comment) carries an explicit
+            # "pending_verification" marker and intentionally never reaches
             # _run_order during normal, same-process operation -- it is not
             # yet a complete result. Reloading it into _run_order here would
             # make it appear in recent-run/admin listings after a restart
             # even though it never would have without one (Devin review,
-            # PR #961). _replace_workflow_run above still restores its
-            # spend into the budget meter either way; only visibility in
-            # _run_order is gated on completeness.
-            if self._is_trace_complete(record):
+            # PR #961). _is_trace_complete() is not this gate: it also
+            # requires a truthy "answer", so a genuinely completed route/
+            # stream/conduct/batch run that happens to carry an empty
+            # answer would wrongly vanish from _run_order on reload while
+            # still showing up in it during live operation (a follow-up
+            # Devin review round on this same reload path) -- the explicit
+            # marker is the only thing that actually distinguishes a
+            # not-yet-judged batch row from every other persisted run.
+            # _replace_workflow_run above still restores this row's spend
+            # into the budget meter either way; only _run_order visibility
+            # is gated.
+            if not record.get("pending_verification"):
                 self._run_order.appendleft(record["workflow_run_id"])
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
@@ -4746,11 +4755,15 @@ class TaskOrchestrator:
         # before judging reloads none of this batch's spend and repeats the
         # same gap (a second Devin review round on the same finding) -- with
         # no verification yet, before any budget check that could raise.
-        # _is_trace_complete() already treats a run with no "accepted"/
-        # "reason" in its verification as honestly incomplete, so this
-        # pending state needs no new status field -- it reads exactly like
-        # any other genuinely-unfinished run already tolerated elsewhere in
-        # this store, and gets no run_order/audit/analytics
+        # An explicit "pending_verification" marker (rather than inferring
+        # pending-ness from _is_trace_complete(), which also requires a
+        # truthy "answer" and so would misclassify a completed route/
+        # stream/conduct run that legitimately received an empty answer --
+        # a third Devin review round on this same reload path) is the only
+        # way _reload_state() tells this row apart from every other,
+        # already-judged persisted run; a judged record below carries no
+        # such key, so it reads exactly like any other completed run once
+        # replaced. This pending state gets no run_order/audit/analytics
         # "workflow_run_created" side effects until it is actually judged
         # below, matching the fact that it is not yet a complete result.
         prepared_rows: list[dict[str, Any]] = []
@@ -4780,6 +4793,7 @@ class TaskOrchestrator:
                     "trace": [row],
                     "policy_snapshot": self.policy.as_dict(),
                     "verification": {},
+                    "pending_verification": True,
                 }
             )
             self._replace_workflow_run(pending_record)

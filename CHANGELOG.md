@@ -113,7 +113,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   listings after a restart even though it never would have without one.
   `_reload_state()` now only adds a reloaded record to `_run_order` when
   `_is_trace_complete()` says it actually is one; its spend still restores
-  into the budget meter either way.
+  into the budget meter either way. `_is_trace_complete()` was the wrong
+  predicate for that gate, though: it also requires a truthy `"answer"`,
+  so a genuinely completed `route`/`stream`/`conduct`/`batch` run that
+  legitimately reported an empty answer would wrongly vanish from
+  `_run_order` on reload while it would have stayed visible without a
+  restart (every live-operation `_run_order.appendleft` call is
+  unconditional). The pending batch row now carries an explicit
+  `"pending_verification"` marker instead, and `_reload_state()` gates on
+  its absence — the only thing that actually distinguishes a not-yet-judged
+  batch row from every other persisted run, regardless of what its answer
+  happens to be.
 
 ### Added
 
