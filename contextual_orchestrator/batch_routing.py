@@ -638,6 +638,7 @@ class ProviderEmbeddingBatchBackend:
         job_registry: Any = None,
         max_concurrency: int = 1,
         claim_lease_seconds: float | None = None,
+        execution_timeout_seconds: float | None = None,
     ) -> None:
         if type(max_concurrency) is not int or max_concurrency < 1:
             raise ValueError("max_concurrency must be a positive integer")
@@ -652,6 +653,13 @@ class ProviderEmbeddingBatchBackend:
         ):
             raise ValueError("durable provider backend claim lease must be positive")
         self._claim_lease_seconds = claim_lease_seconds
+        if execution_timeout_seconds is not None and execution_timeout_seconds <= 0:
+            raise ValueError("provider embedding execution timeout must be positive")
+        self._execution_timeout_seconds = (
+            execution_timeout_seconds
+            if execution_timeout_seconds is not None
+            else self._registry.retention_seconds
+        )
         self._terminal_events: Dict[str, threading.Event] = {}
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
             job_registry.mapping(
@@ -740,7 +748,7 @@ class ProviderEmbeddingBatchBackend:
             raise RuntimeError("provider embedding backend is closed")
         job_id = f"providerembed_{uuid.uuid4().hex}"
         self._requests[job_id] = list(requests)
-        self._deadlines[job_id] = time.time() + self._registry.retention_seconds
+        self._deadlines[job_id] = time.time() + self._execution_timeout_seconds
         self._states[job_id] = "reserved"
         return BatchJob(
             job_id=job_id,

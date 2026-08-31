@@ -199,16 +199,17 @@ class CostRoutingCoordinator:
 
     def _provider_embedding_backend(self) -> ProviderEmbeddingBatchBackend:
         client = getattr(self.orchestrator, "client", None)
+        client_timeout = float(getattr(client, "timeout", 0))
         return ProviderEmbeddingBatchBackend(
             self._run_provider_embeddings,
             job_registry=self.job_registry,
             max_concurrency=getattr(client, "local_concurrency", 1),
             claim_lease_seconds=(
-                float(client.timeout)
-                if self.job_registry.durable
-                and float(getattr(client, "timeout", 0)) > 0
+                client_timeout
+                if self.job_registry.durable and client_timeout > 0
                 else None
             ),
+            execution_timeout_seconds=client_timeout if client_timeout > 0 else None,
         )
 
     def _run_provider_embeddings(

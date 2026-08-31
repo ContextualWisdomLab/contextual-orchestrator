@@ -88,6 +88,27 @@ def test_cost_budget_fails_closed_for_an_unpriced_served_model() -> None:
         orchestrator.run([{"role": "user", "content": "must not dispatch"}])
 
 
+def test_cost_budget_ignores_unpriced_embedding_only_candidate() -> None:
+    orchestrator = _orchestrator(
+        [
+            ModelAgent("chat_agent", "priced-chat", tags=("capability:chat",)),
+            ModelAgent(
+                "embedding_agent",
+                "unpriced-embedding",
+                tags=("capability:embedding",),
+            ),
+        ],
+        price_per_million={"priced-chat": 1.0},
+        budget_max_cost_usd=10.0,
+    )
+
+    orchestrator.run([{"role": "user", "content": "priced chat workflow"}])
+
+    assert orchestrator.budget_status()["enforcement_status"] == "within_budget"
+    assert orchestrator.budget_status()["spent_cost_usd"] > 0
+    assert orchestrator.spend_analytics()["budget"] == orchestrator.budget_status()
+
+
 def test_budget_block_reports_spent_and_remaining() -> None:
     orchestrator = _orchestrator([_agent()], budget_max_output_tokens=1000)
     orchestrator.run([{"role": "user", "content": "measure the budget"}])

@@ -5079,6 +5079,28 @@ def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str,
     return _strip_trace(public_payload)
 
 
+def _chat_usage_measurement_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add gateway usage provenance without rewriting provider chat content."""
+    normalized = dict(payload)
+    usage = normalized.get("usage")
+    prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    completion_tokens = (
+        usage.get("completion_tokens") if isinstance(usage, dict) else None
+    )
+    measured = (
+        type(prompt_tokens) is int
+        and prompt_tokens >= 0
+        and type(completion_tokens) is int
+        and completion_tokens >= 0
+    )
+    if not measured:
+        normalized["usage"] = None
+    normalized["usage_measurement_status"] = (
+        "measured" if measured else "unavailable"
+    )
+    return normalized
+
+
 def _chat_response_sse_chunks(
     payload: dict[str, Any],
     *,
@@ -6852,7 +6874,7 @@ def build_server(
                         if include_trace and not trace_audited:
                             self._audit_trace_disclosure("/v1/chat/completions")
                         response_payload = (
-                            proxied
+                            _chat_usage_measurement_payload(proxied)
                             if tool_loop
                             else _response_payload(proxied, include_trace)
                         )

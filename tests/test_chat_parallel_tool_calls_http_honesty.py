@@ -9,9 +9,12 @@ import urllib.request
 from pathlib import Path
 import sys
 
+from jsonschema import validate
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.api_contract import OPENAPI_SPEC  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "chat_parallel_tool_calls_honesty_token"  # noqa: S105
@@ -132,7 +135,14 @@ def test_http_chat_parallel_tool_calls_true_with_tools_passthrough() -> None:
         )
         # Mock passthrough returns chat-shaped body
         assert status == 200, body
-        assert "choices" in body or "id" in body
+        validate(
+            body,
+            {
+                "$ref": "#/components/schemas/ChatCompletionResponse",
+                "components": OPENAPI_SPEC["components"],
+            },
+        )
+        assert body["usage_measurement_status"] == "measured"
     finally:
         server.shutdown()
         thread.join(timeout=5)

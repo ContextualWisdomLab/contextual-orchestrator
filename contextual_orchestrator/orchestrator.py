@@ -2284,6 +2284,7 @@ class ModelClient:
         return {
             "id": f"chatcmpl_mock_{agent.id}",
             "object": "chat.completion",
+            "created": int(time.time()),
             "model": agent.model,
             "choices": [
                 {
@@ -7567,7 +7568,11 @@ class TaskOrchestrator:
         )
         candidate_prices_available = (
             self.budget_max_cost_usd is None
-            or all(agent.model in prices for agent in self.agents)
+            or all(
+                agent.model in prices
+                for agent in self.agents
+                if _is_general_chat_agent(agent)
+            )
         )
         return {
             "measurement_status": measurement_status,
@@ -7646,7 +7651,11 @@ class TaskOrchestrator:
             spent_cost = float(self._budget_spent_cost_usd)
             candidate_prices_available = (
                 self.budget_max_cost_usd is None
-                or all(agent.model in self.price_per_million for agent in self.agents)
+                or all(
+                    agent.model in self.price_per_million
+                    for agent in self.agents
+                    if _is_general_chat_agent(agent)
+                )
             )
             measurement_available = (
                 not self._budget_unavailable_run_ids and candidate_prices_available

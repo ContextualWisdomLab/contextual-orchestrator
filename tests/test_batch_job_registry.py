@@ -408,6 +408,24 @@ def test_durable_job_past_deadline_becomes_failed_atomically() -> None:
     backend.close()
 
 
+def test_execution_deadline_is_separate_from_result_retention(monkeypatch) -> None:
+    client = FakeValkeyClient()
+    registry = JobRegistryFactory(client, retention_seconds=123)
+    monkeypatch.setattr("contextual_orchestrator.batch_routing.time.time", lambda: 1000.0)
+    backend = ProviderEmbeddingBatchBackend(
+        lambda _requests: ([], 0),
+        job_registry=registry,
+        claim_lease_seconds=1,
+        execution_timeout_seconds=5,
+    )
+
+    job = backend.reserve([])
+
+    assert backend._deadlines[job.job_id] == 1005.0
+    assert client.expirations["batch_job_registry:provider_embedding_deadlines"] == 123
+    backend.close()
+
+
 def test_durable_cancellation_cannot_be_overwritten_by_running_transition() -> None:
     client = FakeValkeyClient()
     client.lose_execution_extension = False
