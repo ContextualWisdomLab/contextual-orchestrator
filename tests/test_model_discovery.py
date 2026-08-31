@@ -43,6 +43,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_provider_models,
     free_discovered_models,
     general_free_serving_candidates,
+    is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -541,7 +542,6 @@ OPENROUTER_SOURCE = ProviderModelSource(
     list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
     chat_base_url="https://openrouter.ai/api/v1",
     capabilities=("chat",),
-    evidence_only=True,
 )
 
 BYTEZ_SOURCE = ProviderModelSource(
@@ -611,10 +611,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
-    assert all(model.evidence_only for model in discovered)
-    assert "response_format" in agent_from_discovered(
-        replace(discovered[0], evidence_only=False)
-    ).tags
+    assert all(not model.evidence_only for model in discovered)
+    assert "response_format" in agent_from_discovered(discovered[0]).tags
 
 
 def test_openrouter_discovery_preserves_every_declared_modality() -> None:
@@ -1510,10 +1508,44 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
-    assert sources["openrouter"].evidence_only is True
+    assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
+
+
+@pytest.mark.parametrize(
+    ("credit_available", "paid_admitted"),
+    [(False, False), (None, False), (True, True)],
+)
+def test_discover_all_models_blocks_only_paid_openrouter_without_credit(
+    credit_available: bool | None,
+    paid_admitted: bool,
+) -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {"id": "provider/free", "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "provider/paid", "pricing": {"prompt": "0.1", "completion": "0.1"}},
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=lambda request, timeout=None: _Response(
+            payload if request.full_url == OPENROUTER_SOURCE.list_url else {"data": []}
+        ),
+    ), patch(
+        "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+        return_value=credit_available,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE,))
+
+    assert errors == []
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["provider/free"].spend_admitted is True
+    assert by_id["provider/paid"].spend_admitted is paid_admitted
+    assert is_routable_discovered_model(by_id["provider/free"]) is True
+    assert is_routable_discovered_model(by_id["provider/paid"]) is paid_admitted
 
 
 def test_price_per_1k_rejects_underflowing_positive_value() -> None:
@@ -1623,7 +1655,7 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", True),
     ]
 
@@ -1712,7 +1744,7 @@ def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
@@ -1752,7 +1784,7 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
