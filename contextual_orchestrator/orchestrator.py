@@ -38,6 +38,7 @@ from jsonschema.validators import validator_for
 from .chat_capability import (
     is_chat_compatible_model_id,
     is_general_chat_candidate,
+    requires_non_text_input,
 )
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
@@ -3688,7 +3689,7 @@ class TaskOrchestrator:
             {
                 candidate.id
                 for candidate in self.agents
-                if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
             }
             if requested_model == self.FREE_MODEL
             else (
@@ -4023,7 +4024,7 @@ class TaskOrchestrator:
             {
                 candidate.id
                 for candidate in self.agents
-                if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+                if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
             }
             if free_only
             else (
@@ -5197,7 +5198,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
         allowed_agent_ids = free_ids if free_only else None
 
@@ -5349,6 +5350,16 @@ class TaskOrchestrator:
             return None
         return tokens
 
+    @staticmethod
+    def _usage_total_tokens(usage: dict[str, Any] | None) -> int | None:
+        """Provider-reported total token count, or None when absent/invalid."""
+        if not isinstance(usage, dict):
+            return None
+        tokens = usage.get("total_tokens")
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            return None
+        return tokens
+
     def conduct(
         self,
         messages: list[ChatMessage],
@@ -5386,7 +5397,7 @@ class TaskOrchestrator:
         free_ids = {
             candidate.id
             for candidate in self.agents
-            if self._is_free_agent(candidate) and self._zdr_agent_allowed(candidate)
+            if self._is_general_free_agent(candidate) and self._zdr_agent_allowed(candidate)
         }
         requested_agent = self._requested_agent(model_name)
         judge_agent_ids = (
@@ -5710,6 +5721,19 @@ class TaskOrchestrator:
         3. Inside one logical model group, measured ledgers refine member
            order (:meth:`_measured_member_order`: judged quality first, then
            successful responses per second).
+
+        ``free_only`` selects between the two ``FREE_MODEL`` eligibility
+        predicates using ``chat_only`` as the scope signal: ``chat_only=True``
+        (every caller except ``_capability_agents``) means the request shape
+        is not yet known, so :meth:`_is_general_free_agent` applies the
+        blind-serving modality exclusion; ``chat_only=False`` means a
+        specific, already-known capability was requested (only
+        ``_capability_agents`` passes this), so the plain price-only
+        :meth:`_is_free_agent` applies instead -- a non-text ``input:``
+        modality there is the capability's own expected shape, not a
+        surprise. This is a deliberate reuse of an existing, audited signal
+        (``chat_only`` already means "the caller does not know which
+        capability will be needed"), not a new implicit distinction.
         """
         source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
@@ -5717,7 +5741,10 @@ class TaskOrchestrator:
             for agent in source
             if not agent.disabled
             and self._zdr_agent_allowed(agent)
-            if (not free_only or self._is_free_agent(agent))
+            if (
+                not free_only
+                or (self._is_general_free_agent(agent) if chat_only else self._is_free_agent(agent))
+            )
             and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
@@ -5857,13 +5884,63 @@ class TaskOrchestrator:
         for router in self._routing_ledgers():
             router.forget_members(member_ids)
 
+    @staticmethod
+    def _agent_requires_non_text_input(agent: ModelAgent) -> bool:
+        """Return whether an agent's discovery-derived tags declare non-text input.
+
+        ``ModelAgent`` carries no dedicated modality field; every discovery
+        pathway (``model_discovery.agent_from_discovered``,
+        ``provider_bootstrap.serving_tags_for_discovered``) instead records
+        each declared input modality as an ``input:<modality>`` tag. Delegates
+        the actual "what counts as non-text" classification to
+        ``chat_capability.requires_non_text_input``, the single evidence-based
+        rule shared with ``model_discovery._requires_non_text_input`` (which
+        reads ``DiscoveredModel.input_modalities`` directly) so the two
+        representations of the same catalog evidence cannot drift on this
+        question independently of each other.
+        """
+        return requires_non_text_input(
+            tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
+        )
+
     def _is_free_agent(self, agent: ModelAgent) -> bool:
-        """Return true only for explicitly zero-priced configured models."""
+        """Return true only for explicitly zero-priced configured models.
+
+        Price-only, deliberately blind to modality: this predicate backs
+        every ``FREE_MODEL`` selection path, including capability-scoped
+        media routes (``_capability_agents`` -> ``/v1/audio/transcriptions``,
+        ``/v1/videos``, image, speech, rerank) where an agent's non-text
+        ``input:<modality>`` tag is exactly the modality the request is
+        already asking for, not a surprise -- excluding it there would make a
+        genuinely free transcription/video/image agent unreachable through
+        its own capability's free route. See :meth:`_is_general_free_agent`
+        for the stricter, blind-general-chat variant.
+        """
         if "cost:free" in agent.tags or self.price_per_million.get(agent.id) == 0:
             return True
         return self.price_per_million.get(agent.model) == 0 and sum(
             candidate.model == agent.model for candidate in self.candidates
         ) == 1
+
+    def _is_general_free_agent(self, agent: ModelAgent) -> bool:
+        """Return true only for zero-priced models fit for *blind* free serving.
+
+        Zero price alone does not certify fitness for the general-purpose
+        ``orchestrator/free`` chat pool: that pool serves every role and
+        request shape -- including tool-calling requests -- without knowing
+        in advance which capability a request will need. An agent whose tags
+        declare a non-text input modality (e.g. a vision-input deployment) is
+        therefore never treated as free *here*, even when it is honestly
+        tagged ``cost:free`` for price inventory purposes and for its own
+        capability-scoped free route (see :meth:`_is_free_agent`, and
+        ``contextual_orchestrator.model_discovery.general_free_serving_candidates``
+        for the equivalent discovery-time selector and its incident writeup).
+        This is the single choke point every *general chat* ``FREE_MODEL``
+        selection path shares -- including an agent row loaded from a durable
+        pool store that was written before this exclusion existed, or one
+        activated by a pool-construction path this repository adds later.
+        """
+        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 
@@ -6099,6 +6176,10 @@ class TaskOrchestrator:
         ranked = [
             agent
             for agent in self._ranked_agents(
+                # chat_only=False signals a known, explicit capability request
+                # (not a blind general-chat one), so free_only here uses
+                # _ranked_agents' price-only _is_free_agent branch: a capable
+                # agent's own non-text input tag is expected, not disqualifying.
                 "", capability, free_only=free_only, chat_only=False
             )
             if not agent.disabled
@@ -6570,11 +6651,13 @@ class TaskOrchestrator:
                 # are never inferred from text length or chunk counts.
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 output_tokens = self._usage_completion_tokens(usage)
+                total_tokens = self._usage_total_tokens(usage)
                 if agent.group_name or allowed_agent_ids is not None:
                     self._group_router.observe_success(
                         agent.id,
                         time.perf_counter() - attempt_start,
                         output_tokens=output_tokens,
+                        total_tokens=total_tokens,
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
@@ -6997,7 +7080,7 @@ class TaskOrchestrator:
             "created": created,
             "owned_by": "contextual-orchestrator",
         })
-        if any(self._is_free_agent(agent) for agent in self.agents):
+        if any(self._is_general_free_agent(agent) for agent in self.agents):
             data.append({
                 "id": self.FREE_MODEL,
                 "object": "model",
