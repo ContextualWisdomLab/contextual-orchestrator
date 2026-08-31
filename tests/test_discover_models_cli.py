@@ -519,6 +519,76 @@ def test_enable_cheapest_does_not_activate_matching_manual_agent(tmp_path) -> No
     reloaded.close()
 
 
+def test_enable_cheapest_preserves_manual_legacy_id_without_crashing(
+    tmp_path,
+) -> None:
+    """A manual owner of the old generated ID remains intact without a crash."""
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    model = DiscoveredModel(
+        "openrouter",
+        "cheap-model",
+        "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1",
+        "Bearer",
+        is_free=True,
+    )
+    db_path = str(tmp_path / "manual-legacy-collision.db")
+    manual = replace(
+        agent_from_discovered(model),
+        id="openrouter_cheap_model",
+        tags=("operator",),
+    )
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(manual)
+    seeded.close()
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    stdout = StringIO()
+
+    try:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "contextual-orchestrator",
+                    "discover-models",
+                    "--agents-db",
+                    db_path,
+                    "--enable-cheapest",
+                    "1",
+                ],
+            ),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                return_value=_Response(
+                    {
+                        "data": [
+                            {
+                                "id": "cheap-model",
+                                "pricing": {"prompt": "0", "completion": "0"},
+                            }
+                        ]
+                    }
+                ),
+            ),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    assert json.loads(stdout.getvalue())["enabled_agent_ids"] == []
+    reloaded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    by_id = {agent.id: agent for agent in reloaded.candidates}
+    assert by_id[manual.id] == manual
+    assert list(by_id) == [manual.id]
+    reloaded.close()
+
+
 def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> None:
     """CLI bootstrap must preserve independent accounts, not only the cheapest vendor."""
     from contextual_orchestrator import TaskOrchestrator

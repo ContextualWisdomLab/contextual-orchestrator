@@ -359,6 +359,8 @@ def _discover_models_command(argv: list[str]) -> None:
                         and candidate.credential_name == incoming.credential_name
                         and candidate.model == incoming.model
                     ]
+                    if not matches:
+                        continue
                     agent_id = next(
                         (candidate.id for candidate in matches if candidate.id == incoming.id),
                         matches[-1].id,
