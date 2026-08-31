@@ -102,7 +102,7 @@ class CostRoutingCoordinator:
         else:
             self.embedding_token_counter = build_embedding_token_counter(postgres_dsn)
         self.policy = routing_policy or RoutingPolicy(self.config)
-        self._resolve_virtual_embedding_target = embedding_batch_backend is None
+        self._resolve_virtual_embedding_target = False
         # Job registries live in Valkey when the credential registry carries
         # batch_job_registry_valkey_url, so submitted jobs survive a process
         # restart; otherwise they are the historical in-process dicts. Built
@@ -134,6 +134,7 @@ class CostRoutingCoordinator:
                 agent for agent in embedding_agents if not agent.base_url.startswith("mock://")
             ]
             if remote_embedding_agents:
+                self._resolve_virtual_embedding_target = True
                 def run_provider_embeddings(
                     requests: List[EmbeddingBatchRequest],
                 ) -> tuple[List[List[float]], int]:
@@ -1174,6 +1175,7 @@ class CostRoutingCoordinator:
         token_counts: List[int | None] = []
         total_cost_amount = 0.0
         currency_code = "USD"
+        aggregate_usage_recorded = False
         for source_index in range(input_count):
             parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])
             if not parts:
@@ -1187,6 +1189,28 @@ class CostRoutingCoordinator:
                     raise TokenCountUnavailable(
                         "provider embedding usage cannot be assigned to split inputs"
                     )
+                if not aggregate_usage_recorded:
+                    agent_id = parts[0]["agent_id"]
+                    if not agent_id:
+                        raise TokenCountUnavailable(
+                            "provider embedding usage omitted execution identity"
+                        )
+                    provider, model_name = self._agent_provider_model(
+                        self.orchestrator._agent(agent_id), str(parts[0]["model"])
+                    )
+                    record = self.ledger.record_usage(
+                        provider=provider,
+                        model=model_name,
+                        prompt_tokens=provider_total_tokens,
+                        completion_tokens=0,
+                        request_channel="batch",
+                        route_mode="embedding",
+                        workflow_run_id=batch_id,
+                        attribution=dict(parts[0]["attribution"]),
+                    )
+                    total_cost_amount += float(record.cost_amount)
+                    currency_code = record.currency_code
+                    aggregate_usage_recorded = True
                 token_counts.append(None)
                 embeddings.append(
                     {"index": source_index, "embedding": parts[0]["embedding"]}

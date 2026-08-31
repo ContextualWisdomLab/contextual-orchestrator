@@ -13,6 +13,8 @@ from contextual_orchestrator import (
     CostRoutingCoordinator,
     InMemoryConfigStore,
     ModelAgent,
+    PriceBook,
+    PriceEntry,
     TaskOrchestrator,
 )
 from contextual_orchestrator.orchestrator import ModelClient
@@ -47,14 +49,23 @@ def test_unknown_tokenizer_uses_authoritative_provider_usage() -> None:
         "provider_embedding", "provider-embedding-model", "https://provider.synthetic.invalid/v1", tags=("embedding",)
     )
     orchestrator = TaskOrchestrator([agent], client=_SyntheticProviderClient())
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("provider.synthetic.invalid", "provider-embedding-model", 1.0, 0.0)
+    )
     coordinator = CostRoutingCoordinator(
-        orchestrator, embedding_token_counter=UnavailableEmbeddingTokenCounter()
+        orchestrator,
+        config,
+        price_book=price_book,
+        embedding_token_counter=UnavailableEmbeddingTokenCounter(),
     )
 
     document = coordinator.complete_embeddings_batch(["synthetic input"])
 
     assert document["status"] == "completed"
     assert document["total_tokens"] == len("synthetic input".encode("utf-8"))
+    assert document["cost_micro_usd"] > 0
 
 
 def test_unknown_tokenizer_rejects_missing_provider_usage() -> None:
