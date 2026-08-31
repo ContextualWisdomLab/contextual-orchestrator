@@ -286,7 +286,9 @@ def _synchronize_durable_agent_pool(
                 and candidate.credential_name == agent.credential_name
                 and candidate.model == agent.model
             ]
-            selected_ids.add(next((item.id for item in matches if item.id == agent.id), matches[0].id))
+            selected_ids.add(
+                next((item.id for item in matches if item.id == agent.id), matches[-1].id)
+            )
 
         for candidate in list(bootstrap.candidates):
             if candidate.id in selected_ids:

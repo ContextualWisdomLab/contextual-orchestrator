@@ -369,3 +369,25 @@ def test_durable_pool_migrates_legacy_selected_endpoint_without_duplicate(tmp_pa
     assert [agent.id for agent in matching] == [legacy.id]
     assert matching[0].disabled is False
     restarted.close()
+
+
+def test_durable_pool_activates_refreshed_duplicate_legacy_endpoint(tmp_path: Any) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "duplicate_legacy_selected.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    assert seeded._pool_store is not None
+    seeded._pool_store.save(replace(generated, id="legacy_first", priority=1))
+    seeded._pool_store.save(replace(generated, id="legacy_refreshed", priority=2))
+    seeded.close()
+
+    enabled = pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+
+    assert enabled == ("legacy_refreshed",)
+    assert [agent.id for agent in restarted.agents] == ["legacy_refreshed"]
+    assert restarted.agents[0].priority == generated.priority
+    restarted.close()
