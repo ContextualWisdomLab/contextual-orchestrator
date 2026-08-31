@@ -4796,7 +4796,52 @@ class TaskOrchestrator:
             # its shared elapsed time on each trace row without claiming
             # unavailable per-request timing precision.
             batch_latency_ms = round((time.perf_counter() - batch_started_at) * 1000, 2)
-            results = _validate_batch_results(requests, batch)
+            try:
+                results = _validate_batch_results(requests, batch)
+            except (TypeError, RuntimeError):
+                # _validate_batch_results is all-or-nothing by design (shared
+                # with ModelClient.batch_chat()'s own internal call, where
+                # that contract is correct) -- but one malformed or missing
+                # item in this group's response must not also erase every
+                # other, perfectly valid item's already-incurred spend in
+                # the same paid provider call (Devin review on #961). Salvage
+                # whatever items in the raw response independently satisfy
+                # the same per-item validity check _validate_batch_results
+                # itself uses, persist their real spend as pending exactly
+                # like the normal path below, then still raise -- the group
+                # as a whole remains correctly unusable as a completed run.
+                if isinstance(batch, Mapping):
+                    seen_indices: set[int] = set()
+                    for custom_id, result in batch.items():
+                        if (
+                            not isinstance(custom_id, str)
+                            or custom_id not in requests
+                            or not isinstance(result, Mapping)
+                            or not isinstance(result.get("content"), str)
+                        ):
+                            continue
+                        _prefix, _suffix = custom_id.rsplit("_", 1)
+                        index = int(_suffix)
+                        if (
+                            _prefix != "task"
+                            or custom_id != f"task_{index}"
+                            or not 0 <= index < len(selected)
+                            or index in answers
+                            or index in seen_indices
+                        ):
+                            continue
+                        seen_indices.add(index)
+                        answers[index] = dict(result)
+                        prompt, salvage_agent = selected[index]
+                        row, run_id = self._persist_pending_batch_row(
+                            prompt=prompt,
+                            agent=salvage_agent,
+                            result=answers[index],
+                            batch_latency_ms=batch_latency_ms,
+                        )
+                        prepared_rows[index] = row
+                        run_ids[index] = run_id
+                raise
             for custom_id, result in results.items():
                 # _validate_batch_results already pinned every result key to the
                 # canonical requested task_{index} identifiers, so hostile or
@@ -4814,35 +4859,14 @@ class TaskOrchestrator:
                     raise RuntimeError("batch provider returned a duplicate request identifier")
                 answers[index] = result
                 prompt = selected[index][0]
-                row: dict[str, Any] = {
-                    "id": 0, "role": "worker", "agent_id": agent.id,
-                    "model": agent.model,
-                    "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
-                    "latency_ms": batch_latency_ms,
-                    "subtask": "Direct route (batched)", "access": [], "output": result["content"],
-                }
-                if result.get("usage") is not None:
-                    row["usage"] = result["usage"]
-                prepared_rows[index] = row
-                run_id = f"run_{uuid.uuid4().hex}"
-                run_ids[index] = run_id
-                pending_record = self._with_effort_snapshot(
-                    {
-                        "workflow_run_id": run_id,
-                        "created_at": int(time.time()),
-                        "mode": "route",
-                        "policy_mode": "route",
-                        "prompt_text": prompt,
-                        "answer": result["content"],
-                        "trace": [row],
-                        "policy_snapshot": self.policy.as_dict(),
-                        "verification": {},
-                        "pending_verification": True,
-                    }
+                row, run_id = self._persist_pending_batch_row(
+                    prompt=prompt,
+                    agent=agent,
+                    result=result,
+                    batch_latency_ms=batch_latency_ms,
                 )
-                self._replace_workflow_run(pending_record)
-                if self._store is not None:
-                    self._store.save("workflow_run", run_id, pending_record)
+                prepared_rows[index] = row
+                run_ids[index] = run_id
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
@@ -4874,6 +4898,51 @@ class TaskOrchestrator:
                 )
             )
         return records
+
+    def _persist_pending_batch_row(
+        self,
+        *,
+        prompt: str,
+        agent: ModelAgent,
+        result: dict[str, Any],
+        batch_latency_ms: float,
+    ) -> tuple[dict[str, Any], str]:
+        """Persist one batched worker answer as an unjudged pending run.
+
+        Shared by the normal per-group result loop and its malformed-response
+        salvage path (Devin review on #961), so a partially invalid batch
+        response persists every independently-valid item's real spend the
+        same way a fully valid one does. Returns the trace row (still needing
+        ``_finalize_batch_row``'s judge verdict) and the generated run id.
+        """
+        row: dict[str, Any] = {
+            "id": 0, "role": "worker", "agent_id": agent.id,
+            "model": agent.model,
+            "provider": agent.provider_name or self._infer_provider_name(agent.base_url),
+            "latency_ms": batch_latency_ms,
+            "subtask": "Direct route (batched)", "access": [], "output": result["content"],
+        }
+        if result.get("usage") is not None:
+            row["usage"] = result["usage"]
+        run_id = f"run_{uuid.uuid4().hex}"
+        pending_record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": run_id,
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": prompt,
+                "answer": result["content"],
+                "trace": [row],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {},
+                "pending_verification": True,
+            }
+        )
+        self._replace_workflow_run(pending_record)
+        if self._store is not None:
+            self._store.save("workflow_run", run_id, pending_record)
+        return row, run_id
 
     def _finalize_batch_row(
         self,
@@ -7135,6 +7204,20 @@ class TaskOrchestrator:
             if result.usage:
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
+            # The provider call has already completed by this point (result
+            # is a real response, with judge_agent_id/judge_model/judge_usage
+            # already captured above) -- an invalid IRT projection is a
+            # publication-safety failure, not evidence the call never
+            # happened. Every fail-closed verdict from here on must still
+            # carry this accounting subset, or _run_budget_output_by_model/
+            # spend_analytics (which key off exactly these fields) silently
+            # lose an already-incurred, real judge spend the moment
+            # publication is rejected (Devin review on #961).
+            accounting_fields = {
+                key: verification[key]
+                for key in ("judge_agent_id", "judge_model", "judge_usage")
+                if key in verification
+            }
             criterion_scores = getattr(result, "criterion_scores", None)
             to_irt_row = getattr(result, "to_irt_row", None)
             if isinstance(criterion_scores, Mapping) and callable(to_irt_row):
@@ -7146,6 +7229,7 @@ class TaskOrchestrator:
                         "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
                         "verifier_output": verifier_output,
                         "judge": "model",
+                        **accounting_fields,
                     }
                 if (
                     len(criterion_scores) < 2
@@ -7157,6 +7241,7 @@ class TaskOrchestrator:
                         "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
                         "verifier_output": verifier_output,
                         "judge": "model",
+                        **accounting_fields,
                     }
                 verification["judge_criterion_scores"] = dict(criterion_scores)
                 verification["judge_irt_item_type"] = "dichotomous"

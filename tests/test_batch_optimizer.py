@@ -122,11 +122,27 @@ def test_mock_default_batch_route_works_without_usage() -> None:
 
 @pytest.mark.parametrize("kind", ["missing", "content"])
 def test_batch_route_rejects_incomplete_or_empty_provider_results(kind: str) -> None:
+    """The group as a whole is rejected, but its other, independently-valid
+    items' real spend must survive (Devin review on #961): a fully-invalid
+    or all-or-nothing loss defeats the point of persisting a group's results
+    as soon as it validates, for the exact same reason an unrelated later
+    group's failure must not erase an earlier group's already-completed one.
+    """
     orchestrator = _orch(_InvalidBatchClient(kind))
 
     with pytest.raises(RuntimeError, match="batch provider"):
         orchestrator.batch_route([t["prompt"] for t in TASKS])
-    assert orchestrator._workflow_runs == {}
+
+    # task_1 ("task two") is the one dropped/malformed item; task_0 and
+    # task_2 ("task one"/"task three") are still salvaged as pending.
+    assert len(orchestrator._workflow_runs) == 2
+    prompts = {run["prompt_text"] for run in orchestrator._workflow_runs.values()}
+    assert prompts == {"task one", "task three"}
+    assert all(
+        run["pending_verification"] is True
+        for run in orchestrator._workflow_runs.values()
+    )
+    assert orchestrator.budget_status()["spent_output_tokens"] == 12  # 2 x 6
 
 
 class _ScriptedFastJudge:

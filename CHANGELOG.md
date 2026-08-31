@@ -229,7 +229,33 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   test `test_batch_route_finalizes_completed_group_before_blocking_a_later_one_when_judging_is_free`:
   two groups, `realtime_judge=False`, the first exhausts the cap; asserts
   the second group's call is still blocked while the first group's run is
-  a finalized, visible result rather than a stuck pending row.
+  a finalized, visible result rather than a stuck pending row. (Devin
+  review on #961) Two further findings, both about losing evidence for
+  spend that has already genuinely happened. First: `batch_route` validated
+  each group's entire response via `_validate_batch_results` before
+  persisting any of it, so one malformed or missing item in an otherwise-
+  valid group's response discarded every other, independently-valid item's
+  already-incurred spend alongside it -- the same class of loss already
+  fixed across groups, but now within one group's own paid provider call.
+  `batch_route` now catches that validation failure, salvages every item in
+  the raw response that independently satisfies the same per-item
+  validity check, persists their spend as pending exactly like the normal
+  path (extracted into a new `_persist_pending_batch_row()` helper shared
+  by both), and then still raises -- the group as a whole remains correctly
+  unusable as a completed run. Second: inside `_model_judge_verification`,
+  the judge's provider call can complete and report real usage, with
+  `judge_agent_id`/`judge_model`/`judge_usage` already captured, before the
+  *separate* IRT-projection validation step rejects the result; both of its
+  fail-closed branches returned a fresh dict literal that discarded those
+  three fields, making an already-incurred judge spend invisible to
+  `_run_budget_output_by_model`/`spend_analytics()`. Both branches now carry
+  the same accounting subset forward. New/extended regression tests:
+  `test_batch_route_rejects_incomplete_or_empty_provider_results` (extended
+  to assert the group's two other, valid items survive as pending, with
+  their spend counted, while the malformed one is excluded) and
+  `test_model_judge_irt_projection_failure_fails_closed` (extended to
+  assert the fail-closed verdict still carries `judge_agent_id`/
+  `judge_model`/`judge_usage` from the already-completed provider call).
 
 ### Added
 

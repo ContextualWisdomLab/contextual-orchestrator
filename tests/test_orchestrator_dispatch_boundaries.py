@@ -346,6 +346,13 @@ def test_model_judge_irt_projection_failure_fails_closed() -> None:
         verification = orch._model_judge_verification("task", fallback)
     assert verification["accepted"] is False
     assert "IRT projection" in verification["reason"]
+    # The provider call already completed and reported real usage before the
+    # IRT projection itself failed -- that accounting must survive the
+    # fail-closed verdict, or the already-incurred spend becomes invisible
+    # to _run_budget_output_by_model/spend_analytics (Devin review on #961).
+    assert verification["judge_agent_id"] == "planner_agent"
+    assert verification["judge_model"] == "mock-model"
+    assert verification["judge_usage"] == {"completion_tokens": 3}
 
 
 # -- PII protection on analytics events ----------------------------------------------
