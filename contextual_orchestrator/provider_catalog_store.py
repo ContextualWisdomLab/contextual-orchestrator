@@ -344,6 +344,8 @@ def normalize_discovered_model(
         auth_scheme=source.auth_scheme,
         max_output_tokens=_normalize_positive_int(model.max_output_tokens),
         context_window=_normalize_positive_int(model.context_window),
+        max_output_tokens_conflicted=bool(model.max_output_tokens_conflicted),
+        context_window_conflicted=bool(model.context_window_conflicted),
         prompt_price_per_1k=_normalize_price(model.prompt_price_per_1k),
         completion_price_per_1k=_normalize_price(
             model.completion_price_per_1k
@@ -487,11 +489,13 @@ class InMemoryProviderCatalogStore:
                     max_output_tokens=(
                         model.max_output_tokens
                         if model.max_output_tokens is not None
+                        or model.max_output_tokens_conflicted
                         else previous.get(model_name, model).max_output_tokens
                     ),
                     context_window=(
                         model.context_window
                         if model.context_window is not None
+                        or model.context_window_conflicted
                         else previous.get(model_name, model).context_window
                     ),
                 )
@@ -778,10 +782,12 @@ class PostgresProviderCatalogStore:
                         "true, %s, %s) "
                         "ON CONFLICT (provider_model_id) DO UPDATE SET "
                         "model_name = EXCLUDED.model_name, "
-                        "max_output_tokens = COALESCE(EXCLUDED.max_output_tokens, "
-                        "provider_model.max_output_tokens), "
-                        "context_window = COALESCE(EXCLUDED.context_window, "
-                        "provider_model.context_window), "
+                        "max_output_tokens = CASE WHEN %s THEN NULL ELSE "
+                        "COALESCE(EXCLUDED.max_output_tokens, "
+                        "provider_model.max_output_tokens) END, "
+                        "context_window = CASE WHEN %s THEN NULL ELSE "
+                        "COALESCE(EXCLUDED.context_window, "
+                        "provider_model.context_window) END, "
                         "prompt_price_per_1k = EXCLUDED.prompt_price_per_1k, "
                         "completion_price_per_1k = EXCLUDED.completion_price_per_1k, "
                         "currency_code = EXCLUDED.currency_code, "
@@ -799,6 +805,8 @@ class PostgresProviderCatalogStore:
                             model_name in eligible,
                             started_at,
                             started_at,
+                            model.max_output_tokens_conflicted,
+                            model.context_window_conflicted,
                         ),
                     )
                     if model_name in eligible:

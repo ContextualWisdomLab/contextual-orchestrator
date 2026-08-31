@@ -275,6 +275,8 @@ class DiscoveredModel:
     output_modalities: tuple[str, ...] = ()
     max_output_tokens: int | None = None
     context_window: int | None = None
+    max_output_tokens_conflicted: bool = False
+    context_window_conflicted: bool = False
     prompt_price_per_1k: float | None = None
     completion_price_per_1k: float | None = None
     currency_code: str = "USD"
@@ -831,10 +833,14 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
             unique_completion_limits = {value for value in completion_limits if value is not None}
             if len(unique_completion_limits) == 1:
                 row["max_output_tokens"] = unique_completion_limits.pop()
+            else:
+                row["_max_output_tokens_conflicted"] = True
         if context_windows and all(value is not None for value in context_windows):
             unique_context_windows = {value for value in context_windows if value is not None}
             if len(unique_context_windows) == 1:
                 row["context_window"] = unique_context_windows.pop()
+            else:
+                row["_context_window_conflicted"] = True
         if pricing_complete and len(prices) == 1:
             prompt, completion = prices.pop()
             if prompt is not None and completion is not None:
@@ -1071,6 +1077,12 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 output_modalities=outputs,
                 max_output_tokens=max_output_tokens,
                 context_window=context_window,
+                max_output_tokens_conflicted=(
+                    row.get("_max_output_tokens_conflicted") is True
+                ),
+                context_window_conflicted=(
+                    row.get("_context_window_conflicted") is True
+                ),
                 prompt_price_per_1k=prompt_price,
                 completion_price_per_1k=completion_price,
                 unit_prices=unit_prices,

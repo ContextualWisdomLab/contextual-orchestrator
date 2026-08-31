@@ -298,6 +298,40 @@ def test_successful_refresh_retains_known_limits_when_metadata_is_unknown() -> N
     ) == (2.0, 2.0)
 
 
+def test_successful_refresh_clears_known_limits_after_fresh_conflict() -> None:
+    source = _source()
+    known = replace(
+        _model(source, "model-a", 1.0),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [known],
+        eligible_model_ids={known.model_id},
+        serving_tags={known.model_id: ("discovered", "chat")},
+    )
+
+    conflicted = replace(
+        known,
+        max_output_tokens=None,
+        context_window=None,
+        max_output_tokens_conflicted=True,
+        context_window_conflicted=True,
+    )
+    store.record_success(
+        source,
+        [conflicted],
+        eligible_model_ids={conflicted.model_id},
+        serving_tags={conflicted.model_id: ("discovered", "chat")},
+    )
+
+    refreshed = store.serving_models(source)[0]
+    assert refreshed.max_output_tokens is None
+    assert refreshed.context_window is None
+
+
 def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
     """A catalog round trip preserves an explicit lack of zero-data retention."""
     source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
@@ -525,14 +559,8 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert "UPDATE provider_model SET enabled_flag = false" in success_sql
     assert "INSERT INTO model_serving_tag" in success_sql
     assert "INSERT INTO model_policy_source" in success_sql
-    assert (
-        "COALESCE(EXCLUDED.max_output_tokens, provider_model.max_output_tokens)"
-        in success_sql
-    )
-    assert (
-        "COALESCE(EXCLUDED.context_window, provider_model.context_window)"
-        in success_sql
-    )
+    assert "max_output_tokens = CASE WHEN %s THEN NULL ELSE COALESCE" in success_sql
+    assert "context_window = CASE WHEN %s THEN NULL ELSE COALESCE" in success_sql
     assert connections[-1].commits >= 1
 
     store.record_failure(source, error_code="provider_timeout: secret-token")
@@ -542,6 +570,35 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert "UPDATE provider_model SET enabled_flag = false" not in failure_sql
     assert "INSERT INTO catalog_refresh_run" in failure_sql
     assert store.refresh_evidence()[-1].error_code == "unknown_error"
+
+
+def test_postgres_success_clears_limits_marked_as_conflicting() -> None:
+    source = _source()
+    connection = _FakeConnection()
+    store = PostgresProviderCatalogStore(
+        "postgresql://catalog.example/db",
+        connection_factory=lambda: connection,
+    )
+    conflicted = replace(
+        _model(source, "model-a"),
+        max_output_tokens_conflicted=True,
+        context_window_conflicted=True,
+    )
+
+    store.record_success(
+        source,
+        [conflicted],
+        eligible_model_ids={conflicted.model_id},
+        serving_tags={conflicted.model_id: ("discovered", "chat")},
+    )
+
+    statement, params = next(
+        call
+        for call in connection.cursor_object.calls
+        if "INSERT INTO provider_model" in call[0]
+    )
+    assert "CASE WHEN %s THEN NULL" in statement
+    assert params[-2:] == (True, True)
 
 
 def test_postgres_success_clears_tags_account_wide_not_per_current_model() -> None:

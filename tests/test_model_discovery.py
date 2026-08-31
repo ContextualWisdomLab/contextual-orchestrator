@@ -605,8 +605,28 @@ def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
     assert merged["data"][0]["max_output_tokens"] == 4096
     assert "context_window" not in merged["data"][1]
     assert "max_output_tokens" not in merged["data"][1]
+    assert merged["data"][1]["_context_window_conflicted"] is True
+    assert merged["data"][1]["_max_output_tokens_conflicted"] is True
     assert "context_window" not in merged["data"][2]
     assert "max_output_tokens" not in merged["data"][2]
+    assert "_context_window_conflicted" not in merged["data"][2]
+    assert "_max_output_tokens_conflicted" not in merged["data"][2]
+
+    discovered = _parse_openai_compatible(
+        merged,
+        ProviderModelSource(
+            provider_name="configured_gateway",
+            credential_name="LLM_GATEWAY_API_KEY",
+            list_url="https://gateway.example/v1/models",
+            chat_base_url="https://gateway.example/v1",
+            capabilities=("chat",),
+        ),
+    )
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["mismatch-model"].max_output_tokens_conflicted is True
+    assert by_id["mismatch-model"].context_window_conflicted is True
+    assert by_id["missing-model"].max_output_tokens_conflicted is False
+    assert by_id["missing-model"].context_window_conflicted is False
 
 
 def test_models_dev_merge_preserves_limit_metadata() -> None:
