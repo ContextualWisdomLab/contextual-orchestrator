@@ -108,9 +108,14 @@ def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
     else:
         return None
     text = message.casefold()
+    single_tool_limit_patterns = (
+        r"\bonly supports?\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?(?:\s+at\s+(?:once|a\s+time))?\b",
+        r"\b(?:single|one)\s+tool(?:-?calls?)?\s+at\s+(?:once|a\s+time)\b",
+        r"\b(?:accepts?|allows?)\s+only\s+(?:a\s+)?(?:single|one)\s+tool(?:-?calls?)?\b",
+        r"\bmax(?:imum)?\s+of\s+one\s+tool(?:-?calls?)?\b",
+    )
     if (
-        "single tool" in text
-        or "one tool" in text
+        any(re.search(pattern, text) for pattern in single_tool_limit_patterns)
         or (
             "parallel_tool_calls" in text
             and any(phrase in text for phrase in ("not supported", "unsupported"))

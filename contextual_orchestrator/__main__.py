@@ -406,6 +406,21 @@ _DISCOVERY_CAPABILITY_BLOCKED_TAG = "discovery:blocked:capability"
 _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG = (
     "discovery:blocked:capability:preserve-disabled"
 )
+_DISCOVERY_SPEND_BLOCKED_TAG = "spend:blocked"
+_DISCOVERY_SPEND_PRESERVE_DISABLED_TAG = "spend:blocked:preserve-disabled"
+
+
+def _should_preserve_operator_disabled_state(existing: ModelAgent) -> bool:
+    """Return whether a discovery blocker should preserve operator disablement."""
+    if not existing.disabled:
+        return False
+    tags = set(existing.tags)
+    if tags & {
+        _DISCOVERY_SPEND_PRESERVE_DISABLED_TAG,
+        _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG,
+    }:
+        return True
+    return not bool(tags & {_DISCOVERY_SPEND_BLOCKED_TAG, _DISCOVERY_CAPABILITY_BLOCKED_TAG})
 
 
 def _discovered_tool_call_tags(model: DiscoveredModel) -> tuple[str, ...]:
@@ -479,12 +494,18 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 }
             )
             if not model.spend_admitted:
-                tags = (*tags, "spend:blocked")
-                if existing.disabled and "spend:blocked" not in existing.tags:
-                    tags = (*tags, "spend:blocked:preserve-disabled")
+                tags = (*tags, _DISCOVERY_SPEND_BLOCKED_TAG)
+                if (
+                    _should_preserve_operator_disabled_state(existing)
+                    and _DISCOVERY_SPEND_BLOCKED_TAG not in existing.tags
+                ):
+                    tags = (*tags, _DISCOVERY_SPEND_PRESERVE_DISABLED_TAG)
             if capability_blocked:
                 tags = (*tags, _DISCOVERY_CAPABILITY_BLOCKED_TAG)
-                if existing.disabled and _DISCOVERY_CAPABILITY_BLOCKED_TAG not in existing.tags:
+                if (
+                    _should_preserve_operator_disabled_state(existing)
+                    and _DISCOVERY_CAPABILITY_BLOCKED_TAG not in existing.tags
+                ):
                     tags = (*tags, _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG)
             agents.append(
                 replace(
@@ -494,14 +515,14 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                 )
             )
         elif (
-            "spend:blocked" in existing.tags
+            _DISCOVERY_SPEND_BLOCKED_TAG in existing.tags
             or _DISCOVERY_CAPABILITY_BLOCKED_TAG in existing.tags
         ):
             agents.append(
                 replace(
                     existing,
                     disabled=(
-                        "spend:blocked:preserve-disabled" in existing.tags
+                        _DISCOVERY_SPEND_PRESERVE_DISABLED_TAG in existing.tags
                         or _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG in existing.tags
                     ),
                     tags=tuple(
@@ -509,8 +530,8 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                         for tag in _refresh_discovered_tool_call_tags(existing.tags, model)
                         if tag
                         not in {
-                            "spend:blocked",
-                            "spend:blocked:preserve-disabled",
+                            _DISCOVERY_SPEND_BLOCKED_TAG,
+                            _DISCOVERY_SPEND_PRESERVE_DISABLED_TAG,
                             _DISCOVERY_CAPABILITY_BLOCKED_TAG,
                             _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG,
                         }

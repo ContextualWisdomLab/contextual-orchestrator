@@ -2504,6 +2504,16 @@ def test_tool_call_parallelism_from_error_recognizes_single_tool_rejection() -> 
     assert _tool_call_parallelism_from_error({"error": {}}) is None
 
 
+def test_tool_call_parallelism_from_error_ignores_generic_one_tool_validation() -> None:
+    """Generic one-tool validation errors are not evidence of single-tool-only support."""
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "At least one tool is required for this request."}}
+    ) is None
+    assert _tool_call_parallelism_from_error(
+        {"error": {"message": "One tool has an invalid schema."}}
+    ) is None
+
+
 def test_probe_discovered_model_tool_call_capability_success_returns_true() -> None:
     """A 200 probe counts only when the response actually contains both tool calls."""
     discovered = _single_tool_discovered_model()

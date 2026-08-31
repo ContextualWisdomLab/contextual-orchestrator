@@ -650,6 +650,130 @@ def test_auto_discovery_preserves_operator_disable_across_spend_recovery(
     assert orchestrator.candidates[0] == existing
 
 
+def test_auto_discovery_does_not_make_spend_blocker_sticky_after_capability_swap(
+    monkeypatch,
+) -> None:
+    active = ModelAgent(
+        "openrouter_provider_parallel",
+        "provider/parallel",
+        provider_name="openrouter",
+        tags=("discovered", "chat"),
+    )
+    spend_blocked = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/parallel",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        spend_admitted=False,
+    )
+    orchestrator = TaskOrchestrator([active], allow_empty_agents=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([spend_blocked], []),
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    blocked = orchestrator.candidates[0]
+    assert blocked.disabled is True
+    assert "spend:blocked" in blocked.tags
+    assert "spend:blocked:preserve-disabled" not in blocked.tags
+
+    capability_blocked = replace(
+        spend_blocked,
+        spend_admitted=True,
+        supports_parallel_tool_calls=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([capability_blocked], []),
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    swapped = orchestrator.candidates[0]
+    assert swapped.disabled is True
+    assert "discovery:blocked:capability" in swapped.tags
+    assert "discovery:blocked:capability:preserve-disabled" not in swapped.tags
+
+    recovered = replace(capability_blocked, supports_parallel_tool_calls=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    final = orchestrator.candidates[0]
+    assert final.disabled is False
+    assert "spend:blocked" not in final.tags
+    assert "discovery:blocked:capability" not in final.tags
+
+
+def test_auto_discovery_does_not_make_capability_blocker_sticky_after_spend_swap(
+    monkeypatch,
+) -> None:
+    active = ModelAgent(
+        "openrouter_provider_parallel",
+        "provider/parallel",
+        provider_name="openrouter",
+        tags=("discovered", "chat"),
+    )
+    capability_blocked = DiscoveredModel(
+        provider_name="openrouter",
+        model_id="provider/parallel",
+        credential_name="OPENROUTER_API_KEY",
+        chat_base_url="https://openrouter.ai/api/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        supports_parallel_tool_calls=False,
+    )
+    orchestrator = TaskOrchestrator([active], allow_empty_agents=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([capability_blocked], []),
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    blocked = orchestrator.candidates[0]
+    assert blocked.disabled is True
+    assert "discovery:blocked:capability" in blocked.tags
+    assert "discovery:blocked:capability:preserve-disabled" not in blocked.tags
+
+    spend_blocked = replace(
+        capability_blocked,
+        supports_parallel_tool_calls=True,
+        spend_admitted=False,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([spend_blocked], []),
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    swapped = orchestrator.candidates[0]
+    assert swapped.disabled is True
+    assert "spend:blocked" in swapped.tags
+    assert "spend:blocked:preserve-disabled" not in swapped.tags
+
+    recovered = replace(spend_blocked, spend_admitted=True)
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([recovered], []),
+    )
+
+    _auto_discover_runtime_agents(orchestrator)
+
+    final = orchestrator.candidates[0]
+    assert final.disabled is False
+    assert "spend:blocked" not in final.tags
+    assert "discovery:blocked:capability" not in final.tags
+
+
 def test_runtime_auto_discovery_does_not_read_gateway_environment(monkeypatch) -> None:
     captured = []
     monkeypatch.setattr(
