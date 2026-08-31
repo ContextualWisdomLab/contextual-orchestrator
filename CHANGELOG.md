@@ -278,6 +278,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   pre-existing `test_fast_mlsirm_format_error_fails_closed` (whose judge
   raises before ever calling the adapter) is extended to assert the
   opposite: no accounting fields, since genuinely no call happened.
+  (Devin review on #961) The same residual gap existed one call site
+  earlier: `_FastMLSIJudgeAdapter.complete_structured()` only stored
+  `served_agent_id`/`served_model`/`served_usage` via `_completion_payload`,
+  which runs *after* `ModelClient._response_content()` validates the
+  response has usable assistant content. A real, billed provider response
+  with no usable content (reasoning-only, or a missing message) makes
+  `_response_content` raise before `_completion_payload` ever runs, so that
+  already-incurred structured-call spend was lost the same way the
+  previous fix closed for judge-side (fast-mlsirm) failures. Accounting is
+  now captured immediately once `proxy_send()` returns, before content
+  validation runs. New regression test
+  `test_judge_adapter_preserves_accounting_on_malformed_structured_response`:
+  `proxy_send` returns a response with real `usage` but no assistant
+  content; asserts the raised `ProviderResponseError` still leaves
+  `served_agent_id`/`served_model`/`served_usage` populated on the adapter.
 
 ### Added
 

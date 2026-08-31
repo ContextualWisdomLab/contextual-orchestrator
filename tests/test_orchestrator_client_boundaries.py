@@ -15,6 +15,7 @@ from contextual_orchestrator.orchestrator import (
     MAX_PROVIDER_PROBE_TIMEOUT,
     ModelAgent,
     ModelClient,
+    ProviderResponseError,
     TaskOrchestrator,
     _FastMLSIJudgeAdapter,
     _coerce_input_text,
@@ -152,6 +153,36 @@ def test_judge_adapter_validates_mode_and_response_format() -> None:
     )
     assert structured["mode"] == "route"
     assert structured["trace"][0]["agent_id"] == "planner_agent"
+
+
+def test_judge_adapter_preserves_accounting_on_malformed_structured_response() -> None:
+    """A billed but malformed structured response must not erase its spend.
+
+    Devin review on #961: complete_structured() only stored served_agent_id/
+    served_model/served_usage via _completion_payload, which runs *after*
+    _response_content validates the response has assistant content. If that
+    validation raises (a real provider response with no usable content --
+    e.g. reasoning-only, or missing message content), the provider call
+    already happened and billed real usage, but the adapter never recorded
+    it. Accounting is now captured immediately once proxy_send returns,
+    before content validation runs.
+    """
+    orch = _orch(_agent())
+    adapter = _FastMLSIJudgeAdapter(orchestrator=orch, text="task", judge="planner_agent")
+    malformed_but_billed = {
+        "choices": [{"message": {}}],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+    }
+    with patch.object(orch.client, "proxy_send", return_value=malformed_but_billed):
+        with pytest.raises(ProviderResponseError, match="did not contain assistant content"):
+            adapter.complete_structured(
+                [{"role": "user", "content": "hi"}],
+                mode="route",
+                response_format={"type": "json_object"},
+            )
+    assert adapter.served_agent_id == "planner_agent"
+    assert adapter.served_model == "mock-model"
+    assert adapter.served_usage == {"prompt_tokens": 5, "completion_tokens": 2}
 
 
 # -- agent and policy validation -----------------------------------------------

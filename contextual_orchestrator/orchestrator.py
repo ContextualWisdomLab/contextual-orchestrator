@@ -345,10 +345,19 @@ class _FastMLSIJudgeAdapter:
         response = self.orchestrator.client.proxy_send(
             agent, "chat/completions", request
         )
+        # Captured immediately once the provider call itself returns, before
+        # _response_content's own content validation gets a chance to raise
+        # on a malformed structured response (Devin review on #961): that
+        # billed call already happened by this point, and this accounting
+        # must survive validation failing on how to interpret its result.
+        self.served_agent_id = agent.id
+        self.served_model = agent.model
+        self.served_usage = (
+            response.get("usage") if isinstance(response.get("usage"), dict) else None
+        )
         output = ModelClient._response_content(agent, response)
-        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(
-            output, agent.id, agent.model, usage, self.mode if mode is None else mode
+            output, agent.id, agent.model, self.served_usage, self.mode if mode is None else mode
         )
 
     def _completion_payload(
