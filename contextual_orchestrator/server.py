@@ -3237,10 +3237,18 @@ def _validate_candidate_routing(
     orchestrator: TaskOrchestrator,
     routing: dict[str, Any] | None,
     model_name: str,
+    *,
+    required_roles: tuple[str, ...] = ("worker",),
+    required_tags: tuple[str, ...] = (),
 ) -> None:
     """Fail closed on candidate controls before any response bytes are sent."""
     try:
-        with orchestrator.candidate_routing_policy(routing, model_name=model_name):
+        with orchestrator.candidate_routing_policy(
+            routing,
+            model_name=model_name,
+            required_roles=required_roles,
+            required_tags=required_tags,
+        ):
             pass
     except ValueError as exc:
         raise RequestError(400, "invalid_routing", str(exc)) from exc
@@ -6897,6 +6905,30 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    try:
+                        with orchestrator.candidate_routing_policy(
+                            request_routing, model_name=model_name
+                        ):
+                            route_selected = orchestrator.would_route(
+                                messages, mode, model_name
+                            )
+                    except ValueError as exc:
+                        raise RequestError(400, "invalid_routing", str(exc)) from exc
+                    _validate_candidate_routing(
+                        orchestrator,
+                        request_routing,
+                        model_name,
+                        required_roles=(
+                            ("worker",)
+                            if route_selected
+                            else ("thinker", "worker", "verifier", "synthesizer")
+                        ),
+                        required_tags=(
+                            ("vision",)
+                            if orchestrator._source_image_parts(messages)
+                            else ()
+                        ),
+                    )
                     with orchestrator.candidate_routing_policy(
                         request_routing, model_name=model_name
                     ):

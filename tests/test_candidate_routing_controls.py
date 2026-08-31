@@ -257,6 +257,75 @@ def test_candidate_controls_reject_an_unserviceable_worker_pool() -> None:
                 pass
 
 
+def test_candidate_pin_preflight_checks_conduct_roles_and_required_tags() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                provider_exclusions=("verifier",),
+            ),
+            ModelAgent("vision_agent", "vision-model", tags=("vision",)),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="eligible agent"):
+        with orchestrator.candidate_routing_policy(
+            {"candidate_id": "worker_only"},
+            required_roles=("thinker", "worker", "verifier", "synthesizer"),
+        ):
+            pass
+    with pytest.raises(ValueError, match="eligible agent"):
+        with orchestrator.candidate_routing_policy(
+            {"candidate_id": "worker_only"}, required_tags=("vision",)
+        ):
+            pass
+    with pytest.raises(ValueError, match="leaves no eligible agent"):
+        with orchestrator.candidate_routing_policy(
+            {"exclude_candidate_ids": ["vision_agent"]},
+            required_roles=("verifier",),
+        ):
+            pass
+
+
+def test_http_conduct_preflight_rejects_role_ineligible_pin() -> None:
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "worker_only",
+                "worker-model",
+                provider_exclusions=("verifier",),
+            )
+        ],
+        client=client,
+    )
+    token = "candidate-routing-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "conduct this"}],
+                "mode": "conduct",
+                "routing": {"candidate_id": "worker_only"},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400
+    assert body["error"]["code"] == "invalid_routing"
+    assert client.calls == []
+
+
 def test_generated_planner_uses_only_request_eligible_candidates(monkeypatch) -> None:
     orchestrator = TaskOrchestrator(
         [

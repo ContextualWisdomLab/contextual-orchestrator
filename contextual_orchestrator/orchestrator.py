@@ -3455,6 +3455,8 @@ class TaskOrchestrator:
         routing: Mapping[str, Any] | None,
         *,
         model_name: str = GATEWAY_DEFAULT_MODEL,
+        required_roles: tuple[str, ...] = ("worker",),
+        required_tags: tuple[str, ...] = (),
     ):
         """Apply trusted request-local candidate pin and exclusion controls."""
         routing = routing or {}
@@ -3490,22 +3492,27 @@ class TaskOrchestrator:
                 or candidate.disabled
                 or not self._zdr_agent_allowed(candidate)
                 or not _is_general_chat_agent(candidate)
-                or "worker" in candidate.provider_exclusions
+                or any(role in candidate.provider_exclusions for role in required_roles)
+                or any(tag not in candidate.tags for tag in required_tags)
             ):
                 raise ValueError("candidate_id is not an eligible agent")
             if model_name == self.FREE_MODEL and not self._is_general_free_agent(candidate):
                 raise ValueError("candidate_id is not eligible for orchestrator/free")
-        elif not any(
-            agent.id not in normalized
-            and not agent.disabled
-            and self._zdr_agent_allowed(agent)
-            and _is_general_chat_agent(agent)
-            and "worker" not in agent.provider_exclusions
-            and (
-                model_name != self.FREE_MODEL
-                or self._is_general_free_agent(agent)
+        elif any(
+            not any(
+                agent.id not in normalized
+                and not agent.disabled
+                and self._zdr_agent_allowed(agent)
+                and _is_general_chat_agent(agent)
+                and role not in agent.provider_exclusions
+                and all(tag in agent.tags for tag in required_tags)
+                and (
+                    model_name != self.FREE_MODEL
+                    or self._is_general_free_agent(agent)
+                )
+                for agent in self.candidates
             )
-            for agent in self.candidates
+            for role in required_roles
         ):
             raise ValueError("exclude_candidate_ids leaves no eligible agent")
         candidate_token = _REQUEST_CANDIDATE_ID.set(candidate_id)
@@ -5619,8 +5626,11 @@ class TaskOrchestrator:
                     additional_cost_usd=in_flight_cost,
                 )
             agent = self._agent(step.agent_id)
+            candidate_controls_active = _REQUEST_ATTEMPTED_CANDIDATE_IDS.get() is not None
             if not self._request_candidate_allowed(agent) or any(
                 tag not in agent.tags for tag in required_tags
+            ) or (
+                candidate_controls_active and step.role in agent.provider_exclusions
             ):
                 try:
                     capable = self._ranked_agents(
@@ -5633,7 +5643,11 @@ class TaskOrchestrator:
                     capable = []
                 if capable:
                     agent = capable[0]
-                if not self._request_candidate_allowed(agent):
+                if candidate_controls_active and (
+                    not self._request_candidate_allowed(agent)
+                    or any(tag not in agent.tags for tag in required_tags)
+                    or step.role in agent.provider_exclusions
+                ):
                     raise ValueError(
                         "no eligible candidate satisfies the active routing controls"
                     )
