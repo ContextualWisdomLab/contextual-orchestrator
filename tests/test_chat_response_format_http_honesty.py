@@ -290,7 +290,8 @@ def test_explicit_structured_model_preserves_model_not_found() -> None:
         )
         assert status == 404
         assert body["error"]["code"] == "model_not_found"
-        assert calls == ["stale_agent"]
+        assert calls
+        assert set(calls) == {"stale_agent"}
     finally:
         server.shutdown()
         thread.join(timeout=5)

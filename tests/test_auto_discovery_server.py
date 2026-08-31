@@ -147,14 +147,13 @@ def test_configured_gateway_structured_probe_is_bounded_and_validates_output() -
     orchestrator = TaskOrchestrator([], allow_empty_agents=True)
     observed = {}
 
-    def send(agent, endpoint, payload):
-        observed.update(agent=agent, endpoint=endpoint, payload=payload)
+    def send(agent, payload):
+        observed.update(agent=agent, payload=payload)
         return {"choices": [{"message": {"content": '{"status":"ok"}'}}]}
 
-    orchestrator.client.proxy_send_once = send
+    orchestrator.client.probe_structured_chat = send
 
     assert _probe_configured_gateway_structured_chat(orchestrator, model) is True
-    assert observed["endpoint"] == "chat/completions"
     assert observed["payload"]["max_tokens"] == 8
     assert observed["payload"]["response_format"] == {"type": "json_object"}
 

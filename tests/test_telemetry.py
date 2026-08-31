@@ -422,6 +422,34 @@ def test_stream_and_passthrough_provider_calls_create_client_spans(monkeypatch):
     ]
 
 
+def test_readiness_probe_uses_separate_operation_telemetry(monkeypatch):
+    """A startup readiness probe cannot masquerade as a caller request attempt."""
+    captured = []
+
+    @contextmanager
+    def capture(name, attributes):
+        captured.append((name, attributes))
+        yield None
+
+    client = ModelClient()
+    agent = ModelAgent(
+        "provider_agent",
+        "model-x",
+        base_url="https://provider.example/v1",
+        credential_key="",
+        provider_name="openai",
+    )
+    monkeypatch.setattr(orchestrator_module, "traced", capture)
+    monkeypatch.setattr(client, "_validate_provider", lambda unused_agent: None)
+    monkeypatch.setattr(
+        client, "_send_raw_with_retry", lambda *_args, **_kwargs: {"ok": True}
+    )
+
+    assert client.probe_structured_chat(agent, {"messages": []}) == {"ok": True}
+    assert captured[0][0] == "capability_probe.chat model-x"
+    assert captured[0][1]["contextual_orchestrator.operation_kind"] == "capability_probe"
+
+
 def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(monkeypatch, caplog):
     """Failures remain classifiable without recording raw exception or session data."""
     tracer = MagicMock()

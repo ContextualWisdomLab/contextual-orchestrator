@@ -15,6 +15,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Configured-gateway runtime discovery now retains chat rows only after a
   bounded structured-output probe, and virtual structured workflows share one
   request-scoped missing-model exclusion set across evidence and synthesis.
+  Probe telemetry is separate from caller attempts, and explicit structured
+  requests keep their model pin throughout evidence, judgment, and synthesis.
 - Provider-embedding workers now propagate durable-claim renewal loss and
   refresh ownership before terminal publication. Embedding token accounting
   uses configured `pg_tiktoken` or the packaged Rust cl100k counter for exact
