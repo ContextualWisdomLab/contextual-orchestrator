@@ -33,6 +33,10 @@ available through a public gateway error or an exception cause.
    missing. Evidence roles and final synthesis share it, so each missing model
    is attempted at most once and complete exhaustion terminates with the typed
    `model_not_found` surface rather than restarting the same catalog sequence.
+8. Configured-gateway readiness probes use a distinct capability-probe
+   telemetry operation. They are not caller attempts. Conversely, an explicit
+   structured model pin constrains evidence, model judgment, and synthesis to
+   that same agent; only virtual selectors may replace a missing model.
 
 ## Consequences
 

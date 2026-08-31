@@ -1964,6 +1964,18 @@ class ModelClient:
         """Send one passthrough attempt so cross-provider failover cannot amplify load."""
         return self._proxy_send(agent, endpoint, payload, allow_transient_retries=False)
 
+    def probe_structured_chat(
+        self, agent: ModelAgent, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Run one bounded chat-readiness probe under separate telemetry."""
+        return self._proxy_send(
+            agent,
+            "chat/completions",
+            payload,
+            allow_transient_retries=False,
+            operation_kind="capability_probe",
+        )
+
     def _proxy_send(
         self,
         agent: ModelAgent,
@@ -1971,6 +1983,7 @@ class ModelClient:
         payload: dict[str, Any],
         *,
         allow_transient_retries: bool,
+        operation_kind: str = "request",
     ) -> dict[str, Any]:
         """Apply the shared passthrough contract with a selectable retry policy."""
         normalized_endpoint = endpoint.strip("/")
@@ -1992,16 +2005,21 @@ class ModelClient:
             "completions": "text_completion",
             "responses": "generate_content",
         }.get(normalized_endpoint, "generate_content")
+        trace_name = f"{operation_name} {agent.model}"
+        trace_attributes = {
+            "gen_ai.operation.name": operation_name,
+            "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+            "gen_ai.request.model": agent.model,
+            "contextual_orchestrator.agent_id": agent.id,
+            "server.address": parsed_provider.hostname or "",
+            "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+        }
+        if operation_kind != "request":
+            trace_name = f"{operation_kind}.{trace_name}"
+            trace_attributes["contextual_orchestrator.operation_kind"] = operation_kind
         with traced(
-            f"{operation_name} {agent.model}",
-            {
-                "gen_ai.operation.name": operation_name,
-                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
-                "gen_ai.request.model": agent.model,
-                "contextual_orchestrator.agent_id": agent.id,
-                "server.address": parsed_provider.hostname or "",
-                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
-            },
+            trace_name,
+            trace_attributes,
         ):
             if (
                 normalized_endpoint == "chat/completions"
@@ -3879,6 +3897,12 @@ class TaskOrchestrator:
         required_tags = ("vision",) if self._source_image_parts(messages) else ()
         response_format_requested = bool(chat_body.get("response_format"))
         requested_model = body.get("model")
+        virtual_model = requested_model in {
+            None,
+            "contextual-orchestrator",
+            self.AUTO_MODEL,
+            self.FREE_MODEL,
+        }
         free_only = requested_model == self.FREE_MODEL
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
@@ -3964,8 +3988,15 @@ class TaskOrchestrator:
         request_exclusions: set[str] = set()
         workflow = self.conduct(
             messages,
-            model_name=self.FREE_MODEL if free_only else self.GATEWAY_DEFAULT_MODEL,
+            model_name=(
+                self.FREE_MODEL
+                if free_only
+                else self.GATEWAY_DEFAULT_MODEL
+                if virtual_model
+                else str(requested_model)
+            ),
             _excluded_agent_ids=request_exclusions,
+            _allowed_agent_ids=None if virtual_model else {final_agent.id},
         )
         in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -4049,12 +4080,6 @@ class TaskOrchestrator:
                 }
             )
         active_profile = effort_profile or self._role_effort_profile("synthesizer")
-        virtual_model = requested_model in {
-            None,
-            "contextual-orchestrator",
-            self.AUTO_MODEL,
-            self.FREE_MODEL,
-        }
         allowed_agent_ids = ({final_agent.id} if isinstance(required_agent_id, str) else (
             {
                 candidate.id
@@ -5456,6 +5481,7 @@ class TaskOrchestrator:
         progress: Any = None,
         workflow_run_id: str | None = None,
         _excluded_agent_ids: set[str] | None = None,
+        _allowed_agent_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         """Run a workflow, optionally persisting it under a supplied run id."""
         self._raise_if_spend_budget_exceeded()
@@ -5559,7 +5585,9 @@ class TaskOrchestrator:
                 step_messages,
                 text=task,
                 role=step.role,
-                allowed_agent_ids=free_ids if model_name == self.FREE_MODEL else None,
+                allowed_agent_ids=(
+                    free_ids if model_name == self.FREE_MODEL else _allowed_agent_ids
+                ),
                 excluded_agent_ids=_excluded_agent_ids,
             )
             elapsed = (time.perf_counter() - start) * 1000

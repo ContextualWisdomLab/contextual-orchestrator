@@ -423,11 +423,7 @@ def _probe_configured_gateway_structured_chat(
         "stream": False,
     }
     try:
-        response = orchestrator.client.proxy_send_once(
-            agent,
-            "chat/completions",
-            payload,
-        )
+        response = orchestrator.client.probe_structured_chat(agent, payload)
         content = response["choices"][0]["message"]["content"]
         parsed = json.loads(content)
     except Exception:  # noqa: BLE001 - startup capability probe is fail-closed
