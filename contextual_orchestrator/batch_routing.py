@@ -871,6 +871,20 @@ class ProviderEmbeddingBatchBackend:
         try:
             vectors, prompt_tokens = self._runner(requests)
             execution_claim.ensure_owned()
+            if time.time() >= self._execution_deadline(job_id):
+                self._publish_terminal(
+                    job_id,
+                    execution_claim,
+                    status="failed",
+                    error={
+                        "error_type": "TimeoutError",
+                        "http_status": None,
+                        "provider_code": "provider_embedding_deadline_exceeded",
+                        "retryable": True,
+                        "failed_shard_index": None,
+                    },
+                )
+                return
             if len(vectors) != len(requests):
                 raise ValueError("provider embedding batch result count did not match inputs")
             dimensions = {len(vector) for vector in vectors}

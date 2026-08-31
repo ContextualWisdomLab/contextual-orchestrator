@@ -236,7 +236,21 @@ def test_chat_completion_missing_usage_is_unavailable_end_to_end() -> None:
         status, records = _request("GET", f"{base}/api/v1/llm_usage_records", token)
         assert status == 200, records
         assert records["total_count"] == 1
-        assert records["items"][0]["measurement_status"] == "unavailable"
+        row = records["items"][0]
+        assert row["measurement_status"] == "unavailable"
+        assert row["prompt_tokens"] is None
+        assert row["completion_tokens"] is None
+        assert row["total_tokens"] is None
+        assert row["cost_amount"] is None
+
+        status, report = _request(
+            "GET", f"{base}/api/v1/cost_reports/rollup?dimension=model_name", token
+        )
+        assert status == 200, report
+        assert report["grand_total"]["measurement_status"] == "unavailable"
+        assert report["grand_total"]["unavailable_record_count"] == 1
+        assert report["items"][0]["measurement_status"] == "unavailable"
+        assert report["items"][0]["unavailable_record_count"] == 1
     finally:
         server.shutdown()
 

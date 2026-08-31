@@ -415,6 +415,25 @@ def test_durable_job_past_deadline_becomes_failed_atomically() -> None:
     backend.close()
 
 
+def test_local_job_returning_after_deadline_fails() -> None:
+    def runner(_requests):
+        time.sleep(0.02)
+        return [[1.0]], 1
+
+    backend = ProviderEmbeddingBatchBackend(
+        runner,
+        job_registry=JobRegistryFactory(),
+        execution_timeout_seconds=0.01,
+    )
+    job = backend.submit([EmbeddingBatchRequest(input_text="synthetic")])
+
+    document = backend.wait(job, timeout=1)
+    assert document["status"] == "failed"
+    assert document["failure"]["provider_code"] == "provider_embedding_deadline_exceeded"
+    assert backend.retrieve(job) == []
+    backend.close()
+
+
 def test_execution_deadline_is_separate_from_result_retention(monkeypatch) -> None:
     client = FakeValkeyClient()
     registry = JobRegistryFactory(client, retention_seconds=123)

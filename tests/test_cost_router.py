@@ -329,16 +329,15 @@ def test_conducted_plain_completion_records_every_step_usage() -> None:
     assert result["usage"] is None
     assert records[0]["prompt_tokens"] == 7
     assert records[0]["completion_tokens"] == 3
-    assert records[1]["prompt_tokens"] == 0
-    assert records[1]["completion_tokens"] == 0
+    assert records[1]["prompt_tokens"] is None
+    assert records[1]["completion_tokens"] is None
 
 
 def test_sync_records_derive_provider_and_model_from_served_agent() -> None:
     coordinator = _coordinator()
     coordinator.complete([{"role": "user", "content": "do a thing"}])
     row = coordinator.ledger.records()[0]
-    # cost = prompt/1k * 1 + completion/1k * 2, both > 0 given the mock echo answer
-    assert row["cost_amount"] >= 0.0
+    assert row["cost_amount"] is None
     assert row["upstream_api"] == "mock"
 
 
@@ -435,9 +434,13 @@ def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     assert statuses.count("unavailable") == 2
     assert set(statuses) == {"measured", "unavailable"}
     assert result["cost"]["measurement_status"] == "unavailable"
-    assert records[1]["total_tokens"] == 0
-    assert records[3]["total_tokens"] == 0
-    assert sum(record["prompt_tokens"] for record in records) == 5
+    assert records[1]["total_tokens"] is None
+    assert records[3]["total_tokens"] is None
+    assert sum(
+        record["prompt_tokens"]
+        for record in records
+        if record["prompt_tokens"] is not None
+    ) == 5
     assert [
         record["prompt_tokens"]
         for record in records
@@ -446,7 +449,7 @@ def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     unavailable = [
         record for record in records if record["measurement_status"] == "unavailable"
     ]
-    assert [record["prompt_tokens"] for record in unavailable] == [0, 0]
+    assert [record["prompt_tokens"] for record in unavailable] == [None, None]
 
 
 def test_unreported_provider_calls_remain_unavailable() -> None:
@@ -469,8 +472,8 @@ def test_unreported_provider_calls_remain_unavailable() -> None:
         record for record in records if record["measurement_status"] == "unavailable"
     ]
     assert len(unreported) >= 2
-    assert all(record["prompt_tokens"] == 0 for record in unreported)
-    assert all(record["completion_tokens"] == 0 for record in unreported)
+    assert all(record["prompt_tokens"] is None for record in unreported)
+    assert all(record["completion_tokens"] is None for record in unreported)
 
 
 def test_structured_mixed_currency_costs_are_never_implicitly_converted() -> None:

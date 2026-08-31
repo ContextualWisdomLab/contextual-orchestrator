@@ -1407,9 +1407,18 @@ class CostLedger:
                     "total_tokens": 0,
                     "cost_amount": Decimal("0"),
                     "currency_code": row.get("currency_code", "USD"),
+                    "measurement_status": "measured",
+                    "unavailable_record_count": 0,
                 },
             )
             bucket["record_count"] += 1
+            status = row.get("measurement_status", "unavailable")
+            if status == "unavailable":
+                bucket["measurement_status"] = "unavailable"
+                bucket["unavailable_record_count"] += 1
+                continue
+            if status == "estimated" and bucket["measurement_status"] == "measured":
+                bucket["measurement_status"] = "estimated"
             bucket["prompt_tokens"] += int(row.get("prompt_tokens", 0))
             bucket["completion_tokens"] += int(row.get("completion_tokens", 0))
             bucket["total_tokens"] += int(row.get("total_tokens", 0))
@@ -1442,18 +1451,38 @@ class CostLedger:
     def total(self, start: Optional[int] = None, end: Optional[int] = None) -> Dict[str, Any]:
         """Return grand totals (cost + tokens + record count) over the window."""
         rows = self.store.query(start, end)
-        cost = sum((Decimal(str(row.get("cost_amount", 0))) for row in rows), Decimal("0"))
+        available = [row for row in rows if row.get("measurement_status") != "unavailable"]
+        unavailable_count = len(rows) - len(available)
+        cost = sum((Decimal(str(row.get("cost_amount", 0))) for row in available), Decimal("0"))
         return {
             "record_count": len(rows),
-            "prompt_tokens": sum(int(row.get("prompt_tokens", 0)) for row in rows),
-            "completion_tokens": sum(int(row.get("completion_tokens", 0)) for row in rows),
-            "total_tokens": sum(int(row.get("total_tokens", 0)) for row in rows),
+            "prompt_tokens": sum(int(row.get("prompt_tokens", 0)) for row in available),
+            "completion_tokens": sum(int(row.get("completion_tokens", 0)) for row in available),
+            "total_tokens": sum(int(row.get("total_tokens", 0)) for row in available),
             "cost_amount": float(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)),
+            "measurement_status": (
+                "unavailable"
+                if unavailable_count
+                else "estimated"
+                if any(row.get("measurement_status") == "estimated" for row in available)
+                else "measured"
+            ),
+            "unavailable_record_count": unavailable_count,
         }
 
     def records(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return raw usage record rows in the optional window."""
-        return self.store.query(start, end)
+        rows = self.store.query(start, end)
+        for row in rows:
+            if row.get("measurement_status") == "unavailable":
+                for field in (
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "cost_amount",
+                ):
+                    row[field] = None
+        return rows
 
     def _mark_inline_success(self) -> None:
         with self._inline_health_lock:
