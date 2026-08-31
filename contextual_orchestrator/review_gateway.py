@@ -14,7 +14,6 @@ import os
 from dataclasses import replace
 from typing import Mapping
 
-from .chat_capability import requires_non_text_input
 from .credentials import NotConfigured, get_credential, register_credential
 from .cost_ledger import PriceBook
 from .kv_config import InMemoryConfigStore
@@ -76,20 +75,7 @@ def build_review_orchestrator(
         detail = f"; failed providers: {providers}" if providers else ""
         raise NotConfigured(f"review gateway discovered no provider models{detail}")
 
-    # A blind review call cannot supply a modality (image/audio/video) a
-    # candidate's catalog evidence declares as required input -- the same
-    # incident this exclusion already fixes for general_free_serving_candidates
-    # (ContextualWisdomLab/.github#1198: NVIDIA NIM's
-    # meta/llama-3.2-90b-vision-instruct rejected a plain tool-calling request
-    # three times despite listing "text" alongside "image"). This gateway
-    # built its own candidate pool through is_chat_serving_candidate instead
-    # of that selector, so it never inherited the fix; apply the same
-    # evidence-based rule directly.
-    chat_discovered = [
-        model
-        for model in discovered
-        if is_chat_serving_candidate(model) and not requires_non_text_input(model.input_modalities)
-    ]
+    chat_discovered = [model for model in discovered if is_chat_serving_candidate(model)]
     if not chat_discovered:
         raise NotConfigured("review gateway discovered no general chat models")
     price_book = PriceBook(InMemoryConfigStore())

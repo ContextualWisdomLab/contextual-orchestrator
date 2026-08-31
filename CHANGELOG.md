@@ -41,15 +41,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   every refresh replaces (not merges) the persisted eligible set and drops
   any previously-served retired model, even in that all-denylisted edge
   case.
-- `review_gateway.build_review_orchestrator()` now also excludes a
-  candidate whose catalog evidence declares a required non-text input
-  modality (image/audio/video), the same rule `general_free_serving_candidates`
-  already applies for the ContextualWisdomLab/.github#1198 incident (NVIDIA
-  NIM's `meta/llama-3.2-90b-vision-instruct` rejecting a blind tool-calling
-  request three times live). The review gateway builds its own candidate
-  pool through `is_chat_serving_candidate` rather than that selector, so it
-  never inherited the original fix — a vision-only-input model could still
-  enter the review pool and exhaust it exactly like the original incident.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
