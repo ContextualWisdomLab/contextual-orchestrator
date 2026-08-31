@@ -1684,7 +1684,6 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
         ("0 / sec", True),
         ("0/sec", True),
         ("0.0000 / sec", True),
-        ("0", True),
         (0, True),
         (0.0, True),
         (0.0006, False),
@@ -1695,6 +1694,19 @@ def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
         (True, False),
         (False, False),
         ("-0 / sec", True),
+        # A zero rate is exactly as free regardless of its time unit -- the
+        # documented grammar constrains shape, not which unit word appears.
+        ("0 / hour", True),
+        # Genuinely malformed shapes must fail closed (unknown, not free),
+        # never trust a numeric-looking prefix pulled out of an unexpected
+        # overall shape.
+        ("0 /", False),  # missing unit
+        ("/ sec", False),  # missing rate
+        ("0 / sec / token", False),  # extra separator
+        ("0//sec", False),  # extra separator, empty middle segment
+        ("0", False),  # no separator at all -- does not match "<rate> / <unit>"
+        ("0 sec", False),  # no separator at all, space-joined
+        (" / ", False),  # separator present, both sides empty
     ],
 )
 def test_bytez_meter_price_is_free_classifies_exact_zero_rates(

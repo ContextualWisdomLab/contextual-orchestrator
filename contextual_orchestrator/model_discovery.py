@@ -1032,6 +1032,18 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
     ``"sm-free"``) is not used here: live documentation shows tier names can
     contain "free" while their own ``meterPrice`` is nonzero, so tier naming
     is not a trustworthy zero-cost signal.
+
+    A string value must match the full documented ``"<rate> / <unit>"`` shape
+    -- exactly one ``/`` separating a non-empty rate from a non-empty unit --
+    before any part of it is trusted. Reading only the text before the first
+    ``/`` would let a shape that does not match the documented grammar at all
+    (a missing unit, e.g. ``"0 /"``, or an extra separator, e.g.
+    ``"0 / sec / token"``) still read as ``"0"`` and get confidently
+    classified free; an unexpected shape is itself a signal something about
+    the row is wrong, so it fails closed instead. The *unit* is deliberately
+    not required to equal ``"sec"``: a rate of exactly zero cost is zero
+    regardless of its time unit (``"0 / hour"`` is exactly as free as
+    ``"0 / sec"``), so this only validates the shape, never the unit name.
     """
     if isinstance(meter_price, bool):
         return False
@@ -1042,8 +1054,13 @@ def _bytez_meter_price_is_free(meter_price: Any) -> bool:
             return False
     if not isinstance(meter_price, str):
         return False
-    rate = meter_price.split("/", 1)[0].strip()
-    if not rate:
+    segments = meter_price.split("/")
+    if len(segments) != 2:
+        # Zero or two-or-more "/" characters does not match the documented
+        # "<rate> / <unit>" shape -- trust nothing from it, zero included.
+        return False
+    rate, unit = (segment.strip() for segment in segments)
+    if not rate or not unit:
         return False
     try:
         return Decimal(rate) == 0
@@ -1473,6 +1490,15 @@ def _log_zero_free_serving_contribution(
     was failing or simply had nothing free to offer. This is derived entirely from
     already-discovered rows -- no extra fetch, no behavior change to the returned
     candidate list.
+
+    ``credential_name`` here is always the KV credential *name* (e.g.
+    ``"BYTEZ_API_KEY"``) -- one of the literal strings declared on each
+    :class:`ProviderModelSource` in ``PROVIDER_MODEL_SOURCES`` and copied
+    verbatim onto every :class:`DiscoveredModel` at construction
+    (``_parse_openai_compatible``/``_parse_bytez``). The actual secret
+    *value* is a distinct local (``api_key`` in
+    :func:`discover_provider_models`) that is never threaded onto a
+    ``DiscoveredModel`` and never reaches this function or this log line.
     """
     serving_account_names = {model.credential_name for model in candidates}
     seen: set[str] = set()
@@ -1487,6 +1513,7 @@ def _log_zero_free_serving_contribution(
             reason = "no_free_pricing_reported"
         else:
             reason = "free_rows_excluded_from_general_pool"
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure - credential_name is the KV secret's *name* (e.g. "BYTEZ_API_KEY"), never its value; see the docstring above for the exact field/type trace. The rule matches on the word "credential" in the format string, not on any actual secret reaching this call.
         _LOGGER.debug(
             "free serving pool contribution zero account=%s credential=%s reason=%s",
             model.provider_name,
