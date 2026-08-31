@@ -479,7 +479,21 @@ def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
 
 
 def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
-    payload = {"data": [{"id": "shared-model"}, {"id": "mismatch-model"}]}
+    payload = {
+        "data": [
+            {"id": "shared-model"},
+            {
+                "id": "mismatch-model",
+                "context_window": 999_999,
+                "max_output_tokens": 99_999,
+            },
+            {
+                "id": "missing-model",
+                "context_window": 999_999,
+                "max_output_tokens": 99_999,
+            },
+        ]
+    }
     metadata = {
         "data": [
             {
@@ -514,6 +528,15 @@ def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
                     "max_completion_tokens": 2048,
                 },
             },
+            {
+                "model_name": "missing-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {"model_name": "missing-model", "model_info": {"mode": "chat"}},
         ]
     }
 
@@ -523,6 +546,8 @@ def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
     assert merged["data"][0]["max_output_tokens"] == 4096
     assert "context_window" not in merged["data"][1]
     assert "max_output_tokens" not in merged["data"][1]
+    assert "context_window" not in merged["data"][2]
+    assert "max_output_tokens" not in merged["data"][2]
 
 
 def test_models_dev_merge_preserves_limit_metadata() -> None:

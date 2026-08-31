@@ -638,6 +638,8 @@ def _merge_configured_gateway_metadata(payload: Any, metadata: Any) -> Any:
         row.pop("pricing", None)
         row.pop("architecture", None)
         row.pop("unit_pricing", None)
+        row.pop("max_output_tokens", None)
+        row.pop("context_window", None)
         for key in (
             "supports_zero_data_retention",
             "supports_no_training",
