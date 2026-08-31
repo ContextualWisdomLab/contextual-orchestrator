@@ -244,6 +244,80 @@ def test_http_embeddings_demote_a_failed_cheapest_member(
         thread.join(timeout=5)
 
 
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_omitted_model_reports_the_actually_served_model(
+    path: str, input_key: str
+) -> None:
+    """Devin follow-up: an omitted model's response/attribution must match who served it.
+
+    ``ranked_first`` outranks ``cheap`` under the orchestrator's own static
+    priority order, so ``_validate_embeddings_model``'s price-blind
+    auto-selection resolves the omitted ``model`` to ``ranked_first`` before
+    cost-based candidate discovery ever runs. Candidate discovery (using
+    ``TaskOrchestrator.AUTO_MODEL`` for the omitted case) then correctly picks
+    the cheaper ``cheap`` to actually serve the request — so the initially
+    "validated" model and the actually-served model genuinely differ. The
+    HTTP response's ``model`` field must report ``cheap`` (who actually
+    served it), not ``ranked_first`` (the pre-failover, price-blind guess).
+
+    Also asserts the cost ledger's own ``model_name`` attribution (the
+    dimension used for spend rollups) is ``cheap``, not ``ranked_first``:
+    ``CostLedger.record_usage`` deliberately strips and overwrites a caller-
+    supplied ``attribution["model_name"]`` with the actual served ``model``
+    argument ("execution identity always wins" — buyer-bill honesty), so
+    this is already protected independently of the response-body fix above;
+    this assertion locks that existing protection in as a regression test.
+    """
+    ranked_first = ModelAgent(
+        "served_ranked_first", "expensive-served-embedding", "mock://expensive-served",
+        provider_name="expensive-served-provider", tags=("embedding",), priority=10,
+    )
+    cheap = ModelAgent(
+        "served_cheapest_member", "cheap-served-embedding", "mock://cheap-served",
+        provider_name="cheap-served-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheap])
+    with orchestrator.request_policy(False):
+        ranked = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in ranked] == [ranked_first.id, cheap.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("expensive-served-provider", ranked_first.model, 5.0, 0.0))
+    price_book.set_price(PriceEntry("cheap-served-provider", cheap.model, 0.01, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, embedding_batch_backend=backend
+    )
+    token = "served_model_identity_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # Deliberately no "model" key: the omitted-model case.
+        status, response_body = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            token,
+            {input_key: ["served model identity check"]},
+        )
+        assert status == 200, response_body
+        assert backend.requests[0].agent_id == cheap.id
+        assert response_body.get("model") == cheap.model
+
+        records = coordinator.ledger.records()
+        assert records, "expected one usage record for the served request"
+        assert records[-1]["model_name"] == cheap.model
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
     orchestrator = TaskOrchestrator(
         [

@@ -12,6 +12,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The HTTP embedding endpoints (`/v1/embeddings`, `/v1/batch/embeddings`)
+  now correctly wire the coordinator's cheapest-price selection into an
+  *omitted* `model` (the common case), not only an explicitly-named model or
+  model-group alias. Previously the request validator resolved an omitted
+  `model` to one concrete, price-blind, highest-ranked model before
+  candidate collection ever ran, so cost-based selection only ever had one
+  candidate to "choose" from. Candidate discovery for an omitted model now
+  runs against `TaskOrchestrator.AUTO_MODEL` (the full unspecified-candidate
+  pool) instead, while the validated/reported model identity for an
+  *explicit* request is unchanged (Devin Review, PR #965).
+- The same embedding candidate ordering now reconciles cost preference with
+  the orchestrator's own measured health evidence
+  (`ModelGroupRouter`/`_group_router`, fed by `observe_success`/
+  `observe_failure`): `CostRoutingCoordinator._cost_ordered_capability_candidates`
+  price-orders only members whose Beta-Bernoulli success posterior mean is
+  still at or above the neutral baseline, keeps a repeatedly-failing
+  cheapest member out of the price-preferred slot (it is retried only after
+  the healthy candidates, not first on every request forever), and re-admits
+  it automatically once new successes bring its posterior mean back to
+  baseline. Applied consistently to both endpoints (Devin Review, PR #965).
+- `/v1/embeddings`'s response `model` field, for an omitted-model request,
+  now reports the completed document's actually-served model instead of the
+  pre-failover, price-blind model the (now-bypassed-for-selection) validator
+  resolved — a cheaper or failed-over candidate can legitimately differ from
+  that guess. `/v1/batch/embeddings` already reported the correctly-served
+  model (its response is the raw batch document, whose `model` field is
+  derived from the actually-submitted request, not from this pre-failover
+  guess) and needed no change. Explicit-model requests are unaffected on
+  both endpoints. The cost ledger's own `model_name` attribution dimension
+  was already protected against this staleness independently: `CostLedger
+  .record_usage` deliberately strips and overwrites any caller-supplied
+  `attribution["model_name"]` with the real served `model` argument
+  ("execution identity always wins" — buyer-bill honesty), so ledger/spend
+  rollups were never affected by this bug (Devin Review follow-up, PR #965).
 - `CostRoutingCoordinator._cheapest_capability_candidate` now performs
   price-aware selection: resolving an unspecified embedding batch member
   out of several capability-matched candidates (e.g. operator-managed

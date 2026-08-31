@@ -7065,7 +7065,16 @@ def build_server(
                     self._send(
                         _openai_embeddings_response(
                             document,
-                            model=model_name,
+                            # Devin follow-up: an omitted model can resolve to a
+                            # different (cheaper or failed-over) member than the
+                            # pre-failover, price-blind ``model_name`` validation
+                            # picked, so report the completed document's own
+                            # served model instead — it already carries the
+                            # actually-used agent's model (see
+                            # ``embeddings_batch_document``). An explicit model
+                            # (a concrete pool model or a group alias) still
+                            # reports exactly what the client asked for.
+                            model=document.get("model") if model_was_omitted else model_name,
                             encoding_format=encoding_format,
                         )
                     )
