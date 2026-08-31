@@ -273,6 +273,41 @@ def test_race_usage_sink_marks_an_unfinished_safe_drain_incomplete() -> None:
     assert emitted == ["__race_incomplete__"]
 
 
+def test_race_finalization_does_not_treat_blocked_usage_delivery_as_complete() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("first_endpoint", "mock-a", tags=("reasoning",))]
+    )
+    delivery_started = threading.Event()
+    release_delivery = threading.Event()
+    emitted: list[str] = []
+
+    def blocked_sink(endpoint_id: str, _value: object) -> None:
+        if endpoint_id == "loser_endpoint":
+            delivery_started.set()
+            release_delivery.wait(timeout=1)
+        emitted.append(endpoint_id)
+
+    orchestrator._race_usage_sink = blocked_sink
+    completed, finalize = orchestrator._race_attempt_collector("text")
+    finalize("winner_endpoint", ())
+    thread = threading.Thread(
+        target=completed,
+        args=(
+            "loser_endpoint",
+            ("loser", "loser_endpoint", {"completion_tokens": 2}),
+            None,
+        ),
+    )
+    thread.start()
+    assert delivery_started.wait(timeout=1)
+
+    finalize("winner_endpoint", (("loser_endpoint", "safe_drain"),))
+    release_delivery.set()
+    thread.join(timeout=1)
+
+    assert emitted == ["__race_incomplete__", "loser_endpoint"]
+
+
 def test_all_race_failures_reenter_existing_sequential_failover_boundary() -> None:
     raw_contract = dict(contract(capability_set=("text",)).__dict__)
     agents = [

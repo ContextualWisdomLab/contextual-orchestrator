@@ -6328,18 +6328,21 @@ class TaskOrchestrator:
             self._record_race_attempt(
                 endpoint_id, value, error, capability=capability
             )
-            with state_lock:
-                state["completed_ids"].add(endpoint_id)
             if error is not None or value is None:
                 emit("__race_incomplete__", None)
+                with state_lock:
+                    state["completed_ids"].add(endpoint_id)
                 return
             with state_lock:
                 if not state["finalized"]:
                     pending.append((endpoint_id, value))
+                    state["completed_ids"].add(endpoint_id)
                     return
                 winner = state["winner"]
             if winner is None or endpoint_id != winner:
                 emit(endpoint_id, value)
+            with state_lock:
+                state["completed_ids"].add(endpoint_id)
 
         def finalize(
             winner_endpoint_id: str | None,
