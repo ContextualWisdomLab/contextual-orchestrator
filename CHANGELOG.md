@@ -122,6 +122,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
+- (Devin review on #958) `_orchestrated_provider_completion`'s structured/
+  Responses synthesis path (the `single_agent=False` branch of
+  `proxy_completion`) resolved its caller-supplied `effort_profile` override
+  only for the final `apply_effort_profile` payload call, not for the
+  synthesizer's own selection (`_select_agent`), replica lookup
+  (`_ranked_agents`), or failover list (`_failover_candidates`) — those three
+  call sites omitted `effort_profile` entirely and so silently fell back to
+  the raw `role_effort_catalog` entry inside `_ranked_agents`. A fail-closed
+  override (`unsupported_provider_fallback` other than `"omit"`) could still
+  rank/select an unproven-support agent ahead of a proven one, and
+  `apply_effort_profile` then raised `EffortProfileError` outright — with no
+  failover, unlike the identical scenario on the plain passthrough path,
+  which already threads its override through every selection call site. Now
+  resolves `effort_profile or self._role_effort_profile("synthesizer")` once,
+  up front, and passes it to all three call sites, matching the passthrough
+  path's existing pattern and `_ranked_agents`' own documented intent that
+  every role-based selection path -- "structured synthesis" included -- stay
+  consistent with the effort catalog's eligibility guard.
 
 ### Added
 

@@ -3926,6 +3926,12 @@ class TaskOrchestrator:
         free_only = requested_model == self.FREE_MODEL
         required_agent_id = body.get("_required_agent_id")
         file_replicas = body.get("_file_replicas")
+        # Resolved once, up front, so the caller's effort_profile override (or
+        # its catalog fallback) governs synthesizer eligibility and failover
+        # ranking identically to how it later shapes the outgoing payload --
+        # see _ranked_agents' `effort_profile or self._role_effort_profile(role)`
+        # pattern this mirrors for every other role-based selection path.
+        active_profile = effort_profile or self._role_effort_profile("synthesizer")
         final_agent = (
             next(
                 (
@@ -3954,6 +3960,7 @@ class TaskOrchestrator:
                         (("response_format",) if response_format_requested else ())
                     ),
                     prompt_context=prompt_context,
+                    effort_profile=active_profile,
                 )
             except RuntimeError as exc:
                 if required_tags:
@@ -3989,6 +3996,7 @@ class TaskOrchestrator:
                     required_tags=required_tags,
                     free_only=free_only,
                     prompt_context=prompt_context,
+                    effort_profile=active_profile,
                     )
                     if candidate.id in replica_agent_ids
                 ),
@@ -4090,7 +4098,6 @@ class TaskOrchestrator:
                     "stream": False,
                 }
             )
-        active_profile = effort_profile or self._role_effort_profile("synthesizer")
         virtual_model = requested_model in {
             None,
             "contextual-orchestrator",
@@ -4128,6 +4135,7 @@ class TaskOrchestrator:
                 required_tags=required_tags,
                 allowed_agent_ids=allowed_agent_ids,
                 prompt_context=prompt_context,
+                effort_profile=active_profile,
             )
             if virtual_model
             else [final_agent]
