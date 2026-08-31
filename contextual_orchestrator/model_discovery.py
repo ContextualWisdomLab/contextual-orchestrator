@@ -1138,6 +1138,7 @@ def discover_provider_models(
     """
     api_key = get_credential(source.credential_name)
     if not api_key:
+        # nosemgrep: python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure - credential_name is the KV registry key identifier (e.g. "OPENAI_API_KEY"), never the resolved secret value; api_key itself never reaches this or any other log call.
         _LOGGER.info(
             "provider_discovery_skipped provider=%s credential_name=%s reason=no_credential_registered",
             source.provider_name,
