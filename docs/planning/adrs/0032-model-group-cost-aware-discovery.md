@@ -36,6 +36,15 @@ publish the same fields through model metadata, but a logical model receives a
 value only when every deployment agrees. Thus free status never implies privacy,
 and paid status never implies retention.
 
+Direct OpenRouter source discovery remains evidence-only. Full discovery may
+promote an account-model row only after an exact match in OpenRouter's ZDR
+inventory; missing, empty, or failed evidence remains non-serving. A paid row
+also requires a current strictly positive credit balance, independently of its
+privacy evidence, while a catalog-declared free row does not. When a caller
+requires ZDR, every OpenRouter JSON transport additionally sends
+`provider.zdr=true`, so endpoint selection enforces the same policy at the
+upstream router rather than relying on catalog evidence alone.
+
 OpenAI catalog rows also retain OpenAI's official data-controls documentation
 as policy evidence. Because approval and enablement are organization/project
 settings that the Models API does not disclose, discovery leaves the actual ZDR

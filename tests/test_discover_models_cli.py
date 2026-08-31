@@ -390,11 +390,14 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
     stdout = StringIO()
 
     def urlopen(request, timeout=None):
-        host = urllib.parse.urlsplit(request.full_url).hostname
+        parsed = urllib.parse.urlsplit(request.full_url)
+        host = parsed.hostname
         if host == "api.openai.com":
             return _Response({"data": [{"id": "pricey-model", "pricing": {"prompt": "0.00005", "completion": "0.0001"}}]})
         if host == "openrouter.ai":
-            return _Response({"data": [{"id": "cheap-model", "pricing": {"prompt": "0.0000001", "completion": "0.0000002"}}]})
+            if parsed.path.endswith("/endpoints/zdr"):
+                return _Response({"data": [{"model_id": "cheap-model"}]})
+            return _Response({"data": [{"id": "cheap-model", "pricing": {"prompt": "0", "completion": "0"}}]})
         return _Response({"data": []})
 
     try:
@@ -406,21 +409,25 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
             ),
             patch.object(sys, "stdout", stdout),
             patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            patch(
+                "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+                return_value={"cheap-model"},
+            ),
         ):
             main()
     finally:
         set_backend(None)
 
     report = json.loads(stdout.getvalue())
-    assert report["enabled_agent_ids"] == ["openai_pricey_model"]
+    assert report["enabled_agent_ids"] == ["openrouter_cheap_model"]
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
-    assert by_id["openai_pricey_model"].disabled is False
+    assert by_id["openrouter_cheap_model"].disabled is False
 
 
-def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> None:
-    """CLI bootstrap must use the provider-diverse selector, not only the cheapest vendor."""
+def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> None:
+    """CLI bootstrap must preserve independent accounts, not only the cheapest vendor."""
     from contextual_orchestrator import TaskOrchestrator
     from contextual_orchestrator.orchestrator import ModelAgent
 
@@ -432,10 +439,13 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
     stdout = StringIO()
 
     def urlopen(request, timeout=None):
-        host = urllib.parse.urlsplit(request.full_url).hostname
+        parsed = urllib.parse.urlsplit(request.full_url)
+        host = parsed.hostname
+        if host == "openrouter.ai" and parsed.path.endswith("/endpoints/zdr"):
+            return _Response({"data": [{"model_id": "router-model"}]})
         payloads = {
             "api.openai.com": {"data": [{"id": "openai-model", "pricing": {"prompt": "0.001", "completion": "0.001"}}]},
-            "openrouter.ai": {"data": [{"id": "router-model", "pricing": {"prompt": "0.000001", "completion": "0.000001"}}]},
+            "openrouter.ai": {"data": [{"id": "router-model", "pricing": {"prompt": "0", "completion": "0"}}]},
             "integrate.api.nvidia.com": {"data": [{"id": "nim-model", "pricing": {"prompt": "0.000002", "completion": "0.000002"}}]},
         }
         return _Response(payloads.get(host, {"data": []}))
@@ -449,6 +459,10 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
             ),
             patch.object(sys, "stdout", stdout),
             patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            patch(
+                "contextual_orchestrator.model_discovery._openrouter_zdr_model_ids",
+                return_value={"router-model"},
+            ),
         ):
             main()
     finally:
@@ -456,6 +470,7 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
 
     report = json.loads(stdout.getvalue())
     assert report["enabled_agent_ids"] == [
+        "openrouter_router_model",
         "nvidia_nim_nim_model",
         "openai_openai_model",
     ]

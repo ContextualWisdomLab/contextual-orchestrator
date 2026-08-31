@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timezone
 import threading
 
@@ -115,6 +116,49 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
             "openrouter_router_new",
         }
         assert "secret-bearing detail" not in str(second.as_dict())
+    finally:
+        set_backend(None)
+
+
+@pytest.mark.parametrize("empty_without_error", [False, True])
+def test_openrouter_fallback_rechecks_spend_before_last_known_good_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    empty_without_error: bool,
+) -> None:
+    """A catalog outage cannot preserve paid routing after credit exhaustion."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        source = _source("openrouter", "OPENROUTER_API_KEY")
+        paid = _model(source, "provider/paid")
+        free = replace(_model(source, "provider/free"), is_free=True)
+        store = InMemoryProviderCatalogStore()
+        bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(source,),
+            discovery=lambda _sources: ([paid, free], []),
+            model_limit=2,
+        )
+        monkeypatch.setattr(
+            "contextual_orchestrator.provider_catalog_bootstrap.openrouter_paid_inference_available",
+            lambda: False,
+        )
+
+        report = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(source,),
+            discovery=lambda _sources: (
+                [],
+                []
+                if empty_without_error
+                else [ProviderDiscoveryError("openrouter", "transport_error")],
+            ),
+            model_limit=2,
+        )
+
+        assert report.last_known_good_model_count == 2
+        assert report.selected_agent_ids == ("openrouter_provider_free",)
     finally:
         set_backend(None)
 

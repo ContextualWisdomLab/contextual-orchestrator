@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import threading
 from typing import Callable, Mapping, Sequence
 
@@ -28,8 +28,10 @@ from .model_discovery import (
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    apply_openrouter_spend_admission,
     agent_id_for,
     discover_all_models,
+    openrouter_paid_inference_available,
     refresh_price_book,
 )
 from .privacy_policy_analysis import (
@@ -593,6 +595,20 @@ def bootstrap_provider_catalog_runtime(
                 for name in failed_credentials
             }
         ) if failed_credentials else ()
+        if any(
+            source.provider_name == "openrouter"
+            and source.credential_name in failed_credentials
+            for source in source_tuple
+        ):
+            snapshot = replace(
+                snapshot,
+                models=tuple(
+                    apply_openrouter_spend_admission(
+                        snapshot.models,
+                        openrouter_paid_inference_available(),
+                    )
+                ),
+            )
 
         usable_models = tuple(
             model

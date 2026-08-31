@@ -1266,6 +1266,18 @@ def _is_passthrough_failover_error(exc: BaseException) -> bool:
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
+    @staticmethod
+    def _apply_openrouter_zdr_policy(
+        agent: ModelAgent, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Enforce request-scoped ZDR on every OpenRouter JSON transport."""
+        if not _REQUEST_ZDR_ONLY.get() or agent.provider_name != "openrouter":
+            return payload
+        provider = payload.get("provider")
+        provider_policy = dict(provider) if isinstance(provider, Mapping) else {}
+        provider_policy["zdr"] = True
+        return {**payload, "provider": provider_policy}
+
     def __init__(
         self,
         timeout: int = 90,
@@ -1659,6 +1671,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
+        payload = self._apply_openrouter_zdr_policy(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -1857,6 +1870,7 @@ class ModelClient:
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
+        payload = self._apply_openrouter_zdr_policy(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -2035,6 +2049,7 @@ class ModelClient:
         """Passthrough a provider response whose body is binary media."""
         if agent.base_url.startswith("mock://"):
             return b"mock audio", "audio/mpeg"
+        payload = self._apply_openrouter_zdr_policy(agent, payload)
         api_key = _provider_credential(agent)  # pragma: no cover
         headers = {"content-type": "application/json"}  # pragma: no cover
         if api_key:  # pragma: no cover
@@ -2185,6 +2200,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
+        payload = self._apply_openrouter_zdr_policy(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -2493,6 +2509,8 @@ class ModelClient:
         destination: ProviderDestination | None = None,
         max_response_bytes: int | None = None,
     ) -> dict[str, Any]:
+        if payload is not None:
+            payload = self._apply_openrouter_zdr_policy(agent, payload)
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),

@@ -7,6 +7,7 @@ import json
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator, load_agents
+from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.model_group import ModelGroupRouter, canonical_group_name
 
 
@@ -142,6 +143,25 @@ def test_zdr_only_selects_only_zdr_group_members_and_default_is_unchanged() -> N
         with pytest.raises(ValueError, match="not configured"):
             orchestrator._requested_agent("vendor/non-zdr")
         assert orchestrator._requested_agent("shared-reasoning-model") == zdr
+
+
+def test_zdr_only_enforces_openrouter_provider_policy_without_losing_preferences() -> None:
+    orchestrator = TaskOrchestrator([_agent("configured_member", "vendor/configured")])
+    agent = ModelAgent(
+        "openrouter_member",
+        "vendor/model",
+        "https://openrouter.ai/api/v1",
+        provider_name="openrouter",
+        tags=("privacy:zdr",),
+    )
+    payload = {"model": agent.model, "provider": {"order": ["provider-a"], "zdr": False}}
+
+    assert ModelClient._apply_openrouter_zdr_policy(agent, payload) is payload
+    with orchestrator.request_policy(True):
+        enforced = ModelClient._apply_openrouter_zdr_policy(agent, payload)
+
+    assert enforced["provider"] == {"order": ["provider-a"], "zdr": True}
+    assert payload["provider"]["zdr"] is False
 
 
 def test_zdr_only_filters_the_caller_supplied_model_group_array() -> None:
