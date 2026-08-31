@@ -4090,10 +4090,12 @@ class TaskOrchestrator:
         def send_synthesis(
             payload: dict[str, Any],
         ) -> tuple[dict[str, Any], ModelAgent]:
-            """Send once per eligible provider, advancing only after a proven 413 rejection."""
+            """Retry 413 broadly and stale virtual models only within one endpoint."""
             nonlocal final_agent
             seen_providers: set[str] = set()
             preferred = final_agent
+            preferred_endpoint = preferred.base_url.rstrip("/").casefold()
+            last_model_not_found: ProviderUpstreamError | None = None
             ordered_candidates = [
                 preferred,
                 *(
@@ -4103,12 +4105,15 @@ class TaskOrchestrator:
                 ),
             ]
             for candidate in ordered_candidates:
+                candidate_endpoint = candidate.base_url.rstrip("/").casefold()
+                if last_model_not_found is not None and candidate_endpoint != preferred_endpoint:
+                    continue
                 provider_key = (
                     f"provider:{candidate.provider_name.casefold()}"
                     if candidate.provider_name.strip()
                     else f"endpoint:{candidate.base_url.rstrip('/').casefold()}"
                 )
-                if provider_key in seen_providers:
+                if provider_key in seen_providers and candidate_endpoint != preferred_endpoint:
                     continue
                 seen_providers.add(provider_key)
                 # Keep the outer failure accounting attached to the provider
@@ -4141,13 +4146,24 @@ class TaskOrchestrator:
                         ) from exc
                     if not request_too_large:
                         if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
-                            raise classify_provider_failure(
+                            classified = classify_provider_failure(
                                 exc,
                                 agent_id=candidate.id,
                                 model=candidate.model,
                                 transport="structured_synthesis",
-                            ) from None
+                            )
+                            if (
+                                virtual_model
+                                and classified.error_code == "model_not_found"
+                                and candidate_endpoint == preferred_endpoint
+                            ):
+                                last_model_not_found = classified
+                                self._record_failure(candidate.id)
+                                continue
+                            raise classified from None
                         raise
+            if last_model_not_found is not None:
+                raise last_model_not_found
             raise ProviderRequestTooLargeError(
                 "request body exceeds every eligible provider limit"
             )
