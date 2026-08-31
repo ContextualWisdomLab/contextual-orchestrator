@@ -672,9 +672,10 @@ statement/branch coverage and 100% docstrings on `nim_benchmark.py` hold.
 `orchestrator/free` (ADR 0032) was structurally empty in practice: `is_free`
 only ever becomes `True` from a provider's own reported per-token price, and
 of this gateway's six provider sources only OpenRouter's API ever reports
-real pricing — and OpenRouter is deliberately `evidence_only=True` (ZDR
-hardening, commit `952996ec`, untouched by this change) so it never serves
-inference. Of the remaining five, `openai`, `nvidia_nim`, `nvidia_nim_sub`,
+real pricing. Commit `952996ec` incorrectly made the entire OpenRouter account
+evidence-only even though its ZDR evidence is route-specific; ADR 0032 now
+keeps authenticated OpenRouter rows routable and applies ZDR only during
+`zdr_only` selection. Of the remaining five, `openai`, `nvidia_nim`, `nvidia_nim_sub`,
 and `bytez` never report pricing themselves. The one existing mitigation, cross-referencing
 `opencode_zen` against Models.dev (`https://models.dev/api.json`), only
 covers a source that is `bootstrap_required = False` and not always

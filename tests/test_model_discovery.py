@@ -30,6 +30,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ProviderDiscoveryError,
     ProviderModelSource,
     _MODELS_DEV_FETCH_ATTEMPTS,
+    _bytez_meter_price_is_free,
     _deduplicate_discovered_models,
     _fetch_json,
     _merge_configured_gateway_metadata,
@@ -43,6 +44,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_provider_models,
     free_discovered_models,
     general_free_serving_candidates,
+    is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -541,7 +543,6 @@ OPENROUTER_SOURCE = ProviderModelSource(
     list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
     chat_base_url="https://openrouter.ai/api/v1",
     capabilities=("chat",),
-    evidence_only=True,
 )
 
 BYTEZ_SOURCE = ProviderModelSource(
@@ -611,10 +612,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
-    assert all(model.evidence_only for model in discovered)
-    assert "response_format" in agent_from_discovered(
-        replace(discovered[0], evidence_only=False)
-    ).tags
+    assert all(not model.evidence_only for model in discovered)
+    assert "response_format" in agent_from_discovered(discovered[0]).tags
 
 
 def test_openrouter_discovery_preserves_every_declared_modality() -> None:
@@ -930,6 +929,78 @@ def test_general_free_serving_candidates_excludes_unroutable_free_models() -> No
         "embedding-only-free-model",
         "routable-free-model",
     }
+
+
+def test_general_free_serving_candidates_logs_zero_contribution_reasons(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Accounts that discover rows but seed no free candidate get a reason, not silence.
+
+    OpenRouter's ``evidence_only`` exclusion and OpenAI having no free-tier model
+    today are both correct behavior, but previously left no diagnostic trace
+    explaining why they contributed nothing to ``orchestrator/free`` -- unlike a
+    hard provider failure, which already logs
+    ``model discovery failed account=<name> ...`` from
+    :func:`discover_provider_models`. This closes that visibility gap.
+    """
+    openrouter_evidence_only = replace(
+        DiscoveredModel(
+            provider_name="openrouter",
+            model_id="openrouter/some-model",
+            credential_name="OPENROUTER_API_KEY",
+            chat_base_url="https://openrouter.ai/api/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat",),
+            input_modalities=("text",),
+            output_modalities=("text",),
+            is_free=True,
+        ),
+        evidence_only=True,
+    )
+    openai_paid_only = DiscoveredModel(
+        provider_name="openai",
+        model_id="openai/gpt-paid",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=False,
+    )
+    nvidia_serving = DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="nvidia/free-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+    )
+
+    with caplog.at_level("DEBUG", logger="contextual_orchestrator.model_discovery"):
+        serving_candidates = general_free_serving_candidates(
+            [openrouter_evidence_only, openai_paid_only, nvidia_serving]
+        )
+
+    assert [model.model_id for model in serving_candidates] == ["nvidia/free-model"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "account=openrouter" in message
+        and "credential=OPENROUTER_API_KEY" in message
+        and "reason=evidence_only" in message
+        for message in messages
+    )
+    assert any(
+        "account=openai" in message
+        and "credential=OPENAI_API_KEY" in message
+        and "reason=no_free_pricing_reported" in message
+        for message in messages
+    )
+    # The provider that did seed a candidate gets no zero-contribution line.
+    assert not any("account=nvidia_nim" in message for message in messages)
 
 
 def test_general_free_serving_candidates_modality_shapes() -> None:
@@ -1510,10 +1581,44 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
-    assert sources["openrouter"].evidence_only is True
+    assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
+
+
+@pytest.mark.parametrize(
+    ("credit_available", "paid_admitted"),
+    [(False, False), (None, False), (True, True)],
+)
+def test_discover_all_models_blocks_only_paid_openrouter_without_credit(
+    credit_available: bool | None,
+    paid_admitted: bool,
+) -> None:
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    payload = {
+        "data": [
+            {"id": "provider/free", "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "provider/paid", "pricing": {"prompt": "0.1", "completion": "0.1"}},
+        ]
+    }
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=lambda request, timeout=None: _Response(
+            payload if request.full_url == OPENROUTER_SOURCE.list_url else {"data": []}
+        ),
+    ), patch(
+        "contextual_orchestrator.model_discovery.openrouter_paid_inference_available",
+        return_value=credit_available,
+    ):
+        discovered, errors = discover_all_models((OPENROUTER_SOURCE,))
+
+    assert errors == []
+    by_id = {model.model_id: model for model in discovered}
+    assert by_id["provider/free"].spend_admitted is True
+    assert by_id["provider/paid"].spend_admitted is paid_admitted
+    assert is_routable_discovered_model(by_id["provider/free"]) is True
+    assert is_routable_discovered_model(by_id["provider/paid"]) is paid_admitted
 
 
 def test_price_per_1k_rejects_underflowing_positive_value() -> None:
@@ -1549,6 +1654,97 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     assert discovered[0].capabilities == ("chat",)
     # Bytez prices by GPU-second, not per-token: no fabricated per-1k estimate.
     assert discovered[0].prompt_price_per_1k is None
+    assert discovered[0].completion_price_per_1k is None
+    # Real, nonzero GPU-second pricing must not be misread as free.
+    assert discovered[0].is_free is False
+
+
+def test_discover_bytez_marks_zero_meter_price_as_free() -> None:
+    """A Bytez row whose real ``meterPrice`` rate is exactly zero is free.
+
+    Regression test: ``_parse_bytez`` used to build every ``DiscoveredModel``
+    without ever passing ``is_free``, silently defaulting every Bytez model
+    to ``is_free=False`` regardless of its actual price -- discarding the one
+    real zero-cost signal Bytez's API does expose (``meterPrice``). This
+    must stay True without fabricating per-1k pricing (Bytez bills by
+    GPU-second, not per-token; that omission is intentional and unrelated).
+    """
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+    payload = {
+        "error": None,
+        "output": [
+            {"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat", "meterPrice": "0 / sec"},
+        ],
+    }
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(BYTEZ_SOURCE)
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is True
+    # Still no fabricated per-1k estimate: the honest-pricing behavior for
+    # GPU-second billing is preserved even for a free model.
+    assert discovered[0].prompt_price_per_1k is None
+    assert discovered[0].completion_price_per_1k is None
+
+
+def test_discover_bytez_missing_meter_price_stays_unknown_not_free() -> None:
+    """A Bytez row with no ``meterPrice`` at all is unknown pricing, not free."""
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+    payload = {
+        "error": None,
+        "output": [{"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat"}],
+    }
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response(payload),
+    ):
+        discovered = discover_provider_models(BYTEZ_SOURCE)
+
+    assert len(discovered) == 1
+    assert discovered[0].is_free is False
+
+
+@pytest.mark.parametrize(
+    ("meter_price", "expected"),
+    [
+        ("0.0006478333 / sec", False),
+        ("0 / sec", True),
+        ("0/sec", True),
+        ("0.0000 / sec", True),
+        (0, True),
+        (0.0, True),
+        (0.0006, False),
+        (None, False),
+        ("", False),
+        ("   ", False),
+        ("free", False),
+        (True, False),
+        (False, False),
+        ("-0 / sec", True),
+        # A zero rate is exactly as free regardless of its time unit -- the
+        # documented grammar constrains shape, not which unit word appears.
+        ("0 / hour", True),
+        # Genuinely malformed shapes must fail closed (unknown, not free),
+        # never trust a numeric-looking prefix pulled out of an unexpected
+        # overall shape.
+        ("0 /", False),  # missing unit
+        ("/ sec", False),  # missing rate
+        ("0 / sec / token", False),  # extra separator
+        ("0//sec", False),  # extra separator, empty middle segment
+        ("0", False),  # no separator at all -- does not match "<rate> / <unit>"
+        ("0 sec", False),  # no separator at all, space-joined
+        (" / ", False),  # separator present, both sides empty
+    ],
+)
+def test_bytez_meter_price_is_free_classifies_exact_zero_rates(
+    meter_price: object, expected: bool
+) -> None:
+    assert _bytez_meter_price_is_free(meter_price) is expected
 
 
 def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
@@ -1623,7 +1819,7 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", True),
     ]
 
@@ -1712,7 +1908,7 @@ def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
@@ -1752,7 +1948,7 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
@@ -1773,14 +1969,21 @@ def test_discovery_boundary_contains_raw_connection_reset() -> None:
 
     Regression: ``ConnectionError``/``OSError`` subclasses that are not
     ``URLError`` used to escape ``discover_provider_models`` uncaught, leaking
-    provider transport diagnostics to discovery callers.
+    provider transport diagnostics to discovery callers. A connection reset is
+    also transient, so this now retries once before giving up; both attempts
+    fail identically here, exercising the exhausted-retry path.
     """
     register_credential("OPENAI_API_KEY", "sk-openai")
+    attempts = []
 
     def urlopen(request, timeout=None):
+        attempts.append(timeout)
         raise ConnectionResetError(104, "Connection reset by peer")
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
         try:
             discover_provider_models(OPENAI_SOURCE)
         except ProviderDiscoveryError as error:
@@ -1790,6 +1993,122 @@ def test_discovery_boundary_contains_raw_connection_reset() -> None:
             assert error.__cause__ is None
         else:  # pragma: no cover
             raise AssertionError("a raw connection reset must become a ProviderDiscoveryError")
+
+    assert len(attempts) == 2  # initial attempt + one bounded retry, both transient
+    mock_sleep.assert_called_once()
+
+
+def test_discover_provider_models_retries_transient_failure_then_succeeds() -> None:
+    """A single transient 5xx on the primary fetch is retried, not fatal.
+
+    This is the exact shape of the incident that motivated the retry: one
+    provider's momentary HTTP 500 must not zero out that provider's entire
+    contribution for this discovery pass.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    payload = {"data": [{"id": "gpt-test", "object": "model"}]}
+    attempt_timeouts = []
+
+    def urlopen(request, timeout=None):
+        attempt_timeouts.append(timeout)
+        if len(attempt_timeouts) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response(payload)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
+        discovered = discover_provider_models(OPENAI_SOURCE)
+
+    assert len(attempt_timeouts) == 2
+    assert attempt_timeouts[1] < attempt_timeouts[0]  # retry uses the shortened timeout
+    mock_sleep.assert_called_once()
+    assert [model.model_id for model in discovered] == ["gpt-test"]
+
+
+def test_discover_provider_models_does_not_retry_non_transient_failure() -> None:
+    """A 401 (bad credential) is never retried -- a retry cannot fix it."""
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    attempts = []
+
+    def urlopen(request, timeout=None):
+        attempts.append(timeout)
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
+        try:
+            discover_provider_models(OPENAI_SOURCE)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "openai"
+            assert error.error_code == "http_status_401"
+        else:  # pragma: no cover
+            raise AssertionError("a 401 must become a ProviderDiscoveryError")
+
+    assert len(attempts) == 1
+    mock_sleep.assert_not_called()
+
+
+def test_discover_provider_models_isolates_a_dns_resolution_failure() -> None:
+    """A configured-gateway DNS failure must not abort the whole discovery pass.
+
+    ``ModelClient._resolve_addresses`` wraps ``socket.gaierror`` as a plain
+    ``RuntimeError`` (see ``_fetch_configured_gateway_json``'s pinned-address
+    validation path), which was not in ``discover_provider_models``'s catch
+    tuple (``URLError``, ``TimeoutError``, ``ValueError``, ``OSError``). One
+    provider's DNS hiccup must become an isolated ``ProviderDiscoveryError``,
+    not a bare ``RuntimeError`` that crashes ``discover_all_models`` entirely.
+    """
+    register_credential("LLM_GATEWAY_API_KEY", "sk-gateway")
+    gateway_source = ProviderModelSource(
+        provider_name="configured_gateway",
+        credential_name="LLM_GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_configured_gateway_json",
+        side_effect=RuntimeError("provider host 'gateway.example' could not be resolved"),
+    ):
+        try:
+            discover_provider_models(gateway_source)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "configured_gateway"
+        else:  # pragma: no cover
+            raise AssertionError("a DNS RuntimeError must become a ProviderDiscoveryError")
+
+
+def test_discover_provider_models_retry_timeout_never_exceeds_callers_budget() -> None:
+    """A caller-supplied timeout shorter than the retry default must not expand on retry.
+
+    Regression (Devin review on #923): the retry attempt hardcoded
+    _DISCOVERY_RETRY_TIMEOUT_SECONDS (5.0s) regardless of what timeout the
+    caller actually requested, so a caller budgeting e.g. 2s per attempt
+    could see the retry alone blow well past that budget.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    payload = {"data": [{"id": "gpt-test", "object": "model"}]}
+    attempt_timeouts = []
+
+    def urlopen(request, timeout=None):
+        attempt_timeouts.append(timeout)
+        if len(attempt_timeouts) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response(payload)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered = discover_provider_models(OPENAI_SOURCE, timeout=2.0)
+
+    assert attempt_timeouts == [2.0, 2.0]
+    assert [model.model_id for model in discovered] == ["gpt-test"]
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:
