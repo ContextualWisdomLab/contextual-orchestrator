@@ -737,6 +737,21 @@ def test_probe_models_sorted_despite_input_order_drift() -> None:
     assert results[0]["endpoint"] == FAKE_ENDPOINT
 
 
+def test_probe_models_share_one_run_timestamp() -> None:
+    timestamps = iter((1234.0, 9999.0, 9999.0))
+    results = nb.probe_discovered_models(
+        [{"model_id": "a/model-one", "owned_by": ""}, {"model_id": "b/model-two", "owned_by": ""}],
+        _fixed_transport(*_ok_json({"choices": [{"message": {"content": "OK"}}]})),
+        FAKE_ENDPOINT,
+        "key",
+        nb.RequestBudget(100),
+        2,
+        lambda: next(timestamps),
+        lambda: 0.0,
+    )
+    assert {row["discovered_at_unix"] for row in results} == {1234.0}
+
+
 def test_probe_models_rejects_incomplete_probe_budget_before_egress() -> None:
     """A capability phase never emits biased partial-inventory evidence."""
     models = [

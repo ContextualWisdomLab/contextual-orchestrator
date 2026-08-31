@@ -41,7 +41,6 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
-import dataclasses
 import datetime as datetime_module
 import decimal
 import hashlib
@@ -1238,6 +1237,8 @@ def probe_discovered_models(
             f"requests but only {request_budget.remaining_requests} remain"
         )
 
+    discovered_at_unix = round(clock(), 3)
+
     def probe_one(model: dict[str, Any]) -> dict[str, Any]:
         """Execute every preflighted capability cell for one model."""
         rows: list[dict[str, Any]] = []
@@ -1258,7 +1259,7 @@ def probe_discovered_models(
             "model_id": model["model_id"],
             "owned_by": model["owned_by"],
             "endpoint": endpoint,
-            "discovered_at_unix": round(clock(), 3),
+            "discovered_at_unix": discovered_at_unix,
             "capability_probe_rows": rows,
             **classified,
         }
@@ -2005,9 +2006,13 @@ def evaluate_policies(
         )
 
     agents_by_id = {agent.id: agent.model for agent in agents}
-    depth_policy = dataclasses.replace(
-        OrchestrationPolicy(),
+    depth_policy = OrchestrationPolicy(
+        route_p95_seconds=2.5,
+        realtime_judge=True,
+        verifier_required=True,
+        workflow_planning="template",
         max_workflow_steps=MAX_WORKFLOW_DEPTH,
+        verifier_judge="model",
     )
 
     def run_cell(
