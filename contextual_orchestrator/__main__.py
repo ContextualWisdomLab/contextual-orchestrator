@@ -638,8 +638,8 @@ def main(argv: list[str] | None = None) -> None:
         help="Enable DEBUG-level logging (timestamp, level, logger name) to stderr for the "
         f"orchestrator's route/conduct/provider-retry/circuit-breaker control flow and model "
         f"discovery; secrets and full prompt/response text are never logged (default: off; "
-        f"also settable via {VERBOSE_ENV_VAR}=true so a deployed server can turn it on without "
-        f"a new CLI flag).",
+        f"also settable via {VERBOSE_ENV_VAR}=true and a restart, so a deployed server can turn "
+        f"it on without editing its CLI invocation).",
     )
     args = parser.parse_args(arguments)
     _configure_logging(args.verbose)

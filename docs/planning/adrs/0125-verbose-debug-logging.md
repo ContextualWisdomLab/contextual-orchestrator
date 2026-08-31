@@ -47,35 +47,79 @@ added at the control-flow points that matter for debugging:
   model, provider, host) and each retry/backoff decision (attempt number,
   delay, and the exception's *class name* only -- never `str(exc)`, which for
   an `HTTPError` can carry the upstream response body).
-- `server.py`'s `Handler.parse_request` / `.log_request`: request-received and
-  response-sent (method, path with query string stripped and capped at 256
-  chars, status, latency) -- these are the two stdlib hooks
-  `BaseHTTPRequestHandler` already calls on every request/response, so no new
-  call sites are threaded through `do_GET`/`do_POST`. `log_message` remains
-  suppressed; these two overrides emit through the module logger instead of
-  reintroducing the default stderr line.
+- `server.py`'s `Handler.parse_request` (request-received: method, path with
+  query string stripped and capped at 256 chars) and `.handle_one_request`
+  (response-sent: same bounded method/path, plus status and latency).
+  `log_request` -- the stdlib hook `send_response` calls the instant a
+  response *starts*, before headers or any body/stream content are written
+  -- only *captures* the status onto the handler instance; it does not log
+  anything itself, so a streamed `chat.completion.chunk` response is timed
+  by `handle_one_request` after the full response (every SSE frame) has
+  actually been written, not at time-to-first-byte. See
+  `tests/test_verbose_debug_logging.py::test_response_completion_log_covers_full_streamed_duration_not_first_byte`.
+  `log_message` remains suppressed; these overrides emit through the module
+  logger instead of reintroducing the default stderr line.
+- `model_discovery.py`'s `discover_provider_models` (landed independently in
+  #941, "secret-free provider discovery diagnostics"): per-account discovery
+  skipped/started/failed/completed, naming only `provider_name` and a
+  classified `error_code` -- verified secret-free and folded into this
+  change's audited logger scope below rather than duplicated.
 
 CLI wiring (`__main__.py`): a `--verbose`/`--debug` flag (single flag; this
 codebase's existing flags are boolean `action="store_true"` switches, not a
 tiered verbosity count) on the main `--serve`/CLI parser and, for consistency,
-the `register-credential` and `discover-models` subcommand parsers. It calls
-`logging.basicConfig(level=logging.DEBUG, format=..., force=True)` -- a no-op
-when not requested, so default output is unchanged. The format includes
-`%(asctime)s`, `%(levelname)s`, and `%(name)s` per call site. `force=True`
-lets a later call (e.g. a test invoking `main()` more than once in one
-process) replace an earlier configuration rather than silently no-op, matching
-`logging.basicConfig`'s documented purpose for a process that decides its
-logging configuration once at startup.
+the `register-credential` and `discover-models` subcommand parsers.
+
+`_configure_logging(verbose)` is a no-op when not requested, so default
+output is unchanged. When verbose, it calls `logging.basicConfig(format=...,
+force=True)` **without** a `level=` argument -- the root logger's own level
+is deliberately left untouched -- and then calls `.setLevel(logging.DEBUG)`
+on each logger individually named in `_VERBOSE_LOGGER_NAMES`:
+`contextual_orchestrator.orchestrator`, `.server`, and `.model_discovery`.
+
+This split matters and was not the first design: an earlier revision of this
+change called `logging.basicConfig(level=logging.DEBUG, ...)`, which sets the
+*root* logger's level. Python's per-logger effective level is inherited from
+the nearest ancestor with an explicit level, so that raised every `.debug()`
+call site in the process to visible -- including `openrouter_uptime.py`'s
+pre-existing, unrelated, and never-rewritten
+`logger.debug("Failed to fetch OpenRouter uptime for %s: %s", model_id, exc)`,
+which logs a raw upstream exception via `%s`. Review caught this
+(`tests/test_verbose_debug_logging.py::test_verbose_mode_keeps_openrouter_uptime_failures_silent`
+is the regression). Setting a whole-package logger
+(`"contextual_orchestrator"`) would reopen the identical leak through the
+same inheritance mechanism, since `openrouter_uptime` is a child of it. The
+fix enables DEBUG on each individually audited leaf logger instead, so an
+unaudited call site elsewhere in this package -- or in a third-party
+dependency sharing the process -- cannot become newly visible just because an
+operator asked to see route/conduct/provider/discovery decisions.
+`format=...` still applies process-wide (via the root handler every logger
+propagates to), so WARNING+ output that was already visible by default keeps
+consistent timestamp/level/name formatting; only which loggers reach DEBUG is
+scoped. `force=True` lets a later call (e.g. a test invoking `main()` more
+than once in one process) replace an earlier handler instead of silently
+no-op'ing, matching `logging.basicConfig`'s documented purpose for a process
+that decides its logging configuration once at startup.
 
 An env var, `CONTEXTUAL_ORCHESTRATOR_VERBOSE` (truthy: `1`/`true`/`yes`/`on`,
 case-insensitive), provides the same default-value-from-environment pattern
 this file already uses for `CONTEXTUAL_ORCHESTRATOR_STATE_DB`,
 `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`, `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`,
-and `CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE` -- read once at process
-start, so a deployed server can turn on DEBUG logging without an operator
-having to edit its CLI invocation, at the cost of still needing a restart.
-No SIGHUP/hot-reload handler is added; that is out of scope for a debugging
-aid, not an observability platform (OpenTelemetry already covers that).
+and `CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE`: read via `os.environ.get()`
+as an `argparse` default exactly once, at process startup, inside `main()`'s
+(or a subcommand's) own parser construction -- never read again afterward,
+and never read at HTTP request-handling time. This is bootstrap-transport
+env use, the same carve-out `AGENTS.md`'s "KV, not env" rule already grants
+those four precedents: the rule targets *runtime* config and provider secrets
+resolved from `os.getenv` while serving a request, not a one-shot CLI
+process's own startup flags. Turning this on for an already-deployed server
+still requires setting the env var and **restarting the process** -- exactly
+like those four precedents, and unlike a KV-backed runtime setting, this is
+not a live/dynamic toggle. No SIGHUP/hot-reload handler is added, and no
+`kv_config.py`-backed dynamic setting was built for it either; both are out
+of scope for a debugging aid, not an observability platform (OpenTelemetry
+already covers that), and would add complexity a one-shot process-restart
+flag does not need.
 
 ## Explicitly excluded
 
@@ -94,9 +138,22 @@ aid, not an observability platform (OpenTelemetry already covers that).
 - **A new logging framework or log shipping.** stdlib `logging` only, no
   structured-logging-as-a-service dependency, no rotation, no shipping. That
   remains this repository's OpenTelemetry integration's job.
-- **Per-request opt-out / sampling.** DEBUG is process-wide once enabled, like
-  every other `--serve` flag in this file. A noisy per-request knob was judged
+- **Per-request opt-out / sampling.** Once enabled, every request on the
+  process sees DEBUG output from the audited loggers, like every other
+  `--serve` flag in this file. A noisy per-request knob was judged
   unnecessary complexity for a debugging aid.
+- **The root logger's level, and any not-individually-audited logger.**
+  Verbose mode raises `.setLevel(logging.DEBUG)` only on the three loggers
+  named in `_VERBOSE_LOGGER_NAMES`. It does not touch the root logger's level
+  or a whole-package `"contextual_orchestrator"` logger, and it does not
+  enable `telemetry.py`, `video_jobs.py`, or `openrouter_uptime.py`'s loggers
+  -- the last of which has a pre-existing `.debug()` call site that logs a
+  raw exception and was deliberately left both unaudited and unreachable by
+  this change rather than silently rewritten as a side effect.
+- **Live/dynamic toggling without a restart.** The env var is read once at
+  process startup, identically to this file's other four env-backed CLI
+  defaults; it is not a `kv_config.py`-backed runtime setting a running
+  server can pick up without restarting.
 
 ## Consequences
 
