@@ -194,6 +194,37 @@ def test_completed_race_loser_usage_is_recorded_as_measured_provider_spend() -> 
     assert record["workflow_run_id"] == "run_race"
 
 
+def test_race_loser_with_unparseable_usage_is_recorded_as_unavailable() -> None:
+    """A billable race-loser call with malformed usage still gets a ledger row."""
+    coordinator = _coordinator()
+    context = {
+        "route_mode": "route",
+        "attribution": {"team": "alpha"},
+        "model_name": "contextual-orchestrator",
+        "workflow_run_id": "run_race_unmeasurable",
+        "workflow_ready": True,
+        "records": [],
+        "pending_usage": [],
+    }
+    token = coordinator._race_usage_context.set(context)
+    try:
+        coordinator._record_race_endpoint_usage(
+            "mock_worker",
+            ("duplicate", "mock_worker", None),
+        )
+    finally:
+        coordinator._race_usage_context.reset(token)
+    records = coordinator.ledger.records()
+    assert len(records) == 1
+    record = records[0]
+    assert record["measurement_status"] == "unavailable"
+    assert record["prompt_tokens"] == 0
+    assert record["completion_tokens"] == 0
+    assert record["provider_name"] == "mock"
+    assert record["model_name"] == "mock-a"
+    assert record["workflow_run_id"] == "run_race_unmeasurable"
+
+
 def test_race_loser_derives_provider_from_base_url_when_name_is_absent() -> None:
     """Race-loser spend uses the same provider identity as winner accounting."""
     agent = ModelAgent(

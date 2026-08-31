@@ -190,14 +190,33 @@ class CostRoutingCoordinator:
             usage = value[2]
         elif isinstance(value, dict):
             usage = value.get("usage")
-        counts = self._provider_usage(usage)
-        if counts is None:
-            return
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
             None,
         )
         if agent is None:  # pragma: no cover - endpoint came from the current pool
+            return
+        counts = self._provider_usage(usage)
+        provider_model = self._agent_provider_model(agent, context["model_name"])
+        if counts is None:
+            # The provider call genuinely completed and is billable, but its
+            # usage payload could not be parsed. Record an honest
+            # "unavailable" row rather than silently dropping this spend —
+            # mirrors record_stream_usage's measurement_status="unavailable"
+            # fallback for the same "call happened, can't measure it" case.
+            provider, model = provider_model
+            record = self.ledger.record_usage(
+                provider=provider,
+                model=model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                request_channel="sync",
+                route_mode=context["route_mode"],
+                workflow_run_id=context["workflow_run_id"],
+                attribution=context["attribution"],
+                measurement_status="unavailable",
+            )
+            context["records"].append(record)
             return
         record = self._record_completion(
             messages=[],
@@ -206,7 +225,7 @@ class CostRoutingCoordinator:
             request_channel="sync",
             attribution=context["attribution"],
             model_name=context["model_name"],
-            provider_model=self._agent_provider_model(agent, context["model_name"]),
+            provider_model=provider_model,
             workflow_run_id=context["workflow_run_id"],
             prompt_tokens=counts[0],
             completion_tokens=counts[1],
