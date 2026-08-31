@@ -6958,6 +6958,11 @@ def build_server(
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
                     embedding_agents = orchestrator._capability_agents("embedding", model_name)
+                    cheapest_embedding_agent = coordinator._cheapest_capability_candidate(embedding_agents)
+                    embedding_agents = [
+                        cheapest_embedding_agent,
+                        *(agent for agent in embedding_agents if agent.id != cheapest_embedding_agent.id),
+                    ]
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -7071,6 +7076,11 @@ def build_server(
                         orchestrator, model_name, required_capability="embedding"
                     )
                     embedding_agents = orchestrator._capability_agents("embedding", model_name)
+                    cheapest_embedding_agent = coordinator._cheapest_capability_candidate(embedding_agents)
+                    embedding_agents = [
+                        cheapest_embedding_agent,
+                        *(agent for agent in embedding_agents if agent.id != cheapest_embedding_agent.id),
+                    ]
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.

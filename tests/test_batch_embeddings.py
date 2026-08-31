@@ -146,6 +146,48 @@ class _PendingEmbeddingBackend(_RecordingEmbeddingBackend):
         return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
 
 
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_try_cheapest_eligible_member_first(path: str, input_key: str) -> None:
+    expensive = ModelAgent(
+        "ranked_first", "expensive-embedding", "mock://expensive",
+        provider_name="expensive-provider", tags=("embedding",), priority=10,
+    )
+    cheap = ModelAgent(
+        "cheapest_member", "cheap-embedding", "mock://cheap",
+        provider_name="cheap-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([expensive, cheap])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("expensive-provider", expensive.model, 5.0, 0.0))
+    price_book.set_price(PriceEntry("cheap-provider", cheap.model, 0.01, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, embedding_batch_backend=backend
+    )
+    token = "cheapest_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, document = _request(
+            "POST",
+            f"http://127.0.0.1:{server.server_address[1]}{path}",
+            token,
+            {"model": TaskOrchestrator.AUTO_MODEL, input_key: ["cost aware"]},
+        )
+        assert status == 200, document
+        assert backend.requests[0].agent_id == cheap.id
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_zdr_embeddings_batch_rejects_a_non_zdr_model_before_submission() -> None:
     orchestrator = TaskOrchestrator(
         [
