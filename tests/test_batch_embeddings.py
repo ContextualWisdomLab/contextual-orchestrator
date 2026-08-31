@@ -315,6 +315,30 @@ def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
     assert backend.requests[0].to_jsonl_line()["body"]["provider"] == {"zdr": True}
 
 
+def test_openrouter_zdr_embedding_batch_infers_legacy_provider_name() -> None:
+    agent = ModelAgent(
+        "legacy_zdr_embedding",
+        "openai/text-embedding-3-small",
+        base_url="https://openrouter.ai/api/v1",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].provider_routing == {"zdr": True}
+
+
 def test_openrouter_zdr_embedding_batch_uses_atomic_target_snapshot(monkeypatch) -> None:
     backend = _RecordingEmbeddingBackend()
     coordinator = CostRoutingCoordinator(

@@ -819,10 +819,10 @@ class CostRoutingCoordinator:
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
             selected = candidates[0]
-            return selected.model, selected.id, selected.provider_name
+            return selected.model, selected.id, _resolved_provider_name(selected)
         for candidate in candidates:
             if candidate.id == agent_id:
-                return candidate.model, candidate.id, candidate.provider_name
+                return candidate.model, candidate.id, _resolved_provider_name(candidate)
         raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
 
     def _build_embedding_requests(
@@ -1163,6 +1163,12 @@ def _provider_from_base_url(base_url: str) -> str:
     except Exception:
         return ""
     return host
+
+
+def _resolved_provider_name(agent: Any) -> str:
+    """Return a canonical provider name for one selected agent snapshot."""
+    provider = agent.provider_name or _provider_from_base_url(agent.base_url)
+    return "openrouter" if provider == "openrouter.ai" else provider
 
 
 def _positive_int(value: Any, default: int) -> int:
