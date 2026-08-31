@@ -52,6 +52,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   streaming, tools/binary-media passthrough, and the batch JSONL path)
   benefits; a valid `provider` object or an absent/`None` one keep their
   existing behavior unchanged.
+- OpenRouter embedding Batch JSONL now carries the same request-scoped
+  `provider.zdr=true` enforcement when `zdr_only` selects an attested
+  OpenRouter embedding agent.
 
 ### Added
 

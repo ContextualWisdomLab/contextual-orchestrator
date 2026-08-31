@@ -291,6 +291,30 @@ def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_a
         server.shutdown()
 
 
+def test_openrouter_zdr_embedding_batch_pins_provider_routing() -> None:
+    agent = ModelAgent(
+        "zdr_embedding",
+        "openai/text-embedding-3-small",
+        provider_name="openrouter",
+        tags=("embedding", "privacy:zdr"),
+    )
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator([agent]),
+        InMemoryConfigStore(),
+        embedding_batch_backend=backend,
+    )
+
+    coordinator.submit_embeddings_batch(
+        ["private"],
+        model=agent.model,
+        zdr_only=True,
+        agent_id=agent.id,
+    )
+
+    assert backend.requests[0].to_jsonl_line()["body"]["provider"] == {"zdr": True}
+
+
 def test_pending_batch_preserves_resolved_model_identity() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("embedding_worker", "resolved-embedding")])
     coordinator = CostRoutingCoordinator(

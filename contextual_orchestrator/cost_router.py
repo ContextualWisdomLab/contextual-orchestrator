@@ -781,6 +781,15 @@ class CostRoutingCoordinator:
         if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
             raise TypeError("agent_id must be a non-empty string when provided")
         resolved_model, resolved_agent_id = self._resolve_embedding_target(model, zdr_only, agent_id)
+        provider_routing = None
+        if zdr_only and resolved_agent_id is not None:
+            selected = next(
+                candidate
+                for candidate in self.orchestrator.candidates
+                if candidate.id == resolved_agent_id
+            )
+            if selected.provider_name == "openrouter":
+                provider_routing = {"zdr": True}
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
             inputs,
@@ -788,6 +797,7 @@ class CostRoutingCoordinator:
             attribution=shared_attribution,
             zdr_only=zdr_only,
             agent_id=resolved_agent_id,
+            provider_routing=provider_routing,
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
@@ -826,6 +836,7 @@ class CostRoutingCoordinator:
         attribution: Dict[str, Any],
         zdr_only: bool,
         agent_id: Optional[str],
+        provider_routing: Optional[Dict[str, Any]],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
@@ -850,6 +861,7 @@ class CostRoutingCoordinator:
                         token_count=token_count,
                         zdr_only=zdr_only,
                         agent_id=agent_id,
+                        provider_routing=provider_routing,
                     )
                 )
         return requests, part_counts, {

@@ -45,9 +45,9 @@ inference.
 
 Every OpenRouter wire transport applies the provider's documented
 `provider.zdr=true` request-time enforcement inside that policy scope. This
-includes JSON chat, streaming, structured passthrough, batch JSONL, and the
-binary-response speech transport; the response media type does not weaken the
-privacy contract of its JSON request body.
+includes JSON chat, streaming, structured passthrough, chat and embedding
+batch JSONL, and the binary-response speech transport; the response media
+type does not weaken the privacy contract of its JSON request body.
 
 OpenAI catalog rows also retain OpenAI's official data-controls documentation
 as policy evidence. Because approval and enablement are organization/project

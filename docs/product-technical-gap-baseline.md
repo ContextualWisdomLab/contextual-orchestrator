@@ -2463,6 +2463,11 @@ on each request body it serializes into the uploaded JSONL, so a `zdr_only`
 batch request against OpenRouter gets the same `"provider": {"zdr": true}`
 enforcement as the synchronous paths.
 
+Embedding Batch JSONL follows the same contract. After `zdr_only` resolves an
+attested OpenRouter embedding agent, `CostRoutingCoordinator` records the
+provider-routing pin on each `EmbeddingBatchRequest`; its JSONL body emits
+`"provider": {"zdr": true}` without exposing the internal `zdr_only` field.
+
 Verified: `tests/test_orchestrator_client_boundaries.py` adds direct unit
 coverage of `_pin_openrouter_zdr` (no-op outside `zdr_only`, no-op for
 non-OpenRouter agents, adds/merges the pin correctly) plus wiring-verification

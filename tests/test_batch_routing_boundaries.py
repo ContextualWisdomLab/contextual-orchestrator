@@ -79,10 +79,15 @@ def test_embedding_request_jsonl_line_shape() -> None:
 
 
 def test_embedding_request_jsonl_preserves_zdr_policy() -> None:
-    request = EmbeddingBatchRequest(input_text="private", zdr_only=True)
+    request = EmbeddingBatchRequest(
+        input_text="private",
+        zdr_only=True,
+        provider_routing={"zdr": True},
+    )
 
     assert request.zdr_only is True
     assert "zdr_only" not in request.to_jsonl_line()["body"]
+    assert request.to_jsonl_line()["body"]["provider"] == {"zdr": True}
 
 
 def test_chat_request_jsonl_preserves_zdr_policy() -> None:
