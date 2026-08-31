@@ -61,6 +61,23 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # bot signature. A stable, identifying user agent is not a credential and is
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
+# NVIDIA NIM's /v1/models catalog listing does not imply the model id is
+# still servable -- these ids were observed live returning HTTP 404 (not a
+# timeout or rate limit, which would be transient) from the completion
+# endpoint on repeated, independent central-review sidecar runs
+# (ContextualWisdomLab/contextual-orchestrator#957, #961, 2026-08-31), while
+# still being listed and selected into the orchestrator/free preflight
+# candidate pool every run. A 404 on a specific model id is evidence the
+# provider has retired it, not evidence of load; there is no live signal at
+# discovery time to catch this (discovery only calls /v1/models, never a
+# completion), so a hand-maintained denylist is the honest interim fix.
+# Scoped to nvidia_nim/nvidia_nim_sub specifically so it can never suppress
+# an unrelated provider serving a same-named id.
+_NVIDIA_NIM_RETIRED_MODEL_IDS = frozenset({
+    "google/gemma-3-12b-it",
+    "google/gemma-3-4b-it",
+})
+_NVIDIA_NIM_PROVIDER_NAMES = frozenset({"nvidia_nim", "nvidia_nim_sub"})
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
 # Small bounded retry budget for the one shared, unauthenticated, third-party
@@ -933,6 +950,11 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             continue
         model_id = row.get("id")
         if type(model_id) is not str or not model_id:
+            continue
+        if (
+            source.provider_name in _NVIDIA_NIM_PROVIDER_NAMES
+            and model_id in _NVIDIA_NIM_RETIRED_MODEL_IDS
+        ):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         architecture = row.get("architecture") if isinstance(row.get("architecture"), dict) else {}

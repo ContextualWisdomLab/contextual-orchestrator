@@ -140,6 +140,44 @@ def test_build_review_orchestrator_excludes_endpoint_only_models(monkeypatch):
     assert [agent.model for agent in orchestrator.agents] == ["gpt-review"]
 
 
+def test_build_review_orchestrator_excludes_non_text_input_models(monkeypatch):
+    """A model requiring non-text input cannot enter the blind review pool.
+
+    ContextualWisdomLab/.github#1198: NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passes every other chat-capability
+    check (Models.dev reports 0/0 cost, "text" output, no disqualifying
+    model-id token) but rejected a plain tool-calling review request three
+    times live, because it declares "image" alongside "text" as required
+    input -- a blind reviewer call cannot know in advance to supply one.
+    ``general_free_serving_candidates`` already excludes this shape; this
+    gateway builds its candidate pool through ``is_chat_serving_candidate``
+    instead, which never inherited that fix, so it must apply the same
+    evidence-based rule directly.
+    """
+    discovered = [
+        DiscoveredModel(
+            provider_name="nvidia_nim",
+            model_id="meta/llama-3.2-90b-vision-instruct",
+            credential_name="NVIDIA_NIM_API_KEY",
+            chat_base_url="https://nvidia_nim.example/v1",
+            auth_scheme="Bearer",
+            capabilities=("chat",),
+            input_modalities=("text", "image"),
+            output_modalities=("text",),
+            is_free=True,
+        ),
+        _discovered("openai", "gpt-review", "OPENAI_API_KEY", 0.01),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENAI_API_KEY": "openai-secret", "NVIDIA_NIM_API_KEY": "nim-secret"},
+        max_agents=2,
+    )
+
+    assert [agent.model for agent in orchestrator.agents] == ["gpt-review"]
+
+
 def test_build_review_orchestrator_fails_closed_without_general_chat_models(monkeypatch):
     """A catalog containing only endpoint-specific models cannot start review."""
     discovered = [_discovered("openai", "text-embedding-3-large", "OPENAI_API_KEY", 0.001)]

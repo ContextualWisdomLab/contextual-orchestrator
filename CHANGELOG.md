@@ -12,6 +12,32 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- NVIDIA NIM discovery no longer selects two catalog-listed but retired
+  model ids (`google/gemma-3-12b-it`, `google/gemma-3-4b-it`, both via
+  `nvidia_nim` and its `_sub` credential) into the `orchestrator/free`
+  candidate pool. `/v1/models` still lists them, but the completion
+  endpoint returned a definitive HTTP 404 for both on independent central
+  review-sidecar runs (contextual-orchestrator#957, #961, 2026-08-31) —
+  a catalog listing is not evidence a model is still servable, and there is
+  no live signal at discovery time (a plain models list) to catch a
+  retirement. Rediscovering and reselecting them every run burned preflight
+  budget and denied diversity margin to routes that would have actually
+  succeeded, directly contributing to review-gate timeouts when too few
+  surviving routes were left to absorb one. `_parse_openai_compatible` now
+  excludes them via a small, provider-scoped, hand-maintained denylist
+  (`_NVIDIA_NIM_RETIRED_MODEL_IDS`) — scoped to `nvidia_nim`/`nvidia_nim_sub`
+  specifically so an unrelated provider serving a same-named id is
+  unaffected. This is a hand-maintained interim fix, not a self-healing
+  breaker; a future retirement still needs a human to add it here.
+- `review_gateway.build_review_orchestrator()` now also excludes a
+  candidate whose catalog evidence declares a required non-text input
+  modality (image/audio/video), the same rule `general_free_serving_candidates`
+  already applies for the ContextualWisdomLab/.github#1198 incident (NVIDIA
+  NIM's `meta/llama-3.2-90b-vision-instruct` rejecting a blind tool-calling
+  request three times live). The review gateway builds its own candidate
+  pool through `is_chat_serving_candidate` rather than that selector, so it
+  never inherited the original fix — a vision-only-input model could still
+  enter the review pool and exhaust it exactly like the original incident.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

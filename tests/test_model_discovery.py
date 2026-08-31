@@ -406,6 +406,46 @@ def test_openai_bare_list_promotes_transport_compatible_ids_to_chat() -> None:
     assert "text-embedding-3-large" not in by_id
 
 
+def test_nvidia_nim_parse_excludes_known_retired_model_ids() -> None:
+    """A hand-maintained denylist keeps a retired NIM catalog id out of discovery.
+
+    ContextualWisdomLab/contextual-orchestrator#957 and #961 (2026-08-31):
+    NVIDIA NIM's /v1/models still lists ``google/gemma-3-12b-it`` and
+    ``google/gemma-3-4b-it``, but the completion endpoint returns a
+    definitive HTTP 404 for both -- on independent central-review sidecar
+    runs, in both cases -- while discovery keeps selecting them into the
+    orchestrator/free preflight candidate pool every run, burning preflight
+    budget and denying diversity margin to routes that would actually
+    succeed. A catalog listing is not evidence a model is still servable;
+    excluding these ids at parse time keeps every downstream consumer
+    (general_free_serving_candidates, select_bootstrap_discovered_agents,
+    the Postgres catalog sync) from re-selecting them. Scoped to
+    nvidia_nim/nvidia_nim_sub only, so an unrelated provider serving a
+    same-named id is unaffected.
+    """
+    nvidia_nim_source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim"
+    )
+    nvidia_nim_sub_source = next(
+        item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim_sub"
+    )
+    payload = {"data": [
+        {"id": "google/gemma-3-12b-it"},
+        {"id": "google/gemma-3-4b-it"},
+        {"id": "meta/llama-3.1-8b-instruct"},
+    ]}
+
+    nim_discovered = _parse_openai_compatible(payload, nvidia_nim_source)
+    nim_sub_discovered = _parse_openai_compatible(payload, nvidia_nim_sub_source)
+
+    assert [model.model_id for model in nim_discovered] == ["meta/llama-3.1-8b-instruct"]
+    assert [model.model_id for model in nim_sub_discovered] == ["meta/llama-3.1-8b-instruct"]
+    # The same id from an unrelated provider must not be caught by this
+    # NVIDIA-scoped denylist.
+    other_discovered = _parse_openai_compatible(payload, OPENAI_SOURCE)
+    assert "google/gemma-3-12b-it" in {model.model_id for model in other_discovered}
+
+
 def test_openai_parse_preserves_explicit_capability_evidence() -> None:
     """A metadata-bearing listing keeps its provider-declared capabilities."""
     discovered = _parse_openai_compatible(
