@@ -5142,7 +5142,10 @@ def _chat_response_sse_chunks(
             normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
         cost = payload.get("cost")
-        if isinstance(cost, dict) and cost.get("measurement_status") != "measured":
+        if isinstance(cost, dict) and (
+            cost.get("measurement_status") != "measured"
+            or not isinstance(reported_usage, dict)
+        ):
             return chunks
         if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}

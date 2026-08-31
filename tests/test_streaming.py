@@ -263,6 +263,18 @@ def test_structured_sse_omits_unmeasured_workflow_usage() -> None:
     assert measured[-1]["choices"] == []
     assert measured[-1]["usage"]["usage_source"] == "reported"
 
+    missing_payload = {
+        "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+        "cost": {"measurement_status": "measured"},
+    }
+    missing = _chat_response_sse_chunks(
+        missing_payload,
+        model="structured-model",
+        include_usage=True,
+        prompt_text="question",
+    )
+    assert all(chunk["choices"] for chunk in missing)
+
 
 def test_structured_nonstream_provider_drops_gateway_stream_options() -> None:
     orchestrator = TaskOrchestrator(
