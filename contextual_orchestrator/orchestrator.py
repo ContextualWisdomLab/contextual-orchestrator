@@ -4725,18 +4725,22 @@ class TaskOrchestrator:
         # provider batch call, before any judge call starts -- unlike
         # route_once/conduct(), a later row's real spend is never hidden
         # behind a not-yet-executed provider call. _replace_workflow_run is
-        # the sole path that updates the budget meter, so a completed worker
-        # result that is never persisted is real, already-incurred spend
-        # that would otherwise silently vanish from budget accounting the
-        # moment a later checkpoint raises -- letting a caller retry the
-        # same batch indefinitely against an unchanged meter (Devin review,
-        # PR #961). Persist every row's real worker spend immediately, with
+        # the sole path that updates the in-memory budget meter, so a
+        # completed worker result that is never persisted is real,
+        # already-incurred spend that would otherwise silently vanish from
+        # budget accounting the moment a later checkpoint raises -- letting
+        # a caller retry the same batch indefinitely against an unchanged
+        # meter (Devin review, PR #961). Persist every row's real worker
+        # spend immediately -- to the in-memory meter AND, when a durable
+        # --state-db is configured, to the store too, or a process restart
+        # before judging reloads none of this batch's spend and repeats the
+        # same gap (a second Devin review round on the same finding) -- with
         # no verification yet, before any budget check that could raise.
         # _is_trace_complete() already treats a run with no "accepted"/
         # "reason" in its verification as honestly incomplete, so this
         # pending state needs no new status field -- it reads exactly like
         # any other genuinely-unfinished run already tolerated elsewhere in
-        # this store, and gets no run_order/store/audit/analytics
+        # this store, and gets no run_order/audit/analytics
         # "workflow_run_created" side effects until it is actually judged
         # below, matching the fact that it is not yet a complete result.
         prepared_rows: list[dict[str, Any]] = []
@@ -4769,6 +4773,8 @@ class TaskOrchestrator:
                 }
             )
             self._replace_workflow_run(pending_record)
+            if self._store is not None:
+                self._store.save("workflow_run", run_id, pending_record)
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):

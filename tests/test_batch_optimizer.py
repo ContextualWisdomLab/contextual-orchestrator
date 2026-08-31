@@ -378,6 +378,51 @@ def test_batch_route_retry_after_budget_exceeded_cannot_incur_untracked_spend() 
         assert client.batch_calls == batch_calls_before_retry
 
 
+def test_batch_route_survives_restart_after_budget_exceeded(tmp_path) -> None:
+    """A restart must not erase a failed batch's already-incurred spend.
+
+    Devin review (PR #961): persisting pending worker rows only to the
+    in-memory budget meter kept a process restart before judging from
+    reloading any of a failed batch's spend, letting the same over-budget
+    batch be retried with a full budget again after every restart. Pending
+    rows are now saved to the durable ``--state-db`` store too, the same as
+    a judged run already was.
+    """
+    db_path = tmp_path / "batch_restart_state.db"
+    agent = ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))
+    orchestrator = TaskOrchestrator(
+        [agent],
+        client=_CountingClient(),  # every item reports completion_tokens=6
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=10,  # below the two-item aggregate (12)
+        state_db=str(db_path),
+    )
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task three"])
+    orchestrator.close()
+
+    restarted = TaskOrchestrator(
+        [agent],
+        client=_CountingClient(),
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=10,
+        state_db=str(db_path),
+    )
+    try:
+        assert restarted.budget_status()["spent_output_tokens"] == 12
+        assert restarted.budget_status()["exceeded"] is True
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            restarted.batch_route(["task five"])
+    finally:
+        restarted.close()
+
+
 def test_batch_route_budget_meter_includes_reported_judge_usage() -> None:
     class _UsageJudge(_ScriptedFastJudge):
         def judge(self, **kwargs):

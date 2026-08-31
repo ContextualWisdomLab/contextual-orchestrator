@@ -99,7 +99,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   judge call is now the same simple "block before the next not-yet-incurred
   provider call" check `conduct()`'s entry point uses, and a retry after
   `BudgetExceededError` fails closed immediately instead of re-incurring
-  the same spend.
+  the same spend. That fix still only updated the in-memory budget meter:
+  a completed batch's pending rows were never written to the durable
+  `--state-db` store, so a process restart before judging reloaded none of
+  a failed batch's spend, and the same over-budget batch could be retried
+  with a full budget again after every restart. Pending rows are now saved
+  to the store too, the same as a judged run already was.
 
 ### Added
 
