@@ -429,7 +429,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
             continue
         elif not routable:
             tags = (*existing.tags, "spend:blocked")
-            if existing.disabled:
+            if existing.disabled and "spend:blocked" not in existing.tags:
                 tags = (*tags, "spend:blocked:preserve-disabled")
             agents.append(
                 replace(

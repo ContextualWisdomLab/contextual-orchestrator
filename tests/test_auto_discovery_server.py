@@ -454,6 +454,9 @@ def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_cre
     assert blocked.priority == 17
     assert blocked.tags == (*existing.tags, "spend:blocked")
 
+    _auto_discover_runtime_agents(orchestrator)
+    assert orchestrator.candidates[0] == blocked
+
     recovered = replace(discovered, spend_admitted=True)
     monkeypatch.setattr(
         "contextual_orchestrator.__main__.discover_all_models",
