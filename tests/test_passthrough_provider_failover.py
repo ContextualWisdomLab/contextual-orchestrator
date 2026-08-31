@@ -20,6 +20,7 @@ from contextual_orchestrator import (
 from contextual_orchestrator.orchestrator import (
     ModelClient,
     ProviderRequestTooLargeError,
+    _structured_output_error,
 )
 from contextual_orchestrator.provider_errors import ProviderUpstreamError
 
@@ -1323,3 +1324,59 @@ def test_default_mock_endpoint_represents_one_fixture_provider() -> None:
 
     assert caught.value.agent_id == "first_mock"
     assert [agent_id for agent_id, _ in client.calls] == ["first_mock"]
+
+
+def test_virtual_structured_synthesis_skips_reasoning_only_model_on_same_endpoint() -> None:
+    """A contentless virtual candidate cannot terminate same-endpoint synthesis."""
+    endpoint = "https://synthetic.invalid/v1"
+    client = SequencedProxyClient(
+        {
+            "reasoning_only": {
+                "choices": [{"message": {"content": None, "reasoning": "bounded"}}]
+            },
+            "structured_live": {
+                "model": "structured-model",
+                "choices": [{"message": {"content": '{"status":"synthetic_ok"}'}}]
+            },
+        }
+    )
+    first = ModelAgent(
+        "reasoning_only", "reasoning-model", endpoint, priority=10,
+        tags=("response_format",),
+    )
+    second = ModelAgent(
+        "structured_live", "structured-model", endpoint, priority=1,
+        tags=("response_format",),
+    )
+    orchestrator = TaskOrchestrator([first, second], client=client)
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {"accepted": True},
+    }
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "synthetic structured request"}],
+            "response_format": {"type": "json_object"},
+        },
+        single_agent=False,
+    )
+
+    assert result["model"] == "structured-model"
+    assert result["choices"][0]["message"]["content"] == '{"status":"synthetic_ok"}'
+    assert [agent_id for agent_id, _ in client.calls] == [
+        "reasoning_only",
+        "structured_live",
+    ]
+
+
+def test_json_object_contract_rejects_non_json_and_non_object_values() -> None:
+    """json_object validation cannot accept provider prose or JSON scalars."""
+    response_format = {"type": "json_object"}
+
+    assert _structured_output_error("not json", response_format) == "invalid_json"
+    assert _structured_output_error("[]", response_format) == "invalid_json_object"
+    assert _structured_output_error('{"status":"synthetic_ok"}', response_format) is None

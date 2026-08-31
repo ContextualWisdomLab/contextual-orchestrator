@@ -172,17 +172,24 @@ class ProviderRequestTooLargeError(ProviderUpstreamError):
 def _structured_output_error(
     content: str, response_format: object
 ) -> str | None:
-    """Return a bounded contract error for strict JSON Schema output."""
-    if not isinstance(response_format, Mapping) or response_format.get("type") != "json_schema":
+    """Return a bounded contract error for JSON object or JSON Schema output."""
+    if not isinstance(response_format, Mapping):
+        return None
+    response_type = response_format.get("type")
+    if response_type not in {"json_object", "json_schema"}:
         return None
     specification = response_format.get("json_schema")
     schema = specification.get("schema") if isinstance(specification, Mapping) else None
-    if not isinstance(schema, Mapping):
+    if response_type == "json_schema" and not isinstance(schema, Mapping):
         return "schema_missing"
     try:
         instance = json.loads(content)
     except (TypeError, json.JSONDecodeError):
         return "invalid_json"
+    if not isinstance(instance, Mapping):
+        return "invalid_json_object"
+    if response_type == "json_object":
+        return None
     validator_type = validator_for(schema)
     try:
         validator_type.check_schema(schema)
@@ -2247,7 +2254,8 @@ class ModelClient:
         mock_content = (
             "{}"
             if isinstance(response_format, dict)
-            and str(response_format.get("type", "")).strip().lower() == "json_schema"
+            and str(response_format.get("type", "")).strip().lower()
+            in {"json_object", "json_schema"}
             else f"[{agent.id}] chat-mock"
         )
         echoed = {
@@ -4135,6 +4143,24 @@ class TaskOrchestrator:
             final_agent = same_endpoint_candidates[0]
             synthesis_candidates = same_endpoint_candidates
 
+        def provider_output(agent: ModelAgent, response: Mapping[str, Any]) -> str:
+            """Extract non-empty structured output from the attempted provider."""
+            if not response_request:
+                return ModelClient._response_content(agent, dict(response))
+            output = response.get("output_text")
+            if isinstance(output, str) and output:
+                return output
+            combined = "".join(
+                _responses_text(item.get("content"))
+                for item in response.get("output", [])
+                if isinstance(item, dict) and item.get("type") == "message"
+            )
+            if combined:
+                return combined
+            raise ProviderResponseError(
+                f"provider {agent.id} returned no structured response content"
+            )
+
         def send_synthesis(
             payload: dict[str, Any],
         ) -> tuple[dict[str, Any], ModelAgent]:
@@ -4187,7 +4213,9 @@ class TaskOrchestrator:
                         send_once = getattr(self.client, "proxy_send_once", None)
                         if callable(send_once):
                             send = send_once
-                    return send(candidate, endpoint, candidate_payload), candidate
+                    response = send(candidate, endpoint, candidate_payload)
+                    provider_output(candidate, response)
+                    return response, candidate
                 except Exception as exc:  # noqa: BLE001 - provider trust boundary
                     request_too_large = _is_request_too_large_error(exc)
                     saw_request_too_large = saw_request_too_large or request_too_large
@@ -4196,6 +4224,15 @@ class TaskOrchestrator:
                             "request body exceeds provider limit"
                         ) from exc
                     if not request_too_large:
+                        if (
+                            virtual_model
+                            and isinstance(exc, ProviderResponseError)
+                            and candidate_endpoint == preferred_endpoint
+                        ):
+                            request_exclusions.add(candidate.id)
+                            self._record_failure(candidate.id)
+                            synthesis_failure_recorded = True
+                            continue
                         if isinstance(exc, (urllib.error.HTTPError, ProviderUpstreamError)):
                             classified = classify_provider_failure(
                                 exc,
@@ -4230,22 +4267,7 @@ class TaskOrchestrator:
             if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)
             raise
-        def provider_output(response: Mapping[str, Any]) -> str:
-            if not response_request:
-                try:
-                    return ModelClient._response_content(final_agent, response)
-                except RuntimeError:
-                    return ""
-            output = response.get("output_text")
-            if isinstance(output, str):
-                return output
-            return "".join(
-                    _responses_text(item.get("content"))
-                    for item in response.get("output", [])
-                    if isinstance(item, dict) and item.get("type") == "message"
-                )
-
-        synthesis_output = provider_output(raw)
+        synthesis_output = provider_output(final_agent, raw)
         synthesis_step: dict[str, Any] = {
             "id": len(workflow["trace"]),
             "role": "synthesizer",
@@ -4304,7 +4326,7 @@ class TaskOrchestrator:
                 if final_agent.group_name and not _is_request_too_large_error(exc):
                     self._group_router.observe_failure(final_agent.id)
                 raise
-            repaired_output = provider_output(repaired)
+            repaired_output = provider_output(final_agent, repaired)
             if _structured_output_error(repaired_output, response_format) is not None:
                 self._record_failure(final_agent.id)
                 if final_agent.group_name:
