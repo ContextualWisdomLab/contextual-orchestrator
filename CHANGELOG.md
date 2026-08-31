@@ -256,6 +256,28 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `test_model_judge_irt_projection_failure_fails_closed` (extended to
   assert the fail-closed verdict still carries `judge_agent_id`/
   `judge_model`/`judge_usage` from the already-completed provider call).
+  (Devin review on #961) One more accounting-loss finding in the same
+  vein: `_FastMLSIJudgeAdapter` only captured `served_agent_id`/
+  `served_model` on completion, not usage, so a malformed structured
+  verdict raised by fast-mlsirm *after* the provider call itself
+  succeeded (inside `judge()`'s own response parsing, before ever
+  returning a `result` object to `_model_judge_verification`) still
+  discarded that call's real usage on the way to its two outer
+  fail-closed returns (`except components.format_error` / generic
+  `except Exception`). The adapter now also records `served_usage` at
+  completion time, and both outer except blocks include whatever subset
+  of `judge_agent_id`/`judge_model`/`judge_usage` a new
+  `_judge_adapter_accounting_fields()` helper finds already captured on
+  the adapter -- empty when the failure happened before any call
+  completed (nothing to account for), populated otherwise. New
+  regression test
+  `test_fast_mlsirm_format_error_after_completed_call_preserves_accounting`:
+  the scripted judge calls the adapter's `complete()` (a real, successful
+  completion) before raising the configured format error; asserts the
+  fail-closed result still carries `judge_agent_id`/`judge_model`. The
+  pre-existing `test_fast_mlsirm_format_error_fails_closed` (whose judge
+  raises before ever calling the adapter) is extended to assert the
+  opposite: no accounting fields, since genuinely no call happened.
 
 ### Added
 

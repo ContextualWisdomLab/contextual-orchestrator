@@ -800,6 +800,55 @@ def test_fast_mlsirm_format_error_fails_closed() -> None:
     assert result["accepted"] is False
     assert result["judge"] == "model"
     assert result["reason"] == "model judge returned an invalid structured verdict; verification failed closed"
+    # No provider call ever completed here (judge() raises before calling
+    # the adapter at all), so there is genuinely no spend to account for.
+    assert "judge_agent_id" not in result
+    assert "judge_usage" not in result
+
+
+def test_fast_mlsirm_format_error_after_completed_call_preserves_accounting() -> None:
+    """A malformed verdict must not erase a judge call that already happened.
+
+    Devin review on #961: _FastMLSIJudgeAdapter captures served_agent_id/
+    served_model/served_usage as soon as its own complete() returns,
+    independently of whether the caller (fast-mlsirm) later raises while
+    turning that response into a verdict. The fail-closed return for that
+    case must still carry that already-captured accounting.
+    """
+    class _FormatError(Exception):
+        pass
+
+    class _FlakyAfterCompletionJudge:
+        def __init__(self, adapter, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            del mode, accept_threshold
+            self.adapter = adapter
+
+        def judge(self, **_) -> None:
+            self.adapter.complete([{"role": "user", "content": "ping"}])
+            raise _FormatError("invalid structured verdict")
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_FlakyAfterCompletionJudge,
+            criterion_cls=_Criterion,
+            format_error=_FormatError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification("task", {"verifier_output": "report"})
+
+    assert result["accepted"] is False
+    assert result["reason"] == "model judge returned an invalid structured verdict; verification failed closed"
+    assert result["judge_agent_id"] == "general_agent"
+    assert result["judge_model"] == "model-x"
 
 
 def test_broken_fast_mlsirm_import_does_not_bypass_required_judge_path() -> None:

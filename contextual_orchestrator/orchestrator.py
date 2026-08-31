@@ -286,6 +286,7 @@ class _FastMLSIJudgeAdapter:
     judge: str
     served_agent_id: str | None = None
     served_model: str | None = None
+    served_usage: dict[str, Any] | None = None
     mode: str = "auto"
     allowed_agent_ids: set[str] | None = None
 
@@ -361,6 +362,7 @@ class _FastMLSIJudgeAdapter:
         """Build the bounded adapter response shared by normal and structured calls."""
         self.served_agent_id = served_id
         self.served_model = served_model
+        self.served_usage = usage
         trace = [
             {
                 "id": 0,
@@ -7149,6 +7151,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
+        judge_adapter: _FastMLSIJudgeAdapter | None = None
         try:
             judge = next(
                 agent
@@ -7253,6 +7256,7 @@ class TaskOrchestrator:
                 "reason": "model judge returned an invalid structured verdict; verification failed closed",
                 "verifier_output": verifier_output,
                 "judge": "model",
+                **self._judge_adapter_accounting_fields(judge_adapter),
             }
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return {
@@ -7260,7 +7264,36 @@ class TaskOrchestrator:
                 "reason": "model judge unavailable; verification failed closed",
                 "verifier_output": verifier_output,
                 "judge": "model",
+                **self._judge_adapter_accounting_fields(judge_adapter),
             }
+
+    @staticmethod
+    def _judge_adapter_accounting_fields(
+        judge_adapter: "_FastMLSIJudgeAdapter | None",
+    ) -> dict[str, Any]:
+        """Return whatever judge spend evidence a (possibly failed) call captured.
+
+        A malformed structured verdict, or any other failure after the
+        provider call itself completed, must not erase that call's real
+        spend from budget/spend accounting (Devin review on #961):
+        ``_FastMLSIJudgeAdapter`` records ``served_agent_id``/``served_model``/
+        ``served_usage`` as soon as its own ``complete()``/``complete_structured()``
+        returns, independently of whether the caller (fast-mlsirm) later
+        raises while turning that response into a verdict. ``judge_adapter``
+        itself can be ``None`` when the failure happened before one was even
+        constructed (e.g. no eligible judge agent), in which case there is
+        genuinely no call to account for.
+        """
+        if judge_adapter is None:
+            return {}
+        fields: dict[str, Any] = {}
+        if judge_adapter.served_agent_id is not None:
+            fields["judge_agent_id"] = judge_adapter.served_agent_id
+        if judge_adapter.served_model is not None:
+            fields["judge_model"] = judge_adapter.served_model
+        if judge_adapter.served_usage:
+            fields["judge_usage"] = judge_adapter.served_usage
+        return fields
 
     def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
         """Prepare evidence for the model judge without making a heuristic decision."""
