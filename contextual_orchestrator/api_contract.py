@@ -136,6 +136,20 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        "/v1/provider_readiness": {
+            "get": {
+                "operationId": "get_provider_readiness",
+                "summary": "Read or explicitly refresh bounded provider chat readiness",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [{
+                    "name": "refresh",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "boolean", "default": False},
+                }],
+                "responses": {"200": {"description": "Provider readiness report"}},
+            }
+        },
         "/v1/chat/completions": {
             "post": {
                 "operationId": "create_chat_completion",
