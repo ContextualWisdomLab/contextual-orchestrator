@@ -256,9 +256,16 @@ def test_batch_route_rechecks_budget_before_each_judge_call() -> None:
         with pytest.raises(orchestrator_module.BudgetExceededError):
             orchestrator.batch_route(["task one", "task three"])
 
-    # The already-completed batch worker exactly exhausts the cap, so the
-    # first per-item checkpoint stops before another provider call.
-    assert len(orchestrator._workflow_runs) == 0
+    # The already-completed batch worker spend is real and already
+    # persisted -- both rows land in the store (their spend already
+    # reflected in the budget meter) before the judge loop's checkpoint
+    # even runs, so the exhausted cap does not vanish along with the raise;
+    # the first per-item checkpoint just stops before any judge call.
+    assert len(orchestrator._workflow_runs) == 2
+    assert orchestrator.budget_status()["spent_output_tokens"] == 12
+    assert not any(
+        orchestrator._is_trace_complete(run) for run in orchestrator._workflow_runs.values()
+    )
 
 
 def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None:
@@ -327,9 +334,48 @@ def test_batch_route_blocks_first_judge_call_when_aggregate_batch_spend_exceeds_
         with pytest.raises(orchestrator_module.BudgetExceededError):
             orchestrator.batch_route(["task one", "task three"])
 
-    # The aggregate checkpoint must reject before the first judge call, not
-    # after letting one item through.
-    assert len(orchestrator._workflow_runs) == 0
+    # The aggregate checkpoint must reject before the first judge call, but
+    # the batch's real worker spend is already persisted -- and so already
+    # counted -- rather than lost by the raise.
+    assert len(orchestrator._workflow_runs) == 2
+    assert orchestrator.budget_status()["spent_output_tokens"] == 12
+    assert not any(
+        orchestrator._is_trace_complete(run) for run in orchestrator._workflow_runs.values()
+    )
+
+
+def test_batch_route_retry_after_budget_exceeded_cannot_incur_untracked_spend() -> None:
+    """A completed batch's spend must stay counted so a retry fails closed.
+
+    Devin review (PR #961): if the aggregate checkpoint raised without
+    persisting the batch's already-incurred worker spend, the budget meter
+    would stay unchanged and a caller retrying the same over-budget batch
+    could keep incurring real, uncounted provider spend indefinitely.
+    """
+    client = _CountingClient()  # every item reports completion_tokens=6
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
+        client=client,
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=10,
+    )
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task three"])
+        assert orchestrator.budget_status()["exceeded"] is True
+
+        # A retry must fail closed at the ordinary entry check -- the first
+        # attempt's real spend is already counted, so this second call
+        # cannot execute another provider batch call at all.
+        batch_calls_before_retry = client.batch_calls
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task three"])
+        assert client.batch_calls == batch_calls_before_retry
 
 
 def test_batch_route_budget_meter_includes_reported_judge_usage() -> None:

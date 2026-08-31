@@ -86,7 +86,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   through the end of the batch (rows before it are already reflected in the
   meter by earlier iterations of the same loop), so a batch whose aggregate
   worker spend alone already exceeds the cap blocks its very first judge
-  call.
+  call. That aggregate checkpoint in turn raised `BudgetExceededError`
+  before persisting any of the batch's already-completed worker rows —
+  since `_replace_workflow_run` is the sole path that updates the budget
+  meter, a batch that failed this checkpoint left its real, already-incurred
+  provider spend completely uncounted, so a caller retrying the same
+  over-budget batch could keep incurring real spend indefinitely against an
+  unchanged meter. Every row's worker result is now persisted immediately
+  (with no verification yet — `_is_trace_complete()` already reads that
+  honestly as incomplete, the same as any other genuinely-unfinished run)
+  before any budget check that could raise, so the checkpoint before each
+  judge call is now the same simple "block before the next not-yet-incurred
+  provider call" check `conduct()`'s entry point uses, and a retry after
+  `BudgetExceededError` fails closed immediately instead of re-incurring
+  the same spend.
 
 ### Added
 

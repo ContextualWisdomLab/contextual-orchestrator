@@ -4724,14 +4724,23 @@ class TaskOrchestrator:
         # Every worker request in this batch already completed above, in the
         # provider batch call, before any judge call starts -- unlike
         # route_once/conduct(), a later row's real spend is never hidden
-        # behind a not-yet-executed provider call; it is simply not yet
-        # persisted into the budget meter. Build every row up front so each
-        # checkpoint below can see the true unpersisted remainder (this row
-        # through the end of the batch), not just its own row -- otherwise a
-        # batch whose aggregate worker spend alone already exceeds the cap
-        # can pass every individual per-row check and let every judge call
-        # through uncounted.
+        # behind a not-yet-executed provider call. _replace_workflow_run is
+        # the sole path that updates the budget meter, so a completed worker
+        # result that is never persisted is real, already-incurred spend
+        # that would otherwise silently vanish from budget accounting the
+        # moment a later checkpoint raises -- letting a caller retry the
+        # same batch indefinitely against an unchanged meter (Devin review,
+        # PR #961). Persist every row's real worker spend immediately, with
+        # no verification yet, before any budget check that could raise.
+        # _is_trace_complete() already treats a run with no "accepted"/
+        # "reason" in its verification as honestly incomplete, so this
+        # pending state needs no new status field -- it reads exactly like
+        # any other genuinely-unfinished run already tolerated elsewhere in
+        # this store, and gets no run_order/store/audit/analytics
+        # "workflow_run_created" side effects until it is actually judged
+        # below, matching the fact that it is not yet a complete result.
         prepared_rows: list[dict[str, Any]] = []
+        run_ids: list[str] = []
         for index, (prompt, agent) in enumerate(selected):
             result = answers[index]
             row: dict[str, Any] = {
@@ -4744,25 +4753,37 @@ class TaskOrchestrator:
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
             prepared_rows.append(row)
+            run_id = f"run_{uuid.uuid4().hex}"
+            run_ids.append(run_id)
+            pending_record = self._with_effort_snapshot(
+                {
+                    "workflow_run_id": run_id,
+                    "created_at": int(time.time()),
+                    "mode": "route",
+                    "policy_mode": "route",
+                    "prompt_text": prompt,
+                    "answer": result["content"],
+                    "trace": [row],
+                    "policy_snapshot": self.policy.as_dict(),
+                    "verification": {},
+                }
+            )
+            self._replace_workflow_run(pending_record)
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
             result = answers[index]
             row = prepared_rows[index]
-            # Each judge call below is its own bounded provider call (see
-            # _model_judge_verification), not covered by the one-time check
-            # above -- re-check against spend already recorded by this batch
-            # before starting another one, exactly like conduct()'s per-step
-            # budget checkpoint. Rows before this index were already
-            # persisted (and so already counted) by earlier iterations of
-            # this same loop; every row from this index onward is real,
-            # already-incurred worker spend that has not been counted yet.
+            # Every row's worker spend is already reflected in the budget
+            # meter by the pending persist above, so this checkpoint is the
+            # same "block before the next not-yet-incurred provider call"
+            # check the entry-point check above and conduct()'s per-step
+            # checkpoint both use -- the judge call below is the only spend
+            # this check needs to gate.
             if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-                in_flight_tokens, in_flight_cost = self._trace_budget_spend(prepared_rows[index:])
-                self._raise_if_spend_budget_exceeded(
-                    additional_output_tokens=in_flight_tokens,
-                    additional_cost_usd=in_flight_cost,
-                )
+                budget = self.budget_status()
+                if budget["exceeded"]:
+                    raise BudgetExceededError("spend budget exceeded", detail=budget)
             # Judge each batched answer exactly like route_once: a genuine
             # fast-mlsirm verdict when policy.realtime_judge is on (the
             # default), or the same reviewed fallback shape when an operator
@@ -4788,7 +4809,7 @@ class TaskOrchestrator:
             }
             record = self._with_effort_snapshot(
                 {
-                    "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                    "workflow_run_id": run_ids[index],
                     "created_at": int(time.time()),
                     "mode": "route",
                     "policy_mode": "route",
