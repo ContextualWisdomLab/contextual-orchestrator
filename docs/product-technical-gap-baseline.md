@@ -1,5 +1,49 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-31 OpenRouter free-discovery deadline bound (PR #939) + orchestrator/free tool-call-capability gap (issue #940)
+
+Investigating Devin Review's second finding on `ContextualWisdomLab/.github#1463` ("Discovery exhausts
+sidecar startup budget"): `_openrouter_free_model_endpoints()` (`contextual_orchestrator/model_discovery.py`)
+used a per-request `timeout` but no overall deadline, so total wall time scaled with the free-catalog
+count (`ceil(len(model_ids) / 8)` sequential timeout waves via `ThreadPoolExecutor` — up to
+`12 * 15s = 180s` at today's ~94-model OpenRouter free catalog, for this one enrichment step alone).
+Confirmed genuinely new relative to `.github`'s old vendored pin (`git log -S
+"_openrouter_free_model_endpoints"` → single commit `6376d85`), so this is a real regression risk
+introduced since that pin was last bumped, not a pre-existing characteristic. `.github`'s sidecar has a
+180s startup watchdog covering discovery + catalog build + preflight combined (already tracked as tight
+in `ContextualWisdomLab/.github#1455`), so this one call could exhaust it alone in the worst case — on
+top of ~6 other sequential discovery calls. Live evidence from `.github#1463`'s own Strix run
+(`33348306414`) showed the sidecar provisioning step actually succeeding in ~5m41s, so this is hardening
+against a worst-case tail risk, not a fix for an observed outage.
+
+**Fix**: [PR #939](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/939) bounds the
+fetch to one shared `concurrent.futures.wait(futures, timeout=timeout)` deadline instead of
+`executor.map()` (no total-time bound); any model not done by the deadline is reported unmapped rather
+than waited on further — this data is best-effort provider-privacy enrichment, not required for
+discovery. Regression test proves the bound holds regardless of catalog size. Also adds opt-in
+verbose/debug discovery logging (`--log-level` / `CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`, never logs
+`api_key` or payload content) for exactly this kind of future timing diagnosis.
+
+**Separate, larger gap found while root-causing `.github#1463`'s live Strix failure** (not caused by
+that PR's diff — confirmed via `git show c10a557:...` that the relevant candidate-selection code
+(`CATALOG_FAMILY_CAP=8`) predates the branch): NVIDIA NIM's `meta/llama-3.2-11b-vision-instruct`
+rejects any tools request that isn't restricted to one tool call at a time
+(`openai.BadRequestError: ... "This model only supports single tool-calls at once!"`,
+[job log](https://github.com/ContextualWisdomLab/.github/actions/runs/33348306414/job/99356649771)).
+Traced the full request/retry/candidate-selection path (`server.py`, `orchestrator.py`,
+`model_discovery.py`): `parallel_tool_calls` is forwarded to upstream verbatim with no gateway default;
+the passthrough failover path only retries on a fixed HTTP-status allowlist that excludes plain `400`,
+so one incompatible candidate hard-fails the whole request with no failover to the next pool candidate;
+and `DiscoveredModel` tracks modality/price/ZDR capability but nothing about tool-call semantics, so
+there's no way to exclude such models from tool-calling-eligible pools at candidate-selection time.
+`docs/planning/adrs/0035-structured-provider-orchestration.md`'s existing "capability tags are positive
+declarations only" stance and `tool_fallback.py`'s deliberately status-only (not message-sniffing)
+retry classification both cut against a quick patch — this needs a proper design pass. Tracked as
+[issue #940](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/940) with the
+recommended direction (a new, evidence-based negative capability signal feeding
+`is_routable_discovered_model`'s existing filter shape, not a hardcoded denylist) rather than rushed
+into this PR.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
