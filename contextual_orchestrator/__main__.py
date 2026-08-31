@@ -402,6 +402,33 @@ def _discover_models_command(argv: list[str]) -> None:
         raise SystemExit(1)
 
 
+_DISCOVERY_CAPABILITY_BLOCKED_TAG = "discovery:blocked:capability"
+_DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG = (
+    "discovery:blocked:capability:preserve-disabled"
+)
+
+
+def _discovered_tool_call_tags(model: DiscoveredModel) -> tuple[str, ...]:
+    """Return the discovery-derived tool-call tags for one model."""
+    if model.supports_parallel_tool_calls is True:
+        return ("tool_call:multi",)
+    if model.supports_parallel_tool_calls is False:
+        return ("tool_call:single",)
+    return ()
+
+
+def _refresh_discovered_tool_call_tags(
+    tags: tuple[str, ...],
+    model: DiscoveredModel,
+) -> tuple[str, ...]:
+    """Replace stale tool-call evidence with the current discovery result."""
+    return tuple(
+        dict.fromkeys(
+            tag for tag in tags if not tag.startswith("tool_call:")
+        )
+    ) + _discovered_tool_call_tags(model)
+
+
 def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, list[str]]:
     """Discover and activate routable chat models without runtime env transport.
 
@@ -426,14 +453,39 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     for model in chat_models:
         existing = existing_by_id.get(agent_id_for(model))
         routable = is_routable_discovered_model(model)
+        capability_blocked = model.supports_parallel_tool_calls is False
         if existing is None:
-            agents.append(replace(agent_from_discovered(model), disabled=not routable))
+            agent = replace(
+                agent_from_discovered(
+                    replace(model, supports_parallel_tool_calls=None)
+                ),
+                disabled=not routable,
+            )
+            tags = _refresh_discovered_tool_call_tags(agent.tags, model)
+            if capability_blocked:
+                tags = (*tags, _DISCOVERY_CAPABILITY_BLOCKED_TAG)
+            agent = replace(agent, tags=tuple(dict.fromkeys(tags)))
+            agents.append(agent)
         elif "discovered" not in existing.tags:
             continue
         elif not routable:
-            tags = (*existing.tags, "spend:blocked")
-            if existing.disabled and "spend:blocked" not in existing.tags:
-                tags = (*tags, "spend:blocked:preserve-disabled")
+            tags = tuple(
+                tag
+                for tag in _refresh_discovered_tool_call_tags(existing.tags, model)
+                if tag
+                not in {
+                    _DISCOVERY_CAPABILITY_BLOCKED_TAG,
+                    _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG,
+                }
+            )
+            if not model.spend_admitted:
+                tags = (*tags, "spend:blocked")
+                if existing.disabled and "spend:blocked" not in existing.tags:
+                    tags = (*tags, "spend:blocked:preserve-disabled")
+            if capability_blocked:
+                tags = (*tags, _DISCOVERY_CAPABILITY_BLOCKED_TAG)
+                if existing.disabled and _DISCOVERY_CAPABILITY_BLOCKED_TAG not in existing.tags:
+                    tags = (*tags, _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG)
             agents.append(
                 replace(
                     existing,
@@ -441,18 +493,34 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
                     tags=tuple(dict.fromkeys(tags)),
                 )
             )
-        elif "spend:blocked" in existing.tags:
+        elif (
+            "spend:blocked" in existing.tags
+            or _DISCOVERY_CAPABILITY_BLOCKED_TAG in existing.tags
+        ):
             agents.append(
                 replace(
                     existing,
-                    disabled="spend:blocked:preserve-disabled" in existing.tags,
+                    disabled=(
+                        "spend:blocked:preserve-disabled" in existing.tags
+                        or _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG in existing.tags
+                    ),
                     tags=tuple(
                         tag
-                        for tag in existing.tags
-                        if tag not in {"spend:blocked", "spend:blocked:preserve-disabled"}
+                        for tag in _refresh_discovered_tool_call_tags(existing.tags, model)
+                        if tag
+                        not in {
+                            "spend:blocked",
+                            "spend:blocked:preserve-disabled",
+                            _DISCOVERY_CAPABILITY_BLOCKED_TAG,
+                            _DISCOVERY_CAPABILITY_PRESERVE_DISABLED_TAG,
+                        }
                     ),
                 )
             )
+        else:
+            refreshed_tags = _refresh_discovered_tool_call_tags(existing.tags, model)
+            if refreshed_tags != existing.tags:
+                agents.append(replace(existing, tags=refreshed_tags))
     result = (
         orchestrator.sync_discovered_agents(agents)
         if agents
