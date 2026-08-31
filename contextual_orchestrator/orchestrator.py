@@ -4721,7 +4721,17 @@ class TaskOrchestrator:
                     raise RuntimeError("batch provider returned a duplicate request identifier")
                 answers[index] = result
 
-        records: list[dict[str, Any]] = []
+        # Every worker request in this batch already completed above, in the
+        # provider batch call, before any judge call starts -- unlike
+        # route_once/conduct(), a later row's real spend is never hidden
+        # behind a not-yet-executed provider call; it is simply not yet
+        # persisted into the budget meter. Build every row up front so each
+        # checkpoint below can see the true unpersisted remainder (this row
+        # through the end of the batch), not just its own row -- otherwise a
+        # batch whose aggregate worker spend alone already exceeds the cap
+        # can pass every individual per-row check and let every judge call
+        # through uncounted.
+        prepared_rows: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
             result = answers[index]
             row: dict[str, Any] = {
@@ -4733,13 +4743,22 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
+            prepared_rows.append(row)
+
+        records: list[dict[str, Any]] = []
+        for index, (prompt, agent) in enumerate(selected):
+            result = answers[index]
+            row = prepared_rows[index]
             # Each judge call below is its own bounded provider call (see
             # _model_judge_verification), not covered by the one-time check
             # above -- re-check against spend already recorded by this batch
             # before starting another one, exactly like conduct()'s per-step
-            # budget checkpoint.
+            # budget checkpoint. Rows before this index were already
+            # persisted (and so already counted) by earlier iterations of
+            # this same loop; every row from this index onward is real,
+            # already-incurred worker spend that has not been counted yet.
             if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-                in_flight_tokens, in_flight_cost = self._trace_budget_spend([row])
+                in_flight_tokens, in_flight_cost = self._trace_budget_spend(prepared_rows[index:])
                 self._raise_if_spend_budget_exceeded(
                     additional_output_tokens=in_flight_tokens,
                     additional_cost_usd=in_flight_cost,

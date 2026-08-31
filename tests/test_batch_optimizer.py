@@ -297,6 +297,41 @@ def test_batch_route_budget_counts_only_the_current_uncommitted_worker() -> None
     assert orchestrator.budget_status()["spent_output_tokens"] == 7
 
 
+def test_batch_route_blocks_first_judge_call_when_aggregate_batch_spend_exceeds_cap() -> None:
+    """No row's own reported spend exceeds the cap, but the batch's total does.
+
+    Every worker request in a batch completes together, before any judge
+    call starts -- so by the time the first per-item checkpoint runs, every
+    row's spend has already happened even though only the current row is
+    persisted. A checkpoint that only looked at the current row (Devin
+    review, PR #961) would let the first judge call start anyway, hiding
+    the rest of the batch's already-incurred spend until later iterations
+    -- or never, if the loop stops early. The checkpoint must see the true
+    unpersisted remainder (this row through the end of the batch) so a
+    batch whose aggregate spend already exceeds the cap blocks its very
+    first judge call.
+    """
+    client = _CountingClient()  # every item reports completion_tokens=6
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
+        client=client,
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=10,  # below the two-item aggregate (12), above one item (6)
+    )
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task three"])
+
+    # The aggregate checkpoint must reject before the first judge call, not
+    # after letting one item through.
+    assert len(orchestrator._workflow_runs) == 0
+
+
 def test_batch_route_budget_meter_includes_reported_judge_usage() -> None:
     class _UsageJudge(_ScriptedFastJudge):
         def judge(self, **kwargs):

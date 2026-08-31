@@ -71,7 +71,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   accumulated in-batch spend before each item's judge call, the same
   per-step budget checkpoint `conduct()` already uses via
   `_trace_budget_spend`, so a batch fails closed mid-loop instead of only
-  after every item has already run.
+  after every item has already run. That first per-item checkpoint design
+  double-counted already-persisted rows (each prior row's spend is
+  reflected in the budget meter as soon as `_replace_workflow_run` persists
+  it, so re-adding it as "in-flight" charged it twice) — fixed to check
+  only the current row. That in turn undercounted: every worker request in
+  a batch actually completes together, before any judge call starts, so a
+  later row's spend is real and already incurred the moment the batch
+  finishes, not hidden behind a not-yet-executed provider call the way a
+  later `conduct()` step's spend is. Checking only the current row let the
+  aggregate spend of the rest of the batch — already incurred, just not yet
+  persisted — pass every individual per-row check and reach every judge
+  call uncounted. Each checkpoint now sums every row from the current index
+  through the end of the batch (rows before it are already reflected in the
+  meter by earlier iterations of the same loop), so a batch whose aggregate
+  worker spend alone already exceeds the cap blocks its very first judge
+  call.
 
 ### Added
 
