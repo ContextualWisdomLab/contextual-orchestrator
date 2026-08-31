@@ -68,6 +68,28 @@ def test_group_router_rejects_unrepresentable_throughput_before_mutation() -> No
     assert router.member_observation_count("member_one") == 0
 
 
+def test_group_router_reports_peak_observed_rpm_and_provider_reported_tpm() -> None:
+    """One-minute maxima use real completions and reported tokens only."""
+    now = 0.0
+    router = ModelGroupRouter(clock=lambda: now)
+
+    router.observe_success("member_one", 0.2, output_tokens=40, total_tokens=100)
+    now = 10.0
+    router.observe_success("member_one", 0.2, output_tokens=80, total_tokens=200)
+    now = 61.0
+    router.observe_success("member_one", 0.2, output_tokens=160, total_tokens=400)
+    now = 80.0
+    router.observe_success("member_one", 0.2)
+
+    report = router.member_report("member_one")
+    assert report["max_observed_rpm"] == 2
+    assert report["max_observed_tpm"] == 600
+    assert report["rate_observation_window_seconds"] == 60
+
+    router.reset_members({"member_one"})
+    assert router.member_report("member_one")["max_observed_rpm"] == 0
+
+
 def test_group_reassignment_discards_old_group_measurements() -> None:
     member = _agent("member_one", "vendor/model")
     orchestrator = TaskOrchestrator([member])

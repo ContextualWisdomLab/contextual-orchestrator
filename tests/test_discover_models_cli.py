@@ -88,6 +88,7 @@ def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None
         "privacy_policy_analysis": [],
         "enabled_agent_ids": [],
         "free_tier_count": 0,
+        "general_free_serving_count": 0,
         "free_data_privacy": {"supported": 0, "unsupported": 0, "unknown": 0},
         "models": [],
     }
