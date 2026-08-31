@@ -36,6 +36,18 @@ def test_auth_token_resolution_prefers_explicit_then_kv() -> None:
         set_backend(None)
 
 
+def test_bound_auth_token_accepts_a_leading_hyphen_value() -> None:
+    """The hourly shell form must preserve a generated token beginning with '-'."""
+    with patch.object(
+        sys,
+        "argv",
+        ["contextual-orchestrator", "--serve", "--auth-token=-leading-token"],
+    ), patch("contextual_orchestrator.__main__.serve") as serve:
+        main()
+
+    assert serve.call_args.kwargs["security"].auth_token == "-leading-token"
+
+
 def test_partial_split_tokens_fail_before_kv_lookup() -> None:
     stderr = StringIO()
     with (
