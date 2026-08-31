@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from dataclasses import replace
@@ -21,6 +22,7 @@ from .model_discovery import (
     configured_gateway_source,
     discover_all_models,
     free_discovered_models,
+    general_free_serving_candidates,
     is_routable_discovered_model,
     refresh_price_book,
     select_bootstrap_discovered_agents,
@@ -266,6 +268,11 @@ def _discover_models_command(argv: list[str]) -> None:
         description="Discover models from every provider with a KV-registered credential.",
     )
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Emit secret-free provider discovery diagnostics to stderr.",
+    )
+    parser.add_argument(
         "--agents-db",
         default=None,
         help="Persist discovered agents (added disabled; enable via the admin API) into this sqlite agent-pool file.",
@@ -298,6 +305,8 @@ def _discover_models_command(argv: list[str]) -> None:
         help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
     )
     args = parser.parse_args(argv)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
@@ -312,7 +321,13 @@ def _discover_models_command(argv: list[str]) -> None:
     privacy_assessments = []
     if args.analyze_privacy_policies:
         discovered, privacy_assessments = analyze_discovered_privacy_policies(discovered)
+    # free_tier_count and general_free_serving_count are always computed over
+    # the complete `discovered` population, independent of --free-only (which
+    # only filters `reported`, the per-model listing below): both answer a
+    # global "how many, out of everything found" question, matching each
+    # other's population by design rather than "reported"'s row-level filter.
     free_models = free_discovered_models(discovered)
+    general_free_serving_models = general_free_serving_candidates(discovered)
     reported = free_models if args.free_only else discovered
     price_book = PriceBook(InMemoryConfigStore())
     priced_count = refresh_price_book(reported, price_book)
@@ -342,6 +357,7 @@ def _discover_models_command(argv: list[str]) -> None:
     report = {
         "discovered_count": len(reported),
         "free_tier_count": len(free_models),
+        "general_free_serving_count": len(general_free_serving_models),
         "free_data_privacy": {
             status: sum(1 for model in free_models if (
                 "supported" if model.supports_zero_data_retention is True else
@@ -458,6 +474,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Emit secret-free runtime and model-discovery diagnostics to stderr.",
+    )
+    parser.add_argument(
         "--release-authority-json",
         default=None,
         help="Path to a persisted exact-head release-authority snapshot collected by the governance CLI.",
@@ -546,6 +567,8 @@ def main(argv: list[str] | None = None) -> None:
         help="discover source-declared chat-capable models at startup and activate them",
     )
     args = parser.parse_args(arguments)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,

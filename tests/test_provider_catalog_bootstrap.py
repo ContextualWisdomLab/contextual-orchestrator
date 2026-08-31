@@ -586,14 +586,8 @@ def test_two_simultaneous_provider_failures_hard_fail_not_a_warning() -> None:
         set_backend(None)
 
 
-def test_nvidia_primary_and_sub_outage_together_is_one_provider_family() -> None:
-    """nvidia_nim/nvidia_nim_sub are two KV credential names for one upstream
-    outage domain (a load-balancing pair -- see model_discovery.
-    _provider_family and PROVIDER_MODEL_SOURCES's own comment), not two
-    independent providers. Both failing together with a transient error is
-    still the single-provider-family blip the tolerance exists for, not a
-    broad outage -- it must not hit the multi-provider hard-fail bound.
-    """
+def test_two_credential_accounts_failing_exceeds_single_account_tolerance() -> None:
+    """A shared vendor or endpoint never collapses independent account failures."""
     set_backend(InMemoryCredentialBackend())
     try:
         openai = _source("openai", "OPENAI_API_KEY")
@@ -618,18 +612,15 @@ def test_nvidia_primary_and_sub_outage_together_is_one_provider_family() -> None
         verdict = evaluate_provider_credential_inventory(
             report.as_dict(), _environment()
         )
-        assert verdict.ok is True
-        assert verdict.hard_fail_reason is None
-        assert verdict.warning_message is not None
+        assert verdict.ok is False
+        assert "too many providers degraded" in verdict.hard_fail_reason
+        assert verdict.warning_message is None
     finally:
         set_backend(None)
 
 
-def test_nvidia_family_outage_plus_a_distinct_provider_still_hard_fails() -> None:
-    """Family-collapsing must not widen the bound itself: an NVIDIA-family
-    outage (both keys) alongside a genuinely distinct provider's failure is
-    two affected provider families, still over the tolerance.
-    """
+def test_three_credential_account_failures_still_hard_fail() -> None:
+    """Three independently discovered account failures exceed the tolerance."""
     set_backend(InMemoryCredentialBackend())
     try:
         openai = _source("openai", "OPENAI_API_KEY")

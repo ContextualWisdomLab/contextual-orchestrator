@@ -118,6 +118,10 @@ identical unconfigured/unexplained/classification/bound checks, rather than `mis
 that shows up in `restored_credentials` for a reason the report can't tie to `providers_with_errors`
 still hard-fails as an unexplained rollback, exactly like a fully-missing name would.
 
+> Superseded on 2026-08-31: this historical provider-family conclusion is no longer the product contract.
+> Every credential account is discovered and judged independently; only explicit `model_group`
+> membership establishes logical model equivalence or shared routing evidence (ADR 0032).
+
 Devin's *fourth* pass ("One NVIDIA outage fails sync") caught a false-positive introduced by fixing the
 third-round gap: `nvidia_nim` and `nvidia_nim_sub` are two separate `provider_name` values but one
 upstream outage domain — two KV credential names (`NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB`)
