@@ -153,8 +153,8 @@ class ProviderResponseError(RuntimeError):
         super().__init__(message)
         self.failure_kind = failure_kind
         self.detail = {
-            "provider_response_failure_kind": failure_kind,
             **(dict(detail) if detail else {}),
+            "provider_response_failure_kind": failure_kind,
         }
 
 

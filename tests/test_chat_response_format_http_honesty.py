@@ -240,6 +240,10 @@ def test_http_chat_surfaces_machine_readable_provider_response_failure_kind() ->
             raise ProviderResponseError(
                 "provider general_agent returned reasoning without content",
                 failure_kind="reasoning_without_content",
+                detail={
+                    "provider_response_failure_kind": "overridden",
+                    "retryable": False,
+                },
             )
         raise ProviderResponseError(
             "provider general_agent response did not contain assistant content",
@@ -277,6 +281,7 @@ def test_http_chat_surfaces_machine_readable_provider_response_failure_kind() ->
             first_body["error"]["detail"]["provider_response_failure_kind"]
             == "reasoning_without_content"
         )
+        assert first_body["error"]["detail"]["retryable"] is False
         assert "reasoning without content" not in json.dumps(first_body)
         assert second_status == 502, second_body
         assert (
