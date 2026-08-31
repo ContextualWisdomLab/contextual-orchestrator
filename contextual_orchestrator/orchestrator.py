@@ -582,6 +582,37 @@ def agent_proves_reasoning_effort_support(agent: ModelAgent) -> bool:
     )
 
 
+def _eligible_role_effort_candidates(
+    candidates: list[ModelAgent],
+    profile: ReasoningEffortProfile | None,
+) -> list[ModelAgent]:
+    """Narrow ranked candidates to agents that prove reasoning-effort support.
+
+    A profile that fails closed (``unsupported_provider_fallback`` other than
+    ``"omit"``) must never hand ``apply_effort_profile`` an agent whose
+    support is unproven -- that raises ``EffortProfileError``. Some call
+    paths (``_invoke``'s generic tool-failure classification) already
+    recover from that error by failing over to the next candidate, but
+    others (``stream_route``, ``batch_route``, structured-synthesis
+    passthrough) call the provider directly with no such recovery, so this
+    filter is what keeps a mixed pool safe everywhere: only proven agents
+    are even offered as the primary or a failover candidate. Falls back to
+    the unfiltered candidates when none of them prove support (e.g. the
+    pool's only supporting agent was excluded by a required tag or
+    free-only filter upstream), so that edge case still gets an attempt and
+    a clear failure/failover instead of a silently emptied candidate list.
+    Mirrors the filter ``TaskOrchestrator.proxy_completion`` already applies
+    for its own caller-supplied effort profile.
+    """
+    if profile is None or profile.unsupported_provider_fallback == "omit":
+        return candidates
+    supported = [
+        candidate for candidate in candidates
+        if agent_proves_reasoning_effort_support(candidate)
+    ]
+    return supported or candidates
+
+
 def _is_general_chat_agent(agent: ModelAgent) -> bool:
     """Apply persisted provider capability tags before model-name fallback."""
     return is_general_chat_candidate(
@@ -3752,17 +3783,7 @@ class TaskOrchestrator:
             allowed_agent_ids=allowed_agent_ids,
             prompt_context=prompt_context,
         )
-        if (
-            effort_profile is not None
-            and effort_profile.unsupported_provider_fallback != "omit"
-        ):
-            supported = [
-                candidate
-                for candidate in ranked_candidates
-                if agent_proves_reasoning_effort_support(candidate)
-            ]
-            if supported:
-                ranked_candidates = supported
+        ranked_candidates = _eligible_role_effort_candidates(ranked_candidates, effort_profile)
         candidates: list[ModelAgent] = []
         seen_providers: set[str] = set()
         for candidate in ranked_candidates:
@@ -4938,7 +4959,14 @@ class TaskOrchestrator:
         }
 
     def patch_agent(self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        """Apply governance updates to an agent and emit an audit event."""
+        """Apply governance updates to an agent and emit an audit event.
+
+        Known limitation: disabling an agent here (``status`` -> disabled)
+        has the same unrevalidated-catalog gap documented on
+        :meth:`remove_agent` -- disabling the pool's last
+        ``reasoning_effort``-proving agent while a fail-closed
+        ``role_effort_catalog`` role is active is not rejected here.
+        """
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
         current = self._agent_in_pool(agent_pool_id, worker_agent_id)
@@ -5177,7 +5205,21 @@ class TaskOrchestrator:
         return {"added": added, "updated": updated}
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
-        """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
+        """Remove a worker agent from the pool; the pool must keep at least one enabled agent.
+
+        Known limitation: this only guards the enabled-agent count, not the
+        active ``role_effort_catalog``'s eligibility invariant enforced once
+        at startup by ``__main__._require_eligible_role_effort_agents``.
+        Removing the pool's last agent that proves ``reasoning_effort``
+        support (see ``agent_proves_reasoning_effort_support``) succeeds here
+        even while a fail-closed catalog role is active, leaving every
+        subsequent request for that role to raise ``EffortProfileError``
+        (route/conduct recover via failover if another candidate exists;
+        ``stream_route``/``batch_route``/structured synthesis do not).
+        Revalidating the catalog on every runtime pool mutation is left out
+        of scope for this change; an operator changing the pool while a
+        role-effort catalog is live should re-check eligibility manually.
+        """
         target = self._agent_in_pool(agent_pool_id, worker_agent_id)
         remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
@@ -5763,6 +5805,19 @@ class TaskOrchestrator:
         surprise. This is a deliberate reuse of an existing, audited signal
         (``chat_only`` already means "the caller does not know which
         capability will be needed"), not a new implicit distinction.
+
+        When ``chat_only`` and an opt-in ``role_effort_catalog`` entry for
+        ``role`` fails closed (``unsupported_provider_fallback`` other than
+        ``"omit"``), the result is further narrowed to agents that prove
+        ``reasoning_effort`` support via :func:`_eligible_role_effort_candidates`
+        -- with automatic fallback to the unfiltered set when none prove it.
+        This keeps every role-based selection and failover path (route,
+        conduct, stream, batch, structured synthesis) consistent with the
+        startup guard's own intent: a role the guard let through must never
+        still hand an unsupported agent to ``apply_effort_profile``, which
+        would raise ``EffortProfileError``. ``chat_only=False`` (only
+        ``_capability_agents``) is a distinct, non-role capability lookup and
+        is deliberately left out of this filter.
         """
         source = self.agents if candidate_pool is None else list(candidate_pool)
         candidates = [
@@ -5777,6 +5832,10 @@ class TaskOrchestrator:
             and (not chat_only or _is_general_chat_agent(agent))
             and all(tag in agent.tags for tag in required_tags)
         ]
+        if chat_only:
+            candidates = _eligible_role_effort_candidates(
+                candidates, self._role_effort_profile(role)
+            )
         if not candidates:
             if _REQUEST_ZDR_ONLY.get():
                 raise RuntimeError("no ZDR-eligible agent is available for the active privacy policy")

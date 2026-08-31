@@ -36,6 +36,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   request. `--agents examples/agents.mock.json` (the CLI default) is
   unaffected; only a non-mock pool without proven support is now rejected at
   startup, before any request is attempted.
+- The startup guard above only proved that *some* agent in the pool supports
+  `reasoning_effort`; ordinary role-based selection (`route_once`, `conduct`,
+  `stream_route`, `batch_route`, structured-synthesis passthrough) could still
+  rank or select an *unsupported* agent from a mixed pool ahead of a
+  supported one. `route_once`/`conduct` already recovered via `_invoke`'s
+  generic tool-failure failover, but `stream_route` and `batch_route` call
+  the provider directly with no failover and would raise `EffortProfileError`
+  outright. `TaskOrchestrator._ranked_agents` now narrows role-based
+  candidates to agents that prove `reasoning_effort` support whenever the
+  role's `role_effort_catalog` entry fails closed
+  (`unsupported_provider_fallback` other than `"omit"`), falling back to the
+  unfiltered set only when no candidate in that narrower selection proves
+  support (e.g. a required tag or free-only filter excluded the pool's only
+  supporting agent). This mirrors the equivalent filter already applied on
+  `proxy_completion`'s passthrough failover, which now shares the same
+  `_eligible_role_effort_candidates` helper instead of a duplicated inline
+  check. Known limitation (unchanged by this fix, tracked as
+  informational): the eligibility check runs at startup only — an operator
+  removing or disabling the pool's last supporting agent at runtime via
+  `remove_agent`/`patch_agent` is not revalidated against an active catalog;
+  see the docstrings on those two methods.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
