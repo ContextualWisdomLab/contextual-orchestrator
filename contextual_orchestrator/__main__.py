@@ -76,6 +76,13 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: Name stamped onto the handler ``_configure_logging`` attaches directly to
+#: each audited leaf logger, so a second call in the same process (a test
+#: invoking ``main()`` more than once) can find and replace its own earlier
+#: handler by name instead of stacking duplicates.
+_VERBOSE_HANDLER_NAME = "contextual_orchestrator.verbose"
+
+
 def _configure_logging(verbose: bool) -> None:
     """Turn on DEBUG-level logging for this package's audited loggers only.
 
@@ -86,26 +93,47 @@ def _configure_logging(verbose: bool) -> None:
     When true, this raises the level to DEBUG on exactly the loggers named in
     ``_VERBOSE_LOGGER_NAMES``, never the root logger and never a whole-package
     logger (see that constant's comment for why the distinction matters), and
-    -- only when the root logger has no handler at all -- installs one bounded
-    timestamp/level/logger-name stderr handler so that DEBUG output has
-    somewhere to go in a bare process. It never removes or replaces a handler
-    that is already there: an earlier version called ``basicConfig(...,
-    force=True)``, which unconditionally closes and discards every existing
-    root handler before installing its own. In a process that had already
-    configured its own log delivery (a hosted structured/JSON logging
-    handler, a log shipper, a test harness's capture handler) that silently
-    destroyed it and replaced it with a plain stderr handler the moment
-    ``--verbose`` was turned on (Devin review). ``logging.basicConfig()``
-    without ``force`` already no-ops whenever root has any handler -- exactly
-    the "leave existing delivery alone" semantics wanted here -- so this only
-    ever adds a handler, never removes one.
+    attaches one bounded timestamp/level/logger-name handler directly to each
+    of those three loggers -- never to root.
+
+    Two earlier bugs, both Devin review: (1) an early version called
+    ``logging.basicConfig(..., force=True)``, which unconditionally closes and
+    discards every existing root handler before installing its own -- in a
+    process that had already configured its own log delivery (a hosted
+    structured/JSON logging handler, a log shipper, a test harness's capture
+    handler), that silently destroyed it. (2) the fix for that -- leaving an
+    existing root handler alone and relying on propagation to it -- reopened a
+    different failure: a ``Handler`` filters independently of the logger
+    level check, so a pre-existing root handler with its own threshold above
+    DEBUG (very plausible for anything hosting this process with its own
+    logging setup, e.g. ``setLevel(logging.INFO)``) would silently swallow
+    every propagated DEBUG record, and verbose mode would produce zero output
+    with no error. A handler attached directly to the *logger itself* is
+    evaluated on its own merits (a fresh ``Handler``'s level defaults to
+    ``NOTSET`` -- accepts everything down to DEBUG) independent of any
+    ancestor's handler, so this guarantees verbose output is actually
+    delivered without ever touching, replacing, or being gated by whatever
+    the host process already configured on root. Propagation to root is left
+    untouched (never ``propagate = False``): these loggers' pre-existing
+    WARNING/ERROR call sites must keep reaching whatever the host already
+    listens to on root, exactly as before this feature existed.
     """
     if not verbose:
         return
-    if not logging.getLogger().handlers:
-        logging.basicConfig(format=_VERBOSE_LOG_FORMAT)
+    formatter = logging.Formatter(_VERBOSE_LOG_FORMAT)
     for logger_name in _VERBOSE_LOGGER_NAMES:
-        logging.getLogger(logger_name).setLevel(logging.DEBUG)
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.DEBUG)
+        previous = next(
+            (h for h in logger.handlers if getattr(h, "name", None) == _VERBOSE_HANDLER_NAME),
+            None,
+        )
+        if previous is not None:
+            logger.removeHandler(previous)
+        handler = logging.StreamHandler()
+        handler.name = _VERBOSE_HANDLER_NAME
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:

@@ -124,32 +124,98 @@ def test_configure_logging_is_a_noop_unless_verbose(restore_root_logger) -> None
     assert root.level == level_before
 
 
-def test_configure_logging_installs_a_bounded_format_handler_on_a_bare_root(
+def test_configure_logging_attaches_a_bounded_format_handler_to_each_leaf_logger(
     restore_root_logger,
 ) -> None:
-    """On a process with no root handler yet, verbose startup installs one.
+    """Verbose startup attaches its own formatted handler directly to each audited logger.
 
-    Root's own LEVEL is left untouched either way -- see
+    Root's own LEVEL and handlers are left completely untouched -- see
     ``_VERBOSE_LOGGER_NAMES``'s docstring in ``__main__.py``: raising the
     ROOT (or a whole-package) logger's level would raise every child
     logger's EFFECTIVE level through inheritance, including loggers this
-    change never audited. Only the specific named module loggers move to
-    DEBUG. This test simulates the bare-process case (no handler installed
-    yet by anything -- a hosting runtime, a test harness) by clearing
-    root.handlers first; ``restore_root_logger`` puts back whatever was
-    really there afterward.
+    change never audited. Attaching straight to each named leaf logger
+    (rather than installing anything on root) guarantees delivery
+    regardless of what root has -- see
+    ``test_configure_logging_still_emits_through_a_stricter_existing_root_handler``
+    for the concrete case this design choice defends against.
     """
     root = logging.getLogger()
-    level_before = root.level
-    root.handlers.clear()
+    level_before, handlers_before = root.level, root.handlers[:]
     _configure_logging(True)
     assert root.level == level_before
-    assert root.handlers, "verbose logging must attach a handler when none exists"
-    formatter = root.handlers[0].formatter
-    assert formatter is not None
-    assert "%(asctime)s" in formatter._fmt
-    assert "%(levelname)s" in formatter._fmt
-    assert "%(name)s" in formatter._fmt
+    assert root.handlers == handlers_before, "root's own handlers must be untouched"
+    for logger_name in (
+        "contextual_orchestrator.orchestrator",
+        "contextual_orchestrator.server",
+        "contextual_orchestrator.model_discovery",
+    ):
+        logger = logging.getLogger(logger_name)
+        assert logger.level == logging.DEBUG, logger_name
+        own_handlers = [h for h in logger.handlers if h.name == "contextual_orchestrator.verbose"]
+        assert len(own_handlers) == 1, logger_name
+        formatter = own_handlers[0].formatter
+        assert formatter is not None
+        assert "%(asctime)s" in formatter._fmt
+        assert "%(levelname)s" in formatter._fmt
+        assert "%(name)s" in formatter._fmt
+
+
+def test_configure_logging_still_emits_through_a_stricter_existing_root_handler(
+    restore_root_logger,
+) -> None:
+    """SEC/availability regression: a hosted process's own handler must not silence verbose mode.
+
+    Devin's fifth review round caught this real follow-up to the
+    force=True fix: once verbose mode correctly stops touching root's
+    handlers, a *pre-existing* root handler with its own threshold above
+    DEBUG (very plausible for anything hosting this process with its own
+    logging setup, e.g. ``setLevel(logging.INFO)``) filters independently
+    of the logger-level check -- a DEBUG record from an audited logger
+    would propagate to it and be silently dropped there, producing zero
+    verbose output with no error. Reproduced directly before this fix: a
+    record from ``contextual_orchestrator.orchestrator`` never reached an
+    INFO-level root handler even though the logger itself was raised to
+    DEBUG, because no handler was ever attached directly to that logger.
+
+    Note: this intentionally replaces ``.emit`` on the *specific handler
+    instance* ``_configure_logging`` attaches (found by name), never on the
+    ``logging.StreamHandler`` class globally -- an earlier draft of this
+    test patched the class itself and, without noticing, also intercepted
+    pytest's own internal handler construction (its live-log/caplog
+    reporting), which made the assertion pass even against the pre-fix code
+    for the wrong reason.
+    """
+    root = logging.getLogger()
+    hosted_records: list[logging.LogRecord] = []
+    hosted_handler = logging.Handler()
+    hosted_handler.setLevel(logging.INFO)
+    hosted_handler.emit = hosted_records.append  # type: ignore[method-assign]
+    close_calls: list[bool] = []
+    hosted_handler.close = lambda: close_calls.append(True)  # type: ignore[method-assign]
+    root.addHandler(hosted_handler)
+
+    _configure_logging(True)
+
+    orchestrator_logger = logging.getLogger("contextual_orchestrator.orchestrator")
+    own_handler = next(
+        (h for h in orchestrator_logger.handlers if h.name == "contextual_orchestrator.verbose"),
+        None,
+    )
+    assert own_handler is not None, "verbose mode must attach its own handler to the leaf logger"
+    delivered: list[logging.LogRecord] = []
+    own_handler.emit = delivered.append  # type: ignore[method-assign]
+
+    orchestrator_logger.debug(
+        "dispatch.decision mode=auto model=contextual-orchestrator path=route"
+    )
+
+    assert any(
+        record.getMessage() == "dispatch.decision mode=auto model=contextual-orchestrator path=route"
+        for record in delivered
+    ), "verbose mode's own dedicated handler must receive the record"
+    assert hosted_records == [], "the hosted INFO-level handler correctly filters DEBUG on its own"
+    assert hosted_handler in root.handlers, "the hosted handler must remain attached"
+    assert close_calls == [], "the hosted handler must never be closed"
     for logger_name in (
         "contextual_orchestrator.orchestrator",
         "contextual_orchestrator.server",
