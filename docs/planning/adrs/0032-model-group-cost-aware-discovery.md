@@ -36,6 +36,13 @@ publish the same fields through model metadata, but a logical model receives a
 value only when every deployment agrees. Thus free status never implies privacy,
 and paid status never implies retention.
 
+OpenRouter's authenticated catalog rows remain ordinary serving candidates.
+The ZDR inventory qualifies only matching account-model routes when a request
+requires ZDR; it does not make the entire OpenRouter account evidence-only and
+does not exclude non-ZDR routes from ordinary requests. Missing or failed ZDR
+evidence therefore fails closed only for `zdr_only` selection, not for general
+inference.
+
 OpenAI catalog rows also retain OpenAI's official data-controls documentation
 as policy evidence. Because approval and enablement are organization/project
 settings that the Models API does not disclose, discovery leaves the actual ZDR
