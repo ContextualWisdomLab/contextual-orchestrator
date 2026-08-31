@@ -270,23 +270,23 @@ def _synchronize_durable_agent_pool(
     """Activate exactly the selected discovered models in one durable agent pool."""
     agents = [_active_agent_from_discovered(model) for model in selected]
     bootstrap = TaskOrchestrator(
-        agents,
+        [],
         agents_db=agents_db,
         allow_empty_agents=True,
     )
     try:
         selected_ids = {agent.id for agent in agents}
         bootstrap.sync_discovered_agents(agents)
-        selected_ids = {
-            candidate.id
-            for candidate in bootstrap.candidates
-            if any(
-                candidate.provider_name == agent.provider_name
+        selected_ids = set()
+        for agent in agents:
+            matches = [
+                candidate
+                for candidate in bootstrap.candidates
+                if candidate.provider_name == agent.provider_name
                 and candidate.credential_name == agent.credential_name
                 and candidate.model == agent.model
-                for agent in agents
-            )
-        }
+            ]
+            selected_ids.add(next((item.id for item in matches if item.id == agent.id), matches[0].id))
 
         for candidate in list(bootstrap.candidates):
             if candidate.id in selected_ids:

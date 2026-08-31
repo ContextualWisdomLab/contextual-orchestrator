@@ -90,6 +90,42 @@ def test_winner_cancels_and_reaps_running_loser_without_generation_deadline() ->
         time.sleep(0.01)
 
 
+def test_winner_requests_running_loser_cancellation_exactly_once() -> None:
+    release = threading.Event()
+    started = threading.Event()
+    calls = 0
+
+    def slow() -> str:
+        started.set()
+        release.wait(timeout=1)
+        return "slow"
+
+    def cancel() -> None:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("cancellation callback repeated")
+        release.set()
+
+    race_first_valid(
+        [
+            EndpointAttempt(
+                "slow_endpoint", contract(cancellation_supported=True), slow,
+                cancellation_supported=True, cancel=cancel,
+            ),
+            EndpointAttempt(
+                "fast_endpoint", contract(cancellation_supported=True),
+                lambda: started.wait(1) and "fast",
+            ),
+        ],
+        validate=bool,
+        deadline_seconds=None,
+        max_concurrency=2,
+    )
+
+    assert calls == 1
+
+
 def test_already_completed_loser_is_reported_as_completed(monkeypatch) -> None:
     second_done = threading.Event()
 

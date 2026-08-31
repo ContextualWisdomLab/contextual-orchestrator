@@ -127,20 +127,26 @@ def race_first_valid(
     }
     pending = set(futures)
     last_error: BaseException | None = None
+    cancellation_outcomes: dict[Future[T], str] = {}
 
     def cancel_loser(future: Future[T], attempt: EndpointAttempt[T]) -> str:
+        if future in cancellation_outcomes:
+            return cancellation_outcomes[future]
         if future.done():
-            return "completed"
-        if future.cancel():
-            return "queued_cancelled"
-        if (
+            outcome = "completed"
+        elif future.cancel():
+            outcome = "queued_cancelled"
+        elif (
             contract.cancellation_supported
             and attempt.cancellation_supported
             and attempt.cancel is not None
         ):
             attempt.cancel()
-            return "cancellation_requested"
-        return "safe_drain"
+            outcome = "cancellation_requested"
+        else:
+            outcome = "safe_drain"
+        cancellation_outcomes[future] = outcome
+        return outcome
 
     try:
         while pending:

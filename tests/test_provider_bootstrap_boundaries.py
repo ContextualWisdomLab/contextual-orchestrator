@@ -341,3 +341,31 @@ def test_durable_pool_sync_closes_temporary_orchestrator(
 
     assert enabled == (pb.agent_id_for(_model("openrouter", "OPENROUTER_API_KEY", "qwen-current")),)
     assert closed == [True]
+
+
+def test_durable_pool_migrates_legacy_selected_endpoint_without_duplicate(tmp_path: Any) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    agents_db = str(tmp_path / "legacy_selected.db")
+    model = _model("openrouter", "OPENROUTER_API_KEY", "Vendor/Model")
+    generated = pb._active_agent_from_discovered(model)
+    legacy = replace(generated, id="openrouter_vendor_model", disabled=False)
+    seeded = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    seeded.sync_discovered_agents([legacy])
+    seeded.close()
+
+    enabled = pb._synchronize_durable_agent_pool(agents_db, [model])
+    restarted = TaskOrchestrator([], agents_db=agents_db, allow_empty_agents=True)
+    matching = [
+        agent
+        for agent in restarted.candidates
+        if agent.provider_name == generated.provider_name
+        and agent.credential_name == generated.credential_name
+        and agent.model == generated.model
+    ]
+
+    assert enabled == (legacy.id,)
+    assert [agent.id for agent in matching] == [legacy.id]
+    assert matching[0].disabled is False
+    restarted.close()
