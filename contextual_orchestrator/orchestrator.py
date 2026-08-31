@@ -4352,6 +4352,14 @@ class TaskOrchestrator:
                 self._record_failure(final_agent.id)
             if final_agent.group_name and not _is_request_too_large_error(exc):
                 self._group_router.observe_failure(final_agent.id)
+            if (
+                virtual_model
+                and response_format_requested
+                and not isinstance(exc, ProviderRequestTooLargeError)
+            ):
+                raise NoViableAgentError(
+                    retry_after_seconds=max(1, math.ceil(self.circuit_reset_seconds))
+                ) from None
             raise
 
         def provider_output(response: Mapping[str, Any]) -> str:
