@@ -423,9 +423,26 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
     for model in chat_models:
         existing = existing_by_id.get(agent_id_for(model))
         routable = is_routable_discovered_model(model)
-        if existing is not None and (routable or "discovered" not in existing.tags):
+        if existing is None:
+            agents.append(replace(agent_from_discovered(model), disabled=not routable))
+        elif "discovered" not in existing.tags:
             continue
-        agents.append(replace(agent_from_discovered(model), disabled=not routable))
+        elif not routable:
+            agents.append(
+                replace(
+                    existing,
+                    disabled=True,
+                    tags=tuple(dict.fromkeys((*existing.tags, "spend:blocked"))),
+                )
+            )
+        elif "spend:blocked" in existing.tags:
+            agents.append(
+                replace(
+                    existing,
+                    disabled=False,
+                    tags=tuple(tag for tag in existing.tags if tag != "spend:blocked"),
+                )
+            )
     result = (
         orchestrator.sync_discovered_agents(agents)
         if agents

@@ -558,16 +558,6 @@ def bootstrap_provider_catalog_runtime(
                 errors=errors,
             )
             catalog_refreshes = store.refresh_evidence()[evidence_offset:]
-        if any(error.provider_name == "openrouter" for error in errors):
-            snapshot = replace(
-                snapshot,
-                models=tuple(
-                    apply_openrouter_spend_admission(
-                        snapshot.models,
-                        openrouter_paid_inference_available(),
-                    )
-                ),
-            )
         assessments_by_account: dict[tuple[str, str], list[PrivacyPolicyAssessment]] = {}
         for assessment in privacy_assessments:
             assessments_by_account.setdefault(
@@ -605,6 +595,20 @@ def bootstrap_provider_catalog_runtime(
                 for name in failed_credentials
             }
         ) if failed_credentials else ()
+        if any(
+            source.provider_name == "openrouter"
+            and source.credential_name in failed_credentials
+            for source in source_tuple
+        ):
+            snapshot = replace(
+                snapshot,
+                models=tuple(
+                    apply_openrouter_spend_admission(
+                        snapshot.models,
+                        openrouter_paid_inference_available(),
+                    )
+                ),
+            )
 
         usable_models = tuple(
             model

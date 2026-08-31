@@ -120,8 +120,10 @@ def test_failed_provider_uses_persisted_last_known_good_model() -> None:
         set_backend(None)
 
 
-def test_openrouter_failure_rechecks_spend_before_last_known_good_selection(
+@pytest.mark.parametrize("empty_without_error", [False, True])
+def test_openrouter_fallback_rechecks_spend_before_last_known_good_selection(
     monkeypatch: pytest.MonkeyPatch,
+    empty_without_error: bool,
 ) -> None:
     """A catalog outage cannot preserve paid routing after credit exhaustion."""
     set_backend(InMemoryCredentialBackend())
@@ -148,7 +150,9 @@ def test_openrouter_failure_rechecks_spend_before_last_known_good_selection(
             sources=(source,),
             discovery=lambda _sources: (
                 [],
-                [ProviderDiscoveryError("openrouter", "transport_error")],
+                []
+                if empty_without_error
+                else [ProviderDiscoveryError("openrouter", "transport_error")],
             ),
             model_limit=2,
         )

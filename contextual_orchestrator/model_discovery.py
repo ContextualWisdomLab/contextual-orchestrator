@@ -1423,6 +1423,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
         tags=(
             "discovered",
             *(("cost:free",) if discovered.is_free else ()),
+            *(("spend:blocked",) if not discovered.spend_admitted else ()),
             *privacy_tags_for_discovered(discovered),
             *discovered.capabilities,
             *(f"capability:{value}" for value in discovered.capabilities),
