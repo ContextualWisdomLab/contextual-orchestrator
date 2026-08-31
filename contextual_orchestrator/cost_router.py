@@ -147,20 +147,37 @@ class CostRoutingCoordinator:
         routing decision: among several capability-matched members (e.g.
         operator-managed model-group members) that could all serve one
         request, prefer the cheapest by the configured price table rather
-        than an arbitrary first pick. Unpriced or tied candidates keep the
+        than an arbitrary first pick.
+
+        Only candidates with a *known* price in the price book's own
+        ``default_currency`` are comparable: a missing/invalid price entry
+        stays unknown rather than becoming a false zero-cost winner, and an
+        entry priced in a different currency is left out of the comparison
+        rather than compared to a same-currency price by face value (this
+        repo has no exchange-rate conversion source). Comparison uses
+        ``assumed_completion_tokens=0`` because embedding requests never
+        consume completion tokens. Candidates with no comparable price —
+        including an all-unpriced or all-mixed-currency pool — keep the
         original (ranked) order, so behavior is unchanged whenever the price
         table has nothing to optimise.
         """
-        priced = [
-            dict(zip(("provider", "model"), self._agent_provider_model(candidate, candidate.model)))
-            for candidate in candidates
-        ]
-        best = cheapest_upstream(priced, self.price_book)
-        if best is None:  # pragma: no cover - callers only pass non-empty pools
+        comparable: list[tuple[Any, dict[str, str]]] = []
+        for candidate in candidates:
+            provider, model = self._agent_provider_model(candidate, candidate.model)
+            entry = self.price_book.get_price(provider, model)
+            if entry is None or entry.currency_code != self.price_book.default_currency:
+                continue
+            comparable.append((candidate, {"provider": provider, "model": model}))
+        if not comparable:
             return candidates[0]
-        for index, entry in enumerate(priced):
-            if entry is best:
-                return candidates[index]
+        best = cheapest_upstream(
+            [priced for _, priced in comparable], self.price_book, assumed_completion_tokens=0
+        )
+        if best is None:  # pragma: no cover - comparable is non-empty here
+            return candidates[0]
+        for candidate, priced in comparable:
+            if priced is best:
+                return candidate
         return candidates[0]  # pragma: no cover - defensive: cheapest_upstream returns an input entry
 
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:

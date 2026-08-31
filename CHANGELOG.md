@@ -19,6 +19,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   table instead of an arbitrary first/ranked pick. Previously it was a
   headline-documented, `__all__`-exported utility with no production caller
   anywhere in the router.
+- `CostRoutingCoordinator._cheapest_capability_candidate` no longer treats an
+  unpriced or invalid `PriceBook` entry as a free (zero-cost) winner, no
+  longer compares prices across mismatched currencies at face value against
+  `PriceBook.default_currency`, and prices embedding candidates with
+  `assumed_completion_tokens=0` (embeddings never consume completion
+  tokens). Candidates with no comparable known-currency price keep the
+  orchestrator's existing ranked order instead of being silently selected.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
