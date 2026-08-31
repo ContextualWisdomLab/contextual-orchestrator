@@ -68,9 +68,19 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert OPENAPI_SPEC["components"]["securitySchemes"]["trace_bearer_auth"]["scheme"] == (
         "bearer"
     )
-    assert OPENAPI_SPEC["paths"]["/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"]["post"][
-        "security"
-    ] == [{"inference_bearer_auth": [], "trace_bearer_auth": []}]
+    batch_results = OPENAPI_SPEC["paths"][
+        "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results"
+    ]["post"]
+    assert batch_results["security"] == [{"inference_bearer_auth": []}]
+    batch_results_schema = batch_results["requestBody"]["content"]["application/json"][
+        "schema"
+    ]
+    assert batch_results_schema["additionalProperties"] is False
+    assert batch_results_schema["properties"]["include_orchestration_trace"] == {
+        "type": "boolean",
+        "default": False,
+        "description": "When true, the same caller must also have the trace purpose.",
+    }
 
 
 def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> None:

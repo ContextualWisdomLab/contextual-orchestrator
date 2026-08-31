@@ -404,6 +404,88 @@ def test_batch_routing_jobs_are_principal_bound_for_poll_and_results() -> None:
         server.shutdown()
 
 
+def test_batch_results_require_explicit_trace_authority(monkeypatch) -> None:
+    """Plain inference retrieves answers while trace opt-in stays privileged."""
+    inference_token = "batch_inference_owner"
+    trace_token = "batch_trace_reader"
+    security = SecurityConfig(
+        bearer_verifier=lambda token, scope: (
+            token == inference_token and scope == "inference"
+        )
+        or (token == trace_token and scope in {"inference", "trace"}),
+        principal_resolver=lambda token: (
+            "tenant-a/owner-a" if token in {inference_token, trace_token} else None
+        ),
+    )
+    agent = ModelAgent("mock_worker", "mock-a", base_url="mock://a")
+    orchestrator = TaskOrchestrator([agent])
+    coordinator = CostRoutingCoordinator(orchestrator, InMemoryConfigStore())
+    original_retrieve = coordinator.retrieve_batch
+
+    def retrieve_with_trace(job_id, *, owner_id=None):
+        result = original_retrieve(job_id, owner_id=owner_id)
+        return {**result, "trace": [{"output": "intermediate"}]}
+
+    monkeypatch.setattr(coordinator, "retrieve_batch", retrieve_with_trace)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=security,
+        coordinator=coordinator,
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, submitted = _request(
+            "POST",
+            f"{base}/api/v1/batch_routing_jobs",
+            inference_token,
+            {"requests": [{"messages": [{"role": "user", "content": "owned"}]}]},
+        )
+        assert status == 201
+        results_url = f"{base}/api/v1/batch_routing_jobs/{submitted['job_id']}/results"
+
+        status, plain = _request("POST", results_url, inference_token, {})
+        assert status == 200
+        assert plain["results"][0]["answer"]
+        assert "cost_amount" in plain["results"][0]
+        assert "trace" not in json.dumps(plain)
+
+        for invalid in ("false", 1, None, [], {}):
+            status, body = _request(
+                "POST",
+                results_url,
+                inference_token,
+                {"include_orchestration_trace": invalid},
+            )
+            assert status == 400
+            assert body["error"]["code"] == "invalid_include_orchestration_trace"
+
+        status, denied = _request(
+            "POST",
+            results_url,
+            inference_token,
+            {"include_orchestration_trace": True},
+        )
+        assert status == 401
+        assert denied["error"]["code"] == "unauthorized"
+
+        status, traced = _request(
+            "POST",
+            results_url,
+            trace_token,
+            {"include_orchestration_trace": True},
+        )
+        assert status == 200
+        assert traced["trace"] == [{"output": "intermediate"}]
+        assert any(
+            event["event_type"] == "orchestration_trace_access_granted"
+            for event in orchestrator.list_recent_audit_events()
+        )
+    finally:
+        server.shutdown()
+
+
 def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
     server, port, token = _serve()
     base = f"http://127.0.0.1:{port}"

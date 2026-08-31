@@ -16,10 +16,12 @@ affected_components:
 ## Decision
 
 Inference or admin authentication alone does not authorize a trace-bearing
-response. Chat, admin simulation, workflow/evaluation creation, batch-result
-retrieval, and trace-enabled workflow/evaluation reads require the verified
-`trace` purpose scope. The server records a metadata-only audit event before
-releasing the response and never trusts a caller-supplied purpose header.
+response. Chat, admin simulation, workflow/evaluation creation, explicit
+batch-result trace requests, and trace-enabled workflow/evaluation reads
+require the verified `trace` purpose scope. Plain inference owners retrieve
+batch answers and cost evidence with traces stripped. The server records a
+metadata-only audit event before releasing a trace response and never trusts a
+caller-supplied purpose header.
 
 Chat validates the trace flag before selecting structured, tool, streaming, or
 ordinary execution, so no early-return path can weaken the request contract.

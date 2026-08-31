@@ -202,6 +202,7 @@ ALLOWED_RESPONSES_KEYS = {
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "zdr_only"}
+ALLOWED_BATCH_RESULTS_KEYS = {"include_orchestration_trace"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing", "zdr_only"}
 ALLOWED_EMBEDDINGS_KEYS = {
     "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing", "zdr_only",
@@ -7170,7 +7171,10 @@ def build_server(
                     return
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
-                    self._authorize_trace_access()
+                    _reject_unknown_keys(body, ALLOWED_BATCH_RESULTS_KEYS)
+                    include_trace = self._validate_trace_request(body, default=False)
+                    if include_trace:
+                        self._authorize_trace_access()
                     try:
                         retrieved = self._run(
                             lambda: coordinator.retrieve_batch(
@@ -7180,8 +7184,11 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
-                    self._audit_trace_disclosure("/api/v1/batch_routing_jobs/{job_id}/results")
-                    self._send(_response_payload(retrieved, include_trace=True))
+                    if include_trace:
+                        self._audit_trace_disclosure(
+                            "/api/v1/batch_routing_jobs/{job_id}/results"
+                        )
+                    self._send(_response_payload(retrieved, include_trace=include_trace))
                     return
                 if path == "/v1/responses":
                     # The Responses API has no chat-completions verifier equivalent,
@@ -7791,10 +7798,14 @@ def build_server(
                     "trace access audit is unavailable",
                 ) from exc
 
-        def _validate_trace_request(self, body: dict[str, Any]) -> bool:
+        def _validate_trace_request(
+            self, body: dict[str, Any], *, default: bool | None = None
+        ) -> bool:
             """Validate whether the caller requested trace disclosure."""
             if "include_orchestration_trace" not in body:
-                include_trace = security.expose_trace_by_default
+                include_trace = (
+                    security.expose_trace_by_default if default is None else default
+                )
             elif type(body["include_orchestration_trace"]) is not bool:
                 raise RequestError(
                     400,

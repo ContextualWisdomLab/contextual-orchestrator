@@ -904,10 +904,28 @@ OPENAPI_SPEC = {
             "post": {
                 "operationId": "create_batch_routing_job_results",
                 "summary": "Retrieve principal-owned batch results and record their usage + cost",
-                "security": [{"inference_bearer_auth": [], "trace_bearer_auth": []}],
+                "security": [{"inference_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
                 ],
+                "requestBody": {
+                    "required": False,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "include_orchestration_trace": {
+                                        "type": "boolean",
+                                        "default": False,
+                                        "description": "When true, the same caller must also have the trace purpose.",
+                                    }
+                                },
+                            }
+                        }
+                    },
+                },
                 "responses": {
                     "200": {"description": "Batch results with recorded usage"},
                     "404": {
