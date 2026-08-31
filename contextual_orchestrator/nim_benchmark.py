@@ -52,7 +52,6 @@ import os
 import random
 import re
 import socket
-import tempfile
 import ssl
 import struct
 import threading
@@ -65,6 +64,7 @@ from typing import Any, Callable
 
 from .conventions import is_two_word_snake_case
 from .credentials import NotConfigured, get_credential, register_credential
+from .nim_evidence import publish_artifact_set
 from .orchestrator import (
     ModelAgent,
     ModelClient,
@@ -72,6 +72,7 @@ from .orchestrator import (
     ReasoningEffortProfile,
     TaskOrchestrator,
     estimate_tokens,
+    redact_text,
 )
 from .provider_transport import (
     _PinnedHTTPSConnection,
@@ -392,6 +393,39 @@ class _BudgetedModelClient(ModelClient):
         self._request_budget.spend_or_fail()
         return super().chat(agent, messages, temperature, top_p, effort_profile)
 
+    def proxy_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Charge and send one structured evaluation request."""
+        self._request_budget.spend_or_fail()
+        if self._benchmark_transport is None or agent.base_url.startswith("mock://"):
+            return super().proxy_send_once(agent, endpoint, payload)
+        url = self._provider_url(agent, f"/{endpoint.strip('/')}")
+        status, body = self._benchmark_transport(
+            "POST",
+            url,
+            _auth_headers(get_credential(NIM_CREDENTIAL_NAME) or ""),
+            json.dumps(payload).encode("utf-8"),
+        )
+        if status >= 400:
+            raise urllib.error.HTTPError(
+                url,
+                status,
+                "NIM benchmark provider request failed",
+                {},
+                io.BytesIO(body),
+            )
+        response = json.loads(body.decode("utf-8"))
+        if not isinstance(response, dict):
+            raise BenchmarkContractError("structured provider response must be an object")
+        return response
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Use the same single-attempt budget boundary for endpoint races."""
+        return self.proxy_send(agent, endpoint, payload)
+
 
 class PolicyTokenBudgetExceeded(RuntimeError):
     """A policy cell exhausted its shared token or call allowance."""
@@ -531,6 +565,63 @@ class EqualBudgetModelClient:
         self._pending_estimated_tokens = estimated_total
         self._exceeded = self.observed_tokens > self.total_token_budget
         return answer
+
+    def proxy_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Apply the cell call/token envelope to structured judge requests."""
+        if self._exceeded or self.observed_calls >= self.maximum_calls:
+            raise PolicyTokenBudgetExceeded(
+                "policy cell maximum-call allowance exhausted"
+            )
+        prompt_tokens = estimate_tokens(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        )
+        output_allowance = self.remaining_tokens - prompt_tokens
+        if output_allowance < 1:
+            raise PolicyTokenBudgetExceeded(
+                "policy cell total-token allowance exhausted"
+            )
+        request = dict(payload)
+        requested_cap = request.get("max_tokens")
+        request["max_tokens"] = min(
+            requested_cap if type(requested_cap) is int and requested_cap > 0 else output_allowance,
+            output_allowance,
+        )
+        self.observed_calls += 1
+        self.observed_prompt_tokens += prompt_tokens
+        self.observed_tokens += prompt_tokens
+        self.attempted_models.append(
+            {"role": "attempted", "agent_id": agent.id, "model_id": agent.model}
+        )
+        model_usage = self.estimated_usage_by_model.setdefault(
+            agent.model, {"prompt_tokens": 0, "completion_tokens": 0}
+        )
+        model_usage["prompt_tokens"] += prompt_tokens
+        response = self._delegate.proxy_send(agent, endpoint, request)
+        answer = ModelClient._response_content(agent, response)
+        completion_tokens = estimate_tokens(answer)
+        self.observed_tokens += completion_tokens
+        model_usage["completion_tokens"] += completion_tokens
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            reported_prompt = self._coerce_usage_count(usage.get("prompt_tokens"))
+            reported_completion = self._coerce_usage_count(usage.get("completion_tokens"))
+            if reported_prompt is not None and reported_completion is not None:
+                self.observed_prompt_tokens += reported_prompt - prompt_tokens
+                self.observed_tokens += (
+                    reported_prompt + reported_completion - prompt_tokens - completion_tokens
+                )
+                model_usage["prompt_tokens"] += reported_prompt - prompt_tokens
+                model_usage["completion_tokens"] += reported_completion - completion_tokens
+        self._exceeded = self.observed_tokens > self.total_token_budget
+        return response
+
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Keep endpoint-race structured sends inside the same cell boundary."""
+        return self.proxy_send(agent, endpoint, payload)
 
     def take_usage(self) -> dict[str, Any] | None:
         """Return delegated usage and replace the latest estimate when valid."""
@@ -2552,6 +2643,15 @@ def _ensure_secret_absent(serialized: str) -> None:
         )
 
 
+def _safe_failure_message(exc: Exception) -> str:
+    """Return a bounded diagnostic with the resolved benchmark credential removed."""
+    message = redact_text(str(exc))
+    secret = get_credential(NIM_CREDENTIAL_NAME)
+    if secret:
+        message = message.replace(secret, "[REDACTED]")
+    return message[:500]
+
+
 def render_markdown_summary(report: dict[str, Any]) -> str:
     """Render a buyer-readable summary with evidence and cost caveats."""
     lines = [
@@ -2632,15 +2732,11 @@ def write_benchmark_artifacts(
     report: dict[str, Any],
     output_dir: str,
 ) -> dict[str, str]:
-    """Validate cost evidence and schema, then write JSON, CSV, and Markdown."""
+    """Validate and atomically publish the shared four-artifact evidence set."""
     _validate_actual_cost_evidence(report)
     validate_report_schema(report)
-    os.makedirs(output_dir, exist_ok=True)
     json_text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     _ensure_secret_absent(json_text)
-    json_path = os.path.join(output_dir, "benchmark_report.json")
-
-    csv_path = os.path.join(output_dir, "benchmark_cells.csv")
     csv_buffer = io.StringIO()
     writer = csv.DictWriter(
         csv_buffer,
@@ -2655,33 +2751,37 @@ def write_benchmark_artifacts(
 
     markdown_text = render_markdown_summary(report)
     _ensure_secret_absent(markdown_text)
-    markdown_path = os.path.join(output_dir, "benchmark_summary.md")
-
-    staged: list[tuple[str, str]] = []
-    try:
-        for final_path, text, newline in (
-            (csv_path, csv_text, ""),
-            (markdown_path, markdown_text, "\n"),
-            # The report is the completion marker and is published last.
-            (json_path, json_text + "\n", "\n"),
-        ):
-            with tempfile.NamedTemporaryFile(
-                "w", encoding="utf-8", newline=newline, dir=output_dir, delete=False
-            ) as handle:
-                handle.write(text)
-                handle.flush()
-                os.fsync(handle.fileno())
-                staged.append((handle.name, final_path))
-        for staged_path, final_path in staged:
-            os.replace(staged_path, final_path)
-    finally:
-        for staged_path, _final_path in staged:
-            if os.path.exists(staged_path):
-                os.unlink(staged_path)
+    provenance = report["provenance"]
+    shared_provenance = {
+        "source_commit": (
+            provenance["git_sha"]
+            if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", provenance["git_sha"])
+            else "0" * 40
+        ),
+        "catalog_snapshot_sha256": provenance["catalog_snapshot_sha256"],
+        "task_manifest_sha256": provenance["task_manifest_sha256"],
+        "pricing_scenario_sha256": provenance["pricing_scenario_sha256"] or "unknown",
+        "workflow_run_id": provenance["workflow_run_id"],
+        "evidence_status": report["evaluation"]["evidence_status"],
+    }
+    provenance_text = json.dumps(
+        shared_provenance, ensure_ascii=False, indent=2, sort_keys=True
+    )
+    _ensure_secret_absent(provenance_text)
+    publish_artifact_set(
+        output_dir,
+        {
+            "benchmark_report.json": (json_text + "\n").encode(),
+            "benchmark_cells.csv": csv_text.encode(),
+            "benchmark_summary.md": (markdown_text + "\n").encode(),
+            "run_provenance.json": (provenance_text + "\n").encode(),
+        },
+    )
     return {
-        "json_path": json_path,
-        "csv_path": csv_path,
-        "markdown_path": markdown_path,
+        "json_path": os.path.join(output_dir, "benchmark_report.json"),
+        "csv_path": os.path.join(output_dir, "benchmark_cells.csv"),
+        "markdown_path": os.path.join(output_dir, "benchmark_summary.md"),
+        "provenance_path": os.path.join(output_dir, "run_provenance.json"),
     }
 
 
@@ -3194,7 +3294,7 @@ def run_benchmark_cli(argv: list[str]) -> int:
                 {
                     "benchmark_failed_closed": True,
                     "error_class": type(exc).__name__,
-                    "error_message": str(exc),
+                    "error_message": _safe_failure_message(exc),
                 },
                 ensure_ascii=False,
             )

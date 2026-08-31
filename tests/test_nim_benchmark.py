@@ -31,7 +31,12 @@ from contextual_orchestrator.credentials import (  # noqa: E402
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import ModelAgent, ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelAgent,
+    ModelClient,
+    TaskOrchestrator,
+    _FastMLSIJudgeAdapter,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TASK_MANIFEST_PATH = str(REPO_ROOT / "examples" / "nim_task_manifest.json")
@@ -314,6 +319,54 @@ def test_budgeted_client_charges_each_chat_call() -> None:
     assert client.chat(agent, [{"role": "user", "content": "hello there"}])
     with pytest.raises(nb.BenchmarkBudgetError):
         client.chat(agent, [{"role": "user", "content": "over budget"}])
+
+
+def test_structured_judge_uses_transport_and_both_request_limits() -> None:
+    calls = []
+
+    def transport(method, url, headers, body):
+        calls.append((method, url, body))
+        return 200, json.dumps(
+            {
+                "choices": [{"message": {"content": '{"score": 1}'}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            }
+        ).encode()
+
+    budget = nb.RequestBudget(1)
+    delegate = nb._BudgetedModelClient(budget, transport=transport)
+    cell = nb.EqualBudgetModelClient(delegate, total_token_budget=100, maximum_calls=1)
+    agent = ModelAgent(
+        "judge_agent",
+        "vendor/judge-model",
+        FAKE_ENDPOINT,
+        provider_name="nvidia_nim",
+        tags=("verifier",),
+    )
+    adapter = _FastMLSIJudgeAdapter(
+        TaskOrchestrator([agent], client=cell), "answer", agent.id
+    )
+    result = adapter.complete_structured(
+        [{"role": "user", "content": "judge"}],
+        response_format={"type": "json_object"},
+    )
+    assert result["trace"][0]["usage"] == {
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+    }
+    assert calls and calls[0][0:2] == (
+        "POST",
+        f"{FAKE_ENDPOINT}/chat/completions",
+    )
+    assert budget.requests_spent == 1
+    assert cell.observed_calls == 1
+    assert cell.observed_tokens == 5
+    with pytest.raises(nb.PolicyTokenBudgetExceeded, match="maximum-call"):
+        adapter.complete_structured(
+            [{"role": "user", "content": "again"}],
+            response_format={"type": "json_object"},
+        )
+    assert budget.requests_spent == 1
 
 
 def test_equal_budget_client_forwards_delegate_controls() -> None:
@@ -1560,25 +1613,20 @@ def test_artifact_writer_refuses_secret_leak() -> None:
             nb.write_benchmark_artifacts(report, os.path.join(tmp, "leaky"))
 
 
-def test_artifact_report_is_published_last(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_artifact_writer_uses_shared_four_file_publication() -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        source = os.path.join(tmp, "source")
-        report = _dry_report(source)
-        target = os.path.join(tmp, "target")
-        real_replace = os.replace
-        calls = 0
-
-        def fail_before_report(staged: str, final: str) -> None:
-            nonlocal calls
-            calls += 1
-            if calls == 3:
-                raise OSError("interrupted")
-            real_replace(staged, final)
-
-        monkeypatch.setattr(os, "replace", fail_before_report)
-        with pytest.raises(OSError, match="interrupted"):
-            nb.write_benchmark_artifacts(report, target)
-        assert not os.path.exists(os.path.join(target, "benchmark_report.json"))
+        target = os.path.join(tmp, "evidence")
+        report = _dry_report(target)
+        assert set(os.listdir(target)) == {
+            "benchmark_report.json",
+            "benchmark_cells.csv",
+            "benchmark_summary.md",
+            "run_provenance.json",
+        }
+        provenance = json.loads(Path(target, "run_provenance.json").read_text())
+        assert provenance["catalog_snapshot_sha256"] == report["provenance"][
+            "catalog_snapshot_sha256"
+        ]
 
 
 def test_secret_guard_passes_when_no_secret_registered() -> None:
@@ -1919,6 +1967,22 @@ def test_cli_live_fails_closed_without_secret() -> None:
         )
     assert exit_code == 1
     assert json.loads(stdout.getvalue())["error_class"] == "NotConfigured"
+
+
+def test_cli_failure_redacts_resolved_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "nvapi-secret-value-123456"
+    register_credential(nb.NIM_CREDENTIAL_NAME, secret)
+
+    def fail(*args, **kwargs):
+        raise nb.BenchmarkContractError(f"Bearer {secret}")
+
+    monkeypatch.setattr(nb, "run_benchmark", fail)
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        exit_code = nb.run_benchmark_cli(["--dry-run"])
+    assert exit_code == 1
+    assert secret not in stdout.getvalue()
+    assert "[REDACTED]" in stdout.getvalue()
 
 
 if __name__ == "__main__":
