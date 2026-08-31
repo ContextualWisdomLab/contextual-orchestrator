@@ -1,6 +1,31 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
-## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
+## 2026-08-31 PR #941 left one stale test asserting the removed nvidia_nim/nvidia_nim_sub collapse
+
+Independently investigated the same premise PR #941 ("fix(discovery): keep credential accounts
+independent") corrected: `model_discovery._provider_family` collapsed `nvidia_nim`/`nvidia_nim_sub`
+into one family on an unverified assumption that the two KV credentials expose the same NVIDIA NIM
+model catalog. `docs/planning/adrs/0015-durable-provider-catalog.md` (accepted 2026-08-22) already
+recorded the opposite — "NVIDIA primary and secondary keys are independent provider accounts" — and
+nothing in this repo (ADRs, doctoring notes, commit history back to the function's introduction at
+`03667a3a`) ever recorded an actual comparison of what each credential's `/v1/models` call returns.
+PR #941 merged first with the equivalent fix (deletes `_provider_family` outright rather than keeping
+it as an identity seam; both approaches are behaviorally the same: every KV credential is now its own
+independent provider/family for pool-diversity selection and outage-tolerance bounding) and updated
+every test file its own `_provider_family` grep found.
+
+One test file was missed because it asserts the collapsed behavior by outcome, not by referencing
+`_provider_family` by name: `tests/test_discovery_bootstrap_selection.py::test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain`
+still asserted `select_bootstrap_discovered_agents([nim_sub, openrouter, nim_primary], price_book, 2)
+== [nim_primary, openrouter]` — the exact pool-shrinking result the fix was meant to eliminate.
+Reproduced failing on a clean checkout of `main` at `42da1d53` (the #941 merge commit itself, not an
+artifact of any local branch state): `AssertionError: ... nvidia_nim_sub ... != ... openrouter ...`.
+Renamed to `test_bootstrap_selector_keeps_nim_primary_and_sub_independent` and corrected to assert
+`[nim_primary, nim_sub]`, matching the behavior `select_bootstrap_discovered_agents` has had since
+#941 merged. A full-suite run on this same commit plus only this one-line test fix was clean (see
+this entry's PR for exact counts). No other file was affected; `_provider_family` no longer exists
+anywhere in the source tree per #941, and a full-repo grep confirms no other test still references the
+removed collapsing behavior.
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
 inventory mismatch: ['BYTEZ_API_KEY']`. Traced to `bootstrap_provider_catalog_runtime`
