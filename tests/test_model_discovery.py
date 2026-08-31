@@ -1812,14 +1812,21 @@ def test_discovery_boundary_contains_raw_connection_reset() -> None:
 
     Regression: ``ConnectionError``/``OSError`` subclasses that are not
     ``URLError`` used to escape ``discover_provider_models`` uncaught, leaking
-    provider transport diagnostics to discovery callers.
+    provider transport diagnostics to discovery callers. A connection reset is
+    also transient, so this now retries once before giving up; both attempts
+    fail identically here, exercising the exhausted-retry path.
     """
     register_credential("OPENAI_API_KEY", "sk-openai")
+    attempts = []
 
     def urlopen(request, timeout=None):
+        attempts.append(timeout)
         raise ConnectionResetError(104, "Connection reset by peer")
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
         try:
             discover_provider_models(OPENAI_SOURCE)
         except ProviderDiscoveryError as error:
@@ -1829,6 +1836,122 @@ def test_discovery_boundary_contains_raw_connection_reset() -> None:
             assert error.__cause__ is None
         else:  # pragma: no cover
             raise AssertionError("a raw connection reset must become a ProviderDiscoveryError")
+
+    assert len(attempts) == 2  # initial attempt + one bounded retry, both transient
+    mock_sleep.assert_called_once()
+
+
+def test_discover_provider_models_retries_transient_failure_then_succeeds() -> None:
+    """A single transient 5xx on the primary fetch is retried, not fatal.
+
+    This is the exact shape of the incident that motivated the retry: one
+    provider's momentary HTTP 500 must not zero out that provider's entire
+    contribution for this discovery pass.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    payload = {"data": [{"id": "gpt-test", "object": "model"}]}
+    attempt_timeouts = []
+
+    def urlopen(request, timeout=None):
+        attempt_timeouts.append(timeout)
+        if len(attempt_timeouts) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response(payload)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
+        discovered = discover_provider_models(OPENAI_SOURCE)
+
+    assert len(attempt_timeouts) == 2
+    assert attempt_timeouts[1] < attempt_timeouts[0]  # retry uses the shortened timeout
+    mock_sleep.assert_called_once()
+    assert [model.model_id for model in discovered] == ["gpt-test"]
+
+
+def test_discover_provider_models_does_not_retry_non_transient_failure() -> None:
+    """A 401 (bad credential) is never retried -- a retry cannot fix it."""
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    attempts = []
+
+    def urlopen(request, timeout=None):
+        attempts.append(timeout)
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep") as mock_sleep,
+    ):
+        try:
+            discover_provider_models(OPENAI_SOURCE)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "openai"
+            assert error.error_code == "http_status_401"
+        else:  # pragma: no cover
+            raise AssertionError("a 401 must become a ProviderDiscoveryError")
+
+    assert len(attempts) == 1
+    mock_sleep.assert_not_called()
+
+
+def test_discover_provider_models_isolates_a_dns_resolution_failure() -> None:
+    """A configured-gateway DNS failure must not abort the whole discovery pass.
+
+    ``ModelClient._resolve_addresses`` wraps ``socket.gaierror`` as a plain
+    ``RuntimeError`` (see ``_fetch_configured_gateway_json``'s pinned-address
+    validation path), which was not in ``discover_provider_models``'s catch
+    tuple (``URLError``, ``TimeoutError``, ``ValueError``, ``OSError``). One
+    provider's DNS hiccup must become an isolated ``ProviderDiscoveryError``,
+    not a bare ``RuntimeError`` that crashes ``discover_all_models`` entirely.
+    """
+    register_credential("LLM_GATEWAY_API_KEY", "sk-gateway")
+    gateway_source = ProviderModelSource(
+        provider_name="configured_gateway",
+        credential_name="LLM_GATEWAY_API_KEY",
+        list_url="https://gateway.example/v1/models",
+        chat_base_url="https://gateway.example/v1",
+        capabilities=("chat",),
+    )
+
+    with patch(
+        "contextual_orchestrator.model_discovery._fetch_configured_gateway_json",
+        side_effect=RuntimeError("provider host 'gateway.example' could not be resolved"),
+    ):
+        try:
+            discover_provider_models(gateway_source)
+        except ProviderDiscoveryError as error:
+            assert error.provider_name == "configured_gateway"
+        else:  # pragma: no cover
+            raise AssertionError("a DNS RuntimeError must become a ProviderDiscoveryError")
+
+
+def test_discover_provider_models_retry_timeout_never_exceeds_callers_budget() -> None:
+    """A caller-supplied timeout shorter than the retry default must not expand on retry.
+
+    Regression (Devin review on #923): the retry attempt hardcoded
+    _DISCOVERY_RETRY_TIMEOUT_SECONDS (5.0s) regardless of what timeout the
+    caller actually requested, so a caller budgeting e.g. 2s per attempt
+    could see the retry alone blow well past that budget.
+    """
+    register_credential("OPENAI_API_KEY", "sk-openai")
+    payload = {"data": [{"id": "gpt-test", "object": "model"}]}
+    attempt_timeouts = []
+
+    def urlopen(request, timeout=None):
+        attempt_timeouts.append(timeout)
+        if len(attempt_timeouts) == 1:
+            raise urllib.error.HTTPError(request.full_url, 500, "Internal Server Error", {}, None)
+        return _Response(payload)
+
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered = discover_provider_models(OPENAI_SOURCE, timeout=2.0)
+
+    assert attempt_timeouts == [2.0, 2.0]
+    assert [model.model_id for model in discovered] == ["gpt-test"]
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:
