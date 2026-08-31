@@ -326,6 +326,42 @@ def test_http_conduct_preflight_rejects_role_ineligible_pin() -> None:
     assert client.calls == []
 
 
+def test_response_candidate_evidence_does_not_mutate_workflow_history() -> None:
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("candidate_b", "model-b", provider_name="provider-b")],
+        client=client,
+    )
+    token = "candidate-routing-token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "messages": [{"role": "user", "content": "conduct this"}],
+                "mode": "conduct",
+                "routing": {"candidate_id": "candidate_b"},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert body["orchestration"]["routing"]["candidate_id"] == "candidate_b"
+    assert orchestrator._workflow_runs
+    assert all(
+        "candidate_routing" not in record
+        for record in orchestrator._workflow_runs.values()
+    )
+
+
 def test_generated_planner_uses_only_request_eligible_candidates(monkeypatch) -> None:
     orchestrator = TaskOrchestrator(
         [

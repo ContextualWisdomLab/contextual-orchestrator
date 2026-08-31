@@ -444,6 +444,7 @@ class CostRoutingCoordinator:
                 result = self.orchestrator.run(messages, **run_kwargs)
                 routing_evidence = self.orchestrator._candidate_routing_evidence(result)
                 if routing_evidence is not None:
+                    result = dict(result)
                     result["candidate_routing"] = routing_evidence
             if isinstance(result.get("workflow_run_id"), str):
                 race_context["workflow_run_id"] = result["workflow_run_id"]

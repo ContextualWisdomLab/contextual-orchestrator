@@ -8232,6 +8232,7 @@ def build_server(
                             result = orchestrator.conduct(messages, **conduct_kwargs)
                         evidence = orchestrator._candidate_routing_evidence(result)
                         if evidence is not None:
+                            result = dict(result)
                             result["candidate_routing"] = evidence
                 except ConnectionAbortedError:
                     raise
