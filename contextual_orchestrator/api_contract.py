@@ -32,7 +32,7 @@ OPENAPI_SPEC = {
                     "candidate_id": {
                         "type": "string",
                         "minLength": 1,
-                        "pattern": r"^\S(?:.*\S)?$",
+                        "pattern": r"^\S(?:[^\r\n]*\S)?(?![\s\S])",
                         "description": "Exact private agent ID to use for this request.",
                     },
                     "exclude_candidate_ids": {
@@ -42,7 +42,7 @@ OPENAPI_SPEC = {
                         "items": {
                             "type": "string",
                             "minLength": 1,
-                            "pattern": r"^\S(?:.*\S)?$",
+                            "pattern": r"^\S(?:[^\r\n]*\S)?(?![\s\S])",
                         },
                     },
                 },

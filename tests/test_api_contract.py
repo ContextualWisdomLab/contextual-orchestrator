@@ -60,7 +60,8 @@ def test_openapi_documents_compatibility_front_door() -> None:
     assert chat_schema["properties"]["include_orchestration_trace"]["type"] == "boolean"
     routing_schema = OPENAPI_SPEC["components"]["schemas"]["CandidateRoutingControls"]
     assert routing_schema["properties"]["candidate_id"]["minLength"] == 1
-    assert routing_schema["properties"]["candidate_id"]["pattern"] == r"^\S(?:.*\S)?$"
+    exact_id_pattern = r"^\S(?:[^\r\n]*\S)?(?![\s\S])"
+    assert routing_schema["properties"]["candidate_id"]["pattern"] == exact_id_pattern
     assert routing_schema["properties"]["exclude_candidate_ids"] == {
         "type": "array",
         "maxItems": 32,
@@ -68,9 +69,15 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "items": {
             "type": "string",
             "minLength": 1,
-            "pattern": r"^\S(?:.*\S)?$",
+            "pattern": exact_id_pattern,
         },
     }
+    for invalid in (
+        {"candidate_id": "candidate_a\n"},
+        {"exclude_candidate_ids": ["candidate_a\n"]},
+    ):
+        with pytest.raises(ValidationError):
+            validate(instance=invalid, schema=routing_schema)
     assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
         "security"
     ] == [{"admin_bearer_auth": [], "trace_bearer_auth": []}]
