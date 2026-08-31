@@ -16,6 +16,7 @@ import json
 import os
 import socket
 import tempfile
+import threading
 import urllib.error
 from pathlib import Path
 import sys
@@ -198,8 +199,8 @@ def _install_direct_transport_fakes(monkeypatch, plans, addresses=("93.184.216.3
 
     _FakeDirectConnection.plans = list(plans)
     _FakeDirectConnection.instances = []
-    monkeypatch.setattr(nb, "_validated_public_addresses", resolve)
-    monkeypatch.setattr(nb, "_PinnedHTTPSConnection", _FakeDirectConnection)
+    monkeypatch.setattr(nb, "validated_public_addresses", resolve)
+    monkeypatch.setattr(nb, "PinnedHTTPSConnection", _FakeDirectConnection)
     return resolution_calls
 
 
@@ -321,6 +322,46 @@ def test_budgeted_client_charges_each_chat_call() -> None:
         client.chat(agent, [{"role": "user", "content": "over budget"}])
 
 
+def test_budgeted_evaluation_transport_failures_are_fail_closed() -> None:
+    agent = ModelAgent(
+        "worker_one",
+        "vendor/model-a",
+        FAKE_ENDPOINT,
+        provider_name="nvidia_nim",
+    )
+
+    def client_for(result):
+        def transport(method, url, headers, body):
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        return nb._BudgetedModelClient(nb.RequestBudget(2), transport=transport)
+
+    for result, pattern in (
+        (nb.BenchmarkContractError("redirect"), "redirect"),
+        ((401, b"{}"), "credential"),
+        ((200, b"not-json"), "valid JSON"),
+        ((200, b"[]"), "must be an object"),
+    ):
+        client = client_for(result)
+        with pytest.raises((nb.BenchmarkContractError, nb.BenchmarkAuthError), match=pattern):
+            client._send(agent, {})
+        if isinstance(result, nb.BenchmarkContractError) or result[0] == 200:
+            assert client.benchmark_contract_error is not None
+
+    for result, expected_error in (
+        (nb.BenchmarkContractError("oversized"), nb.BenchmarkContractError),
+        ((403, b"{}"), nb.BenchmarkAuthError),
+        ((500, b"{}"), urllib.error.HTTPError),
+        ((200, b"not-json"), nb.BenchmarkContractError),
+        ((200, b"[]"), nb.BenchmarkContractError),
+    ):
+        client = client_for(result)
+        with pytest.raises(expected_error):
+            client.proxy_send_once(agent, "responses", {})
+
+
 def test_structured_judge_uses_transport_and_both_request_limits() -> None:
     calls = []
 
@@ -367,6 +408,23 @@ def test_structured_judge_uses_transport_and_both_request_limits() -> None:
             response_format={"type": "json_object"},
         )
     assert budget.requests_spent == 1
+
+
+def test_equal_budget_structured_transport_alias_and_invalid_usage() -> None:
+    class StructuredDelegate(ModelClient):
+        def proxy_send(self, agent, endpoint, payload):
+            return {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": "unknown", "completion_tokens": None},
+            }
+
+    cell = nb.EqualBudgetModelClient(
+        StructuredDelegate(), total_token_budget=100, maximum_calls=1
+    )
+    response = cell.proxy_send_once(
+        _mock_agents("dryrun/chat-basic")[0], "responses", {"input": "judge"}
+    )
+    assert response["usage"]["prompt_tokens"] == "unknown"
 
 
 def test_equal_budget_client_forwards_delegate_controls() -> None:
@@ -839,6 +897,34 @@ def test_probe_models_rejects_incomplete_probe_budget_before_egress() -> None:
     assert budget.requests_spent == 0
 
 
+def test_probe_models_stop_scheduling_requests_after_auth_rejection() -> None:
+    calls = 0
+    lock = threading.Lock()
+
+    def rejected_transport(method, url, headers, body):
+        nonlocal calls
+        with lock:
+            calls += 1
+        return 401, b"{}"
+
+    concurrency = 3
+    with pytest.raises(nb.BenchmarkAuthError):
+        nb.probe_discovered_models(
+            [
+                {"model_id": f"vendor/model-{index}", "owned_by": ""}
+                for index in range(20)
+            ],
+            rejected_transport,
+            FAKE_ENDPOINT,
+            "rejected-key",
+            nb.RequestBudget(500),
+            concurrency,
+            lambda: 1234.0,
+        )
+
+    assert calls <= concurrency
+
+
 # --------------------------------------------------------------------------
 # Scorers, manifest, pricing
 # --------------------------------------------------------------------------
@@ -952,6 +1038,10 @@ def test_manifest_rejects_each_contract_violation() -> None:
             manifest_with(
                 scorer={"name": "exact_number_match", "version": "1"},
                 expected={"wrong": 21},
+            ),
+            manifest_with(
+                scorer={"name": "exact_number_match", "version": "1"},
+                expected={"number": "NaN"},
             ),
             manifest_with(expected={"wrong": "blue"}),
             # Leakage: the scorer would award the prompt itself a point.
@@ -1223,6 +1313,24 @@ def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
         "route_once", _task(), fail, agents_by_id, None, nb._deterministic_timer()
     )
     assert failed["run_outcome"] == "failure" and failed["task_score"] is None
+    assert failed["outcome_reason"] == "RuntimeError:boom"
+
+    def provider_failure() -> dict:
+        raise urllib.error.HTTPError("https://provider", 503, "down", {}, None)
+
+    categorized = nb.run_policy_cell(
+        "route_once",
+        _task(),
+        provider_failure,
+        agents_by_id,
+        None,
+        nb._deterministic_timer(),
+    )
+    assert categorized["outcome_reason"] == "provider_http_error:503"
+    assert (
+        nb._run_error_reason(nb.PolicyTokenBudgetExceeded("limit"))
+        == "policy_token_budget_exceeded"
+    )
 
     incurred = nb.run_policy_cell(
         "route_once",
@@ -1256,6 +1364,16 @@ def test_run_policy_cell_success_failure_timeout_and_fail_closed() -> None:
             "route_once",
             _task(),
             out_of_budget,
+            agents_by_id,
+            None,
+            nb._deterministic_timer(),
+        )
+
+    with pytest.raises(nb.BenchmarkContractError):
+        nb.run_policy_cell(
+            "route_once",
+            _task(),
+            lambda: (_ for _ in ()).throw(nb.BenchmarkContractError("transport")),
             agents_by_id,
             None,
             nb._deterministic_timer(),
@@ -1312,6 +1430,21 @@ def test_evaluate_policies_contract_failures() -> None:
             agents, _mini_manifest(), None, client, nb.RequestBudget(2)
         )
 
+    class RememberedContractClient(ModelClient):
+        benchmark_contract_error = nb.BenchmarkContractError("transport contract")
+
+        def chat(self, *args, **kwargs):
+            return "apparently successful fallback"
+
+    with pytest.raises(nb.BenchmarkContractError, match="transport contract"):
+        nb.evaluate_policies(
+            agents,
+            _mini_manifest(),
+            None,
+            RememberedContractClient(),
+            nb.RequestBudget(100),
+        )
+
 
 def test_evaluate_policies_all_arms_with_pricing() -> None:
     agents = _mock_agents("dryrun/chat-basic", "dryrun/chat-vision")
@@ -1355,6 +1488,27 @@ def test_evaluate_policies_all_arms_with_pricing() -> None:
         cells, key=lambda cell: (cell["policy_name"], cell["task_id"])
     )
     assert budget.requests_spent > 0
+
+
+def test_evaluate_policies_preserves_reported_usage_source() -> None:
+    class ReportedUsageClient(ModelClient):
+        def chat(self, *args, **kwargs):
+            return "zebra"
+
+        def take_usage(self):
+            return {"prompt_tokens": 2, "completion_tokens": 1}
+
+    evaluation = nb.evaluate_policies(
+        _mock_agents("dryrun/chat-basic"),
+        _mini_manifest(1),
+        None,
+        ReportedUsageClient(),
+        nb.RequestBudget(100),
+    )
+    assert any(
+        cell["token_usage_source"] == "reported"
+        for cell in evaluation["evaluation_cells"]
+    )
 
 
 def test_evaluate_policies_records_observed_budget_overflow() -> None:
@@ -1569,7 +1723,7 @@ def test_provenance_fails_closed_for_live_without_identity() -> None:
         nb.build_provenance("live", "", "", {}, TASK_MANIFEST_PATH, None, {})
     live = nb.build_provenance(
         "live",
-        "abc123",
+        "a" * 40,
         "run-9",
         {},
         TASK_MANIFEST_PATH,
@@ -1577,6 +1731,11 @@ def test_provenance_fails_closed_for_live_without_identity() -> None:
         {"seed": 7},
     )
     assert live["pricing_scenario_sha256"] is not None
+    for invalid_sha in ("abc123", "g" * 40, "a" * 39, "A" * 40):
+        with pytest.raises(nb.BenchmarkContractError, match="valid --git-sha"):
+            nb.build_provenance(
+                "live", invalid_sha, "run-9", {}, TASK_MANIFEST_PATH, None, {}
+            )
     dry = nb.build_provenance("dry_run", "", "", {}, TASK_MANIFEST_PATH, None, {})
     assert dry["git_sha"] == nb.DRY_RUN_PROVENANCE_PLACEHOLDER
     assert dry["pricing_scenario_sha256"] is None
@@ -1596,6 +1755,42 @@ def _dry_report(output_dir: str) -> dict:
         output_dir,
         max_total_requests=900,
     )
+
+
+def test_evaluation_contract_failure_publishes_no_artifacts(
+    tmp_path: Path,
+) -> None:
+    register_credential(nb.NIM_CREDENTIAL_NAME, "nvapi-test-credential")
+    dry_transport = nb.build_dry_run_transport()
+    _, catalog_body = dry_transport(
+        "GET", f"{FAKE_ENDPOINT}/models", {}, None
+    )
+    discovered_count = len(nb.parse_model_catalog_body(catalog_body)["models"])
+    probe_phase_calls = 1 + discovered_count * len(nb.CAPABILITY_PROBE_ORDER)
+    calls = 0
+
+    def malformed_during_evaluation(method, url, headers, body):
+        nonlocal calls
+        calls += 1
+        if calls <= probe_phase_calls:
+            return dry_transport(method, url, headers, body)
+        if calls == probe_phase_calls + 1:
+            return 200, b"[]"
+        return dry_transport(method, url, headers, body)
+
+    with pytest.raises(nb.BenchmarkContractError, match="must be an object"):
+        nb.run_benchmark(
+            "live",
+            TASK_MANIFEST_PATH,
+            None,
+            str(tmp_path),
+            max_total_requests=900,
+            git_sha="e" * 40,
+            workflow_run_id="run-contract-failure",
+            transport=malformed_during_evaluation,
+        )
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_artifact_writer_refuses_secret_leak() -> None:
@@ -1837,7 +2032,7 @@ def test_live_run_fails_closed_without_credential() -> None:
                 TASK_MANIFEST_PATH,
                 None,
                 tmp,
-                git_sha="abc",
+                git_sha="a" * 40,
                 workflow_run_id="run-1",
             )
 
@@ -1856,7 +2051,7 @@ def test_live_run_end_to_end_offline() -> None:
                 None,
                 tmp,
                 max_total_requests=900,
-                git_sha="abc123",
+                git_sha="b" * 40,
                 workflow_run_id="run-42",
                 transport=nb.build_dry_run_transport(),
             )
@@ -1864,7 +2059,7 @@ def test_live_run_end_to_end_offline() -> None:
         ModelClient._validate_provider = original_validate
         ModelClient._send = original_send
     assert report["provenance"]["run_mode"] == "live"
-    assert report["provenance"]["git_sha"] == "abc123"
+    assert report["provenance"]["git_sha"] == "b" * 40
     assert report["honesty_labels"]["actual_cost_basis"] == (
         "reviewed_nvidia_developer_program_hosted_endpoint_access"
     )
@@ -1888,7 +2083,7 @@ def test_live_run_uses_default_transport_builder_when_none_given() -> None:
                 None,
                 tmp,
                 max_total_requests=900,
-                git_sha="abc123",
+                git_sha="c" * 40,
                 workflow_run_id="run-43",
             )
     finally:
@@ -1960,7 +2155,7 @@ def test_cli_live_fails_closed_without_secret() -> None:
                 "--task-manifest",
                 TASK_MANIFEST_PATH,
                 "--git-sha",
-                "abc",
+                "d" * 40,
                 "--workflow-run-id",
                 "run-1",
             ]

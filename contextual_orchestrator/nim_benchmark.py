@@ -75,8 +75,8 @@ from .orchestrator import (
     redact_text,
 )
 from .provider_transport import (
-    _PinnedHTTPSConnection,
-    _validated_public_addresses,
+    PinnedHTTPSConnection,
+    validated_public_addresses,
 )
 
 BENCHMARK_SCHEMA_VERSION = "1.0.0"
@@ -176,7 +176,7 @@ def require_public_https_endpoint(url: str) -> tuple[str, ...]:
     if parsed.scheme != "https" or not parsed.hostname:
         raise BenchmarkContractError(f"benchmark endpoint must use https: {url!r}")
     try:
-        return _validated_public_addresses(
+        return validated_public_addresses(
             parsed.hostname.lower(),
             parsed.port or 443,
             "NIM benchmark",
@@ -232,7 +232,7 @@ def build_default_transport(timeout_seconds: float) -> ProviderTransport:
 
         last_error: BaseException | None = None
         for pinned_ip in approved_addresses:
-            connection = _PinnedHTTPSConnection(
+            connection = PinnedHTTPSConnection(
                 parsed.hostname or "",
                 pinned_ip,
                 port,
@@ -348,6 +348,12 @@ class _BudgetedModelClient(ModelClient):
         super().__init__(**kwargs)
         self._request_budget = request_budget
         self._benchmark_transport = transport
+        self._benchmark_contract_error: BenchmarkContractError | None = None
+
+    @property
+    def benchmark_contract_error(self) -> BenchmarkContractError | None:
+        """Return the first benchmark transport-contract failure, if any."""
+        return self._benchmark_contract_error
 
     def _send(
         self,
@@ -361,12 +367,20 @@ class _BudgetedModelClient(ModelClient):
         if self._benchmark_transport is None or agent.base_url.startswith("mock://"):
             return super()._send(agent, payload, destination, timeout=timeout)
         url = self._provider_url(agent, "/chat/completions")
-        status, body = self._benchmark_transport(
-            "POST",
-            url,
-            _auth_headers(get_credential(NIM_CREDENTIAL_NAME) or ""),
-            json.dumps(payload).encode("utf-8"),
-        )
+        try:
+            status, body = self._benchmark_transport(
+                "POST",
+                url,
+                _auth_headers(get_credential(NIM_CREDENTIAL_NAME) or ""),
+                json.dumps(payload).encode("utf-8"),
+            )
+        except BenchmarkContractError as exc:
+            self._benchmark_contract_error = exc
+            raise
+        if status in (401, 403):
+            raise BenchmarkAuthError(
+                f"provider rejected the benchmark credential during evaluation (HTTP {status})"
+            )
         if status >= 400:
             raise urllib.error.HTTPError(
                 url,
@@ -375,7 +389,20 @@ class _BudgetedModelClient(ModelClient):
                 {},
                 io.BytesIO(body),
             )
-        data = json.loads(body.decode("utf-8"))
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            contract_error = BenchmarkContractError(
+                "evaluation provider response must be valid JSON"
+            )
+            self._benchmark_contract_error = contract_error
+            raise contract_error from exc
+        if not isinstance(data, dict):
+            contract_error = BenchmarkContractError(
+                "evaluation provider response must be an object"
+            )
+            self._benchmark_contract_error = contract_error
+            raise contract_error
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -401,12 +428,20 @@ class _BudgetedModelClient(ModelClient):
         if self._benchmark_transport is None or agent.base_url.startswith("mock://"):
             return super().proxy_send_once(agent, endpoint, payload)
         url = self._provider_url(agent, f"/{endpoint.strip('/')}")
-        status, body = self._benchmark_transport(
-            "POST",
-            url,
-            _auth_headers(get_credential(NIM_CREDENTIAL_NAME) or ""),
-            json.dumps(payload).encode("utf-8"),
-        )
+        try:
+            status, body = self._benchmark_transport(
+                "POST",
+                url,
+                _auth_headers(get_credential(NIM_CREDENTIAL_NAME) or ""),
+                json.dumps(payload).encode("utf-8"),
+            )
+        except BenchmarkContractError as exc:
+            self._benchmark_contract_error = exc
+            raise
+        if status in (401, 403):
+            raise BenchmarkAuthError(
+                f"provider rejected the benchmark credential during evaluation (HTTP {status})"
+            )
         if status >= 400:
             raise urllib.error.HTTPError(
                 url,
@@ -415,9 +450,20 @@ class _BudgetedModelClient(ModelClient):
                 {},
                 io.BytesIO(body),
             )
-        response = json.loads(body.decode("utf-8"))
+        try:
+            response = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            contract_error = BenchmarkContractError(
+                "structured provider response must be valid JSON"
+            )
+            self._benchmark_contract_error = contract_error
+            raise contract_error from exc
         if not isinstance(response, dict):
-            raise BenchmarkContractError("structured provider response must be an object")
+            contract_error = BenchmarkContractError(
+                "structured provider response must be an object"
+            )
+            self._benchmark_contract_error = contract_error
+            raise contract_error
         return response
 
     def proxy_send_once(
@@ -478,6 +524,7 @@ class EqualBudgetModelClient:
         self.estimated_usage_by_model: dict[str, dict[str, int]] = {}
         self._pending_estimated_tokens: int | None = None
         self._exceeded = False
+        self._contract_error: BenchmarkContractError | None = None
 
     def __getattr__(self, name: str) -> Any:
         """Forward provider-client capabilities not owned by the cell limiter."""
@@ -502,6 +549,11 @@ class EqualBudgetModelClient:
     def exceeded(self) -> bool:
         """Return whether observed usage crossed the configured allowance."""
         return self._exceeded
+
+    @property
+    def contract_error(self) -> BenchmarkContractError | None:
+        """Return a transport-contract failure swallowed by orchestration failover."""
+        return self._contract_error
 
     @staticmethod
     def _coerce_usage_count(value: Any) -> int | None:
@@ -549,14 +601,19 @@ class EqualBudgetModelClient:
             agent.model, {"prompt_tokens": 0, "completion_tokens": 0}
         )
         usage["prompt_tokens"] += prompt_tokens
-        with self._delegate.request_settings(max_output_tokens=output_cap):
-            answer = self._delegate.chat(
-                agent,
-                messages,
-                temperature,
-                top_p,
-                effort_profile,
-            )
+        try:
+            with self._delegate.request_settings(max_output_tokens=output_cap):
+                answer = self._delegate.chat(
+                    agent,
+                    messages,
+                    temperature,
+                    top_p,
+                    effort_profile,
+                )
+        finally:
+            delegate_error = getattr(self._delegate, "benchmark_contract_error", None)
+            if isinstance(delegate_error, BenchmarkContractError):
+                self._contract_error = delegate_error
 
         estimated_total = prompt_tokens + estimate_tokens(answer)
         completion_tokens = estimate_tokens(answer)
@@ -1329,22 +1386,31 @@ def probe_discovered_models(
         )
 
     discovered_at_unix = round(clock(), 3)
+    auth_rejected = threading.Event()
 
     def probe_one(model: dict[str, Any]) -> dict[str, Any]:
         """Execute every preflighted capability cell for one model."""
         rows: list[dict[str, Any]] = []
         for capability_name in CAPABILITY_PROBE_ORDER:
-            request_budget.spend_or_fail()
-            rows.append(
-                execute_capability_probe(
-                    transport,
-                    endpoint,
-                    api_key,
-                    model["model_id"],
-                    capability_name,
-                    timer,
+            if auth_rejected.is_set():
+                raise BenchmarkAuthError(
+                    "provider rejected the benchmark credential during probes"
                 )
-            )
+            request_budget.spend_or_fail()
+            try:
+                rows.append(
+                    execute_capability_probe(
+                        transport,
+                        endpoint,
+                        api_key,
+                        model["model_id"],
+                        capability_name,
+                        timer,
+                    )
+                )
+            except BenchmarkAuthError:
+                auth_rejected.set()
+                raise
         classified = classify_model_capabilities(rows)
         return {
             "model_id": model["model_id"],
@@ -1844,6 +1910,17 @@ def _classify_run_error(exc: Exception) -> str:
     return "failure"
 
 
+def _run_error_reason(exc: Exception) -> str:
+    """Return a bounded, redacted category and detail for a failed policy cell."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"provider_http_error:{exc.code}"
+    if isinstance(exc, PolicyTokenBudgetExceeded):
+        return "policy_token_budget_exceeded"
+    detail = redact_text(str(exc)).strip().replace("\n", " ")[:256]
+    category = type(exc).__name__
+    return f"{category}:{detail}" if detail else category
+
+
 def run_policy_cell(
     policy_name: str,
     task: dict[str, Any],
@@ -1858,7 +1935,7 @@ def run_policy_cell(
     started = timer()
     try:
         result = run_callable()
-    except (BenchmarkBudgetError, BenchmarkAuthError):
+    except (BenchmarkContractError, BenchmarkBudgetError, BenchmarkAuthError):
         # Budget exhaustion and credential rejection must abort the whole run
         # (fail closed), never degrade into one quietly failed cell.
         raise
@@ -1872,7 +1949,7 @@ def run_policy_cell(
             "scorer_version": scorer["version"],
             "task_score": None,
             "run_outcome": _classify_run_error(exc),
-            "outcome_reason": f"{type(exc).__name__}",
+            "outcome_reason": _run_error_reason(exc),
             "end_to_end_latency_ms": round((timer() - started) * 1000, 3),
             "provider_latency_ms": None,
             "call_count": incurred.get("call_count", 0),
@@ -2124,13 +2201,24 @@ def evaluate_policies(
             tool_retry_attempts=0,
         )
         orchestrator.policy = depth_policy
+        def complete_cell() -> dict[str, Any]:
+            try:
+                result = orchestrator.complete(
+                    [{"role": "user", "content": task["prompt"]}],
+                    mode=mode,
+                )
+            except Exception:
+                if cell_client.contract_error is not None:
+                    raise cell_client.contract_error
+                raise
+            if cell_client.contract_error is not None:
+                raise cell_client.contract_error
+            return result
+
         cell = run_policy_cell(
             policy_name,
             task,
-            lambda: orchestrator.complete(
-                [{"role": "user", "content": task["prompt"]}],
-                mode=mode,
-            ),
+            complete_cell,
             agents_by_id,
             pricing_scenario,
             timer,
@@ -2534,10 +2622,8 @@ def build_provenance(
     benchmark_parameters: dict[str, Any],
 ) -> dict[str, Any]:
     """Assemble the provenance block; live runs fail closed on missing identity."""
-    if run_mode == "live" and (not git_sha or not workflow_run_id):
-        raise BenchmarkContractError(
-            "live runs require --git-sha and --workflow-run-id provenance"
-        )
+    if run_mode == "live":
+        _validate_live_provenance(git_sha, workflow_run_id)
     return {
         "run_mode": run_mode,
         "git_sha": git_sha or DRY_RUN_PROVENANCE_PLACEHOLDER,
@@ -2549,6 +2635,17 @@ def build_provenance(
         ),
         "benchmark_parameters": benchmark_parameters,
     }
+
+
+def _validate_live_provenance(git_sha: str, workflow_run_id: str) -> None:
+    """Reject live evidence that cannot identify an exact Git revision."""
+    if (
+        re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", git_sha) is None
+        or not workflow_run_id.strip()
+    ):
+        raise BenchmarkContractError(
+            "live runs require a valid --git-sha and --workflow-run-id provenance"
+        )
 
 
 _REPORT_REQUIRED_PATHS = (
@@ -3060,10 +3157,7 @@ def run_benchmark(
     manifest = load_task_manifest(task_manifest_path)
     pricing_scenario = load_pricing_scenario(pricing_scenario_path)
     if run_mode == "live":
-        if not git_sha or not workflow_run_id:
-            raise BenchmarkContractError(
-                "live runs require --git-sha and --workflow-run-id provenance"
-            )
+        _validate_live_provenance(git_sha, workflow_run_id)
         _require_current_actual_cost_evidence()
         validate_live_pricing_scenario(pricing_scenario)
     request_budget = RequestBudget(max_total_requests)

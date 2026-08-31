@@ -13,7 +13,7 @@ import socket
 import ssl
 
 
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+class PinnedHTTPSConnection(http.client.HTTPSConnection):
     """Connect to one validated IP while retaining the provider hostname for TLS."""
 
     def __init__(
@@ -46,7 +46,9 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             raise
 
 
-def _validated_public_addresses(hostname: str, port: int, provider_label: str) -> tuple[str, ...]:
+def validated_public_addresses(
+    hostname: str, port: int, provider_label: str
+) -> tuple[str, ...]:
     """Resolve, validate, and deduplicate addresses approved for one connection."""
     validated_addresses: list[str] = []
     for address in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM):
