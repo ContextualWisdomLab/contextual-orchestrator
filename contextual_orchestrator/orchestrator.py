@@ -248,6 +248,30 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
 
 
+def _resolved_openrouter_provider(agent: ModelAgent) -> str:
+    """Canonical provider identity for the ZDR-pin decision, base_url-first.
+
+    ``ModelAgent.provider_name`` is free-text and unvalidated at construction
+    (hand-authored JSON, ``model_discovery.py`` auto-discovery, or KV-driven
+    config can all leave it empty or typo'd). Trusting it verbatim here would
+    let an agent whose ``base_url`` is OpenRouter's own endpoint silently skip
+    the ``provider.zdr=true`` enforcement pin under an explicit ``zdr_only``
+    scope while still routing bytes to OpenRouter (base_url decides where the
+    request goes; this function only decides whether the pin is applied) —
+    a silent ZDR-policy bypass, not a crash (CodeRabbit review on #953,
+    discussion_r3898471887). Falling back to the ``base_url`` hostname when
+    ``provider_name`` is empty mirrors the same normalization already applied
+    in ``cost_router.py``'s embedding-target resolver, so every call site that
+    funnels through this shared choke point (chat, streaming, raw, binary
+    media, and non-embedding batch JSONL) gets the same protection the
+    embedding batch path already has.
+    """
+    if agent.provider_name:
+        return agent.provider_name
+    host = urlparse(agent.base_url).hostname or ""
+    return "openrouter" if host == "openrouter.ai" else host
+
+
 def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str, Any]:
     """Force OpenRouter to enforce zero-data-retention at request time.
 
@@ -267,8 +291,14 @@ def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str,
     non-mapping value (an int, bool, list, or string) must fail with a named,
     caller-actionable validation error here rather than an opaque ``TypeError``
     from ``dict()`` deep inside provider-transport code (Devin review on #953).
+
+    The "is this agent OpenRouter" check itself goes through
+    ``_resolved_openrouter_provider`` rather than a bare ``agent.provider_name``
+    comparison, so a misconfigured agent (empty/wrong ``provider_name`` but a
+    ``base_url`` that is actually OpenRouter's) still gets pinned instead of
+    silently bypassing ZDR enforcement (CodeRabbit review on #953).
     """
-    if not _REQUEST_ZDR_ONLY.get() or agent.provider_name != "openrouter":
+    if not _REQUEST_ZDR_ONLY.get() or _resolved_openrouter_provider(agent) != "openrouter":
         return payload
     provider_routing = payload.get("provider")
     if provider_routing is not None and not isinstance(provider_routing, dict):
