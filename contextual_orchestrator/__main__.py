@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from dataclasses import replace
@@ -40,6 +41,32 @@ from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+#: Env-var escape hatch so an already-deployed server can turn on DEBUG-level
+#: logging (env is read once at process start, same as CONTEXTUAL_ORCHESTRATOR_STATE_DB
+#: below) without editing its CLI invocation.
+VERBOSE_ENV_VAR = "CONTEXTUAL_ORCHESTRATOR_VERBOSE"
+_VERBOSE_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+
+def _env_flag(name: str) -> bool:
+    """Return whether an environment variable is set to a truthy flag value."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_logging(verbose: bool) -> None:
+    """Turn on DEBUG-level logging (timestamp, level, logger name) when requested.
+
+    A no-op when ``verbose`` is false: this repository never introduces
+    unrequested log noise, and ``.debug()`` call sites across the package stay
+    silent unless a caller explicitly opts in here or via ``VERBOSE_ENV_VAR``.
+    ``force=True`` lets a later call (or a test invoking ``main()`` more than
+    once in one process) replace an earlier logging configuration instead of
+    silently no-op'ing, matching stdlib ``logging.basicConfig`` semantics for
+    a process whose configuration is decided exactly once at startup.
+    """
+    if not verbose:
+        return
+    logging.basicConfig(level=logging.DEBUG, format=_VERBOSE_LOG_FORMAT, force=True)
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -195,7 +222,15 @@ def _register_credential_command(argv: list[str]) -> None:
         metavar="VAR",
         help="Bootstrap transport: read the secret value from this env var (e.g. --from-env OPENAI_API_KEY).",
     )
+    parser.add_argument(
+        "--verbose", "--debug",
+        dest="verbose",
+        action="store_true",
+        default=_env_flag(VERBOSE_ENV_VAR),
+        help=f"Enable DEBUG-level logging (default: off; also settable via {VERBOSE_ENV_VAR}).",
+    )
     args = parser.parse_args(argv)
+    _configure_logging(args.verbose)
 
     if args.from_env:
         # Bootstrap transport only: the deploy step injects secrets.OPENAI_API_KEY
@@ -297,7 +332,15 @@ def _discover_models_command(argv: list[str]) -> None:
         default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
         help="Optional reviewed CA bundle for configured-gateway discovery TLS verification.",
     )
+    parser.add_argument(
+        "--verbose", "--debug",
+        dest="verbose",
+        action="store_true",
+        default=_env_flag(VERBOSE_ENV_VAR),
+        help=f"Enable DEBUG-level logging (default: off; also settable via {VERBOSE_ENV_VAR}).",
+    )
     args = parser.parse_args(argv)
+    _configure_logging(args.verbose)
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
@@ -545,7 +588,18 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="discover source-declared chat-capable models at startup and activate them",
     )
+    parser.add_argument(
+        "--verbose", "--debug",
+        dest="verbose",
+        action="store_true",
+        default=_env_flag(VERBOSE_ENV_VAR),
+        help="Enable DEBUG-level logging (timestamp, level, logger name) to stderr for the "
+        f"orchestrator's route/conduct/provider-retry/circuit-breaker control flow; secrets "
+        f"and full prompt/response text are never logged (default: off; also settable via "
+        f"{VERBOSE_ENV_VAR}=true so a deployed server can turn it on without a new CLI flag).",
+    )
     args = parser.parse_args(arguments)
+    _configure_logging(args.verbose)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,

@@ -16,6 +16,7 @@ import http.client
 import io
 import ipaddress
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -84,6 +85,8 @@ from .reasoning_effort_profile import (
     snapshot_role_effort_catalog,
 )
 
+
+_LOGGER = logging.getLogger(__name__)
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
 ChatMessage = dict[str, Any]
@@ -1594,6 +1597,13 @@ class ModelClient:
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
+            _LOGGER.debug(
+                "provider.attempt agent_id=%s model=%s attempt=%s retry_limit=%s",
+                agent.id,
+                agent.model,
+                attempt,
+                retry_limit,
+            )
             try:
                 return (
                     self._send(agent, payload, destination)
@@ -1603,8 +1613,22 @@ class ModelClient:
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
+                    _LOGGER.debug(
+                        "provider.attempt_exhausted agent_id=%s attempt=%s error_type=%s",
+                        agent.id,
+                        attempt,
+                        type(exc).__name__,
+                    )
                     break
-                self._sleep(self._backoff_delay(attempt))
+                delay = self._backoff_delay(attempt)
+                _LOGGER.debug(
+                    "provider.retry_scheduled agent_id=%s attempt=%s delay_seconds=%.3f error_type=%s",
+                    agent.id,
+                    attempt,
+                    delay,
+                    type(exc).__name__,
+                )
+                self._sleep(delay)
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
             raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, urllib.error.HTTPError) and (
@@ -1651,6 +1675,16 @@ class ModelClient:
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
+        )
+        # Bounded metadata only: never the api_key/headers just built above, and
+        # never payload/message content -- see redact_text/redact_value for the
+        # one place raw text is intentionally allowed to reach a trace.
+        _LOGGER.debug(
+            "provider.request agent_id=%s model=%s provider=%s host=%s",
+            agent.id,
+            agent.model,
+            agent.provider_name or "",
+            urlparse(request.full_url).hostname,
         )
         started = time.monotonic()
         opened = (
@@ -4384,7 +4418,9 @@ class TaskOrchestrator:
                 or not self._needs_workflow(text)
             )
         ):
+            _LOGGER.debug("dispatch.decision mode=%s model=%s path=route", mode, model_name)
             return self.route_once(messages, model_name=model_name)
+        _LOGGER.debug("dispatch.decision mode=%s model=%s path=conduct", mode, model_name)
         return self.conduct(messages, model_name=model_name)
 
     def would_route(
@@ -5216,6 +5252,12 @@ class TaskOrchestrator:
             if len(tried_ids) >= max_attempts:
                 break
             tried_ids.add(candidate.id)
+            _LOGGER.debug(
+                "route.attempt_started attempt=%s agent_id=%s model=%s",
+                attempt_index,
+                candidate.id,
+                candidate.model,
+            )
             start = time.perf_counter()
             attempt_answer, attempt_served_id, attempt_usage = self._invoke(
                 candidate,
@@ -5256,6 +5298,14 @@ class TaskOrchestrator:
                 "reason": verification["reason"],
             }
             trace_rows.append(row)
+            _LOGGER.debug(
+                "route.attempt_completed attempt=%s agent_id=%s served_id=%s accepted=%s latency_ms=%s",
+                attempt_index,
+                candidate.id,
+                served_id,
+                verification["accepted"],
+                row["latency_ms"],
+            )
             if verification["accepted"]:
                 break
             # Rejected answers already recorded a quality-ledger failure in
@@ -5453,6 +5503,13 @@ class TaskOrchestrator:
                     "content": user_content,
                 },
             ]
+            _LOGGER.debug(
+                "conduct.step_started step_id=%s role=%s agent_id=%s access=%s",
+                step.id,
+                step.role,
+                agent.id,
+                step.access,
+            )
             start = time.perf_counter()
             output, served_id, usage = self._invoke(
                 agent,
@@ -5462,6 +5519,15 @@ class TaskOrchestrator:
                 allowed_agent_ids=free_ids if model_name == self.FREE_MODEL else None,
             )
             elapsed = (time.perf_counter() - start) * 1000
+            _LOGGER.debug(
+                "conduct.step_completed step_id=%s role=%s agent_id=%s served_id=%s latency_ms=%.2f failover=%s",
+                step.id,
+                step.role,
+                agent.id,
+                served_id,
+                elapsed,
+                served_id != agent.id,
+            )
             outputs[step.id] = output
             row = step.as_dict()
             row["agent_id"] = agent.id
@@ -6476,7 +6542,14 @@ class TaskOrchestrator:
         # fully-failed pool surfaces *why* (rate limit, auth, timeout) instead of
         # one opaque collapse message.
         last_upstream_error: ProviderUpstreamError | None = None
-        for agent in candidates:
+        for candidate_index, agent in enumerate(candidates):
+            _LOGGER.debug(
+                "invoke.candidate_attempt role=%s agent_id=%s candidate_index=%s candidate_count=%s",
+                role,
+                agent.id,
+                candidate_index,
+                len(candidates),
+            )
             retry_attempt = 0
             while True:
                 try:
@@ -6530,12 +6603,32 @@ class TaskOrchestrator:
                         bounded_provider_response_failures += 1
                         last_provider_response_error = exc
                         decision = classify_tool_failure(exc)
+                        _LOGGER.debug(
+                            "invoke.failure_classified agent_id=%s role=%s kind=%s action=%s "
+                            "reason_code=%s retry_attempt=%s",
+                            agent.id,
+                            role,
+                            decision.kind,
+                            decision.action,
+                            decision.reason_code,
+                            retry_attempt,
+                        )
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         self._record_failure(agent.id)
                         break
                     else:
                         decision = classify_tool_failure(exc)
                     action = decision.action
+                    _LOGGER.debug(
+                        "invoke.failure_classified agent_id=%s role=%s kind=%s action=%s "
+                        "reason_code=%s retry_attempt=%s",
+                        agent.id,
+                        role,
+                        decision.kind,
+                        action,
+                        decision.reason_code,
+                        retry_attempt,
+                    )
                     # A failed attempt is one Bernoulli stability observation
                     # for measured group routing regardless of what happens next.
                     if (
@@ -6558,6 +6651,12 @@ class TaskOrchestrator:
                     if action is ToolFallbackAction.RETRY_SAME_AGENT:
                         decision = downgrade_to_failover(decision)
                         action = decision.action
+                        _LOGGER.debug(
+                            "invoke.action_downgraded agent_id=%s action=%s reason_code=%s",
+                            agent.id,
+                            action,
+                            decision.reason_code,
+                        )
                     self._record_tool_fallback(agent.id, decision, retry_attempt)
                     if decision.circuit_failure:
                         self._record_failure(agent.id)
@@ -6577,6 +6676,12 @@ class TaskOrchestrator:
                         output_tokens=output_tokens,
                     )
                 self._record_success(agent.id)
+                _LOGGER.debug(
+                    "invoke.success agent_id=%s role=%s latency_ms=%.2f",
+                    agent.id,
+                    role,
+                    (time.perf_counter() - attempt_start) * 1000,
+                )
                 return output, agent.id, usage
         if (
             last_provider_response_error is not None
@@ -6671,22 +6776,29 @@ class TaskOrchestrator:
             state = self._circuit.get(agent_id)
             if not state or state["failures"] < self.circuit_failure_threshold:
                 return False
-            if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
-                state["failures"] = 0.0
-                state["opened_at"] = 0.0
-                return False
-            return True
+            if time.monotonic() - state["opened_at"] < self.circuit_reset_seconds:
+                return True
+            state["failures"] = 0.0
+            state["opened_at"] = 0.0
+        _LOGGER.debug("circuit.half_open agent_id=%s", agent_id)
+        return False
 
     def _record_failure(self, agent_id: str) -> None:
         with self._circuit_lock:
             state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
             state["failures"] += 1.0
-            if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
+            just_opened = state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]
+            if just_opened:
                 state["opened_at"] = time.monotonic()
+            failure_count = int(state["failures"])
+        if just_opened:
+            _LOGGER.debug("circuit.opened agent_id=%s failures=%s", agent_id, failure_count)
 
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:
-            self._circuit.pop(agent_id, None)
+            previously_tracked = self._circuit.pop(agent_id, None)
+        if previously_tracked is not None:
+            _LOGGER.debug("circuit.closed agent_id=%s", agent_id)
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
