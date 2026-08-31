@@ -639,6 +639,35 @@ def test_send_pins_openrouter_zdr_on_the_wire_for_legacy_provider_name() -> None
     assert captured["body"]["provider"] == {"zdr": True}
 
 
+def test_send_pins_openrouter_zdr_on_the_wire_for_mistyped_provider_name() -> None:
+    """``_send`` still applies the pin when ``provider_name`` is nonempty but wrong.
+
+    Closes the gap CodeRabbit and Devin Review both flagged against
+    ``df97709a``: ``_resolved_openrouter_provider`` used to return any
+    *nonempty* ``agent.provider_name`` before ever checking ``base_url``, so
+    an agent with ``provider_name="openai"`` and ``base_url`` actually
+    pointing at OpenRouter still reported ``"openai"`` and silently skipped
+    the ``provider.zdr=true`` enforcement pin — even though ``base_url``, not
+    the free-text ``provider_name`` label, decides where the request
+    actually goes. Proved end-to-end on the real ``_send`` transport (the
+    captured outgoing JSON body), not just against the
+    ``_resolved_openrouter_provider``/``_pin_openrouter_zdr`` helpers in
+    isolation, per CodeRabbit's explicit ask for on-wire coverage of this
+    exact case (CodeRabbit review on #953, discussion_r3898659143; Devin
+    review on #953, discussion_r3898661634).
+    """
+    agent = _openrouter_agent(id="mistyped_openrouter_agent", provider_name="openai")
+    client = ModelClient()
+    captured: dict[str, Any] = {}
+    with patch.object(client, "_open_provider", side_effect=_capture_request_body(captured)):
+        token = _REQUEST_ZDR_ONLY.set(True)
+        try:
+            client._send(agent, {"model": agent.model, "messages": []})
+        finally:
+            _REQUEST_ZDR_ONLY.reset(token)
+    assert captured["body"]["provider"] == {"zdr": True}
+
+
 def test_stream_send_pins_openrouter_zdr_on_the_wire() -> None:
     """``_stream_send`` applies the same pin as the non-streaming transport."""
     agent = _openrouter_agent()

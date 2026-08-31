@@ -1166,9 +1166,28 @@ def _provider_from_base_url(base_url: str) -> str:
 
 
 def _resolved_provider_name(agent: Any) -> str:
-    """Return a canonical provider name for one selected agent snapshot."""
-    provider = agent.provider_name or _provider_from_base_url(agent.base_url)
-    return "openrouter" if provider == "openrouter.ai" else provider
+    """Return a canonical provider name for one selected agent snapshot.
+
+    ``base_url`` is what actually decides an outbound HTTP destination;
+    ``provider_name`` is a free-text label unvalidated at ``ModelAgent``
+    construction, so it can be empty *or* nonempty-but-wrong (a typo, a
+    stale copy-paste). Trusting a nonempty ``provider_name`` unconditionally
+    — the previous ``agent.provider_name or ...`` short-circuit — let an
+    agent whose ``base_url`` is OpenRouter's own endpoint report a different
+    provider identity, which made ``submit_embeddings_batch``'s ZDR pin
+    (``provider_routing = {"zdr": True} if resolved_provider == "openrouter"
+    ...``) silently skip OpenRouter requests under an active ``zdr_only``
+    scope. The exact destination hostname is checked first and is
+    authoritative whenever it is OpenRouter's, mirroring
+    ``orchestrator._resolved_openrouter_provider`` so both ZDR-pin choke
+    points (the embedding-batch path here and the chat/streaming/raw/batch
+    JSONL path there) share one normalization rule (CodeRabbit review on
+    #953, discussion_r3898471887 / discussion_r3898659143).
+    """
+    host = _provider_from_base_url(agent.base_url)
+    if host == "openrouter.ai":
+        return "openrouter"
+    return agent.provider_name or host
 
 
 def _positive_int(value: Any, default: int) -> int:
