@@ -2401,8 +2401,9 @@ may terminate that work.
 ### GAP RESOLVED ON PR HEAD — 2026-08-31: model groups, free discovery, and measured capacity
 
 [PR #971](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/971)
-head `a36770179a695b3825a0fc2ca45eace09b5e3b8f` implements the requested
-provider-neutral contract:
+implementation parent `a36770179a695b3825a0fc2ca45eace09b5e3b8f` implements the
+requested provider-neutral contract. The live PR head must be read from GitHub
+because this baseline commit necessarily advances it.
 
 - Routing identity is an exact `model_group`; provider-family grouping is not
   part of the serving contract. Collision-resistant group ids preserve model
@@ -2420,7 +2421,8 @@ provider-neutral contract:
   observed Bytez HTTP 500 remains upstream/account evidence, not proof that the
   provider should be silently excluded.
 
-Verification on this exact head: local full suite `2859 passed, 1 skipped`;
+Verification on implementation parent `a36770179a695b3825a0fc2ca45eace09b5e3b8f`:
+local full suite `2859 passed, 1 skipped`;
 hosted Full unit/contract, Hypothesis, Atheris, CodeQL, dependency review,
 Python supply chain, OSV, Trivy, Semgrep, and OpenCode coverage checks passed.
 Devin and CodeRabbit reviews passed. Noema failed only because the central
