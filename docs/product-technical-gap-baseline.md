@@ -2386,22 +2386,46 @@ failed after the verdict was already correctly published and enforced —
 a downstream status-publish step, not the review pipeline itself; not yet
 investigated.
 
-**Separate, newly found, NOT YET FIXED bug** (traced via `.github#1276`'s
+**Superseded timeout diagnosis** (traced via `.github#1276`'s
 `noema-review` run, flagged by the user as "still not working" after the
 above fixes landed): `TaskOrchestrator._invoke()`
 (`contextual_orchestrator/orchestrator.py:6353-6537`, the per-agent
-call/retry/failover loop) has no overall wall-clock deadline. Each
-attempt is capped at `ModelClient.timeout = 90s`, but a hanging (not
-erroring) candidate plus one same-agent retry can chain past 90s +
-backoff + 90s = 180s+ before any response — well past
-`contextual_orchestrator_review_sidecar.sh`'s 120s outer
-`curl --max-time` bound on its own gateway-preflight self-check, so the
-sidecar sees exactly "0 bytes received after 120002ms" even though
-nothing is truly hung, just still working through an unbounded internal
-retry chain. Reproduced once (`.github` run `33312258611`, job
-`99259327051`); org-wide evidence since the pingora/Strix fixes landed
-shows this is now occasional, not the dominant failure mode (most
-`.github`-hosted PRs' `noema-review`/dispatch runs succeed). Correct fix
-is an overall deadline on `_invoke`'s candidate/retry loop, not another
-timeout increase on the sidecar's client side — deferred rather than
-rushed into this heavily-tested core file without dedicated validation.
+call/retry/failover loop) could run longer than the sidecar's former
+120-second client ceiling. That did not prove an internal hang; it proved
+the outer limit could terminate a healthy slow model. The former proposal
+to add an overall `_invoke` deadline is withdrawn. PR #971 removes fixed
+wall-clock limits from inference, discovery, OpenRouter ZDR lookup, and
+local readiness paths; only operator cancellation or a superseded PR head
+may terminate that work.
+
+### GAP RESOLVED ON PR HEAD — 2026-08-31: model groups, free discovery, and measured capacity
+
+[PR #971](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/971)
+head `a36770179a695b3825a0fc2ca45eace09b5e3b8f` implements the requested
+provider-neutral contract:
+
+- Routing identity is an exact `model_group`; provider-family grouping is not
+  part of the serving contract. Collision-resistant group ids preserve model
+  punctuation rather than conflating distinct upstream model names.
+- Authenticated OpenRouter discovery admits concrete zero-price models and
+  excludes the aggregate `openrouter/free` router from serving candidates.
+  ZDR evidence is evaluated per discovered model rather than disabling the
+  entire OpenRouter account.
+- Discovery, ZDR lookup, provider policy/credit reads, inference, and racing
+  default to no fixed wall-clock timeout.
+- The measured group ledger reports observed peak RPM and TPM from real
+  completed requests; missing token usage remains missing rather than being
+  invented.
+- Bytez's discovery parser and `Key` authentication path are implemented. The
+  observed Bytez HTTP 500 remains upstream/account evidence, not proof that the
+  provider should be silently excluded.
+
+Verification on this exact head: local full suite `2859 passed, 1 skipped`;
+hosted Full unit/contract, Hypothesis, Atheris, CodeQL, dependency review,
+Python supply chain, OSV, Trivy, Semgrep, and OpenCode coverage checks passed.
+Devin and CodeRabbit reviews passed. Noema failed only because the central
+trusted workflow still used its pre-fix 120-second request limit; Strix remains
+in progress. Therefore this is verified PR-head behavior, not yet protected-main
+or deployed evidence. Central `.github` PR #1508 carries the shared no-timeout
+and independent-Noema fix and is configured for automatic merge after its
+required Security jobs obtain runners and pass.
