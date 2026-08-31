@@ -1885,6 +1885,17 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        # Same event name and shape as _send's non-streaming provider.request
+        # log (bounded metadata only -- never headers/payload content): this
+        # is the identical provider-request boundary, now also visible when
+        # the call is a stream.
+        _LOGGER.debug(
+            "provider.request agent_id=%s model=%s provider=%s host=%s",
+            agent.id,
+            agent.model,
+            agent.provider_name or "",
+            urlparse(request.full_url).hostname,
+        )
         stream_error: RuntimeError | None = None
         started = time.monotonic()
         stream_usage: dict[str, Any] | None = None
@@ -4459,6 +4470,11 @@ class TaskOrchestrator:
         agent = self._requested_agent(model_name) or self._select_agent(
             text, "worker", free_only=model_name == self.FREE_MODEL
         )
+        # Mirrors route_once's route.attempt_started/_completed pair, scoped
+        # down for the streaming reality documented above: there is exactly
+        # one candidate and no retry/failover to report, so one selection log
+        # and one outcome log (success or failure) is the whole shape.
+        _LOGGER.debug("stream.route_started agent_id=%s model=%s", agent.id, agent.model)
         parts: list[str] = []
         effort_profile = self._role_effort_profile("worker")
         stream_kwargs: dict[str, Any] = {}
@@ -4472,9 +4488,14 @@ class TaskOrchestrator:
             for delta in stream:
                 parts.append(delta)
                 yield delta
-        except Exception:
+        except Exception as exc:
             if agent.group_name or model_name == self.FREE_MODEL:
                 self._group_router.observe_failure(agent.id)
+            _LOGGER.debug(
+                "stream.route_failed agent_id=%s error_type=%s",
+                agent.id,
+                type(exc).__name__,
+            )
             raise
         usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
         if usage_callback is not None:
@@ -4487,6 +4508,11 @@ class TaskOrchestrator:
         # quality ledger so measured accuracy steers future member ordering,
         # and it is persisted for audit.
         latency_seconds = time.perf_counter() - started_at
+        _LOGGER.debug(
+            "stream.route_completed agent_id=%s latency_ms=%s",
+            agent.id,
+            round(latency_seconds * 1000, 2),
+        )
         verification = self._realtime_route_judge(
             text=text,
             answer=answer,

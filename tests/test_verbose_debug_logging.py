@@ -580,6 +580,125 @@ def test_provider_debug_logs_absent_without_debug_level(monkeypatch, caplog) -> 
     assert "provider.attempt" not in caplog.text
 
 
+# -- streaming route control-flow --------------------------------------------
+#
+# Devin review: stream_route/ModelClient.stream_chat/_stream_send are a
+# structurally separate path from _dispatch/route_once/_invoke/
+# _send_with_retry -- by design, per stream_route's own docstring ("no
+# cross-agent failover here -- bytes already sent can't be recalled"), so
+# every non-streaming routing/provider DEBUG log above stayed silent for a
+# streamed request. These mirror the correct, simpler shape for streaming
+# (one selection log, one outcome log, the same provider.request boundary
+# event) rather than the retry/failover-aware non-streaming shape, which
+# would misrepresent what streaming actually does.
+#
+# server.py's Chat Completions and Responses SSE handlers both call this
+# exact same TaskOrchestrator.stream_route method with no endpoint-specific
+# branching in it (see the two `orchestrator.stream_route(...)` call sites in
+# server.py), so testing it once here covers both HTTP surfaces.
+
+
+def test_stream_route_debug_logs_report_agent_selection_and_completion(caplog) -> None:
+    """stream_route logs the selected agent, then the completed outcome."""
+    orchestrator = build()
+    with caplog.at_level("DEBUG"):
+        parts = list(
+            orchestrator.stream_route([{"role": "user", "content": "Write one sentence."}])
+        )
+    assert parts
+    assert "stream.route_started agent_id=" in caplog.text
+    assert "stream.route_completed agent_id=" in caplog.text
+    assert "latency_ms=" in caplog.text
+
+
+def test_stream_route_debug_log_reports_failure_before_reraising(monkeypatch, caplog) -> None:
+    """A mid-stream provider failure logs its classification before propagating.
+
+    Streaming cannot fail over (bytes already yielded can't be recalled), so
+    unlike invoke.failure_classified this only reports the exception class
+    name -- never str(exc), matching this file's error_type=%s convention
+    for provider failures throughout.
+    """
+    orchestrator = build()
+
+    def _broken_stream(agent, messages, **kwargs):  # noqa: ARG001
+        raise RuntimeError("synthetic mid-stream failure")
+        yield  # pragma: no cover - unreachable, keeps this a generator
+
+    monkeypatch.setattr(orchestrator.client, "stream_chat", _broken_stream)
+
+    with caplog.at_level("DEBUG"), pytest.raises(RuntimeError):
+        list(orchestrator.stream_route([{"role": "user", "content": "hello"}]))
+
+    assert "stream.route_started agent_id=" in caplog.text
+    assert "stream.route_failed agent_id=" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "synthetic mid-stream failure" not in caplog.text
+
+
+def test_stream_route_debug_logs_absent_by_default(caplog) -> None:
+    """Streaming route logs stay silent without DEBUG, matching every other call site."""
+    orchestrator = build()
+    list(orchestrator.stream_route([{"role": "user", "content": "hello"}]))
+    assert "stream.route_started" not in caplog.text
+    assert "stream.route_completed" not in caplog.text
+
+
+def test_stream_send_provider_request_debug_log_matches_non_streaming_event(
+    monkeypatch, caplog
+) -> None:
+    """_stream_send reuses the exact provider.request event non-streaming _send emits.
+
+    Same event name and bounded shape as
+    test_provider_request_and_retry_debug_logs_are_bounded's non-streaming
+    assertion -- proving the provider-request boundary is now visible for a
+    real (non-mock) streaming call too, not a new, streaming-only event.
+    """
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent(
+        "streaming_agent",
+        "model-y",
+        base_url="https://provider.example/v1",
+        credential_key="",
+    )
+
+    @contextmanager
+    def fake_open(request, destination=None, timeout=None):  # noqa: ARG001
+        yield io.BytesIO(b"data: [DONE]\n\n")
+
+    monkeypatch.setattr(client, "_validate_provider", lambda unused: None)
+    monkeypatch.setattr(client, "_open_provider", fake_open)
+
+    with caplog.at_level("DEBUG"):
+        list(client.stream_chat(agent, [{"role": "user", "content": "hello"}]))
+
+    assert (
+        "provider.request agent_id=streaming_agent model=model-y provider= host=provider.example"
+        in caplog.text
+    )
+
+
+def test_stream_send_provider_request_debug_log_absent_without_debug_level(monkeypatch, caplog) -> None:
+    """The streaming provider.request log stays silent at the default level too."""
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent(
+        "quiet_streaming_agent",
+        "model-z",
+        base_url="https://provider.example/v1",
+        credential_key="",
+    )
+
+    @contextmanager
+    def fake_open(request, destination=None, timeout=None):  # noqa: ARG001
+        yield io.BytesIO(b"data: [DONE]\n\n")
+
+    monkeypatch.setattr(client, "_validate_provider", lambda unused: None)
+    monkeypatch.setattr(client, "_open_provider", fake_open)
+
+    list(client.stream_chat(agent, [{"role": "user", "content": "hello"}]))
+    assert "provider.request" not in caplog.text
+
+
 # -- HTTP request/response lifecycle (server.py) -----------------------------
 
 
@@ -851,4 +970,3 @@ def test_debug_logs_bound_an_oversized_method_token(monkeypatch, caplog) -> None
         assert oversized_method not in caplog.text
     finally:
         server.server_close()
-
