@@ -161,14 +161,24 @@ class ResponsiveThreadingHTTPServer(ThreadingHTTPServer):
     request_queue_size = socket.SOMAXCONN
     embedding_batch_backend: Any = None
 
+    def _close_embedding_backend(self) -> None:
+        close = getattr(self.embedding_batch_backend, "close", None)
+        if callable(close):
+            close()
+
     def shutdown(self) -> None:
         """Stop accepting requests and release embedding worker threads."""
         try:
             super().shutdown()
         finally:
-            close = getattr(self.embedding_batch_backend, "close", None)
-            if callable(close):
-                close()
+            self._close_embedding_backend()
+
+    def server_close(self) -> None:
+        """Close the listener and workers on normal or abnormal serve exit."""
+        try:
+            self._close_embedding_backend()
+        finally:
+            super().server_close()
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {

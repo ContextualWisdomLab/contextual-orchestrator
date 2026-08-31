@@ -18,6 +18,7 @@ from contextual_orchestrator import (
     TaskOrchestrator,
 )
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.provider_errors import ProviderUpstreamError
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.token_counting import (
     TokenCountUnavailable,
@@ -177,6 +178,31 @@ def test_provider_batch_failure_is_terminal_without_payload_leak() -> None:
     backend.close()
 
 
+def test_provider_batch_failure_preserves_classified_provider_details() -> None:
+    def runner(_requests):
+        raise ProviderUpstreamError(
+            agent_id="embedding_worker",
+            model="embedding-model",
+            error_code="rate_limit_exceeded",
+            message="provider request failed",
+            client_status=429,
+            provider_status=429,
+            retryable=True,
+            transport="embedding",
+        )
+
+    backend = ProviderEmbeddingBatchBackend(runner)
+    job = backend.submit(
+        [EmbeddingBatchRequest(input_text="synthetic", model="embedding-model")]
+    )
+
+    failure = backend.wait(job, timeout=1)["failure"]
+    assert failure["http_status"] == 429
+    assert failure["provider_code"] == "rate_limit_exceeded"
+    assert failure["retryable"] is True
+    backend.close()
+
+
 def test_provider_batch_cancellation_preserves_the_reason() -> None:
     release = threading.Event()
 
@@ -223,6 +249,35 @@ def test_server_shutdown_closes_embedding_workers() -> None:
 
     server.shutdown()
     thread.join(timeout=1)
+
+    assert backend.closed is True
+
+
+def test_server_close_closes_embedding_workers_after_abnormal_exit() -> None:
+    class ClosingBackend:
+        name = "closing"
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    backend = ClosingBackend()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("embedding_worker", "embedding-model")]
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_token_counter=_SyntheticExactCounter(),
+        embedding_batch_backend=backend,
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="close-token"),
+        coordinator=coordinator,
+    )
+
+    server.server_close()
 
     assert backend.closed is True
 

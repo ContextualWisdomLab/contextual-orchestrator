@@ -817,8 +817,12 @@ class ProviderEmbeddingBatchBackend:
         except Exception as exc:  # noqa: BLE001 - polling exposes bounded failure metadata
             error = {
                 "error_type": type(exc).__name__,
-                "http_status": getattr(exc, "status_code", None),
-                "provider_code": getattr(exc, "provider_code", None),
+                "http_status": getattr(
+                    exc, "provider_status", getattr(exc, "status_code", None)
+                ),
+                "provider_code": getattr(
+                    exc, "error_code", getattr(exc, "provider_code", None)
+                ),
                 "retryable": bool(getattr(exc, "retryable", False)),
                 "failed_shard_index": getattr(exc, "failed_shard_index", None),
             }
