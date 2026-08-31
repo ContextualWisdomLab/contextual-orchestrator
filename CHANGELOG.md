@@ -104,7 +104,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `--state-db` store, so a process restart before judging reloaded none of
   a failed batch's spend, and the same over-budget batch could be retried
   with a full budget again after every restart. Pending rows are now saved
-  to the store too, the same as a judged run already was.
+  to the store too, the same as a judged run already was. That durable save
+  had its own follow-up gap: `_reload_state()` unconditionally added every
+  loaded `workflow_run` to `_run_order` (the recency structure behind
+  `list_recent_runs()`), so a reloaded pending row -- never added to
+  `_run_order` during normal, same-process operation because it is not yet
+  a complete result -- would appear as a completed run in admin/API
+  listings after a restart even though it never would have without one.
+  `_reload_state()` now only adds a reloaded record to `_run_order` when
+  `_is_trace_complete()` says it actually is one; its spend still restores
+  into the budget meter either way.
 
 ### Added
 

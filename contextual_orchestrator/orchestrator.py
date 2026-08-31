@@ -3536,7 +3536,17 @@ class TaskOrchestrator:
             )
         for record in self._store.load("workflow_run"):
             self._replace_workflow_run(record)
-            self._run_order.appendleft(record["workflow_run_id"])
+            # A batch_route row persisted before judging (see batch_route's
+            # own pending-record comment) intentionally never reaches
+            # _run_order during normal, same-process operation -- it is not
+            # yet a complete result. Reloading it into _run_order here would
+            # make it appear in recent-run/admin listings after a restart
+            # even though it never would have without one (Devin review,
+            # PR #961). _replace_workflow_run above still restores its
+            # spend into the budget meter either way; only visibility in
+            # _run_order is gated on completeness.
+            if self._is_trace_complete(record):
+                self._run_order.appendleft(record["workflow_run_id"])
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
         for event in self._store.load("analytics", self._analytics_events.maxlen):

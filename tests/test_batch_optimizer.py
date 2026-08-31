@@ -386,7 +386,10 @@ def test_batch_route_survives_restart_after_budget_exceeded(tmp_path) -> None:
     reloading any of a failed batch's spend, letting the same over-budget
     batch be retried with a full budget again after every restart. Pending
     rows are now saved to the durable ``--state-db`` store too, the same as
-    a judged run already was.
+    a judged run already was -- but a reloaded pending row must restore its
+    spend into the budget meter without appearing as a completed run in
+    ``list_recent_runs()``, the same as it never would have without a
+    restart (a follow-up Devin finding on that same fix).
     """
     db_path = tmp_path / "batch_restart_state.db"
     agent = ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))
@@ -417,6 +420,9 @@ def test_batch_route_survives_restart_after_budget_exceeded(tmp_path) -> None:
     try:
         assert restarted.budget_status()["spent_output_tokens"] == 12
         assert restarted.budget_status()["exceeded"] is True
+        # The reloaded pending rows restore spend but must not surface as
+        # completed runs -- they were never judged.
+        assert restarted.list_recent_runs(page_size=10) == []
         with pytest.raises(orchestrator_module.BudgetExceededError):
             restarted.batch_route(["task five"])
     finally:
