@@ -317,6 +317,7 @@ def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> No
     entered = threading.Event()
     release = threading.Event()
     mutation_done = threading.Event()
+    refreshed = []
 
     def probe(agent, **_kwargs):
         entered.set()
@@ -329,8 +330,11 @@ def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> No
         )
         mutation_done.set()
 
+    def refresh_pool():
+        refreshed.append(orchestrator.provider_readiness_report(refresh=True))
+
     with patch.object(client, "probe", side_effect=probe):
-        refresh = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
+        refresh = threading.Thread(target=refresh_pool)
         mutation = threading.Thread(target=mutate_pool)
         refresh.start()
         assert entered.wait(timeout=2)
@@ -341,7 +345,8 @@ def test_pool_mutation_cannot_leave_an_inflight_readiness_refresh_cached() -> No
         mutation.join(timeout=2)
 
     report = orchestrator.provider_readiness_report()
-    assert report["status"] == "unprobed"
+    assert refreshed == [report]
+    assert report["status"] == "ready"
     assert {item["agent_id"] for item in report["items"]} == {
         "ready_agent", "backup_agent", "added_agent"
     }
