@@ -230,9 +230,15 @@ def test_insecure_discovery_url_is_refused_before_any_network_call() -> None:
 
 
 def test_unclassified_provider_failure_fails_loudly() -> None:
-    """If the caller's catch tuple drifts, the mapper refuses to guess a code."""
+    """If the caller's catch tuple drifts, the mapper refuses to guess a code.
+
+    RuntimeError is deliberately classified now (the configured-gateway
+    transport wraps DNS/validation failures as RuntimeError), so this uses a
+    type genuinely outside every classified branch and outside
+    discover_provider_models's own catch tuple.
+    """
     with pytest.raises(AssertionError, match="unclassified provider discovery"):
-        _provider_discovery_error_code(RuntimeError("not transport related"))
+        _provider_discovery_error_code(KeyError("not transport related"))
 
 
 def test_openai_rows_that_are_not_objects_are_skipped() -> None:
