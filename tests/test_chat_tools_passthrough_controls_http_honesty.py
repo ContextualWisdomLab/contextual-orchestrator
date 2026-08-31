@@ -68,28 +68,6 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
-def _post_raw(port: int, payload: dict) -> tuple[int, str, str]:
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "content-type": "application/json",
-            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
-            "connection": "close",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            return (
-                response.status,
-                response.headers.get("content-type", ""),
-                response.read().decode("utf-8"),
-            )
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.headers.get("content-type", ""), exc.read().decode("utf-8")
-
-
 def _server():
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -168,39 +146,17 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
         thread.join(timeout=5)
 
 
-def test_http_tools_stream_usage_succeeds_via_local_framing() -> None:
-    """Tools passthrough fetches a complete upstream response and frames it
+def test_http_response_format_only_stream_usage_fails_closed_before_execution() -> None:
+    """response_format-only (conduct mode, no tools) still rejects stream+usage.
 
-    locally (``proxy_completion`` forces ``upstream["stream"] = False``), so
-    it can emit a real, honestly-labeled usage chunk -- this combination is
-    no longer rejected.
-    """
-    server, thread, port = _server()
-    try:
-        status, content_type, sse = _post_raw(
-            port, _base(stream=True, stream_options={"include_usage": True})
-        )
-        assert status == 200, sse
-        assert content_type.startswith("text/event-stream")
-        usage_frames = [
-            json.loads(frame[len("data: "):])
-            for frame in sse.split("\n\n")
-            if frame.startswith("data: ")
-            and frame != "data: [DONE]"
-            and json.loads(frame[len("data: "):]).get("choices") == []
-        ]
-        assert len(usage_frames) == 1, sse
-        assert usage_frames[0]["usage"]["usage_source"] in {"reported", "estimated"}
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_structured_response_format_stream_usage_fails_closed() -> None:
-    """response_format's multi-agent "conduct" path still has no aggregate-usage
-
-    story, so it still rejects before provider work -- unlike tools (see
-    ``test_http_tools_stream_usage_succeeds_via_local_framing``).
+    Its usage comes from a multi-step workflow's cost ledger, which may be
+    unmeasured, so this keeps failing closed. The sibling `tools` case (this
+    same request shape but with a `tools` list, i.e. single-agent
+    passthrough) no longer rejects this combination -- its one upstream call
+    is always non-streaming and its real, reported usage survives into the
+    SSE framing unmodified; see
+    test_stream_options_null_flags_noop_http_honesty.py::test_http_chat_tools_streams_include_reported_usage
+    for that positive case.
     """
     server, thread, port = _server()
     try:
@@ -260,8 +216,7 @@ if __name__ == "__main__":
     test_http_tools_passthrough_rejects_invalid_temperature()
     test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n()
     test_http_tools_passthrough_rejects_invalid_user_and_stream_options()
-    test_http_tools_stream_usage_succeeds_via_local_framing()
-    test_http_structured_response_format_stream_usage_fails_closed()
+    test_http_response_format_only_stream_usage_fails_closed_before_execution()
     test_http_tools_passthrough_accepts_coerced_sampling()
     test_http_response_format_passthrough_rejects_seed()
     print("ok")

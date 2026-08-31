@@ -37,19 +37,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retried as if it were a network blip. Fixes the shared classifier itself
   (not just the discovery retry call site), so every current and future
   caller of `is_transient_error` benefits.
-- `/v1/chat/completions`'s tools passthrough no longer rejects
-  `stream: true` + `stream_options.include_usage: true` together with
-  `tools`. Root-caused a live Strix required-check failure (org-wide CI run,
-  `contextual-orchestrator#923`): `proxy_completion`'s single-agent tool
-  passthrough always fetches a complete, non-streamed upstream response and
-  frames it locally via `_chat_response_sse_chunks`, which already emits a
-  real, honestly-labeled usage chunk (`usage_source: reported` when the
-  provider returned one, else a clearly marked `estimated` fallback) for
-  both plain-content and tool-call deltas — the combination was always
-  supported downstream, so the upfront rejection was an avoidable, stale
-  restriction. `response_format`'s separate multi-agent "conduct"
-  orchestration path has no equivalent aggregate-usage story yet and still
-  fails closed with the same `invalid_stream_options` error.
 
 ### Added
 
@@ -179,9 +166,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Accept the standard Chat Completions `stream_options.include_usage=true`
   request and emit provider-reported usage in a usage-only SSE chunk when
   available after the terminal stop chunk; pass the option through live provider
-  streams, and reject structured `tools`/`response_format` passthrough before
-  execution because it cannot emit that SSE contract; keep unsupported
-  obfuscation flags fail-closed.
+  streams; keep unsupported obfuscation flags fail-closed.
+- Accept `stream_options.include_usage=true` for single-agent `tools`
+  passthrough streaming too (e.g. an OpenAI Agents SDK client such as Strix):
+  `_chat_response_sse_chunks` already frames the one non-streaming upstream
+  call's response into a correctly-shaped terminal SSE chunk alongside
+  `tool_call` deltas, honestly labeling usage `reported` when the provider
+  returned it and falling back to its existing `estimated` labeling (never
+  fabricated as `reported`) when a provider's JSON omits `usage` — the prior
+  blanket rejection covering this case was an overbroad validation gate, not
+  a genuine limitation of the passthrough itself. `response_format`-only
+  structured passthrough (conduct mode, whose usage comes from a multi-step
+  workflow's cost ledger and may be unmeasured with no per-field tag to
+  distinguish it) keeps rejecting the combination rather than risk that
+  estimate being framed as `reported`.
 - Billing usage-export failures now appear in the operator-safe telemetry health
   counters instead of only in emitted error events.
 - Billing usage export now follows accepted ledger writes and skips duplicate,
