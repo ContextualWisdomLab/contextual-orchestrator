@@ -31,6 +31,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _deduplicate_discovered_models,
     _fetch_json,
     _merge_configured_gateway_metadata,
+    _merge_models_dev_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
     _price_per_1k,
@@ -312,6 +313,36 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
     assert discovered[0].zdr_capable is False
 
 
+def test_duplicate_discovery_withholds_conflicting_limit_metadata() -> None:
+    """Conflicting duplicate rows must not preserve one limit by row order."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                max_output_tokens=2048,
+                context_window=128000,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_B",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                max_output_tokens=4096,
+                context_window=256000,
+            ),
+        ]
+    )
+
+    assert len(discovered) == 1
+    assert discovered[0].max_output_tokens is None
+    assert discovered[0].context_window is None
+
+
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:
     payload = {
         "data": [
@@ -447,6 +478,73 @@ def test_configured_gateway_preserves_litellm_endpoint_modalities() -> None:
     ]
 
 
+def test_configured_gateway_preserves_only_consensus_limit_metadata() -> None:
+    payload = {"data": [{"id": "shared-model"}, {"id": "mismatch-model"}]}
+    metadata = {
+        "data": [
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {
+                "model_name": "shared-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {
+                "model_name": "mismatch-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 128000,
+                    "max_completion_tokens": 4096,
+                },
+            },
+            {
+                "model_name": "mismatch-model",
+                "model_info": {
+                    "mode": "chat",
+                    "context_length": 64000,
+                    "max_completion_tokens": 2048,
+                },
+            },
+        ]
+    }
+
+    merged = _merge_configured_gateway_metadata(payload, metadata)
+
+    assert merged["data"][0]["context_window"] == 128000
+    assert merged["data"][0]["max_output_tokens"] == 4096
+    assert "context_window" not in merged["data"][1]
+    assert "max_output_tokens" not in merged["data"][1]
+
+
+def test_models_dev_merge_preserves_limit_metadata() -> None:
+    payload = {"data": [{"id": "gpt-4.1-mini"}]}
+    metadata = {
+        "openai": {
+            "models": {
+                "gpt-4.1-mini": {
+                    "modalities": {"input": ["text"], "output": ["text"]},
+                    "limit": {"context": 1047576, "output": 32768},
+                    "cost": {"input": 0.4, "output": 1.6},
+                }
+            }
+        }
+    }
+
+    merged = _merge_models_dev_metadata(payload, metadata, "openai")
+
+    assert merged["data"][0]["context_window"] == 1047576
+    assert merged["data"][0]["max_output_tokens"] == 32768
+
+
 @pytest.fixture(autouse=True)
 def _fresh_backend():
     set_backend(InMemoryCredentialBackend())
@@ -537,6 +635,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
             {
                 "id": "meta/llama-3.3",
                 "pricing": {"prompt": "0.0000006", "completion": "0.0000012"},
+                "context_length": 131072,
+                "top_provider": {"max_completion_tokens": 8192},
                 "supported_parameters": ["response_format"],
             },
             {"id": "no-pricing-model"},
@@ -558,6 +658,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     priced = discovered[0]
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
+    assert priced.context_window == 131072
+    assert priced.max_output_tokens == 8192
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
@@ -603,6 +705,24 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     assert {"input:text", "output:embeddings"} <= set(
         agent_from_discovered(replace(embedding, evidence_only=False)).tags
     )
+
+
+def test_agent_from_discovered_preserves_limit_metadata() -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="gpt-5.5",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+
+    agent = agent_from_discovered(discovered)
+
+    assert agent.max_output_tokens == 4096
+    assert agent.context_window == 128000
 
 
 def test_openrouter_skips_model_endpoint_fetches_when_provider_policies_fail() -> None:

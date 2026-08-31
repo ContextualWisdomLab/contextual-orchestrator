@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS provider_model (
     provider_account_id text NOT NULL
         REFERENCES provider_account(provider_account_id) ON DELETE CASCADE,
     model_name text NOT NULL,
+    max_output_tokens integer CHECK (max_output_tokens IS NULL OR max_output_tokens > 0),
+    context_window integer CHECK (context_window IS NULL OR context_window > 0),
     prompt_price_per_1k numeric(20, 8),
     completion_price_per_1k numeric(20, 8),
     currency_code text NOT NULL,
@@ -265,6 +267,25 @@ def _normalize_currency(value: object) -> str:
     return normalized if _CURRENCY_RE.fullmatch(normalized) else _UNKNOWN_CURRENCY
 
 
+def _normalize_positive_int(value: object) -> int | None:
+    """Normalize one provider-published positive integer field or withhold it."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        integer = int(value)
+        return integer if integer > 0 else None
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            return None
+        integer = int(value)
+        return integer if integer > 0 else None
+    return None
+
+
 def _normalize_error_code(value: object) -> str:
     """Return one approved secret-free provider refresh failure code."""
     if not isinstance(value, str):
@@ -312,6 +333,8 @@ def normalize_discovered_model(
         credential_name=source.credential_name,
         chat_base_url=source.chat_base_url,
         auth_scheme=source.auth_scheme,
+        max_output_tokens=_normalize_positive_int(model.max_output_tokens),
+        context_window=_normalize_positive_int(model.context_window),
         prompt_price_per_1k=_normalize_price(model.prompt_price_per_1k),
         completion_price_per_1k=_normalize_price(
             model.completion_price_per_1k
@@ -348,6 +371,8 @@ def _restore_model_semantics(
         ),
         input_modalities=tuple(tag.removeprefix("input:") for tag in normalized if tag.startswith("input:")),
         output_modalities=tuple(tag.removeprefix("output:") for tag in normalized if tag.startswith("output:")),
+        max_output_tokens=model.max_output_tokens,
+        context_window=model.context_window,
         prompt_price_per_1k=model.prompt_price_per_1k,
         completion_price_per_1k=model.completion_price_per_1k,
         currency_code=model.currency_code,
@@ -605,6 +630,16 @@ class PostgresProviderCatalogStore:
                 return
             with connection.cursor() as cursor:
                 cursor.execute(PROVIDER_CATALOG_SCHEMA_SQL)
+                cursor.execute(
+                    "ALTER TABLE provider_model "
+                    "ADD COLUMN IF NOT EXISTS max_output_tokens integer "
+                    "CHECK (max_output_tokens IS NULL OR max_output_tokens > 0)"
+                )
+                cursor.execute(
+                    "ALTER TABLE provider_model "
+                    "ADD COLUMN IF NOT EXISTS context_window integer "
+                    "CHECK (context_window IS NULL OR context_window > 0)"
+                )
             connection.commit()
             self._schema_ready = True
 
@@ -686,13 +721,16 @@ class PostgresProviderCatalogStore:
                     cursor.execute(
                         "INSERT INTO provider_model ("
                         "provider_model_id, provider_account_id, model_name, "
+                        "max_output_tokens, context_window, "
                         "prompt_price_per_1k, completion_price_per_1k, currency_code, "
                         "serving_eligible_flag, enabled_flag, first_seen_at, "
                         "last_seen_at"
-                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, "
+                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
                         "true, %s, %s) "
                         "ON CONFLICT (provider_model_id) DO UPDATE SET "
                         "model_name = EXCLUDED.model_name, "
+                        "max_output_tokens = EXCLUDED.max_output_tokens, "
+                        "context_window = EXCLUDED.context_window, "
                         "prompt_price_per_1k = EXCLUDED.prompt_price_per_1k, "
                         "completion_price_per_1k = EXCLUDED.completion_price_per_1k, "
                         "currency_code = EXCLUDED.currency_code, "
@@ -702,6 +740,8 @@ class PostgresProviderCatalogStore:
                             model_row_id,
                             account_id,
                             model_name,
+                            model.max_output_tokens,
+                            model.context_window,
                             model.prompt_price_per_1k,
                             model.completion_price_per_1k,
                             model.currency_code,
@@ -831,6 +871,7 @@ class PostgresProviderCatalogStore:
             with connection.cursor() as cursor:
                 cursor.execute(
                     "SELECT pm.model_name, pa.chat_base_url, pa.auth_scheme, "
+                    "pm.max_output_tokens, pm.context_window, "
                     "pm.prompt_price_per_1k, pm.completion_price_per_1k, "
                     "pm.currency_code FROM provider_model AS pm "
                     "JOIN provider_account AS pa ON pa.provider_account_id = pm.provider_account_id "
@@ -886,9 +927,11 @@ class PostgresProviderCatalogStore:
                 credential_name=source.credential_name,
                 chat_base_url=row[1],
                 auth_scheme=row[2],
-                prompt_price_per_1k=_normalize_price(row[3]),
-                completion_price_per_1k=_normalize_price(row[4]),
-                currency_code=_normalize_currency(row[5]),
+                max_output_tokens=_normalize_positive_int(row[3]),
+                context_window=_normalize_positive_int(row[4]),
+                prompt_price_per_1k=_normalize_price(row[5]),
+                completion_price_per_1k=_normalize_price(row[6]),
+                currency_code=_normalize_currency(row[7]),
                 unit_prices=tuple(unit_prices_by_model.get(row[0], ())),
                 privacy_policy_urls=tuple(policy_sources_by_model.get(row[0], ())),
             ), tags_by_model.get(row[0], ()))

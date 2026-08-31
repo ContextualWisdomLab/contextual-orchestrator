@@ -36,6 +36,8 @@ NEW_AGENT = {
     "credential_key": "OPENAI_API_KEY",
     "tags": ["coding", "reasoning"],
     "priority": 2,
+    "max_output_tokens": 4096,
+    "context_window": 128000,
     "stream_usage_supported": True,
 }
 
@@ -151,6 +153,29 @@ def test_stream_usage_capability_patch_survives_restart() -> None:
 
         restored = TaskOrchestrator([agent], agents_db=db)
         assert restored._agent(agent.id).stream_usage_supported is True
+
+
+def test_agent_pool_persists_limit_metadata_across_restart() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        first = TaskOrchestrator(_seed(), agents_db=db)
+        created = first.add_agent(
+            "default",
+            {
+                "id": "persisted_agent",
+                "model": "model-x",
+                "base_url": "https://api.openai.com/v1",
+                "credential_key": "OPENAI_API_KEY",
+                "max_output_tokens": 4096,
+                "context_window": 128000,
+            },
+        )
+        assert created["max_output_tokens"] == 4096
+        assert created["context_window"] == 128000
+
+        restored = TaskOrchestrator(_seed(), agents_db=db)
+        assert restored._agent("persisted_agent").max_output_tokens == 4096
+        assert restored._agent("persisted_agent").context_window == 128000
 
 
 def test_legacy_payload_group_is_migrated_without_data_loss() -> None:

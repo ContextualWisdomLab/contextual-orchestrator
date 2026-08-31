@@ -107,6 +107,17 @@ def test_model_normalization_rejects_cross_account_rows_and_bad_prices() -> None
     assert normalized.currency_code == "USD"
 
 
+def test_model_normalization_withholds_non_positive_limit_metadata() -> None:
+    source = _source()
+    normalized = normalize_discovered_model(
+        source,
+        replace(_model(source, "model-a"), max_output_tokens=0, context_window=-1),
+    )
+
+    assert normalized.max_output_tokens is None
+    assert normalized.context_window is None
+
+
 def test_underflowing_positive_price_is_rejected_not_treated_as_free() -> None:
     """A nonzero price that underflows to 0.0 in float must stay unknown."""
     source = _source()
@@ -184,6 +195,8 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
         capabilities=("chat", "text"),
         input_modalities=("text", "image"),
         output_modalities=("text",),
+        max_output_tokens=4096,
+        context_window=128000,
         currency_code="USD",
         is_free=True,
         supports_zero_data_retention=True,
@@ -494,6 +507,8 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
                 "model-b",
                 source.chat_base_url,
                 "Bearer",
+                None,
+                None,
                 Decimal("0.25"),
                 Decimal("0.50"),
                 "usd",

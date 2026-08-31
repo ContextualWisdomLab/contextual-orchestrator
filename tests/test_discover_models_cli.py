@@ -179,6 +179,8 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
         {
             "provider": "openai", "model": "gpt-5.5", "agent_id": "openai_gpt_5_5",
             "is_free": False,
+            "max_output_tokens": None,
+            "context_window": None,
             "data_privacy": {
                 "zero_data_retention": "unknown",
                 "no_training": "unknown",
@@ -211,6 +213,8 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
                             "mode": "chat",
                             "input_cost_per_token": 0.000005,
                             "output_cost_per_token": 0.00003,
+                            "context_length": 256000,
+                            "max_completion_tokens": 8192,
                         },
                     },
                     {
@@ -267,6 +271,8 @@ def test_discover_models_bootstraps_allowlisted_openai_gateway_from_environment(
         "community/free-chat",
         "text-embedding-3-large",
     ]
+    assert report["models"][0]["context_window"] == 256000
+    assert report["models"][0]["max_output_tokens"] == 8192
 
 
 def test_configured_gateway_requires_explicit_host_allowlist() -> None:

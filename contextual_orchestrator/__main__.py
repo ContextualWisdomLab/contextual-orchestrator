@@ -361,6 +361,8 @@ def _discover_models_command(argv: list[str]) -> None:
                 "model": model.model_id,
                 "agent_id": agent_id_for(model),
                 "is_free": model.is_free,
+                "max_output_tokens": model.max_output_tokens,
+                "context_window": model.context_window,
                 "data_privacy": {
                     "zero_data_retention": (
                         "supported" if model.supports_zero_data_retention is True else

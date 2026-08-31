@@ -162,6 +162,34 @@ def test_model_agent_rejects_bad_local_credential_key_and_effort_flag() -> None:
         ModelAgent(id="agent_two", model="m", local_credential_key=123)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="reasoning_effort_supported must be"):
         ModelAgent(id="agent_two", model="m", reasoning_effort_supported="yes")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="max_output_tokens must be"):
+        ModelAgent(id="agent_two", model="m", max_output_tokens=0)
+    with pytest.raises(TypeError, match="context_window must be"):
+        ModelAgent(id="agent_two", model="m", context_window="128000")  # type: ignore[arg-type]
+
+
+def test_client_clamps_known_provider_output_ceiling() -> None:
+    agent = ModelAgent(
+        id="remote_agent",
+        model="remote-model",
+        base_url="https://provider.example/v1",
+        credential_key="REMOTE_API_KEY",
+        max_output_tokens=64,
+    )
+    payload = {
+        "max_tokens": 256,
+        "max_completion_tokens": 128,
+        "max_output_tokens": 96,
+    }
+
+    clamped = ModelClient._clamp_agent_token_budget(agent, payload)
+
+    assert clamped == {
+        "max_tokens": 64,
+        "max_completion_tokens": 64,
+        "max_output_tokens": 64,
+    }
+    assert payload["max_tokens"] == 256
 
 
 def test_batch_results_must_be_a_mapping() -> None:

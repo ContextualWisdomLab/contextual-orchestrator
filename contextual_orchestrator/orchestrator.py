@@ -454,6 +454,10 @@ class ModelAgent:
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
     auth_scheme: str = "Bearer"
+    # Provider-published output ceiling for this exact deployment when known.
+    max_output_tokens: int | None = None
+    # Provider-published shared prompt+output context window when known.
+    context_window: int | None = None
     # Optional measured-routing group: agents sharing a canonical group name are
     # one logical model whose members are ordered by observed speed/stability
     # (see model_group.ModelGroupRouter and planning ADR 0032).
@@ -477,6 +481,10 @@ class ModelAgent:
             raise ValueError("local_credential_key requires a local:// gateway URL")
         if not self.auth_scheme or type(self.auth_scheme) is not str:
             raise ValueError("auth_scheme must be a non-empty string")
+        for field_name in ("max_output_tokens", "context_window"):
+            value = getattr(self, field_name)
+            if value is not None and (type(value) is not int or value <= 0):
+                raise TypeError(f"{field_name} must be a positive integer or null")
         if self.reasoning_effort_supported not in (None, True, False):
             raise TypeError("reasoning_effort_supported must be true, false, or null")
         if type(self.stream_usage_supported) is not bool:
@@ -500,6 +508,8 @@ class ModelAgent:
             "provider_exclusions": list(self.provider_exclusions),
             "local_credential_key": self.local_credential_key,
             "auth_scheme": self.auth_scheme,
+            "max_output_tokens": self.max_output_tokens,
+            "context_window": self.context_window,
             "group_name": self.group_name,
             "reasoning_effort_supported": self.reasoning_effort_supported,
             "endpoint_equivalence": self.endpoint_equivalence,
@@ -533,6 +543,8 @@ class ModelAgent:
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
             auth_scheme=value.get("auth_scheme", "Bearer"),
+            max_output_tokens=value.get("max_output_tokens"),
+            context_window=value.get("context_window"),
             group_name=value.get("group_name", ""),
             reasoning_effort_supported=value.get("reasoning_effort_supported"),
             endpoint_equivalence=value.get("endpoint_equivalence"),
@@ -1619,6 +1631,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
+        payload = self._clamp_agent_token_budget(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -1643,6 +1656,23 @@ class ModelClient:
         if isinstance(usage, dict):
             self._local.usage = usage
         return self._response_content(agent, data)
+
+    @staticmethod
+    def _clamp_agent_token_budget(
+        agent: ModelAgent, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Clamp only explicit output-budget fields to a known provider ceiling."""
+        limit = agent.max_output_tokens
+        if type(limit) is not int or limit <= 0:
+            return payload
+        updated = payload
+        for field in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
+            value = updated.get(field)
+            if type(value) is int and value > limit:
+                if updated is payload:
+                    updated = dict(payload)
+                updated[field] = limit
+        return updated
 
     @staticmethod
     def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
@@ -2145,6 +2175,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
+        payload = self._clamp_agent_token_budget(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -2562,6 +2593,8 @@ class _AgentPoolStore:
             "provider_name",
             "local_credential_key",
             "auth_scheme",
+            "max_output_tokens",
+            "context_window",
             "reasoning_effort_supported",
             "stream_usage_supported",
         }
@@ -2599,9 +2632,15 @@ class _AgentPoolStore:
                 provider_name TEXT NOT NULL,
                 local_credential_key TEXT NOT NULL,
                 auth_scheme TEXT NOT NULL,
+                max_output_tokens INTEGER,
+                context_window INTEGER,
                 reasoning_effort_supported INTEGER,
                 stream_usage_supported INTEGER NOT NULL DEFAULT 0,
                 CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1)),
+                CONSTRAINT agent_pool_max_output_tokens_check
+                    CHECK (max_output_tokens IS NULL OR max_output_tokens > 0),
+                CONSTRAINT agent_pool_context_window_check
+                    CHECK (context_window IS NULL OR context_window > 0),
                 CONSTRAINT agent_pool_reasoning_effort_flag_check
                     CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1)),
                 CONSTRAINT agent_pool_stream_usage_flag_check
@@ -2644,8 +2683,8 @@ class _AgentPoolStore:
             INSERT INTO agent_pool (
                 agent_id, model_name, base_url, api_key_env, credential_key,
                 priority, disabled, provider_name, local_credential_key, auth_scheme,
-                reasoning_effort_supported, stream_usage_supported
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                max_output_tokens, context_window, reasoning_effort_supported, stream_usage_supported
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 config["id"],
@@ -2658,6 +2697,8 @@ class _AgentPoolStore:
                 config["provider_name"],
                 config["local_credential_key"],
                 config["auth_scheme"],
+                config["max_output_tokens"],
+                config["context_window"],
                 config["reasoning_effort_supported"],
                 int(config["stream_usage_supported"]),
             ),
@@ -2711,6 +2752,18 @@ class _AgentPoolStore:
                 "CHECK (reasoning_effort_supported IS NULL OR reasoning_effort_supported IN (0, 1))"
             )
             columns.add("reasoning_effort_supported")
+        if "max_output_tokens" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN max_output_tokens INTEGER "
+                "CHECK (max_output_tokens IS NULL OR max_output_tokens > 0)"
+            )
+            columns.add("max_output_tokens")
+        if "context_window" not in columns:
+            conn.execute(
+                "ALTER TABLE agent_pool ADD COLUMN context_window INTEGER "
+                "CHECK (context_window IS NULL OR context_window > 0)"
+            )
+            columns.add("context_window")
         if "stream_usage_supported" not in columns:
             conn.execute(
                 "ALTER TABLE agent_pool ADD COLUMN stream_usage_supported INTEGER NOT NULL DEFAULT 0 "
@@ -2811,6 +2864,7 @@ class _AgentPoolStore:
                         model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
                         priority = ?, disabled = ?, provider_name = ?,
                         local_credential_key = ?, auth_scheme = ?,
+                        max_output_tokens = ?, context_window = ?,
                         reasoning_effort_supported = ?, stream_usage_supported = ?
                     WHERE agent_id = ?
                     """,
@@ -2824,6 +2878,8 @@ class _AgentPoolStore:
                         config["provider_name"],
                         config["local_credential_key"],
                         config["auth_scheme"],
+                        config["max_output_tokens"],
+                        config["context_window"],
                         config["reasoning_effort_supported"],
                         int(config["stream_usage_supported"]),
                         agent.id,
@@ -2921,6 +2977,7 @@ class _AgentPoolStore:
                     """
                     SELECT agent_id, model_name, base_url, api_key_env, credential_key,
                            priority, disabled, provider_name, local_credential_key, auth_scheme,
+                           max_output_tokens, context_window,
                            reasoning_effort_supported, stream_usage_supported
                     FROM agent_pool ORDER BY agent_id
                     """
@@ -2983,8 +3040,10 @@ class _AgentPoolStore:
                 provider_exclusions=tuple(exclusions_by_agent.get(row[0], ())),
                 local_credential_key=row[8],
                 auth_scheme=row[9],
-                reasoning_effort_supported=(None if row[10] is None else bool(row[10])),
-                stream_usage_supported=bool(row[11]),
+                max_output_tokens=row[10],
+                context_window=row[11],
+                reasoning_effort_supported=(None if row[12] is None else bool(row[12])),
+                stream_usage_supported=bool(row[13]),
                 group_name=group_by_agent.get(row[0], ""),
                 endpoint_equivalence=contract_by_agent.get(row[0]),
             )
@@ -4908,6 +4967,10 @@ class TaskOrchestrator:
         if "group_name" in patch:
             group_name = str(patch["group_name"])
             patched = replace(patched, group_name=canonical_group_name(group_name) if group_name else "")
+        if "max_output_tokens" in patch:
+            patched = replace(patched, max_output_tokens=patch["max_output_tokens"])
+        if "context_window" in patch:
+            patched = replace(patched, context_window=patch["context_window"])
         if "endpoint_equivalence" in patch:
             value = patch["endpoint_equivalence"]
             if value is not None and not isinstance(value, dict):
@@ -6914,6 +6977,8 @@ class TaskOrchestrator:
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
+            "max_output_tokens": agent.max_output_tokens,
+            "context_window": agent.context_window,
             "stream_usage_supported": agent.stream_usage_supported,
             "group_name": agent.group_name,
             "group_routing": self._group_router.member_report(agent.id) if agent.group_name else None,

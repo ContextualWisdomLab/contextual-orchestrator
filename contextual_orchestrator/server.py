@@ -248,7 +248,8 @@ ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orches
 ALLOWED_SESSION_KEYS = {"token"}
 ALLOWED_AGENT_PATCH_KEYS = {
     "status", "priority", "tags", "provider_exclusions", "group_name",
-    "endpoint_equivalence", "stream_usage_supported",
+    "endpoint_equivalence", "stream_usage_supported", "max_output_tokens",
+    "context_window",
 }
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -264,6 +265,8 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "group_name",
     "endpoint_equivalence",
     "stream_usage_supported",
+    "max_output_tokens",
+    "context_window",
 }
 ALLOWED_MODEL_GROUP_KEYS = {"group_name", "member_agent_ids"}
 ALLOWED_MODEL_GROUP_PATCH_KEYS = {"member_agent_ids"}

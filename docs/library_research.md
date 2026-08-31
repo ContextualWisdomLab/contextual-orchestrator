@@ -75,6 +75,19 @@ Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_abla
 and keep route/conduct defaults unchanged until `production_default_change_allowed`
 returns true.
 
+## Discovery output ceilings and context windows (2026-08-31)
+
+Issue #927 needs real per-model output-ceiling and context-window metadata from
+discovery. Provider docs were re-checked against live public sources on
+2026-08-31 rather than recalled from memory because these schemas drift.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| OpenRouter metadata | Live `https://openrouter.ai/openapi.yaml`; current `Model.context_length`; current `TopProviderInfo.max_completion_tokens` | Parse `context_window` from `context_length` and `max_output_tokens` from `top_provider.max_completion_tokens`. Keep them separate because OpenRouter documents them as different limits. | Inferring output ceiling from `context_length` alone. |
+| Models.dev-enriched providers | Live `https://models.dev/api.json`; current `limit.context`; current `limit.output` | Merge `models.dev` `limit.context` into `context_window` and `limit.output` into `max_output_tokens` for providers already enriched from Models.dev (`openai`, `opencode_zen`, `nvidia_nim`, `nvidia_nim_sub`). | Guessing limits from modality, family, or price metadata. |
+| Configured gateway model info | Existing LiteLLM-style `model/info` merge in `model_discovery.py` | Accept only explicit completion-ceiling fields (`max_output_tokens` / `max_completion_tokens`) and explicit context-window fields (`context_window` / `context_length`) when every deployment for one logical model agrees. | Treating ambiguous `max_tokens` or `max_input_tokens` as an output ceiling. |
+| Runtime enforcement | Existing stdlib `ModelClient` request assembly | Clamp only provider-bound outgoing token-budget fields when an agent carries a known `max_output_tokens`; otherwise preserve caller and client defaults. | New provider SDKs, tokenizer packages, or substituting `context_window` when the output ceiling is unknown. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
