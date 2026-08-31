@@ -72,6 +72,7 @@ class SqliteRoutingObservationStore:
     """
 
     _TABLE_NAME = "routing_observations"
+    _REGISTRATION_LEASE_WINDOW_MULTIPLIER = 2
     _CREATE_TABLE_SQL = (
         "CREATE TABLE IF NOT EXISTS routing_observations ("
         "observation_id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -95,7 +96,8 @@ class SqliteRoutingObservationStore:
     _MAX_RETENTION_WINDOW_KEY = "max_retention_window_seconds"
     _CREATE_REGISTRATIONS_TABLE_SQL = (
         "CREATE TABLE IF NOT EXISTS routing_observation_registrations ("
-        "registration_id TEXT PRIMARY KEY, window_seconds INTEGER NOT NULL)"
+        "registration_id TEXT PRIMARY KEY, window_seconds INTEGER NOT NULL, "
+        "lease_expires_at REAL NOT NULL)"
     )
 
     def __init__(
@@ -133,11 +135,7 @@ class SqliteRoutingObservationStore:
                 connection.execute(self._CREATE_INDEX_SQL)
                 connection.execute(self._CREATE_RETENTION_INDEX_SQL)
                 self._register_retention_window(connection)
-                connection.execute(
-                    "INSERT INTO routing_observation_registrations "
-                    "(registration_id, window_seconds) VALUES (?, ?)",
-                    (self._registration_id, self._window_seconds),
-                )
+                self._refresh_registration(connection)
                 connection.commit()
             finally:
                 connection.close()
@@ -174,6 +172,17 @@ class SqliteRoutingObservationStore:
                 "ALTER TABLE routing_observations "
                 "ADD COLUMN context_key TEXT NOT NULL DEFAULT ''"
             )
+        registration_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(routing_observation_registrations)"
+            ).fetchall()
+        }
+        if "lease_expires_at" not in registration_columns:
+            connection.execute(
+                "ALTER TABLE routing_observation_registrations "
+                "ADD COLUMN lease_expires_at REAL NOT NULL DEFAULT 0"
+            )
 
     def _register_retention_window(self, connection: sqlite3.Connection) -> None:
         """Persist the largest configured shared-retention window for this database."""
@@ -185,8 +194,36 @@ class SqliteRoutingObservationStore:
             (self._MAX_RETENTION_WINDOW_KEY, self._window_seconds),
         )
 
+    def _refresh_registration(
+        self, connection: sqlite3.Connection, *, now: float | None = None
+    ) -> float:
+        """Renew this active store's bounded lease and discard crashed peers."""
+        current = self._now() if now is None else now
+        connection.execute(
+            "DELETE FROM routing_observation_registrations WHERE lease_expires_at <= ?",
+            (current,),
+        )
+        connection.execute(
+            "INSERT INTO routing_observation_registrations "
+            "(registration_id, window_seconds, lease_expires_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(registration_id) DO UPDATE SET "
+            "window_seconds = excluded.window_seconds, "
+            "lease_expires_at = excluded.lease_expires_at",
+            (
+                self._registration_id,
+                self._window_seconds,
+                current
+                + float(
+                    self._window_seconds
+                    * self._REGISTRATION_LEASE_WINDOW_MULTIPLIER
+                ),
+            ),
+        )
+        return current
+
     def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
         """Return the physical prune boundary from the shared database-wide window."""
+        current = self._refresh_registration(connection)
         row = connection.execute(
             "SELECT MAX(window_seconds) FROM routing_observation_registrations",
         ).fetchone()
@@ -195,7 +232,7 @@ class SqliteRoutingObservationStore:
             if row is None or row[0] is None
             else max(int(row[0]), 1)
         )
-        return self._now() - float(max_window_seconds)
+        return current - float(max_window_seconds)
 
     @staticmethod
     def _validate_ledger_name(ledger_name: str) -> None:
@@ -294,6 +331,8 @@ class SqliteRoutingObservationStore:
         connection = self._connect()
         with self._lock:
             try:
+                connection.execute("BEGIN IMMEDIATE")
+                self._refresh_registration(connection)
                 if active:
                     placeholders = ", ".join(["(?, ?)"] * len(active))
                     params: list[object] = [ledger_name.strip(), cutoff]
@@ -315,6 +354,10 @@ class SqliteRoutingObservationStore:
                         "ORDER BY observed_at, observation_id",
                         (ledger_name.strip(), cutoff),
                     ).fetchall()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
             finally:
                 connection.close()
         return [
@@ -339,6 +382,7 @@ class SqliteRoutingObservationStore:
         with self._lock:
             try:
                 connection.execute("BEGIN IMMEDIATE")
+                self._refresh_registration(connection)
                 for member_id in members:
                     connection.execute(
                         "DELETE FROM routing_observations WHERE ledger_name = ? AND member_id = ?",

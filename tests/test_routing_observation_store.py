@@ -89,6 +89,37 @@ def test_store_creates_retention_index_for_prune_path(tmp_path) -> None:
     assert "routing_observations_observed_at" in index_names
 
 
+def test_store_migrates_prelease_registration_schema(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE routing_observation_registrations ("
+            "registration_id TEXT PRIMARY KEY, window_seconds INTEGER NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO routing_observation_registrations VALUES (?, ?)",
+            ("crashed_legacy_process", 3600),
+        )
+
+    store = SqliteRoutingObservationStore(path, 60, clock=_Clock(100.0))
+    try:
+        with sqlite3.connect(path) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(routing_observation_registrations)"
+                )
+            }
+            registrations = connection.execute(
+                "SELECT registration_id FROM routing_observation_registrations"
+            ).fetchall()
+    finally:
+        store.close()
+
+    assert "lease_expires_at" in columns
+    assert registrations == [(store._registration_id,)]
+
+
 def test_store_deletes_only_requested_members(tmp_path) -> None:
     clock = _Clock(100.0)
     store = SqliteRoutingObservationStore(tmp_path / "routing.sqlite", 60, clock=clock)
@@ -685,6 +716,45 @@ def test_closed_long_window_no_longer_controls_physical_retention(tmp_path) -> N
             "SELECT member_id FROM routing_observations ORDER BY observation_id"
         ).fetchall()
     assert rows == [("member_b",)]
+
+
+def test_crashed_long_window_registration_expires_and_no_longer_controls_retention(
+    tmp_path,
+) -> None:
+    path = tmp_path / "routing.sqlite"
+    clock = _Clock(100.0)
+    crashed_long_window = SqliteRoutingObservationStore(path, 60, clock=clock)
+    short_window = SqliteRoutingObservationStore(path, 10, clock=clock)
+    crashed_long_window.append(
+        "transport",
+        "member_a",
+        context_key="member_a:v1",
+        observed_at=50.0,
+        success=False,
+    )
+
+    # Simulate an ungraceful exit: do not call close() on the long-window
+    # instance. Once its bounded lease expires, a live writer removes both the
+    # stale registration and evidence outside every active window.
+    clock.value = 221.0
+    short_window.append(
+        "transport",
+        "member_b",
+        context_key="member_b:v1",
+        observed_at=clock(),
+        success=False,
+    )
+
+    with sqlite3.connect(path) as connection:
+        registrations = connection.execute(
+            "SELECT registration_id FROM routing_observation_registrations"
+        ).fetchall()
+        observations = connection.execute(
+            "SELECT member_id FROM routing_observations ORDER BY observation_id"
+        ).fetchall()
+
+    assert registrations == [(short_window._registration_id,)]
+    assert observations == [("member_b",)]
 
 
 def test_store_prunes_only_rows_older_than_database_retention_window(tmp_path) -> None:
