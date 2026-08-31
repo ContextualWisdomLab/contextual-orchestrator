@@ -2300,10 +2300,10 @@ of fabricated-precision the project's Honest metrics convention exists to
 prevent. `tools` passthrough doesn't have this exposure (always one
 non-streaming upstream call; `payload["usage"]` there is always the raw
 provider JSON's own field), which is also exactly the shape Strix needs.
-**Follow-up (not yet scheduled)**: teach `_chat_response_sse_chunks` the same
-`measurement_status == "measured"` gate `chat_completion_chunks` already has,
-so conduct-mode streamed usage can be exposed honestly too, instead of kept
-closed.
+**Resolved by the conduct SSE usage follow-up**: `_chat_response_sse_chunks`
+now applies the same `measurement_status == "measured"` gate
+`chat_completion_chunks` already has, so conduct-mode streamed usage is exposed
+only when measured instead of rejecting the whole streaming request.
 
 **Duplicate-work consolidation** (concurrent autonomous sessions independently
 converged on the same bug): closed contextual-orchestrator#924 (superseded by

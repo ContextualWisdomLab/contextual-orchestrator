@@ -5141,6 +5141,9 @@ def _chat_response_sse_chunks(
         for normal_chunk in chunks:
             normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
+        cost = payload.get("cost")
+        if isinstance(cost, dict) and cost.get("measurement_status") != "measured":
+            return chunks
         if isinstance(reported_usage, dict):
             usage = {**reported_usage, "usage_source": "reported"}
         else:
@@ -6680,17 +6683,8 @@ def build_server(
                         # otherwise — the same fallback already exercised for the
                         # non-tools streaming path — so there is nothing to fail closed
                         # on here.
-                        # response_format-only structured passthrough (conduct mode)
-                        # is different: its usage comes from a multi-step workflow's
-                        # cost ledger, which may be unmeasured, so it keeps failing
-                        # closed rather than let _chat_response_sse_chunks synthesize
-                        # an estimated figure for a workflow-level answer.
-                        if stream and include_usage and not tool_loop:
-                            raise RequestError(
-                                400,
-                                "invalid_stream_options",
-                                "stream_options.include_usage=true is not supported with response_format-only structured passthrough",
-                            )
+                        # Conduct-mode payloads carry cost.measurement_status;
+                        # SSE usage is emitted only when that ledger is measured.
                         if (
                             tool_loop
                             and "include_orchestration_trace" in body
