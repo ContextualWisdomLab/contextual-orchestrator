@@ -121,6 +121,44 @@ def downgrade_to_failover(decision: ToolFailureDecision) -> ToolFailureDecision:
     )
 
 
+def classify_provider_transport_failure(retryable: bool) -> ToolFailureDecision:
+    """Map one plain (non-tool) provider transport failure to a fallback decision.
+
+    This is the classifier for a bounded, side-effect-free model completion
+    request -- the primary call a virtual ``orchestrator/free``/``orchestrator/auto``
+    route makes, not an in-flight tool invocation. Because the request has no
+    external side effect, replaying it (same agent) or moving to the next
+    ranked candidate can never create the ambiguous-outcome risk
+    :func:`classify_tool_failure` exists to guard against, so this classifier
+    intentionally never returns :attr:`ToolFallbackAction.FAIL_CLOSED`.
+
+    ``retryable`` is the upstream classification already computed by
+    :func:`contextual_orchestrator.provider_errors.classify_provider_failure`
+    (true for a transient 429/500/502/503/504/408/network failure, false for a
+    non-transient 4xx such as 401/403/404). The decision is keyed on that
+    boolean alone -- never on the failure's message text -- so an upstream
+    error body that happens to mention "tool", "command", "invalid arguments",
+    or another :func:`classify_tool_failure` keyword can never accidentally
+    reclassify a plain provider outage as fail-closed (CWE-705: incorrect
+    control flow scoping between the tool-execution and provider-transport
+    failure domains).
+    """
+    if not isinstance(retryable, bool):
+        raise TypeError("retryable must be a boolean")
+    if retryable:
+        return _decision(
+            ToolFailureKind.TRANSPORT_ERROR,
+            ToolFallbackAction.RETRY_SAME_AGENT,
+            retry_safe=True,
+            circuit_failure=True,
+        )
+    return _decision(
+        ToolFailureKind.TRANSPORT_ERROR,
+        ToolFallbackAction.FAILOVER_AGENT,
+        circuit_failure=True,
+    )
+
+
 _HTTP_FAILURE_KIND = {
     400: ToolFailureKind.INVALID_ARGUMENTS,
     401: ToolFailureKind.PERMISSION_DENIED,

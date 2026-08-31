@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import AUTH_SCHEME_RAW_TOKEN  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     register_credential,
@@ -28,6 +29,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ModelUnitPrice,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _MODELS_DEV_FETCH_ATTEMPTS,
     _deduplicate_discovered_models,
     _fetch_json,
     _merge_configured_gateway_metadata,
@@ -499,7 +501,7 @@ BYTEZ_SOURCE = ProviderModelSource(
     credential_name="BYTEZ_API_KEY",
     list_url="https://api.bytez.com/models/v2/list/models",
     chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-    auth_scheme="Key",
+    auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     style="bytez",
     task_filter="chat",
     capabilities=("chat",),
@@ -1079,6 +1081,71 @@ def test_discover_all_models_shared_models_dev_fetch_failure_keeps_is_free_false
     assert [model.is_free for model in discovered] == [False, False]
 
 
+def test_discover_all_models_shared_models_dev_fetch_retries_a_transient_failure() -> None:
+    """A single transient Models.dev failure recovers on retry instead of erasing coverage.
+
+    Regression for the ContextualWisdomLab/.github#1433 ``orchestrator/free``
+    reliability gap: NVIDIA NIM's free-tier coverage depends entirely on this
+    one unauthenticated, third-party fetch (ADR 0041) succeeding, so a lone
+    blip must not degrade every dependent provider's evidence for the run.
+    """
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    attempts = {"models_dev": 0}
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            attempts["models_dev"] += 1
+            if attempts["models_dev"] < 2:
+                raise urllib.error.URLError("transient blip")
+            return _Response(
+                {
+                    "nvidia": {
+                        "models": {
+                            "meta/llama-3.1-8b-instruct": {
+                                "cost": {"input": 0, "output": 0},
+                                "modalities": {"input": ["text"], "output": ["text"]},
+                            }
+                        }
+                    }
+                }
+            )
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert attempts["models_dev"] == 2
+    assert [model.is_free for model in discovered] == [True]
+
+
+def test_discover_all_models_shared_models_dev_fetch_gives_up_after_retry_budget() -> None:
+    """Exhausting the bounded retry budget still degrades to unknown cost, not a crash."""
+    register_credential("NVIDIA_NIM_API_KEY", "nim-key")
+    attempts = {"models_dev": 0}
+
+    def urlopen(request, timeout=None):
+        if request.full_url == "https://models.dev/api.json":
+            attempts["models_dev"] += 1
+            raise urllib.error.URLError("still offline")
+        return _Response({"data": [{"id": "meta/llama-3.1-8b-instruct"}]})
+
+    sources = tuple(item for item in PROVIDER_MODEL_SOURCES if item.provider_name == "nvidia_nim")
+    with (
+        patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+        patch("contextual_orchestrator.model_discovery.time.sleep"),
+    ):
+        discovered, errors = discover_all_models(sources)
+
+    assert errors == []
+    assert attempts["models_dev"] == _MODELS_DEV_FETCH_ATTEMPTS
+    assert [model.is_free for model in discovered] == [False]
+
+
 def test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev() -> None:
     """Bytez has no Models.dev coverage; it must never trigger the shared fetch."""
     register_credential("BYTEZ_API_KEY", "bytez-key")
@@ -1141,11 +1208,11 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
         discovered = discover_provider_models(BYTEZ_SOURCE)
 
-    assert seen_requests[0].get_header("Authorization") == "Key bytez-secret"
+    assert seen_requests[0].get_header("Authorization") == "bytez-secret"
     assert seen_requests[0].full_url == "https://api.bytez.com/models/v2/list/models?task=chat"
     assert len(discovered) == 1
     assert discovered[0].model_id == "0-hero/Matter-0.1-Slim-7B-C"
-    assert discovered[0].auth_scheme == "Key"
+    assert discovered[0].auth_scheme == AUTH_SCHEME_RAW_TOKEN
     assert discovered[0].capabilities == ("chat",)
     # Bytez prices by GPU-second, not per-token: no fabricated per-1k estimate.
     assert discovered[0].prompt_price_per_1k is None
@@ -1159,7 +1226,7 @@ def test_discover_bytez_preserves_operator_declared_capabilities() -> None:
         credential_name="BYTEZ_EMBEDDING_KEY",
         list_url="https://api.bytez.com/models/v2/list/models?task=embedding",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         capabilities=("embedding",),
     )
@@ -1501,12 +1568,12 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
         model_id="0-hero/Matter-0.1-Slim-7B-C",
         credential_name="BYTEZ_API_KEY",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     agent = agent_from_discovered(discovered, priority=3)
     assert agent.id == "bytez_0_hero_matter_0_1_slim_7b_c"
     assert agent.disabled is True
-    assert agent.auth_scheme == "Key"
+    assert agent.auth_scheme == AUTH_SCHEME_RAW_TOKEN
     assert agent.credential_key == "BYTEZ_API_KEY"
     assert agent.priority == 3
     assert "discovered" in agent.tags
@@ -1592,7 +1659,7 @@ def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:
         model_id="some/model",
         credential_name="BYTEZ_API_KEY",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     written = refresh_price_book([priced, unpriced], price_book)
     assert written == 1
@@ -1652,7 +1719,7 @@ def test_unknown_price_is_not_silently_ranked_as_free() -> None:
 
     price_book = PriceBook(InMemoryConfigStore())
     known = DiscoveredModel("openrouter", "known", "KEY_NAME", "https://openrouter.ai/api/v1", "Bearer")
-    unknown = DiscoveredModel("bytez", "unknown", "KEY_NAME", "https://api.bytez.com/v1", "Key")
+    unknown = DiscoveredModel("bytez", "unknown", "KEY_NAME", "https://api.bytez.com/v1", AUTH_SCHEME_RAW_TOKEN)
     price_book.set_price(PriceEntry("openrouter", "known", 0.1, 0.1))
 
     assert select_cheapest_discovered_agent([unknown, known], price_book) is known

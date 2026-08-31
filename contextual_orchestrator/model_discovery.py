@@ -29,7 +29,13 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
 from .credentials import get_credential
-from .orchestrator import ModelAgent, ModelClient, is_transient_error
+from .orchestrator import (
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelAgent,
+    ModelClient,
+    format_authorization_header,
+    is_transient_error,
+)
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
@@ -51,6 +57,15 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
+# Small bounded retry budget for the one shared, unauthenticated, third-party
+# Models.dev fetch that every ``models_dev_provider_id``-joined source's
+# free-tier classification depends on (ADR 0041/0032). It has already been
+# observed live to reject urllib's default user agent as a bot signature (see
+# ``_HTTP_USER_AGENT`` above); a lone transient failure of that kind must not
+# silently erase every dependent provider's ``orchestrator/free`` coverage for
+# the whole discovery run the way a single un-retried attempt would.
+_MODELS_DEV_FETCH_ATTEMPTS = 3
+_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS = 0.05
 _OPENROUTER_ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
 _OPENROUTER_PROVIDER_POLICIES_URL = "https://openrouter.ai/api/frontend/v1/all-providers"
 CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
@@ -201,7 +216,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         credential_name="BYTEZ_API_KEY",
         list_url="https://api.bytez.com/models/v2/list/models",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
         capabilities=("chat",),
@@ -277,7 +292,7 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
     headers = {"user-agent": _HTTP_USER_AGENT}
     if api_key:
-        headers["authorization"] = f"{auth_scheme} {api_key}"
+        headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
@@ -291,6 +306,33 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         )
     with response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
+    """Fetch the shared Models.dev catalog with a small bounded retry.
+
+    Every ``models_dev_provider_id``-joined source (``opencode_zen``,
+    ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
+    unauthenticated, best-effort, third-party fetch for its free-cost
+    evidence; none of those providers report their own pricing, so a lone
+    transient failure here (a timeout, a reset connection, or the
+    bot-signature rejection ``_HTTP_USER_AGENT`` already guards against) used
+    to silently degrade every one of them to ``is_free = False`` for the rest
+    of the discovery run, collapsing ``orchestrator/free`` coverage over a
+    blip in a service this gateway does not control.
+
+    Returns ``None`` -- the existing "no evidence" fail-closed signal
+    :func:`_merge_models_dev_metadata` already handles -- only once every
+    bounded attempt has failed; a successful attempt returns immediately
+    without spending the rest of the retry budget.
+    """
+    for attempt in range(_MODELS_DEV_FETCH_ATTEMPTS):
+        try:
+            return _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            if attempt < _MODELS_DEV_FETCH_ATTEMPTS - 1:
+                time.sleep(_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS)
+    return None
 
 
 def _fetch_configured_gateway_json(
@@ -324,7 +366,7 @@ def _fetch_configured_gateway_json(
         credential_key=CONFIGURED_GATEWAY_CREDENTIAL_NAME,
     )
     destination = client._validate_provider(agent)
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     with client._open_provider(request, destination, timeout=timeout) as response:
         raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
@@ -362,7 +404,7 @@ def _fetch_json_same_host_https(
     parsed = urlsplit(url)
     if not parsed.hostname:
         raise ValueError(f"refusing discovery URL without hostname: {url!r}")
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     opener = urllib.request.build_opener(
         _TrustedDiscoveryRedirectHandler(parsed.hostname)
@@ -1120,10 +1162,7 @@ def discover_provider_models(
         raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(last_exc)) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
-            try:
-                metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-            except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-                metadata = None
+            metadata = _fetch_models_dev_metadata(timeout=timeout)
         else:
             metadata = models_dev_metadata
         payload = _merge_models_dev_metadata(payload, metadata, source.models_dev_provider_id)
@@ -1180,7 +1219,8 @@ def discover_all_models(
 
     Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
     ``openai``) each want the same Models.dev catalog. When any registered
-    source declares ``models_dev_provider_id``, fetch it here exactly once and
+    source declares ``models_dev_provider_id``, fetch it here exactly once
+    (:func:`_fetch_models_dev_metadata`, with its own small bounded retry) and
     hand every source the identical parsed payload, instead of each source
     independently repeating the fetch inside :func:`discover_provider_models`.
     """
@@ -1191,10 +1231,7 @@ def discover_all_models(
         source.models_dev_provider_id and get_credential(source.credential_name)
         for source in sources
     ):
-        try:
-            models_dev_metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-            models_dev_metadata = None
+        models_dev_metadata = _fetch_models_dev_metadata(timeout=timeout)
     for source in sources:
         try:
             discovered.extend(
