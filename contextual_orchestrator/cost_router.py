@@ -200,6 +200,28 @@ class CostRoutingCoordinator:
                 best_candidate, best_entry = candidate, entry
         return best_candidate
 
+    def _cost_ordered_capability_candidates(self, candidates: List[Any]) -> List[Any]:
+        """Price-order healthy candidates while retaining measured failover order."""
+        healthy = [
+            candidate
+            for candidate in candidates
+            if self.orchestrator._group_router.member_report(candidate.id)[
+                "success_posterior_mean"
+            ]
+            >= 0.5
+        ]
+        if not healthy:
+            return candidates
+        ordered: List[Any] = []
+        remaining = list(healthy)
+        # ponytail: pools are small; replace with a shared price key if they become large.
+        while remaining:
+            cheapest = self._cheapest_capability_candidate(remaining)
+            ordered.append(cheapest)
+            remaining = [candidate for candidate in remaining if candidate.id != cheapest.id]
+        healthy_ids = {candidate.id for candidate in healthy}
+        return ordered + [candidate for candidate in candidates if candidate.id not in healthy_ids]
+
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
         trace = result.get("trace") or []

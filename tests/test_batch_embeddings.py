@@ -179,10 +179,66 @@ def test_http_embeddings_try_cheapest_eligible_member_first(path: str, input_key
             "POST",
             f"http://127.0.0.1:{server.server_address[1]}{path}",
             token,
-            {"model": TaskOrchestrator.AUTO_MODEL, input_key: ["cost aware"]},
+            {input_key: ["cost aware"]},
         )
         assert status == 200, document
         assert backend.requests[0].agent_id == cheap.id
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("path", "input_key"),
+    [("/v1/embeddings", "input"), ("/v1/batch/embeddings", "inputs")],
+)
+def test_http_embeddings_demote_a_failed_cheapest_member(
+    path: str, input_key: str
+) -> None:
+    cheap = ModelAgent(
+        "cheap_member", "cheap-embedding", "mock://cheap",
+        provider_name="cheap-provider", tags=("embedding",), group_name="shared_embedding",
+    )
+    fallback = ModelAgent(
+        "fallback_member", "fallback-embedding", "mock://fallback",
+        provider_name="fallback-provider", tags=("embedding",), group_name="shared_embedding",
+    )
+    orchestrator = TaskOrchestrator([cheap, fallback])
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("cheap-provider", cheap.model, 0.01, 0.0))
+    price_book.set_price(PriceEntry("fallback-provider", fallback.model, 5.0, 0.0))
+
+    class _FailCheapBackend(_RecordingEmbeddingBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempts: list[str | None] = []
+
+        def submit(self, requests, metadata=None):
+            self.attempts.append(requests[0].agent_id)
+            if requests[0].agent_id == cheap.id:
+                raise RuntimeError("cheap member unavailable")
+            return super().submit(requests, metadata)
+
+    backend = _FailCheapBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, embedding_batch_backend=backend
+    )
+    token = "health_order_http_token"
+    server = build_server(
+        orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}{path}"
+        payload = {input_key: ["cost aware"]}
+        assert _request("POST", url, token, payload)[0] == 200
+        assert _request("POST", url, token, payload)[0] == 200
+        assert backend.attempts == [cheap.id, fallback.id, fallback.id]
+        orchestrator._group_router.observe_success(cheap.id, 1.0)
+        assert _request("POST", url, token, payload)[0] == 200
+        assert backend.attempts[-2:] == [cheap.id, fallback.id]
     finally:
         server.shutdown()
         thread.join(timeout=5)
