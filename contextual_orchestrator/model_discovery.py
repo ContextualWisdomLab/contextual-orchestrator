@@ -1622,7 +1622,7 @@ def _discovery_price_key(
     ):
         return unknown
     try:
-        cost, currency = price_book.compute_cost(
+        cost, currency, _price_known = price_book.compute_cost(
             model.provider_name,
             model.model_id,
             1000,

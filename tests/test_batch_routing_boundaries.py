@@ -28,9 +28,9 @@ class _StaticPriceBook:
 
     def compute_cost(
         self, provider: str, model: str, prompt_tokens: int, completion_tokens: int
-    ) -> tuple[float, str]:
+    ) -> tuple[float, str, bool]:
         self.queries.append((provider, model))
-        return self._cost, "USD"
+        return self._cost, "USD", True
 
 
 def test_cheapest_upstream_returns_none_for_no_candidates() -> None:

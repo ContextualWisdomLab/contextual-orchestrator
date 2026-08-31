@@ -141,7 +141,7 @@ def cheapest_upstream(
     for candidate in candidates:
         provider = candidate.get("provider", "")
         model = candidate.get("model", "")
-        cost, _currency = price_book.compute_cost(
+        cost, _currency, _price_known = price_book.compute_cost(
             provider, model, assumed_prompt_tokens, assumed_completion_tokens
         )
         if best_cost is None or cost < best_cost:

@@ -12,6 +12,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The cost ledger no longer fabricates a $0.00 price for an unpriced
+  provider/model. `PriceBook.compute_cost()` now returns a
+  `(cost_amount, currency_code, price_known)` 3-tuple; `UsageRecord` gains a
+  `price_known: bool` field (persisted through a new `usage_price_knowledge`
+  satellite table, joined the same way `usage_measurements` already is) so a
+  measured-but-unpriced request is distinguishable from a genuinely free one.
+  `CostLedger.rollup()`/`.report()`/`.total()` add an additive
+  `cost_amount_by_status`/`record_count_by_status` breakdown
+  (measured/estimated/unavailable) alongside the existing flat `cost_amount`
+  total, so measured, estimated, and unavailable-priced spend are no longer
+  opaquely blended into one authoritative-looking number.
+
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

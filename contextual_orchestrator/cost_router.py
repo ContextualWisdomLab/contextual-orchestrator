@@ -1139,7 +1139,13 @@ class CostRoutingCoordinator:
         start: Optional[int] = None,
         end: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Return a cost rollup report grouped by ``dimension`` over a window."""
+        """Return a cost rollup report grouped by ``dimension`` over a window.
+
+        The envelope's ``items`` and ``grand_total`` each carry a
+        ``cost_amount_by_status``/``record_count_by_status`` breakdown
+        (measured/estimated/unavailable) alongside their flat ``cost_amount``
+        total — see :meth:`CostLedger.rollup`.
+        """
         return self.ledger.report(dimension, start, end)
 
 

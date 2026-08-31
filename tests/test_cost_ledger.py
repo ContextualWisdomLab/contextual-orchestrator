@@ -139,7 +139,33 @@ def test_unpriced_model_costs_zero_and_still_records() -> None:
         provider="mystery", model="unpriced", prompt_tokens=100, completion_tokens=50
     )
     assert record.cost_amount == 0.0
+    # The zero must be distinguishable from a real free price: an unpriced
+    # provider/model is unknown, never fabricated as $0.00.
+    assert record.price_known is False
     assert len(ledger.records()) == 1
+
+
+def test_priced_model_marks_price_known_true() -> None:
+    ledger = _priced_ledger()
+    record = ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=100, completion_tokens=50
+    )
+    assert record.price_known is True
+
+
+def test_compute_cost_returns_price_known_flag() -> None:
+    """PriceBook.compute_cost's 3-tuple distinguishes known from unknown price."""
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("openai", "gpt-x", prompt_price_per_1k=2.0, completion_price_per_1k=4.0)
+    )
+
+    priced = price_book.compute_cost("openai", "gpt-x", 1000, 500)
+    assert priced == (4.0, "USD", True)
+
+    unpriced = price_book.compute_cost("mystery", "unpriced", 100, 50)
+    assert unpriced == (0.0, "USD", False)
 
 
 def test_provider_wildcard_price_entry() -> None:
@@ -355,6 +381,48 @@ def test_report_envelope_sorts_by_cost_desc_and_includes_grand_total() -> None:
     assert report["grand_total"]["cost_amount"] == 11.0
 
 
+def test_rollup_report_total_break_down_cost_by_measurement_status() -> None:
+    """cost_amount stays a flat sum; the new by-status fields attribute it."""
+    ledger = _priced_ledger()
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0,
+        measurement_status="measured",
+    )  # 2.0, priced
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=500, completion_tokens=0,
+        measurement_status="estimated",
+    )  # 1.0, priced
+    ledger.record_usage(
+        provider="mystery", model="unpriced", prompt_tokens=1000, completion_tokens=1000,
+        measurement_status="unavailable",
+    )  # 0.0, unpriced
+
+    total = ledger.total()
+    assert total["cost_amount"] == 3.0  # unchanged, backward-compatible flat total
+    assert total["cost_amount_by_status"] == {
+        "measured": 2.0, "estimated": 1.0, "unavailable": 0.0,
+    }
+    assert total["record_count_by_status"] == {
+        "measured": 1, "estimated": 1, "unavailable": 1,
+    }
+    # The breakdown must sum back to the flat total exactly.
+    assert sum(total["cost_amount_by_status"].values()) == total["cost_amount"]
+
+    by_provider = ledger.rollup("provider")
+    assert by_provider["openai"]["cost_amount"] == 3.0
+    assert by_provider["openai"]["cost_amount_by_status"] == {
+        "measured": 2.0, "estimated": 1.0, "unavailable": 0.0,
+    }
+    assert by_provider["openai"]["record_count_by_status"] == {
+        "measured": 1, "estimated": 1, "unavailable": 0,
+    }
+    assert by_provider["mystery"]["cost_amount_by_status"]["unavailable"] == 0.0
+    assert by_provider["mystery"]["record_count_by_status"]["unavailable"] == 1
+
+    report = ledger.report("provider")
+    assert report["grand_total"] == total
+
+
 def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
     conn = sqlite3.connect(":memory:")
     store = SqlLedgerStore(conn, paramstyle="qmark")
@@ -375,6 +443,23 @@ def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
 
     by_company = ledger.rollup("company")
     assert by_company["acme"]["cost_amount"] == 15.0  # 6 + 9
+
+
+def test_sql_ledger_persists_price_known_flag() -> None:
+    """price_known round-trips through the SQL store's satellite table."""
+    conn = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(conn, paramstyle="qmark")
+    ledger = _priced_ledger(store=store)
+    ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0)
+    ledger.record_usage(provider="mystery", model="unpriced", prompt_tokens=1000, completion_tokens=0)
+
+    assert conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='usage_price_knowledge'"
+    ).fetchone() == ("usage_price_knowledge",)
+
+    rows = {row["provider_name"]: row for row in store.query()}
+    assert bool(rows["openai"]["price_known"]) is True
+    assert bool(rows["mystery"]["price_known"]) is False
 
 
 def test_table_columns_honors_its_argument_on_qmark() -> None:
@@ -544,6 +629,10 @@ def test_sql_ledger_migrates_flattened_usage_rows() -> None:
     assert row["service_name"] == "unattributed"
     assert row["team_name"] == "unattributed"
     assert row["company_name"] == "acme"
+    # A flattened legacy row predates the price_known signal: whether its
+    # stored cost reflects a real price is unknown, so migration marks it
+    # unknown rather than assuming it was known.
+    assert bool(row["price_known"]) is False
 
 
 def test_sql_ledger_maps_null_legacy_attribution_to_unattributed() -> None:
@@ -824,6 +913,8 @@ def test_orphaned_legacy_generation_is_adopted_and_dropped() -> None:
     rows = store.query(None, None)
     assert len(rows) == 1
     assert rows[0]["usage_record_id"] == "usage_guard_t1"
+    # Adopted from a pre-price_known legacy table: unknown, not assumed known.
+    assert bool(rows[0]["price_known"]) is False
     legacy_tables = connection.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE name='llm_usage_records_legacy'"
     ).fetchone()[0]
@@ -910,6 +1001,8 @@ def test_ledger_table_names_follow_two_word_snake_case() -> None:
         "llm_price_entries",
         "cost_attribution_values",
         "usage_record_attributions",
+        "usage_measurements",
+        "usage_price_knowledge",
     ):
         assert is_two_word_snake_case(name)
 
