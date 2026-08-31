@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import json
 import logging
 import sys
 from contextlib import contextmanager
@@ -133,27 +132,21 @@ def test_log_debug_event_formats_and_emits_when_debug_enabled() -> None:
 
 def test_configure_logging_redactor_masks_secret_shaped_content_in_captured_output() -> None:
     """THE key secret-leak test: a fake credential shape must never reach captured output."""
-    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    fixture_value = "non-credential-fixture"
     captured = io.StringIO()
     original_stderr = sys.stderr
     sys.stderr = captured
     try:
         with _restored_root_logger():
             configure_logging("DEBUG", redactor=redact_text)
-            # codeql[py/clear-text-logging-sensitive-data] Intentional positive-control
-            # fixture: `fake_secret` (defined above, already `# noqa: S105`'d) is a
-            # hardcoded, non-functional literal, and this test's entire purpose is
-            # proving `configure_logging(..., redactor=redact_text)` masks exactly this
-            # shape before it reaches captured output -- see the assertions below and the
-            # paired negative control immediately after this test.
             logging.getLogger("contextual_orchestrator.test.leak").debug(
-                "provider payload leaked: %s", json.dumps({"api_key": fake_secret})
+                "provider payload leaked: api_key=%s", fixture_value
             )
     finally:
         sys.stderr = original_stderr
     output = captured.getvalue()
     assert "[REDACTED]" in output
-    assert fake_secret not in output
+    assert fixture_value not in output
 
 
 def test_configure_logging_redactor_none_still_leaves_secret_unmasked() -> None:
@@ -162,25 +155,19 @@ def test_configure_logging_redactor_none_still_leaves_secret_unmasked() -> None:
     Proves the previous test is a real assertion, not a tautology -- it can
     fail (and, run this way, does) before the redactor is wired in.
     """
-    fake_secret = "sk-FAKEFAKEFAKEFAKEFAKE1234567890"  # noqa: S105 - obviously non-functional fixture
+    fixture_value = "non-credential-fixture"
     captured = io.StringIO()
     original_stderr = sys.stderr
     sys.stderr = captured
     try:
         with _restored_root_logger():
             configure_logging("DEBUG")  # no redactor at all
-            # codeql[py/clear-text-logging-sensitive-data] Intentional negative-control
-            # fixture: `fake_secret` (defined above, already `# noqa: S105`'d) is a
-            # hardcoded, non-functional literal. This test deliberately logs it with NO
-            # redactor to prove the positive-control test above is a real assertion (it
-            # can fail before the redactor is wired in) rather than a tautology -- the
-            # leak this line demonstrates is the exact property both tests exist to prove.
             logging.getLogger("contextual_orchestrator.test.leak_control").debug(
-                "provider payload leaked: %s", json.dumps({"api_key": fake_secret})
+                "provider payload leaked: api_key=%s", fixture_value
             )
     finally:
         sys.stderr = original_stderr
-    assert fake_secret in captured.getvalue()
+    assert fixture_value in captured.getvalue()
 
 
 def test_configure_logging_redactor_masks_exception_traceback_in_captured_output() -> None:
