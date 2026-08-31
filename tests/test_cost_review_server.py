@@ -200,7 +200,8 @@ def test_chat_completion_reports_real_usage_and_records_cost() -> None:
                                   "messages": [{"role": "user", "content": "hello there world"}],
                                   "attribution": {"team": "alpha", "company": "acme"}})
         assert status == 200
-        assert body["usage"]["total_tokens"] > 0
+        assert body["usage"] is None
+        assert body["usage_measurement_status"] == "unavailable"
         assert body["orchestration"]["channel"] == "sync"
 
         status, report = _request("GET", f"{base}/api/v1/cost_reports/rollup?dimension=team", token)
@@ -212,8 +213,8 @@ def test_chat_completion_reports_real_usage_and_records_cost() -> None:
         server.shutdown()
 
 
-def test_chat_completion_fallback_path_labels_estimated_measurement_status() -> None:
-    """Provider-unreported usage stays honestly labeled estimated end to end."""
+def test_chat_completion_missing_usage_is_unavailable_end_to_end() -> None:
+    """Provider-unreported usage stays unavailable end to end."""
     server, port, token = _serve()
     base = f"http://127.0.0.1:{port}"
     try:
@@ -229,13 +230,13 @@ def test_chat_completion_fallback_path_labels_estimated_measurement_status() -> 
         assert status == 200, body
         # The mock provider reports no usage, so both the completion cost
         # payload and the analytics usage-ledger rows must carry the explicit
-        # estimated measurement status instead of claiming provider-measured.
-        assert body["orchestration"]["cost"]["measurement_status"] == "estimated"
+        # unavailable measurement status instead of claiming provider-measured.
+        assert body["orchestration"]["cost"]["measurement_status"] == "unavailable"
 
         status, records = _request("GET", f"{base}/api/v1/llm_usage_records", token)
         assert status == 200, records
         assert records["total_count"] == 1
-        assert records["items"][0]["measurement_status"] == "estimated"
+        assert records["items"][0]["measurement_status"] == "unavailable"
     finally:
         server.shutdown()
 

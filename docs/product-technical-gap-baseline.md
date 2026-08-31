@@ -2271,10 +2271,9 @@ that exact combination unconditionally, before any upstream call.
 codebase has never sent `tools` + `stream=true` to a real provider in the
 first place; `proxy_completion()` always forces `upstream["stream"] = False`
 for tool-calling requests. `_chat_response_sse_chunks` (the SSE framing
-function this passthrough already calls) already had full, independently
-tested support for both tool_calls delta framing and honest usage-chunk
-emission (`usage_source: "reported"` vs `"estimated"`) — the only thing
-missing was reachability.
+function this passthrough already calls) had independently tested tool_calls
+delta framing. ADR 0006 subsequently removed its estimated-usage fallback:
+valid provider usage is reported and missing usage is explicitly unavailable.
 
 **Fix**: [PR #925](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/925)
 narrowed the rejection from *all* `tools`/`response_format` structured
@@ -2285,9 +2284,8 @@ fix, PR #924, took that broader approach and was closed in favor of #925):
 traced `cost_router.py:456-507` — a conduct-mode multi-step workflow's
 `result["usage"]` dict is built by summing per-step counts and is *always*
 populated, but carries no `usage_source`/`measurement_status` tag of its own;
-when a step's provider response omits usage, the sum silently includes a
-local token-count estimate (the `measurement_status="estimated"` case, which
-only survives on the sibling `cost` key, never on `usage` itself).
+when a step's provider response omitted usage, the historical sum silently
+included a local token-count estimate.
 `_chat_response_sse_chunks` labels any populated `usage` dict
 `"usage_source": "reported"` unconditionally — it does not check
 `payload["cost"]["measurement_status"]`, unlike the sibling
@@ -2300,10 +2298,9 @@ of fabricated-precision the project's Honest metrics convention exists to
 prevent. `tools` passthrough doesn't have this exposure (always one
 non-streaming upstream call; `payload["usage"]` there is always the raw
 provider JSON's own field), which is also exactly the shape Strix needs.
-**Follow-up (not yet scheduled)**: teach `_chat_response_sse_chunks` the same
-`measurement_status == "measured"` gate `chat_completion_chunks` already has,
-so conduct-mode streamed usage can be exposed honestly too, instead of kept
-closed.
+**Follow-up delivered by ADR 0006**: `_chat_response_sse_chunks` now emits
+measured usage only for valid provider counts and otherwise emits null usage
+with an unavailable status rather than synthesizing the historical estimate.
 
 **Duplicate-work consolidation** (concurrent autonomous sessions independently
 converged on the same bug): closed contextual-orchestrator#924 (superseded by

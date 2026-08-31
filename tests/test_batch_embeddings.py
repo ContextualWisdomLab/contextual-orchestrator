@@ -39,7 +39,16 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     EmbeddingBatchResultItem,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
-from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
+
+
+class _ExactTestCounter:
+    """Deterministic injected counter for synthetic embedding fixtures."""
+
+    def __init__(self, tokens_per_word: float = 1.0) -> None:
+        self.tokens_per_word = tokens_per_word
+
+    def count_text(self, text: str, model: str = "") -> int:
+        return int(len(text.split()) * self.tokens_per_word)
 
 
 CONTRACT = json.loads(
@@ -79,7 +88,7 @@ def _serve():
         orchestrator,
         config,
         price_book=price_book,
-        embedding_token_counter=HeuristicTokenCounter(),
+        embedding_token_counter=_ExactTestCounter(),
     )
     token = "cost_token"
     server = build_server(
@@ -279,7 +288,7 @@ def test_batch_embeddings_zdr_only_omitted_model_selects_zdr_capable_embedding_a
     coordinator = CostRoutingCoordinator(
         orchestrator,
         InMemoryConfigStore(),
-        embedding_token_counter=HeuristicTokenCounter(),
+        embedding_token_counter=_ExactTestCounter(),
     )
     token = "zdr_batch_token"
     server = build_server(
@@ -305,7 +314,7 @@ def test_pending_batch_preserves_resolved_model_identity() -> None:
     coordinator = CostRoutingCoordinator(
         orchestrator,
         InMemoryConfigStore(),
-        embedding_token_counter=HeuristicTokenCounter(),
+        embedding_token_counter=_ExactTestCounter(),
         embedding_batch_backend=_PendingEmbeddingBackend(),
     )
 
@@ -348,7 +357,7 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
         orchestrator,
         config,
         price_book=price_book,
-        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        token_counter=_ExactTestCounter(tokens_per_word=1.0),
         embedding_batch_backend=backend,
     )
 
@@ -401,7 +410,7 @@ def test_batch_embeddings_char_guard_splits_no_whitespace_input() -> None:
     coordinator = CostRoutingCoordinator(
         orchestrator,
         config,
-        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        token_counter=_ExactTestCounter(tokens_per_word=1.0),
         embedding_batch_backend=backend,
     )
 

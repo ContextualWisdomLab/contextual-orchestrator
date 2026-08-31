@@ -1,94 +1,74 @@
-"""Spend observability — estimated per-model token + cost analytics.
-
-The LLM-gateway category monetizes on spend tracking; this product discarded usage
-entirely. These assert the token estimate, per-model aggregation, cost math when a
-price is configured, honest nulls when it is not, and the read-only HTTP endpoint.
-"""
+"""Authoritative per-model token and cost analytics."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
-import sys
 import threading
-import urllib.error
 import urllib.request
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import estimate_tokens  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
+from contextual_orchestrator.token_counting import TokenCountUnavailable
 
 
-def test_estimate_tokens_heuristic() -> None:
-    assert estimate_tokens("") == 0
-    assert estimate_tokens("abcd") == 1  # 4 chars ~ 1 token
-    assert estimate_tokens("abcde") == 2  # (5 + 3) // 4
-    assert estimate_tokens("a" * 400) == 100
+class _ExactCounter:
+    """Injected exact raw-output counter for synthetic fixtures."""
+
+    def count_text(self, text: str, model: str) -> int:
+        if model != "gpt-4":
+            raise TokenCountUnavailable("unknown synthetic model")
+        return len(text.encode("utf-8"))
 
 
-def test_spend_without_prices_reports_null_cost() -> None:
-    orchestrator = TaskOrchestrator([ModelAgent("general_agent", "free-model", tags=("reasoning",))])
-    orchestrator.run([{"role": "user", "content": "estimate my spend"}])
+def _orchestrator(*, price: float | None = None) -> TaskOrchestrator:
+    return TaskOrchestrator(
+        [ModelAgent("general_agent", "gpt-4", tags=("reasoning",))],
+        price_per_million={"gpt-4": price} if price is not None else None,
+        token_counter=_ExactCounter(),
+    )
+
+
+def test_exact_output_without_prompt_usage_is_explicitly_unavailable() -> None:
+    orchestrator = _orchestrator()
+    orchestrator.run([{"role": "user", "content": "account for this"}])
     report = orchestrator.spend_analytics()
+    row = report["by_model"][0]
 
-    assert report["pricing_configured"] is False
-    assert report["totals"]["run_count"] == 1
-    assert report["totals"]["estimated_output_tokens"] > 0
-    assert report["totals"]["estimated_cost_usd"] is None
-    assert "free-model" in report["unpriced_models"]
-    row = next(r for r in report["by_model"] if r["model"] == "free-model")
-    assert row["estimated_cost_usd"] is None
+    assert report["measurement_status"] == "unavailable"
+    assert report["totals"]["output_tokens"] > 0
+    assert report["totals"]["prompt_tokens"] is None
+    assert report["totals"]["cost_usd"] is None
+    assert row["usage_source"] == "tokenizer"
+    assert row["cost_usd"] is None
+    assert not any("estimated" in key for key in row | report["totals"])
 
 
-def test_spend_with_price_computes_cost() -> None:
-    orchestrator = TaskOrchestrator(
-        [ModelAgent("general_agent", "priced-model", tags=("reasoning",))],
-        price_per_million={"priced-model": 10.0},
-    )
-    orchestrator.run([{"role": "user", "content": "compute my cost please"}])
+def test_exact_output_cost_uses_operator_price() -> None:
+    orchestrator = _orchestrator(price=10.0)
+    orchestrator.run([{"role": "user", "content": "calculate exact output cost"}])
     report = orchestrator.spend_analytics()
-
-    assert report["pricing_configured"] is True
-    row = next(r for r in report["by_model"] if r["model"] == "priced-model")
-    assert row["price_per_million_usd"] == 10.0
-    expected = round(row["estimated_output_tokens"] / 1_000_000 * 10.0, 6)
-    assert row["estimated_cost_usd"] == expected
-    assert report["totals"]["estimated_cost_usd"] == expected  # single priced model
-    assert report["unpriced_models"] == []
+    row = report["by_model"][0]
+    expected = row["output_tokens"] / 1_000_000 * 10.0
+    assert row["cost_usd"] == expected
+    assert report["totals"]["cost_usd"] == expected
 
 
-def test_call_time_price_overrides_instance() -> None:
-    orchestrator = TaskOrchestrator(
-        [ModelAgent("general_agent", "priced-model", tags=("reasoning",))],
-        price_per_million={"priced-model": 10.0},
-    )
-    orchestrator.run([{"role": "user", "content": "override the price"}])
-    row = next(
-        r for r in orchestrator.spend_analytics(price_per_million={"priced-model": 20.0})["by_model"]
-        if r["model"] == "priced-model"
-    )
-    assert row["price_per_million_usd"] == 20.0
-
-
-def test_spend_empty_when_no_runs() -> None:
-    report = TaskOrchestrator([ModelAgent("general_agent", "some-model")]).spend_analytics()
+def test_empty_analytics_are_zero_not_estimated() -> None:
+    report = _orchestrator().spend_analytics()
     assert report["totals"]["run_count"] == 0
+    assert report["totals"]["output_tokens"] == 0
     assert report["by_model"] == []
-    assert report["totals"]["estimated_output_tokens"] == 0
 
 
-def test_http_spend_endpoint_returns_report() -> None:
+def test_http_spend_endpoint_preserves_unavailable_status() -> None:
     token = "spend_token"
-    orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))])
+    orchestrator = _orchestrator()
     orchestrator.run([{"role": "user", "content": "seed a run"}])
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    port = server.server_address[1]
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/v1/spend_analytics/latest",
+        f"http://127.0.0.1:{server.server_address[1]}/api/v1/spend_analytics/latest",
         headers={"authorization": f"Bearer {token}", "connection": "close"},
     )
     try:
@@ -97,13 +77,5 @@ def test_http_spend_endpoint_returns_report() -> None:
     finally:
         server.shutdown()
     assert status == 200
-    assert body["measurement_status"] == "local_runtime_estimate"
-    assert body["totals"]["run_count"] == 1
-
-
-if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"ok {name}")
-    print("ok")
+    assert body["measurement_status"] == "unavailable"
+    assert body["totals"]["prompt_tokens"] is None

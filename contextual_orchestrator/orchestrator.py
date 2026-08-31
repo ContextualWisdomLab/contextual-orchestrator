@@ -84,6 +84,7 @@ from .reasoning_effort_profile import (
     apply_request_profile,
     snapshot_role_effort_catalog,
 )
+from .token_counting import TokenCountUnavailable, build_token_counter
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -211,29 +212,30 @@ def _bind_provider_file_ids(
     return result
 
 
-def estimate_tokens(text: str) -> int:
-    """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
-
-    Honest floor for spend analytics on mock/runtime text; replace with provider-reported
-    usage when real workers return it.
-    """
-    return (len(text) + 3) // 4 if text else 0
-
-
-def _step_output_tokens(step: Mapping[str, Any]) -> tuple[int, bool]:
-    """Return provider-reported output tokens or the existing text estimate."""
+def _step_output_tokens(
+    step: Mapping[str, Any], token_counter: Any, model: str
+) -> tuple[int | None, str]:
+    """Return reported or exact raw-output tokens with their evidence source."""
     usage = step.get("usage")
     if isinstance(usage, dict):
         for key in ("completion_tokens", "output_tokens"):
             reported = usage.get(key)
             if type(reported) is int and reported >= 0:
-                return reported, True
-    return estimate_tokens(step.get("output", "")), False
+                return reported, "reported"
+    output = step.get("output")
+    if not isinstance(output, str):
+        return None, "unavailable"
+    try:
+        return token_counter.count_text(output, model), "tokenizer"
+    except TokenCountUnavailable:
+        return None, "unavailable"
 
 
-def _step_output_token_count(step: Mapping[str, Any]) -> int:
-    """Return the output count used by in-flight structured budget checks."""
-    return _step_output_tokens(step)[0]
+def _step_output_token_count(
+    step: Mapping[str, Any], token_counter: Any, model: str
+) -> int | None:
+    """Return the authoritative output count for an in-flight budget check."""
+    return _step_output_tokens(step, token_counter, model)[0]
 
 
 def _cost_usd_decimal(output_tokens: int, price_per_million: float) -> Decimal:
@@ -3338,6 +3340,7 @@ class TaskOrchestrator:
         role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
         pii_key_name: str = DEFAULT_PII_KEY_NAME,
         allow_empty_agents: bool = False,
+        token_counter: Any = None,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -3382,6 +3385,7 @@ class TaskOrchestrator:
         # production always uses the exact-schema implementation below.
         self._triage_fn = self._triage_workflow_required
         self.client = client or ModelClient()
+        self.token_counter = token_counter or build_token_counter()
         # The cost coordinator installs this optional sink. Direct orchestrator
         # callers still retain audit evidence without inventing price or usage.
         self._race_usage_sink: Callable[[str, Any], None] | None = None
@@ -3425,6 +3429,7 @@ class TaskOrchestrator:
         self._budget_spent_output_tokens = 0
         self._budget_spent_cost_usd = Decimal(0)
         self._budget_model_output_tokens: dict[str, int] = {}
+        self._budget_unavailable_run_ids: set[str] = set()
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
@@ -3998,23 +4003,10 @@ class TaskOrchestrator:
             _excluded_agent_ids=request_exclusions,
             _allowed_agent_ids=None if virtual_model else {final_agent.id},
         )
-        in_flight_tokens = sum(_step_output_token_count(step) for step in workflow["trace"])
-        model_by_agent = {agent.id: agent.model for agent in self.agents}
-        in_flight_cost = sum(
-            _step_output_token_count(step)
-            / 1_000_000
-            * self.price_per_million[model]
-            for step in workflow["trace"]
-            if (
-                model := model_by_agent.get(
-                    step.get("served_agent_id") or step.get("agent_id")
-                )
-            )
-            in self.price_per_million
-        )
+        in_flight_tokens, in_flight_cost = self._trace_budget_spend(workflow["trace"])
         self._raise_if_spend_budget_exceeded(
             additional_output_tokens=in_flight_tokens,
-            additional_cost_usd=round(in_flight_cost, 6),
+            additional_cost_usd=in_flight_cost,
         )
 
         evidence = "\n\n".join(
@@ -4652,6 +4644,8 @@ class TaskOrchestrator:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
+            if budget.get("enforcement_status") == "blocked_unavailable":
+                raise BudgetExceededError("spend budget measurement unavailable", detail=budget)
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
         result = self.complete(
@@ -4717,8 +4711,8 @@ class TaskOrchestrator:
     def _raise_if_spend_budget_exceeded(
         self,
         *,
-        additional_output_tokens: int = 0,
-        additional_cost_usd: float = 0.0,
+        additional_output_tokens: int | None = 0,
+        additional_cost_usd: float | None = 0.0,
     ) -> None:
         """Fail before another provider call would cross an operator budget."""
         with self._budget_spend_lock:
@@ -4727,14 +4721,29 @@ class TaskOrchestrator:
             budget = self._budget_block(
                 spent_output_tokens,
                 float(spent_cost_decimal) if self.price_per_million else None,
+                measurement_available=not self._budget_unavailable_run_ids,
             )
-            spent_tokens = spent_output_tokens + additional_output_tokens
+            measurement_unavailable = (
+                (budget["max_output_tokens"] is not None and additional_output_tokens is None)
+                or (budget["max_cost_usd"] is not None and additional_cost_usd is None)
+            )
+            spent_tokens = (
+                spent_output_tokens + additional_output_tokens
+                if additional_output_tokens is not None
+                else None
+            )
             spent_cost = budget["spent_cost_usd"]
             effective_cost = (
-                spent_cost + additional_cost_usd if spent_cost is not None else None
+                spent_cost + additional_cost_usd
+                if spent_cost is not None and additional_cost_usd is not None
+                else None
             )
+            if measurement_unavailable or budget["enforcement_status"] == "blocked_unavailable":
+                detail = {**budget, "measurement_status": "unavailable"}
+                raise BudgetExceededError("spend budget measurement unavailable", detail=detail)
             if budget["exceeded"] or (
                 budget["max_output_tokens"] is not None
+                and spent_tokens is not None
                 and spent_tokens >= budget["max_output_tokens"]
             ) or (
                 budget["max_cost_usd"] is not None
@@ -4743,19 +4752,26 @@ class TaskOrchestrator:
             ):
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
 
-    def _trace_budget_spend(self, trace: list[dict[str, Any]]) -> tuple[int, float]:
+    def _trace_budget_spend(
+        self, trace: list[dict[str, Any]]
+    ) -> tuple[int | None, float | None]:
         """Return completed provider-call spend for a workflow budget checkpoint."""
         model_by_agent = {agent.id: agent.model for agent in self.agents}
-        output_tokens = sum(_step_output_token_count(step) for step in trace)
-        output_cost = sum(
-            _step_output_token_count(step) / 1_000_000 * self.price_per_million[model]
-            for step in trace
-            if (
-                model := model_by_agent.get(
-                    step.get("served_agent_id") or step.get("agent_id")
-                )
+        counts: list[tuple[int, str]] = []
+        for step in trace:
+            model = step.get("model_name") or model_by_agent.get(
+                step.get("served_agent_id") or step.get("agent_id"), "unknown"
             )
-            in self.price_per_million
+            count = _step_output_token_count(step, self.token_counter, model)
+            if count is None:
+                return None, None
+            counts.append((count, model))
+        output_tokens = sum(count for count, _model in counts)
+        if any(model not in self.price_per_million for _count, model in counts):
+            return output_tokens, None
+        output_cost = sum(
+            count / 1_000_000 * self.price_per_million[model]
+            for count, model in counts
         )
         return output_tokens, round(output_cost, 6)
 
@@ -4769,6 +4785,8 @@ class TaskOrchestrator:
         """
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
+            if budget.get("enforcement_status") == "blocked_unavailable":
+                raise BudgetExceededError("spend budget measurement unavailable", detail=budget)
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
         selected = [(prompt, self._select_agent(prompt, "worker")) for prompt in prompts]
@@ -7374,17 +7392,23 @@ class TaskOrchestrator:
         if self._store is not None:
             self._store.save("analytics", None, event)
 
-    def _run_budget_output_by_model(self, record: Mapping[str, Any]) -> dict[str, int]:
-        """Return the exact per-model output-token contribution of one run."""
+    def _run_budget_output_by_model(
+        self, record: Mapping[str, Any]
+    ) -> tuple[dict[str, int], bool]:
+        """Return authoritative per-model output tokens and availability."""
         model_by_agent = {agent.id: agent.model for agent in self.candidates}
         output_by_model: dict[str, int] = {}
         for step in record.get("trace", []):
             model = step.get("model_name") or model_by_agent.get(
                 step.get("served_agent_id") or step.get("agent_id"), "unknown"
             )
-            output_tokens, _reported = _step_output_tokens(step)
+            output_tokens, _source = _step_output_tokens(
+                step, self.token_counter, model
+            )
+            if output_tokens is None:
+                return {}, False
             output_by_model[model] = output_by_model.get(model, 0) + output_tokens
-        return output_by_model
+        return output_by_model, True
 
     def _replace_workflow_run(self, record: dict[str, Any]) -> None:
         """Store one run and update its constant-time budget meter atomically."""
@@ -7399,7 +7423,17 @@ class TaskOrchestrator:
             for sign, run in ((-1, previous), (1, record)):
                 if run is None:
                     continue
-                for model, output_tokens in self._run_budget_output_by_model(run).items():
+                run_id_for_meter = run["workflow_run_id"]
+                output_by_model, available = self._run_budget_output_by_model(run)
+                available_for_budget = available and (
+                    self.budget_max_cost_usd is None
+                    or all(model in self.price_per_million for model in output_by_model)
+                )
+                if sign < 0:
+                    self._budget_unavailable_run_ids.discard(run_id_for_meter)
+                elif not available_for_budget:
+                    self._budget_unavailable_run_ids.add(run_id_for_meter)
+                for model, output_tokens in output_by_model.items():
                     before = self._budget_model_output_tokens.get(model, 0)
                     after = before + sign * output_tokens
                     price = self.price_per_million.get(model)
@@ -7418,10 +7452,19 @@ class TaskOrchestrator:
         """Reconcile the meter after a rare agent-pool identity change."""
         with self._budget_spend_lock:
             output_by_model: dict[str, int] = {}
+            unavailable_run_ids: set[str] = set()
             for run in self._workflow_runs.values():
-                for model, output_tokens in self._run_budget_output_by_model(run).items():
+                run_output, available = self._run_budget_output_by_model(run)
+                available_for_budget = available and (
+                    self.budget_max_cost_usd is None
+                    or all(model in self.price_per_million for model in run_output)
+                )
+                if not available_for_budget:
+                    unavailable_run_ids.add(run["workflow_run_id"])
+                for model, output_tokens in run_output.items():
                     output_by_model[model] = output_by_model.get(model, 0) + output_tokens
             self._budget_model_output_tokens = output_by_model
+            self._budget_unavailable_run_ids = unavailable_run_ids
             self._budget_spent_output_tokens = sum(output_by_model.values())
             self._budget_spent_cost_usd = sum(
                 (
@@ -7433,117 +7476,164 @@ class TaskOrchestrator:
             )
 
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
-        """Estimated token and cost spend per model, aggregated from workflow runs.
-
-        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
-        usage. Cost is computed only for models with an operator-supplied price; models without
-        one are reported under ``unpriced_models`` with a null cost. This is the honest local
-        floor for spend observability, not a billing system.
-        """
+        """Return provider-reported or exact-tokenizer output usage and cost."""
         prices = {**self.price_per_million, **(price_per_million or {})}
         model_by_agent = {agent.id: agent.model for agent in self.candidates}
         by_model: dict[str, dict[str, Any]] = {}
         total_output_tokens = 0
-        total_prompt_tokens = 0
         reported_prompt_tokens = 0
-        any_reported_prompt = False
+        prompt_available = True
 
         for run in self._workflow_runs.values():
-            total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
             for step in run["trace"]:
                 model = step.get("model_name") or model_by_agent.get(
                     step.get("served_agent_id") or step.get("agent_id"), "unknown"
                 )
-                estimated = estimate_tokens(step.get("output", ""))
                 usage = step.get("usage")
-                reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported_prompt, int):
-                    reported_prompt_tokens += reported_prompt
-                    any_reported_prompt = True
-                effective, is_reported = _step_output_tokens(step)
-                bucket = by_model.setdefault(
-                    model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
+                reported_prompt = (
+                    usage.get("prompt_tokens", usage.get("input_tokens"))
+                    if isinstance(usage, dict)
+                    else None
                 )
-                bucket["estimated_output_tokens"] += estimated
-                bucket["output_tokens"] += effective
+                if type(reported_prompt) is int and reported_prompt >= 0:
+                    reported_prompt_tokens += reported_prompt
+                else:
+                    prompt_available = False
+                effective, source = _step_output_tokens(step, self.token_counter, model)
+                bucket = by_model.setdefault(
+                    model,
+                    {
+                        "output_tokens": 0,
+                        "step_count": 0,
+                        "reported_steps": 0,
+                        "tokenizer_steps": 0,
+                        "unavailable_steps": 0,
+                    },
+                )
                 bucket["step_count"] += 1
-                bucket["reported_steps"] += 1 if is_reported else 0
-                total_output_tokens += effective
+                bucket[f"{source}_steps"] += 1
+                if effective is not None:
+                    bucket["output_tokens"] += effective
+                    total_output_tokens += effective
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
         total_cost_usd = Decimal(0)
+        output_available = True
+        cost_available = True
         for model, bucket in sorted(by_model.items()):
+            model_available = bucket["unavailable_steps"] == 0
+            output_available = output_available and model_available
             price = prices.get(model)
             cost_decimal = (
                 _cost_usd_decimal(bucket["output_tokens"], price)
-                if price is not None
+                if price is not None and model_available
                 else None
             )
             cost = float(cost_decimal) if cost_decimal is not None else None
             if price is None:
                 unpriced.append(model)
+                cost_available = False
+            elif not model_available:
+                cost_available = False
             else:
                 total_cost_usd += cost_decimal
-            if bucket["reported_steps"] == 0:
-                usage_source = "estimated"
+            if not model_available:
+                usage_source = "unavailable"
             elif bucket["reported_steps"] == bucket["step_count"]:
                 usage_source = "reported"
+            elif bucket["tokenizer_steps"] == bucket["step_count"]:
+                usage_source = "tokenizer"
             else:
                 usage_source = "mixed"
             rows.append({
                 "model": model,
-                "estimated_output_tokens": bucket["estimated_output_tokens"],
-                "output_tokens": bucket["output_tokens"],
+                "output_tokens": bucket["output_tokens"] if model_available else None,
                 "usage_source": usage_source,
                 "step_count": bucket["step_count"],
                 "price_per_million_usd": price,
-                "estimated_cost_usd": cost,
+                "cost_usd": cost,
             })
 
+        measurement_status = (
+            "unavailable"
+            if not output_available or not prompt_available
+            else "measured"
+            if all(row["usage_source"] == "reported" for row in rows)
+            else "exact_tokenizer"
+        )
+        candidate_prices_available = (
+            self.budget_max_cost_usd is None
+            or all(agent.model in prices for agent in self.agents)
+        )
         return {
-            "measurement_status": "local_runtime_estimate",
+            "measurement_status": measurement_status,
             "source_note": (
-                "output_tokens use provider-reported usage when available (usage_source=reported/mixed) and "
-                "fall back to a ~4 chars/token estimate otherwise; cost = output_tokens x operator-supplied price only."
+                "Provider usage is authoritative. Exact tokenizer counts apply only to "
+                "declared raw textual outputs; unreconstructible usage is unavailable."
             ),
             "pricing_configured": bool(prices),
             "totals": {
                 "run_count": len(self._workflow_runs),
-                "estimated_output_tokens": total_output_tokens,
-                "estimated_prompt_tokens": total_prompt_tokens,
-                "reported_prompt_tokens": reported_prompt_tokens,
-                "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
-                "estimated_cost_usd": float(total_cost_usd) if prices else None,
+                "output_tokens": total_output_tokens if output_available else None,
+                "prompt_tokens": reported_prompt_tokens if prompt_available else None,
+                "prompt_tokens_source": "reported" if prompt_available else "unavailable",
+                "cost_usd": (
+                    float(total_cost_usd) if prices and cost_available else None
+                ),
                 "currency": "USD",
             },
             "by_model": rows,
             "unpriced_models": unpriced,
             "budget": self._budget_block(
                 total_output_tokens,
-                float(total_cost_usd) if prices else None,
+                float(total_cost_usd) if prices and cost_available else None,
+                measurement_available=output_available and candidate_prices_available,
             ),
         }
 
-    def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
+    def _budget_block(
+        self,
+        spent_tokens: int,
+        spent_cost: float | None,
+        *,
+        measurement_available: bool = True,
+    ) -> dict[str, Any]:
         token_limit = self.budget_max_output_tokens
         cost_limit = self.budget_max_cost_usd
-        exceeded = bool(
-            (token_limit is not None and spent_tokens >= token_limit)
-            or (cost_limit is not None and spent_cost is not None and spent_cost >= cost_limit)
+        required_available = measurement_available and (
+            cost_limit is None or spent_cost is not None
         )
+        exceeded = bool(
+            required_available
+            and ((token_limit is not None and spent_tokens >= token_limit)
+            or (cost_limit is not None and spent_cost is not None and spent_cost >= cost_limit)
+            )
+        )
+        enabled = token_limit is not None or cost_limit is not None
         return {
-            "enabled": token_limit is not None or cost_limit is not None,
+            "enabled": enabled,
             "max_output_tokens": token_limit,
             "max_cost_usd": cost_limit,
-            "spent_output_tokens": spent_tokens,
-            "spent_cost_usd": spent_cost,
-            "remaining_output_tokens": max(0, token_limit - spent_tokens) if token_limit is not None else None,
+            "spent_output_tokens": spent_tokens if measurement_available else None,
+            "spent_cost_usd": spent_cost if required_available else None,
+            "remaining_output_tokens": (
+                max(0, token_limit - spent_tokens)
+                if token_limit is not None and measurement_available
+                else None
+            ),
             "remaining_cost_usd": (
                 round(max(0.0, cost_limit - spent_cost), 6)
-                if cost_limit is not None and spent_cost is not None else None
+                if cost_limit is not None and spent_cost is not None and required_available
+                else None
             ),
             "exceeded": exceeded,
+            "measurement_status": "measured" if required_available else "unavailable",
+            "enforcement_status": (
+                "blocked_unavailable" if enabled and not required_available
+                else "exceeded" if exceeded
+                else "within_budget"
+            ),
         }
 
     def budget_status(self) -> dict[str, Any]:
@@ -7551,9 +7641,17 @@ class TaskOrchestrator:
         with self._budget_spend_lock:
             spent_tokens = self._budget_spent_output_tokens
             spent_cost = float(self._budget_spent_cost_usd)
+            candidate_prices_available = (
+                self.budget_max_cost_usd is None
+                or all(agent.model in self.price_per_million for agent in self.agents)
+            )
+            measurement_available = (
+                not self._budget_unavailable_run_ids and candidate_prices_available
+            )
         return self._budget_block(
             spent_tokens,
             spent_cost if self.price_per_million else None,
+            measurement_available=measurement_available,
         )
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
@@ -14125,14 +14223,15 @@ for _commercial_report_name, _commercial_report_method in list(TaskOrchestrator.
 
 def _pareto_front(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Configs not dominated on (quality up, cost down)."""
+    measured = [row for row in results if row.get("cost_usd") is not None]
     front: list[dict[str, Any]] = []
-    for a in results:
+    for a in measured:
         dominated = any(
             b is not a
             and b["quality"] >= a["quality"]
             and b["cost_usd"] <= a["cost_usd"]
             and (b["quality"] > a["quality"] or b["cost_usd"] < a["cost_usd"])
-            for b in results
+            for b in measured
         )
         if not dominated:
             front.append(a)
@@ -14140,20 +14239,21 @@ def _pareto_front(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | None) -> dict[str, Any] | None:
-    if not results:
+    measured = [row for row in results if row.get("cost_usd") is not None]
+    if not measured:
         return None
     if cost_budget_usd is not None:
-        affordable = [r for r in results if r["cost_usd"] <= cost_budget_usd]
+        affordable = [r for r in measured if r["cost_usd"] <= cost_budget_usd]
         if affordable:
             best = max(affordable, key=lambda r: (r["quality"], -r["cost_usd"]))
             reason = "highest quality within cost budget"
         else:
-            best = min(results, key=lambda r: r["cost_usd"])
+            best = min(measured, key=lambda r: r["cost_usd"])
             reason = "no config within budget; cheapest instead"
     else:
         # Maximize performance first, minimize cost as the tie-break (cheapest among the
         # best-quality configs) — the honest reading of "max quality while min cost".
-        best = max(results, key=lambda r: (r["quality"], -r["cost_usd"]))
+        best = max(measured, key=lambda r: (r["quality"], -r["cost_usd"]))
         reason = "highest quality; cheapest among equal-quality configs"
     return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
 
@@ -14196,20 +14296,29 @@ def optimize_orchestration(
         orchestrator = candidate["orchestrator"]
         mode = candidate.get("mode", "auto")
         quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
-        cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
+        cost = orchestrator.spend_analytics()["totals"]["cost_usd"]
         results.append({
             "name": candidate["name"],
             "mode": mode,
             "quality": round(quality, 4),
-            "cost_usd": round(cost, 6),
-            "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
+            "cost_usd": round(cost, 6) if cost is not None else None,
+            "quality_per_usd": (
+                round(quality / cost, 2) if cost is not None and cost > 0 else None
+            ),
             "task_count": len(tasks),
         })
 
     return {
         "objective": "maximize quality, minimize cost",
         "cost_budget_usd": cost_budget_usd,
-        "results": sorted(results, key=lambda r: (-r["quality"], r["cost_usd"])),
+        "results": sorted(
+            results,
+            key=lambda r: (
+                -r["quality"],
+                r["cost_usd"] is None,
+                r["cost_usd"] if r["cost_usd"] is not None else float("inf"),
+            ),
+        ),
         "pareto_front": [r["name"] for r in _pareto_front(results)],
         "recommended": _recommend_config(results, cost_budget_usd),
     }
@@ -14262,19 +14371,23 @@ def evolve_orchestration(
         orchestrator = build_orchestrator(config)
         mode = config.get("mode", "auto")
         quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
-        cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
+        cost = orchestrator.spend_analytics()["totals"]["cost_usd"]
         result = {
             "name": config_key,
             "config": dict(config),
             "quality": round(quality, 4),
-            "cost_usd": round(cost, 6),
-            "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
+            "cost_usd": round(cost, 6) if cost is not None else None,
+            "quality_per_usd": (
+                round(quality / cost, 2) if cost is not None and cost > 0 else None
+            ),
             "task_count": len(tasks),
         }
         evaluated[config_key] = result
         return result
 
     def fitness(row: dict[str, Any]) -> tuple[int, float, float]:
+        if row["cost_usd"] is None:
+            return (0, row["quality"], float("-inf"))
         affordable = 1 if cost_budget_usd is None or row["cost_usd"] <= cost_budget_usd else 0
         return (affordable, row["quality"], -row["cost_usd"])
 
@@ -14330,8 +14443,7 @@ def chat_completion_response(
 ) -> dict[str, Any]:  # pragma: no cover
     """Wrap orchestration output in an OpenAI-compatible chat completion response.
 
-    ``usage`` carries the token counts recorded by the cost ledger; when absent
-    the response reports zeros (the count could not be computed).
+    ``usage`` carries measured token counts. Absence remains explicit and null.
     """
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
@@ -14356,7 +14468,8 @@ def chat_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage,
+        "usage_measurement_status": "measured" if usage is not None else "unavailable",
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
 
@@ -14380,7 +14493,8 @@ def text_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage,
+        "usage_measurement_status": "measured" if usage is not None else "unavailable",
     }
 
 
@@ -14448,13 +14562,20 @@ def chat_completion_chunks(
 
     usage = result.get("usage")
     cost = result.get("cost")
-    if (
-        include_usage
-        and isinstance(cost, dict)
-        and cost.get("measurement_status") == "measured"
-        and isinstance(usage, dict)
-    ):
-        chunks.append({**base, "choices": [], "usage": usage})
+    if include_usage:
+        measured = (
+            isinstance(cost, dict)
+            and cost.get("measurement_status") == "measured"
+            and isinstance(usage, dict)
+        )
+        chunks.append(
+            {
+                **base,
+                "choices": [],
+                "usage": usage if measured else None,
+                "usage_measurement_status": "measured" if measured else "unavailable",
+            }
+        )
     return chunks
 
 

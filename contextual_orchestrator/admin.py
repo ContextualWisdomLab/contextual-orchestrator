@@ -81,13 +81,15 @@ ADMIN_TRANSLATIONS = {
         "readiness_summary_text": "Sales and commercial criteria passed: {pass}. Need attention: {warn}. Failed: {fail}. See the rows below to fix what failed.",
         "readiness_source": "Readiness source",
         "readiness_measurement_status": "Measurement status",
-        "measurement_local_runtime_estimate": "Estimated on this server",
+        "measurement_measured": "Provider measured",
+        "measurement_exact_tokenizer": "Exact tokenizer",
+        "measurement_unavailable": "Unavailable",
         "measurement_local_runtime_snapshot": "Measured on this server",
         "measurement_local_runtime": "Generated locally on this server",
         "measurement_estimate": "Estimated",
         "measurement_unknown": "Unknown",
         "spend_no_price": "No price set",
-        "spend_no_price_action": "Add provider pricing to estimate cost.",
+        "spend_no_price_action": "Add provider pricing to calculate cost.",
         "readiness_remediation_label": "Remediation",
         "sales_readiness": "Sales readiness",
         "sales_readiness_title": "Sales Readiness",
@@ -340,13 +342,15 @@ ADMIN_TRANSLATIONS = {
         "readiness_summary_text": "판매 및 상용 기준 통과 {pass}개, 주의 {warn}개, 실패 {fail}개. 아래 행에서 실패 항목을 해결하세요.",
         "readiness_source": "준비 근거",
         "readiness_measurement_status": "측정 상태",
-        "measurement_local_runtime_estimate": "이 서버에서 추정됨",
+        "measurement_measured": "공급자 측정값",
+        "measurement_exact_tokenizer": "정확 토크나이저",
+        "measurement_unavailable": "사용 불가",
         "measurement_local_runtime_snapshot": "이 서버에서 측정됨",
         "measurement_local_runtime": "이 서버에서 생성됨",
         "measurement_estimate": "추정값",
         "measurement_unknown": "알 수 없음",
         "spend_no_price": "가격 미설정",
-        "spend_no_price_action": "비용을 추정하려면 공급자 가격을 추가하세요.",
+        "spend_no_price_action": "비용을 계산하려면 공급자 가격을 추가하세요.",
         "readiness_remediation_label": "보완 조치",
         "sales_readiness": "판매 준비도",
         "sales_readiness_title": "판매 준비도",
@@ -1289,7 +1293,9 @@ Summarize this research thread and verify claims.</textarea>
       renderReadiness();
     }
     const MEASUREMENT_STATUS_KEYS = {
-      local_runtime_estimate: "measurement_local_runtime_estimate",
+      measured: "measurement_measured",
+      exact_tokenizer: "measurement_exact_tokenizer",
+      unavailable: "measurement_unavailable",
       local_runtime_snapshot: "measurement_local_runtime_snapshot",
       estimate: "measurement_estimate",
       unknown: "measurement_unknown"
@@ -1307,20 +1313,20 @@ Summarize this research thread and verify claims.</textarea>
       if (statusEl) statusEl.textContent = statusLabel(spend.measurement_status);
       const totalsEl = document.getElementById("spendTotals");
       if (totalsEl) {
-        const cost = totals.estimated_cost_usd == null ? "—" : ("$" + totals.estimated_cost_usd);
+        const cost = totals.cost_usd == null ? "—" : ("$" + totals.cost_usd);
         totalsEl.innerHTML = [
           [t("spend_runs") || "Runs", totals.run_count ?? 0],
-          [t("spend_output_tokens") || "Est. output tokens", totals.estimated_output_tokens ?? 0],
-          [t("spend_prompt_tokens") || "Est. prompt tokens", totals.estimated_prompt_tokens ?? 0],
-          [t("spend_cost") || "Est. cost (USD)", cost]
+          [t("spend_output_tokens") || "Output tokens", totals.output_tokens ?? "—"],
+          [t("spend_prompt_tokens") || "Prompt tokens", totals.prompt_tokens ?? "—"],
+          [t("spend_cost") || "Cost (USD)", cost]
         ].map(([l, v]) => `<div class="kpi"><span>${escapeHtml(l)}</span><strong>${escapeHtml(v)}</strong></div>`).join("");
       }
       const rowsEl = document.getElementById("spendRows");
       if (rowsEl) {
         rowsEl.innerHTML = (spend.by_model || []).map(row => {
           const price = row.price_per_million_usd == null ? "&mdash;" : escapeHtml(row.price_per_million_usd);
-          const cost = row.estimated_cost_usd == null ? `<span class="chip" title="${escapeHtml(t("spend_no_price_action"))}">${escapeHtml(t("spend_no_price"))}</span>` : ("$" + escapeHtml(row.estimated_cost_usd));
-          return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.estimated_output_tokens)}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
+          const cost = row.cost_usd == null ? `<span class="chip" title="${escapeHtml(t("spend_no_price_action"))}">${escapeHtml(t("spend_no_price"))}</span>` : ("$" + escapeHtml(row.cost_usd));
+          return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.output_tokens ?? "—")}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
         }).join("") || `<tr><td colspan="5">${t("no_trace")}</td></tr>`;
       }
       const noteEl = document.getElementById("spendNote");

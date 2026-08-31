@@ -284,21 +284,17 @@ class _NoUsageToolProvider:
         return f"http://127.0.0.1:{self._server.server_address[1]}"
 
 
-def test_http_chat_tools_streams_estimated_usage_when_provider_omits_it() -> None:
-    """A tools-capable provider that omits ``usage`` gets an honest estimate, not a fake "reported" label.
+def test_http_chat_tools_streams_unavailable_usage_when_provider_omits_it() -> None:
+    """A tools-capable provider that omits ``usage`` reports unavailable.
 
     Regression for a Devin finding on #925: the PR's own rationale for
     narrowing the ``stream_options.include_usage`` rejection to exclude
     ``tools`` passthrough assumed the one upstream call "always" carries real
     provider usage. That's the common case, not a guarantee --
     ``ModelClient.proxy_send`` returns the provider's raw JSON verbatim with
-    no ``usage`` requirement. ``_chat_response_sse_chunks`` already has a
-    fallback for exactly this (the same one already exercised for the
-    non-tools streaming path): estimate from the visible content/tool_calls
-    and label it ``usage_source: "estimated"`` rather than fabricate
-    ``"reported"``. This proves that fallback over a real (if fake) HTTP
-    provider response, since ``mock://`` agents always inject usage and can
-    never exercise it.
+    no ``usage`` requirement. This proves that the gateway returns an explicit
+    unavailable outcome over a real (if fake) HTTP provider response, since
+    ``mock://`` agents always inject usage and cannot exercise this boundary.
     """
     with _NoUsageToolProvider() as provider:
         # The "local://" scheme is this codebase's sanctioned way to point an
@@ -354,29 +350,22 @@ def test_http_chat_tools_streams_estimated_usage_when_provider_omits_it() -> Non
             ]
             usage_frames = [frame for frame in frames if frame.get("choices") == []]
             assert len(usage_frames) == 1, frames
-            usage = usage_frames[0]["usage"]
-            assert usage["usage_source"] == "estimated", usage
-            assert usage["prompt_tokens"] > 0
-            assert usage["completion_tokens"] > 0
+            assert usage_frames[0]["usage"] is None
+            assert usage_frames[0]["usage_measurement_status"] == "unavailable"
         finally:
             server.shutdown()
             thread.join(timeout=5)
 
 
-def test_http_chat_tools_estimated_usage_counts_the_tool_schema() -> None:
-    """A larger ``tools`` schema must widen the estimated prompt token count.
+def test_http_chat_tools_do_not_reconstruct_tool_schema_usage() -> None:
+    """Tool schemas remain unavailable instead of being reconstructed.
 
-    Regression for a Devin finding on #925: the estimated-usage fallback in
-    ``_chat_response_sse_chunks`` used to build its prompt-token estimate
-    from ``body["messages"]`` alone, excluding ``body["tools"]`` entirely.
-    OpenAI-compatible providers count tool definitions (names, descriptions,
-    JSON schemas) toward prompt usage, so a request with a large tool schema
-    would get a materially understated estimate. Proves the fix by sending
-    the identical messages with a tiny tools list vs. a large one and
-    asserting the estimated prompt_tokens strictly increases.
+    A generic gateway cannot reproduce provider serialization for names,
+    descriptions, and JSON schemas. Send identical messages with small and
+    large tool sets and require the same unavailable outcome for both.
     """
 
-    def estimated_prompt_tokens(tools: list[dict]) -> int:
+    def usage_frame(tools: list[dict]) -> dict:
         with _NoUsageToolProvider() as provider:
             local_base_url = provider.base_url.replace("http://", "local://", 1)
             orchestrator = TaskOrchestrator(
@@ -417,7 +406,7 @@ def test_http_chat_tools_estimated_usage_counts_the_tool_schema() -> None:
                 ]
                 usage_frames = [frame for frame in frames if frame.get("choices") == []]
                 assert len(usage_frames) == 1, frames
-                return usage_frames[0]["usage"]["prompt_tokens"]
+                return usage_frames[0]
             finally:
                 server.shutdown()
                 thread.join(timeout=5)
@@ -446,9 +435,9 @@ def test_http_chat_tools_estimated_usage_counts_the_tool_schema() -> None:
         for index in range(5)
     ]
 
-    small_estimate = estimated_prompt_tokens(small_tools)
-    large_estimate = estimated_prompt_tokens(large_tools)
-    assert large_estimate > small_estimate, (small_estimate, large_estimate)
+    for frame in (usage_frame(small_tools), usage_frame(large_tools)):
+        assert frame["usage"] is None
+        assert frame["usage_measurement_status"] == "unavailable"
 
 
 def test_http_chat_response_format_only_streams_still_reject_include_usage() -> None:
@@ -504,8 +493,8 @@ if __name__ == "__main__":
     test_http_responses_accepts_stream_options_null_flags()
     test_http_chat_accepts_include_usage_true()
     test_http_chat_tools_streams_include_reported_usage()
-    test_http_chat_tools_streams_estimated_usage_when_provider_omits_it()
-    test_http_chat_tools_estimated_usage_counts_the_tool_schema()
+    test_http_chat_tools_streams_unavailable_usage_when_provider_omits_it()
+    test_http_chat_tools_do_not_reconstruct_tool_schema_usage()
     test_http_chat_response_format_only_streams_still_reject_include_usage()
     test_http_chat_rejects_non_boolean_non_null_flag()
     print("ok")

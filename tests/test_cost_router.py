@@ -56,7 +56,8 @@ def test_sync_completion_records_usage_and_returns_costs() -> None:
         attribution={"team": "alpha", "company": "acme"},
     )
     assert result["channel"] == "sync"
-    assert result["usage"]["total_tokens"] > 0
+    assert result["usage"] is None
+    assert result["usage_measurement_status"] == "unavailable"
     assert result["usage_record_id"].startswith("usage_")
     records = coordinator.ledger.records()
     assert len(records) == len(result["usage_record_ids"])
@@ -64,7 +65,7 @@ def test_sync_completion_records_usage_and_returns_costs() -> None:
     assert all(record["provider_name"] == "mock" for record in records)
     assert all(record["model_name"] == "mock-a" for record in records)
     assert all(record["request_channel"] == "sync" for record in records)
-    assert all(record["measurement_status"] == "estimated" for record in records)
+    assert all(record["measurement_status"] == "unavailable" for record in records)
 
 
 def test_sync_completion_preserves_provider_reported_usage() -> None:
@@ -300,7 +301,7 @@ def test_ready_race_usage_without_workflow_id_is_not_discarded() -> None:
 
 
 def test_conducted_plain_completion_records_every_step_usage() -> None:
-    """A conducted run preserves measured and estimated evidence per provider call."""
+    """A conducted run preserves measured and unavailable evidence per call."""
     coordinator = _coordinator()
     coordinator.orchestrator.run = lambda *args, **kwargs: {  # type: ignore[method-assign]
         "workflow_run_id": "run_plain_conducted",
@@ -323,18 +324,13 @@ def test_conducted_plain_completion_records_every_step_usage() -> None:
     assert len(records) == 2
     assert result["usage_record_ids"] == [row["usage_record_id"] for row in records]
     assert result["usage_record_id"] == records[-1]["usage_record_id"]
-    assert [row["measurement_status"] for row in records] == ["measured", "estimated"]
-    assert result["cost"]["measurement_status"] == "estimated"
-    assert result["usage"] == {
-        "prompt_tokens": sum(row["prompt_tokens"] for row in records),
-        "completion_tokens": sum(row["completion_tokens"] for row in records),
-        "total_tokens": sum(row["total_tokens"] for row in records),
-    }
+    assert [row["measurement_status"] for row in records] == ["measured", "unavailable"]
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert result["usage"] is None
     assert records[0]["prompt_tokens"] == 7
     assert records[0]["completion_tokens"] == 3
-    assert records[1]["prompt_tokens"] == coordinator.token_counter.count_messages(
-        messages, "mock-a"
-    )
+    assert records[1]["prompt_tokens"] == 0
+    assert records[1]["completion_tokens"] == 0
 
 
 def test_sync_records_derive_provider_and_model_from_served_agent() -> None:
@@ -436,28 +432,25 @@ def test_structured_provider_workflow_estimates_each_unreported_call() -> None:
     records = coordinator.ledger.records()
     assert len(result["usage_record_ids"]) == len(records) == len(trace)
     statuses = [record["measurement_status"] for record in records]
-    assert statuses.count("estimated") == 2
-    assert set(statuses) == {"measured", "estimated"}
-    assert result["cost"]["measurement_status"] == "estimated"
-    assert records[1]["total_tokens"] > 0
-    assert records[3]["total_tokens"] > 0
-    request_prompt = coordinator.token_counter.count_messages(
-        [{"role": "user", "content": "return mixed usage JSON"}], "mock-a"
-    )
-    assert sum(record["prompt_tokens"] for record in records) == request_prompt + 5
+    assert statuses.count("unavailable") == 2
+    assert set(statuses) == {"measured", "unavailable"}
+    assert result["cost"]["measurement_status"] == "unavailable"
+    assert records[1]["total_tokens"] == 0
+    assert records[3]["total_tokens"] == 0
+    assert sum(record["prompt_tokens"] for record in records) == 5
     assert [
         record["prompt_tokens"]
         for record in records
         if record["measurement_status"] == "measured"
     ] == [2, 3, 0]
-    estimated = [
-        record for record in records if record["measurement_status"] == "estimated"
+    unavailable = [
+        record for record in records if record["measurement_status"] == "unavailable"
     ]
-    assert [record["prompt_tokens"] for record in estimated] == [request_prompt, 0]
+    assert [record["prompt_tokens"] for record in unavailable] == [0, 0]
 
 
-def test_unreported_provider_calls_bill_request_prompt_once() -> None:
-    """One completion attributes its request prompt once, not once per unreported call."""
+def test_unreported_provider_calls_remain_unavailable() -> None:
+    """Missing provider usage never reconstructs prompt framing."""
     coordinator = _coordinator()
     coordinator.orchestrator.client.take_usage = lambda: None
 
@@ -473,15 +466,11 @@ def test_unreported_provider_calls_bill_request_prompt_once() -> None:
 
     records = coordinator.ledger.records()
     unreported = [
-        record for record in records if record["measurement_status"] == "estimated"
+        record for record in records if record["measurement_status"] == "unavailable"
     ]
     assert len(unreported) >= 2
-    request_prompt = coordinator.token_counter.count_messages(messages, "mock-a")
-    # The full request prompt lands on the first unreported step only; later
-    # unreported steps estimate just their own output tokens.
-    assert sum(record["prompt_tokens"] for record in unreported) == request_prompt
-    assert unreported[0]["prompt_tokens"] == request_prompt
-    assert all(record["prompt_tokens"] == 0 for record in unreported[1:])
+    assert all(record["prompt_tokens"] == 0 for record in unreported)
+    assert all(record["completion_tokens"] == 0 for record in unreported)
 
 
 def test_structured_mixed_currency_costs_are_never_implicitly_converted() -> None:
@@ -551,7 +540,7 @@ def test_sync_completion_survives_usage_persistence_failure() -> None:
     result = coordinator.complete([{"role": "user", "content": "hello without blocking"}])
     assert result["channel"] == "sync"
     assert result["usage_record_id"].startswith("usage_")
-    assert result["usage"]["total_tokens"] > 0
+    assert result["usage"] is None
 
     assert ledger.flush(timeout=1.0)
     assert ledger.telemetry_health()["store_failures"] == len(result["usage_record_ids"])
