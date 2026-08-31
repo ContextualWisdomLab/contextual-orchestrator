@@ -24,6 +24,7 @@ from .credentials import (
 )
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
+    ExternalMetadataFetchEvidence,
     PROVIDER_MODEL_SOURCES,
     DiscoveredModel,
     ProviderDiscoveryError,
@@ -31,6 +32,7 @@ from .model_discovery import (
     apply_openrouter_spend_admission,
     agent_id_for,
     discover_all_models,
+    discover_all_models_with_metadata_evidence,
     openrouter_paid_inference_available,
     refresh_price_book,
 )
@@ -50,6 +52,7 @@ from .provider_bootstrap import (
 )
 from .provider_catalog_store import (
     CatalogRefreshEvidence,
+    ExternalMetadataRefreshEvidence,
     InMemoryProviderCatalogStore,
     PostgresProviderCatalogStore,
     ProviderCatalogStore,
@@ -146,6 +149,7 @@ class ProviderCatalogBootstrapReport:
     priced_model_count: int
     privacy_assessment_count: int
     catalog_refreshes: tuple[CatalogRefreshEvidence, ...]
+    external_metadata_refreshes: tuple[ExternalMetadataRefreshEvidence, ...]
 
     def as_dict(self) -> dict[str, object]:
         """Return the stable JSON evidence contract without secret values."""
@@ -176,6 +180,17 @@ class ProviderCatalogBootstrapReport:
                     "finished_at": evidence.finished_at.isoformat(),
                 }
                 for evidence in self.catalog_refreshes
+            ],
+            "external_metadata_refreshes": [
+                {
+                    "metadata_source_name": evidence.metadata_source_name,
+                    "refresh_status": evidence.refresh_status,
+                    "consumer_provider_count": evidence.consumer_provider_count,
+                    "error_code": evidence.error_code,
+                    "started_at": evidence.started_at.isoformat(),
+                    "finished_at": evidence.finished_at.isoformat(),
+                }
+                for evidence in self.external_metadata_refreshes
             ],
         }
 
@@ -538,10 +553,13 @@ def bootstrap_provider_catalog_runtime(
     try:
         store = catalog_store or build_provider_catalog_store()
         source_tuple = tuple(sources)
-        discover = discovery or (
-            lambda requested_sources: discover_all_models(requested_sources)
-        )
-        live_models, errors = discover(source_tuple)
+        metadata_refreshes: tuple[ExternalMetadataFetchEvidence, ...] = ()
+        if discovery is None:
+            live_models, errors, metadata_refreshes = (
+                discover_all_models_with_metadata_evidence(source_tuple)
+            )
+        else:
+            live_models, errors = discovery(source_tuple)
         privacy_assessments: list[PrivacyPolicyAssessment] = []
         if analyze_privacy_policies:
             live_models, privacy_assessments = privacy_analysis(live_models)
@@ -550,6 +568,18 @@ def bootstrap_provider_catalog_runtime(
         # bootstrap reports cannot claim one another's provider attempts.
         with _CATALOG_REFRESH_EVIDENCE_LOCK:
             evidence_offset = len(store.refresh_evidence())
+            external_evidence_offset = len(store.external_metadata_refresh_evidence())
+            for metadata_refresh in metadata_refreshes:
+                store.record_external_metadata_refresh(
+                    ExternalMetadataRefreshEvidence(
+                        metadata_source_name=metadata_refresh.metadata_source_name,
+                        refresh_status=metadata_refresh.refresh_status,
+                        consumer_provider_count=metadata_refresh.consumer_provider_count,
+                        error_code=metadata_refresh.error_code,
+                        started_at=metadata_refresh.started_at,
+                        finished_at=metadata_refresh.finished_at,
+                    )
+                )
             snapshot = refresh_persisted_provider_catalog(
                 store,
                 sources=source_tuple,
@@ -558,6 +588,9 @@ def bootstrap_provider_catalog_runtime(
                 errors=errors,
             )
             catalog_refreshes = store.refresh_evidence()[evidence_offset:]
+            external_metadata_refreshes = (
+                store.external_metadata_refresh_evidence()[external_evidence_offset:]
+            )
         assessments_by_account: dict[tuple[str, str], list[PrivacyPolicyAssessment]] = {}
         for assessment in privacy_assessments:
             assessments_by_account.setdefault(
@@ -657,6 +690,7 @@ def bootstrap_provider_catalog_runtime(
             priced_model_count=priced_count,
             privacy_assessment_count=privacy_assessment_count,
             catalog_refreshes=catalog_refreshes,
+            external_metadata_refreshes=external_metadata_refreshes,
         )
     except Exception:
         try:

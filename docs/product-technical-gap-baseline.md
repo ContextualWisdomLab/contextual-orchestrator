@@ -1,5 +1,32 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-09-01 durable Models.dev freshness evidence for `orchestrator/free`
+
+The live baseline still called out a customer-visible blind spot: Zen and
+NVIDIA free-tier eligibility depends on the shared Models.dev metadata join,
+but operators could not tell whether `is_free = False` meant "current metadata
+said not free", "no metadata matched", or "the third-party metadata fetch
+failed and the gateway failed closed". The durable catalog already recorded
+per-provider refresh evidence; the shared metadata catalog had no equivalent
+freshness or last-error evidence.
+
+This worktree adds one normalized `external_metadata_refresh_run` table plus
+secret-free evidence objects/report fields for the shared Models.dev fetch.
+`discover_all_models_with_metadata_evidence()` now emits one bounded refresh
+record for that third-party dependency with `metadata_source_name`,
+`refresh_status`, `consumer_provider_count`, stable `error_code`, and UTC
+timestamps. `bootstrap_provider_catalog_runtime()` persists that evidence
+through the same durable catalog store used for provider refreshes and returns
+it on `external_metadata_refreshes`, so operator reports can distinguish
+current unknown-cost exclusions from stale or failed metadata.
+
+Exact local evidence on Tuesday, September 1, 2026 in clean worktree
+`commercial-loop-20260901-metadata-freshness`:
+`uv run pytest tests/test_provider_catalog_store.py tests/test_provider_catalog_store_boundaries.py tests/test_provider_catalog_bootstrap.py tests/test_model_discovery.py`
+passed `158` tests in `9.08s`. New coverage proves both a successful shared
+Models.dev refresh and a failed one are durably reported without fabricating
+free pricing, and that invalid metadata-evidence shapes fail closed.
+
 ## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
 
 `provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential

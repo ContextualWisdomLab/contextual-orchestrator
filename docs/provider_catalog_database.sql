@@ -51,3 +51,16 @@ CREATE INDEX IF NOT EXISTS provider_model_account_idx
     ON provider_model (provider_account_id, enabled_flag, serving_eligible_flag);
 CREATE INDEX IF NOT EXISTS catalog_refresh_account_idx
     ON catalog_refresh_run (provider_account_id, finished_at DESC);
+
+CREATE TABLE IF NOT EXISTS external_metadata_refresh_run (
+    external_metadata_refresh_run_id text PRIMARY KEY,
+    metadata_source_name text NOT NULL,
+    refresh_status text NOT NULL,
+    consumer_provider_count integer NOT NULL DEFAULT 0,
+    error_code text,
+    started_at timestamptz NOT NULL,
+    finished_at timestamptz NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS external_metadata_refresh_name_idx
+    ON external_metadata_refresh_run (metadata_source_name, finished_at DESC);
