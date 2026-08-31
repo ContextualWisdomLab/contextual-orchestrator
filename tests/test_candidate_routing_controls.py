@@ -10,6 +10,7 @@ import urllib.request
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.cost_router import CostRoutingCoordinator
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.server import (
     RequestError,
@@ -594,3 +595,65 @@ def test_cache_hit_reports_no_current_candidate_attempt() -> None:
         "exclude_candidate_ids": [],
         "attempted_candidate_ids": [],
     }
+
+
+def test_conduct_pin_rejects_candidate_excluded_from_required_role() -> None:
+    client = _CandidateClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("worker_only", "model-worker", provider_exclusions=("verifier",)),
+            ModelAgent("all_roles", "model-all"),
+        ],
+        client=client,
+    )
+    token = "candidate-conduct-token"
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "orchestration": "conduct",
+                "messages": [{"role": "user", "content": "conduct this"}],
+                "routing": {"candidate_id": "worker_only"},
+            },
+        )
+        route_status, _ = _post(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "orchestration": "route",
+                "messages": [{"role": "user", "content": "route this"}],
+                "routing": {"candidate_id": "worker_only"},
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400
+    assert body["error"]["code"] == "invalid_routing"
+    assert route_status == 200
+    assert client.calls and set(client.calls) == {"worker_only"}
+
+
+def test_response_routing_evidence_is_not_persisted_in_workflow_history() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("candidate_b", "model-b")], client=_CandidateClient()
+    )
+    response = CostRoutingCoordinator(orchestrator).complete(
+        [{"role": "user", "content": "route this"}],
+        mode="route",
+        model_name="orchestrator/auto",
+        workflow_run_id="run_candidate_evidence",
+        hints={"candidate_id": "candidate_b"},
+    )
+
+    assert response["candidate_routing"]["candidate_id"] == "candidate_b"
+    assert "candidate_routing" not in orchestrator.get_workflow_run(
+        "run_candidate_evidence"
+    )
