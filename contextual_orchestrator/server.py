@@ -40,7 +40,6 @@ from .orchestrator import (
     ProviderResponseError,
     ModelAgent,
     TaskOrchestrator,
-    estimate_tokens,
     _new_chat_completion_id,
     _responses_to_chat_payload,
     chat_completion_chunks,
@@ -5085,7 +5084,6 @@ def _chat_response_sse_chunks(
     *,
     model: str,
     include_usage: bool,
-    prompt_text: str,
 ) -> list[dict[str, Any]]:
     """Frame a completed provider-shaped chat response as OpenAI SSE chunks."""
     completion_id = payload.get("id")
@@ -5167,21 +5165,35 @@ def _chat_response_sse_chunks(
         for normal_chunk in chunks:
             normal_chunk["usage"] = None
         reported_usage = payload.get("usage")
-        if isinstance(reported_usage, dict):
+        prompt_tokens = (
+            reported_usage.get("prompt_tokens", reported_usage.get("input_tokens"))
+            if isinstance(reported_usage, dict)
+            else None
+        )
+        completion_tokens = (
+            reported_usage.get("completion_tokens", reported_usage.get("output_tokens"))
+            if isinstance(reported_usage, dict)
+            else None
+        )
+        if (
+            type(prompt_tokens) is int
+            and prompt_tokens >= 0
+            and type(completion_tokens) is int
+            and completion_tokens >= 0
+        ):
             usage = {**reported_usage, "usage_source": "reported"}
+            measurement_status = "measured"
         else:
-            completion_text = content if isinstance(content, str) else ""
-            if tool_calls:
-                completion_text += json.dumps(tool_calls, ensure_ascii=False)
-            prompt_tokens = estimate_tokens(prompt_text)
-            completion_tokens = estimate_tokens(completion_text)
-            usage = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                "usage_source": "estimated",
+            usage = None
+            measurement_status = "unavailable"
+        chunks.append(
+            {
+                **base,
+                "choices": [],
+                "usage": usage,
+                "usage_measurement_status": measurement_status,
             }
-        chunks.append({**base, "choices": [], "usage": usage})
+        )
     return chunks
 
 
@@ -6716,16 +6728,12 @@ def build_server(
                         # "usage" key, so a provider may still omit it.
                         # _chat_response_sse_chunks (below) already frames that payload
                         # into a correctly-shaped terminal SSE chunk alongside tool_call
-                        # deltas, honestly labeling usage "reported" when the provider
-                        # sent it and "estimated" (never fabricated as "reported")
-                        # otherwise — the same fallback already exercised for the
-                        # non-tools streaming path — so there is nothing to fail closed
-                        # on here.
+                        # deltas. Provider usage is measured when valid and explicitly
+                        # unavailable otherwise; chat framing/tools are not reconstructed.
                         # response_format-only structured passthrough (conduct mode)
                         # is different: its usage comes from a multi-step workflow's
                         # cost ledger, which may be unmeasured, so it keeps failing
-                        # closed rather than let _chat_response_sse_chunks synthesize
-                        # an estimated figure for a workflow-level answer.
+                        # closed when workflow-level usage is unavailable.
                         if stream and include_usage and not tool_loop:
                             raise RequestError(
                                 400,
@@ -6855,13 +6863,6 @@ def build_server(
                                         response_payload,
                                         model=model_name,
                                         include_usage=include_usage,
-                                        prompt_text=json.dumps(
-                                            {
-                                                "messages": body.get("messages", []),
-                                                "tools": body.get("tools"),
-                                            },
-                                            ensure_ascii=False,
-                                        ),
                                     )
                                 )
                             )

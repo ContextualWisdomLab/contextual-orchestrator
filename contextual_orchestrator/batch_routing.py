@@ -94,7 +94,7 @@ class RoutingPolicy:
     def _batch_enabled(self) -> bool:
         return bool(self._config.get(_ROUTING_CATEGORY, "batch_enabled", True))
 
-    def decide(self, hints: RoutingHints, prompt_tokens: int = 0) -> RoutingDecision:
+    def decide(self, hints: RoutingHints, prompt_tokens: int | None = None) -> RoutingDecision:
         """Return the routing decision for one request."""
         if not self._batch_enabled():
             return RoutingDecision("sync", "batch routing disabled by config")
@@ -114,6 +114,10 @@ class RoutingPolicy:
             return RoutingDecision("batch", "latency-tolerant request routed to batch")
 
         batch_min_tokens = int(self._config.get(_ROUTING_CATEGORY, "batch_min_tokens", 0))
+        if batch_min_tokens and prompt_tokens is None:
+            return RoutingDecision(
+                "sync", "prompt token count unavailable; conservative sync path"
+            )
         if batch_min_tokens and prompt_tokens >= batch_min_tokens:
             return RoutingDecision(
                 "batch", f"prompt tokens {prompt_tokens} >= batch_min_tokens {batch_min_tokens}"
@@ -201,8 +205,8 @@ class BatchResultItem:
 
     custom_id: str
     answer: str
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
     attribution: Dict[str, Any] = field(default_factory=dict)
     model: str = "contextual-orchestrator"
     mode: str = "auto"
@@ -405,15 +409,26 @@ class PgLlmBatchBackend:
             custom_id = entry.get("custom_id", "")
             body = (entry.get("response") or {}).get("body", {})
             answer = _extract_answer(body)
-            usage = body.get("usage", {}) or {}
+            usage = body.get("usage")
+            usage = usage if isinstance(usage, dict) else {}
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
             raw_request = tracked.get(custom_id)
             request = BatchRequest(**raw_request) if raw_request else None
             items.append(
                 BatchResultItem(
                     custom_id=custom_id,
                     answer=answer,
-                    prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                    completion_tokens=int(usage.get("completion_tokens", 0)),
+                    prompt_tokens=(
+                        prompt_tokens
+                        if type(prompt_tokens) is int and prompt_tokens >= 0
+                        else None
+                    ),
+                    completion_tokens=(
+                        completion_tokens
+                        if type(completion_tokens) is int and completion_tokens >= 0
+                        else None
+                    ),
                     attribution=dict(request.attribution) if request else {},
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",

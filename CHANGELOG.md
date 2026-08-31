@@ -17,11 +17,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   request-scoped missing-model exclusion set across evidence and synthesis.
   Probe telemetry is separate from caller attempts, and explicit structured
   requests keep their model pin throughout evidence, judgment, and synthesis.
+- Chat token accounting now uses valid provider usage or exact Rust raw-output
+  counts for ADR-declared tokenizer mappings. Unreconstructible prompts, tools,
+  multimodal input, unknown models, and missing stream usage are explicitly
+  unavailable; token-threshold routing stays synchronous, enabled budgets fail
+  closed, and API usage/cost fields no longer publish heuristic estimates
+  (ADR 0006).
 - Provider-embedding workers now propagate durable-claim renewal loss and
   refresh ownership before terminal publication. Embedding token accounting
   uses configured `pg_tiktoken` or the packaged Rust cl100k counter for exact
   declared models, and otherwise fails closed without publishing estimated
-  usage or cost (ADR 0005). Legacy chat estimation remains a documented gap.
+  usage or cost (ADR 0005). Chat accounting is governed separately by ADR 0006.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

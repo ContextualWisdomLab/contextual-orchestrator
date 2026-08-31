@@ -62,9 +62,10 @@ from .reasoning_effort_profile import (
     snapshot_role_effort_catalog,
 )
 from .token_counting import (
-    HeuristicTokenCounter,
     NativeCl100kTokenCounter,
+    NativeExactTokenCounter,
     TokenCountUnavailable,
+    UnavailableTokenCounter,
     build_embedding_token_counter,
     build_token_counter,
 )
@@ -125,9 +126,10 @@ __all__ = [
     # config / tokens
     "InMemoryConfigStore",
     "get_config_store",
-    "HeuristicTokenCounter",
     "NativeCl100kTokenCounter",
+    "NativeExactTokenCounter",
     "TokenCountUnavailable",
+    "UnavailableTokenCounter",
     "build_embedding_token_counter",
     "build_token_counter",
     "ResponseCacheProvider",

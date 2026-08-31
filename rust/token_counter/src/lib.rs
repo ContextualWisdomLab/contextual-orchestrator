@@ -1,11 +1,12 @@
-//! Exact cl100k child chunking and provider-request packing for Python.
+//! Exact token counting, cl100k child chunking, and provider-request packing.
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::sync::OnceLock;
-use tiktoken_rs::cl100k_base;
+use tiktoken_rs::{cl100k_base, o200k_base};
 
 static CL100K: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
+static O200K: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
 
 fn exact_tokenizer() -> PyResult<&'static tiktoken_rs::CoreBPE> {
     if let Some(tokenizer) = CL100K.get() {
@@ -16,6 +17,17 @@ fn exact_tokenizer() -> PyResult<&'static tiktoken_rs::CoreBPE> {
     CL100K
         .get()
         .ok_or_else(|| PyValueError::new_err("cl100k initialization failed"))
+}
+
+fn o200k_tokenizer() -> PyResult<&'static tiktoken_rs::CoreBPE> {
+    if let Some(tokenizer) = O200K.get() {
+        return Ok(tokenizer);
+    }
+    let tokenizer = o200k_base().map_err(|_| PyValueError::new_err("o200k unavailable"))?;
+    let _ = O200K.set(tokenizer);
+    O200K
+        .get()
+        .ok_or_else(|| PyValueError::new_err("o200k initialization failed"))
 }
 
 #[pyclass(get_all, skip_from_py_object)]
@@ -74,6 +86,12 @@ fn sum_token_counts(values: Vec<usize>) -> PyResult<usize> {
 #[pyfunction]
 fn count_cl100k(text: &str) -> PyResult<usize> {
     let tokenizer = exact_tokenizer()?;
+    Ok(tokenizer.encode_ordinary(text).len())
+}
+
+#[pyfunction]
+fn count_o200k(text: &str) -> PyResult<usize> {
+    let tokenizer = o200k_tokenizer()?;
     Ok(tokenizer.encode_ordinary(text).len())
 }
 
@@ -240,6 +258,7 @@ fn _token_packer(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(pack_cl100k, module)?)?;
     module.add_function(wrap_pyfunction!(sum_token_counts, module)?)?;
     module.add_function(wrap_pyfunction!(count_cl100k, module)?)?;
+    module.add_function(wrap_pyfunction!(count_o200k, module)?)?;
     module.add_function(wrap_pyfunction!(cosine_similarity, module)?)?;
     module.add_function(wrap_pyfunction!(root_mean_square_error, module)?)?;
     module.add_function(wrap_pyfunction!(weighted_average_embeddings, module)?)?;
@@ -406,6 +425,7 @@ mod tests {
     fn exact_count_cosine_and_rmse_are_rust_owned() {
         Python::attach(|_| {
             assert_eq!(count_cl100k("hello world").unwrap(), 2);
+            assert_eq!(count_o200k("hello world").unwrap(), 2);
             assert_eq!(
                 cosine_similarity(vec![1.0, 0.0], vec![1.0, 0.0]).unwrap(),
                 Some(1.0)

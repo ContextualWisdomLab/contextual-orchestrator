@@ -13,6 +13,7 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.orchestrator import (
+    BudgetExceededError,
     ModelAgent,
     TaskOrchestrator,
     WorkflowStep,
@@ -142,9 +143,9 @@ def test_batch_route_enforces_budget_and_request_identifier_contract() -> None:
         with pytest.raises(RuntimeError, match="spend budget exceeded"):
             orch.batch_route(["prompt one"])
 
-    # Without an exceeded budget the batch path answers and persists normally.
-    records = orch.batch_route(["prompt two"])
-    assert len(records) == 1
+    # Missing authoritative accounting blocks an enabled budget before dispatch.
+    with pytest.raises(BudgetExceededError, match="measurement unavailable"):
+        orch.batch_route(["prompt two"])
 
 
 def test_batch_route_persists_runs_when_a_state_db_is_configured(tmp_path) -> None:
@@ -437,7 +438,7 @@ def test_openai_models_deduplicate_models_and_unknown_ids_raise() -> None:
 # -- spend analytics usage-source classification ---------------------------------------
 
 
-def test_spend_analytics_marks_mixed_usage_sources_per_model() -> None:
+def test_spend_analytics_marks_partial_unknown_usage_unavailable() -> None:
     orch = _orch(_agent(), _agent("builder_agent"))
     run = {
         "workflow_run_id": "run_mixed",
@@ -462,7 +463,8 @@ def test_spend_analytics_marks_mixed_usage_sources_per_model() -> None:
     by_model = {row["model"]: row for row in report["by_model"]}
     planner_row = by_model["mock-model"]
     assert planner_row["step_count"] == 3
-    assert planner_row["usage_source"] == "mixed"
+    assert planner_row["usage_source"] == "unavailable"
+    assert planner_row["output_tokens"] is None
 
 
 # -- readiness criteria -----------------------------------------------------------------

@@ -154,7 +154,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** �
 One public interface:
 
 - `contextual-orchestrator` is the model-like control-plane candidate exposed to callers. `/v1/models` lists it first, followed by every configured worker candidate, including disabled candidates with their status.
-- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a usage-only chunk after the terminal stop chunk, labeled `usage_source: reported` when the provider returned usage or `usage_source: estimated` (never mislabeled `reported`) otherwise; single-agent `tools` passthrough accepts it the same way from the one non-streaming upstream call — the provider's own usage field when present, an honest estimate when the provider omits it; `response_format`-only structured passthrough (conduct mode) still rejects the combination before provider execution, since its usage comes from a multi-step workflow's cost ledger and may be unmeasured. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
+- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. `stream_options.include_usage=true` is accepted for ordinary chat streams and emits a usage-only chunk after the terminal stop chunk. Valid provider counts carry `usage_source: reported` and `usage_measurement_status: measured`; missing or malformed counts carry `usage: null` and `usage_measurement_status: unavailable`. Single-agent `tools` passthrough follows the same rule and never reconstructs tool or multimodal framing. `response_format`-only structured passthrough (conduct mode) still rejects the combination before provider execution when workflow-level usage is unavailable. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline — per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
@@ -162,7 +162,7 @@ One public interface:
 - The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged.
 - `/api/v1/provider_readiness/latest` reports provider liveness separately from an explicit chat readiness probe; `?refresh=true` re-probes instead of returning the cached result.
 - `/api/v1/analytics_snapshots/latest` returns source-backed local KPI definitions (trace completeness, policy-safe run rate, successful chat requests, and related event-derived counts) from in-memory runtime state, localized via the same locale bundles as the admin console.
-- `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. See [Observability & spend](#observability--spend).
+- `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Valid provider usage is authoritative; declared model IDs may use the packaged Rust tokenizer for exact raw textual output. Prompt framing, tools, multimodal input, unknown tokenizers, and missing native code remain unavailable. Cost is computed only when every required count and operator-supplied price is available. See [Observability & spend](#observability--spend).
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
 - `/api/v1/commercial_evidence_manifests/latest` shows the evidence gaps to resolve before commercial due diligence. The former `/api/v1/buyer_evidence_manifests/latest` route remains a deprecated compatibility alias.
@@ -201,15 +201,15 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 
 ## Observability & spend
 
-Local spend observability, aggregated from in-memory workflow runs. It is honest by construction — estimates are labeled, and cost is only reported when a price is configured.
+Local spend observability, aggregated from in-memory workflow runs. It is honest by construction: counts are authoritative or explicitly unavailable, and cost is reported only when its required counts and prices are available.
 
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
   -H "authorization: Bearer $local_token" | jq '.totals, .by_model, .budget'
 ```
 
-- **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.
-- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated.
+- **Tokens.** `by_model[].output_tokens` uses provider-reported completion/output tokens first. For exact full model IDs declared by ADR 0006, a missing output count may use the packaged Rust tokenizer over raw textual output only. Rows carry `usage_source: reported | tokenizer | mixed | unavailable`; unavailable rows return `output_tokens: null`. Prompt tokens are provider-reported or null because chat framing is not reconstructed.
+- **Cost.** Supply a price table to turn authoritative output tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models`; `cost_usd` remains null when a price or required token count is unavailable. No prices or token counts are assumed.
 - **Budget cap.** Set an operator cap to refuse runaway spend (default: no cap):
 
   ```bash
@@ -217,7 +217,7 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
     --budget-max-output-tokens 2000000 --budget-max-cost-usd 50
   ```
 
-  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). Cost caps require a price table; token caps do not.
+  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. An enabled budget also fails closed when a required count or price is unavailable. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, nullable `spent_*`/`remaining_*`, `measurement_status`, `enforcement_status`, `exceeded`). Cost caps require a complete price table; token caps require authoritative output counts.
 - **Admin.** The `/admin` **Observability** view renders the totals and the per-model table (unpriced models show an `unpriced` chip).
 
 These are process-local measured signals for a stdlib lab, not a billing system or production compliance data.
@@ -240,7 +240,9 @@ is read from a **KV config store**, never `os.getenv`.
   first-class dimensions catalogued in `cost_attribution_dimensions`: **account,
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
-  configured, and fall back to a deterministic heuristic otherwise.
+  configured. Valid provider usage is authoritative; missing chat framing,
+  tool, multimodal, or unknown-tokenizer counts remain explicitly unavailable
+  instead of falling back to a deterministic heuristic.
 - **Canonical Billing export.** Install the published `metering_billing`
   producer SDK, create its durable outbox, and pass
   `CanonicalUsageRecordSink(event_builder=build_contextual_usage_event,

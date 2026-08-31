@@ -58,6 +58,12 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "content"
     ]["application/json"]["schema"]
     assert chat_schema["properties"]["include_orchestration_trace"]["type"] == "boolean"
+    chat_response = OPENAPI_SPEC["components"]["schemas"]["ChatCompletionResponse"]
+    assert chat_response["properties"]["usage"]["$ref"].endswith("AuthoritativeUsage")
+    assert chat_response["properties"]["usage_measurement_status"]["enum"] == [
+        "measured",
+        "unavailable",
+    ]
     assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
         "security"
     ] == [{"admin_bearer_auth": [], "trace_bearer_auth": []}]
