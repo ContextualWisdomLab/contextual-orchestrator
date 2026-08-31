@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from email.message import Message
 from http.cookies import CookieError, SimpleCookie
@@ -8150,9 +8151,14 @@ def build_server(
                 }
                 emit("response.output_item.added", output_index=0, item=reasoning_item)
                 try:
-                    with orchestrator.candidate_routing_policy(
-                        routing, model_name=model_name
-                    ):
+                    candidate_scope = (
+                        orchestrator.candidate_routing_policy(
+                            routing, model_name=model_name
+                        )
+                        if routing
+                        else nullcontext()
+                    )
+                    with candidate_scope:
                         if orchestrator.would_route(messages, "auto", model_name):
                             progress("worker", "started")
                             workflow_run_id = f"run_{uuid.uuid4().hex}"
@@ -8351,14 +8357,21 @@ def build_server(
                         stream_kwargs.update(
                             {"include_usage": True, "usage_callback": capture_usage}
                         )
-                    with orchestrator.candidate_routing_policy(
-                        routing, model_name=model_name
-                    ):
+                    candidate_scope = (
+                        orchestrator.candidate_routing_policy(
+                            routing, model_name=model_name
+                        )
+                        if routing
+                        else nullcontext()
+                    )
+                    with candidate_scope:
                         for delta in orchestrator.stream_route(messages, **stream_kwargs):
                             if not self._write_sse(frame({"content": delta})):
                                 return
-                        record = orchestrator.get_workflow_run(run_id)
-                        evidence = orchestrator._candidate_routing_evidence(record)
+                        evidence = None
+                        if routing:
+                            record = orchestrator.get_workflow_run(run_id)
+                            evidence = orchestrator._candidate_routing_evidence(record)
                     terminal_delta: dict[str, Any] = {}
                     terminal = frame(terminal_delta, finish="stop")
                     if evidence is not None:
