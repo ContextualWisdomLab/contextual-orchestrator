@@ -10,6 +10,7 @@ from .batch_routing import (
     LocalEmbeddingBatchBackend,
     PgLlmBatchBackend,
     PgLlmBatchEmbeddingBackend,
+    ProviderEmbeddingBatchBackend,
     RoutingDecision,
     RoutingHints,
     RoutingPolicy,

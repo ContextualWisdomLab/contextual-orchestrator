@@ -35,13 +35,21 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
+import time
+import weakref
 from collections.abc import MutableMapping
+from contextlib import contextmanager
 from typing import Any, Callable, Iterator, Optional
 
 # Registry entries expire after this many seconds so abandoned jobs do
 # not accumulate forever. Seven days comfortably outlives every batch
 # backend's own completion window.
 DEFAULT_RETENTION_SECONDS = 7 * 24 * 3600
+
+
+class ClaimNotAcquired(RuntimeError):
+    """Another worker owns a non-blocking durable job claim."""
 
 
 def _encode(value: Any) -> str:
@@ -130,11 +138,94 @@ class JobRegistryFactory:
     def __init__(self, client: Any = None, *, retention_seconds: int = DEFAULT_RETENTION_SECONDS) -> None:
         self._client = client
         self._retention_seconds = retention_seconds
+        self._local_locks: weakref.WeakValueDictionary[str, threading.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+        self._local_locks_guard = threading.Lock()
+
+    def lock(
+        self,
+        name: str,
+        key: str,
+        *,
+        lease_seconds: float | None = None,
+        renew_until_epoch: float | None = None,
+    ):
+        """Return an atomic shard claim with bounded lease and acquisition wait."""
+        lock_name = f"batch_job_registry:{name}:claim:{key}"
+        if self._client is not None:
+            if lease_seconds is None or lease_seconds <= 0:
+                raise ValueError("durable claim lease_seconds must be positive")
+            claim = self._client.lock(
+                lock_name,
+                timeout=lease_seconds,
+                blocking=True,
+                blocking_timeout=lease_seconds,
+                thread_local=False,
+            )
+
+            @contextmanager
+            def acquired_claim():
+                if not claim.acquire():
+                    raise ClaimNotAcquired(lock_name)
+                stop_renewal = threading.Event()
+                renewal_thread = None
+                if renew_until_epoch is not None:
+
+                    def renew_claim() -> None:
+                        interval = max(0.05, min(lease_seconds / 3, 1.0))
+                        while not stop_renewal.wait(interval):
+                            remaining = renew_until_epoch - time.time()
+                            if remaining <= 0:
+                                return
+                            try:
+                                # redis-py's Lock.extend script checks the
+                                # claim token before replacing the TTL (CAS).
+                                renewed = claim.extend(
+                                    max(0.05, min(lease_seconds, remaining)),
+                                    replace_ttl=True,
+                                )
+                                if not renewed:
+                                    return
+                            except Exception as exc:  # noqa: BLE001 - redis is optional.
+                                if type(exc).__name__ in {"LockError", "LockNotOwnedError"}:
+                                    return
+
+                    renewal_thread = threading.Thread(
+                        target=renew_claim,
+                        name="job-claim-renewal",
+                        daemon=True,
+                    )
+                    renewal_thread.start()
+                try:
+                    yield claim
+                finally:
+                    stop_renewal.set()
+                    if renewal_thread is not None:
+                        renewal_thread.join()
+                    try:
+                        claim.release()
+                    except Exception as exc:  # noqa: BLE001 - redis is optional.
+                        if renew_until_epoch is None or type(exc).__name__ != "LockNotOwnedError":
+                            raise
+
+            return acquired_claim()
+        with self._local_locks_guard:
+            lock = self._local_locks.get(lock_name)
+            if lock is None:
+                lock = threading.Lock()
+                self._local_locks[lock_name] = lock
+            return lock
 
     @property
     def durable(self) -> bool:
         """True when registries survive a process restart."""
         return self._client is not None
+
+    @property
+    def retention_seconds(self) -> int:
+        """Return the configured terminal-result retention contract."""
+        return self._retention_seconds
 
     def mapping(self, name: str, *, decode: Optional[Callable[[Any], Any]] = None) -> MutableMapping:
         """Return the registry called ``name`` — a dict unless Valkey is configured."""

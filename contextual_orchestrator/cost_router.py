@@ -34,6 +34,7 @@ from .batch_routing import (
     EmbeddingBatchResultItem,
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
+    ProviderEmbeddingBatchBackend,
     RoutingHints,
     RoutingPolicy,
 )
@@ -109,12 +110,54 @@ class CostRoutingCoordinator:
             )
         else:
             self.batch_backend = batch_backend
-        self.embedding_batch_backend: EmbeddingBatchBackend = (
-            embedding_batch_backend
-            or LocalEmbeddingBatchBackend(
-                token_counter=self.token_counter, job_registry=registry
-            )
-        )
+        if embedding_batch_backend is not None:
+            self.embedding_batch_backend = embedding_batch_backend
+        else:
+            try:
+                embedding_agents = orchestrator._capability_agents("embedding")
+            except (AttributeError, RuntimeError):
+                embedding_agents = []
+            remote_embedding_agents = [
+                agent for agent in embedding_agents if not agent.base_url.startswith("mock://")
+            ]
+            if remote_embedding_agents:
+                def run_provider_embeddings(
+                    requests: List[EmbeddingBatchRequest],
+                ) -> tuple[List[List[float]], int]:
+                    first = requests[0]
+                    agent = (
+                        orchestrator._agent(first.agent_id)
+                        if first.agent_id is not None
+                        else orchestrator.select_capability_agent("embedding", first.model)
+                    )
+                    if any(
+                        request.model != first.model or request.agent_id != first.agent_id
+                        for request in requests
+                    ):
+                        raise RuntimeError("provider embedding batch must retain one selected route")
+                    vectors = orchestrator.client.embed(
+                        agent, [request.input_text for request in requests]
+                    )
+                    prompt_tokens = sum(
+                        int(self.token_counter.count_text(request.input_text, request.model))
+                        for request in requests
+                    )
+                    return vectors, prompt_tokens
+
+                self.embedding_batch_backend = ProviderEmbeddingBatchBackend(
+                    run_provider_embeddings,
+                    job_registry=registry,
+                    max_concurrency=getattr(orchestrator.client, "local_concurrency", 1),
+                    claim_lease_seconds=(
+                        float(orchestrator.client.timeout)
+                        if registry.durable and float(getattr(orchestrator.client, "timeout", 0)) > 0
+                        else None
+                    ),
+                )
+            else:
+                self.embedding_batch_backend = LocalEmbeddingBatchBackend(
+                    token_counter=self.token_counter, job_registry=registry
+                )
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
         # embeddings batch state: job handle + submitted requests + cached doc,
