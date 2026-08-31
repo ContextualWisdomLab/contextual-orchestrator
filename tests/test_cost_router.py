@@ -784,6 +784,74 @@ def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -
     assert backend.requests[0].agent_id == second.id
 
 
+def test_embedding_batch_selects_cheapest_capability_candidate_when_unspecified() -> None:
+    """``cheapest_upstream`` wiring: an unspecified member picks price, not rank order.
+
+    ``ranked_first`` outranks ``cheaper`` under the orchestrator's own
+    priority-based ordering (verified below), so a price-blind ``candidates[0]``
+    pick would return it. The coordinator must instead resolve to the cheaper
+    member per the configured price table.
+    """
+    from contextual_orchestrator.batch_routing import EmbeddingBatchResultItem
+
+    ranked_first = ModelAgent(
+        "ranked_first_zdr_member",
+        "expensive-embedding",
+        "mock://expensive",
+        provider_name="expensive-provider",
+        tags=("embedding", "privacy:zdr"),
+        priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_zdr_member",
+        "cheap-embedding",
+        "mock://cheap",
+        provider_name="cheap-provider",
+        tags=("embedding", "privacy:zdr"),
+        priority=1,
+    )
+
+    class _RecordingEmbeddingBackend:
+        name = "recording"
+
+        def __init__(self) -> None:
+            self.requests = []
+
+        def submit(self, requests, metadata=None):
+            self.requests.extend(requests)
+            return BatchJob("cheapest-pick", self.name, status="completed", request_count=len(requests))
+
+        def poll(self, job):
+            return {"is_complete": True, "status": "completed"}
+
+        def retrieve(self, job):
+            return [EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model) for request in self.requests]
+
+    backend = _RecordingEmbeddingBackend()
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+    with orchestrator.request_policy(True):
+        ranked = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in ranked] == [ranked_first.id, cheaper.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry("expensive-provider", "expensive-embedding", prompt_price_per_1k=5.0, completion_price_per_1k=0.0)
+    )
+    price_book.set_price(
+        PriceEntry("cheap-provider", "cheap-embedding", prompt_price_per_1k=0.01, completion_price_per_1k=0.0)
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, embedding_batch_backend=backend
+    )
+
+    document = coordinator.complete_embeddings_batch(["private"], zdr_only=True)
+
+    assert document["status"] == "completed"
+    assert backend.requests[0].model == cheaper.model
+    assert backend.requests[0].agent_id == cheaper.id
+
+
 def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
     """The ZDR resolver must not change ordinary batch passthrough behavior."""
     captured: list[BatchRequest] = []

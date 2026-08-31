@@ -12,6 +12,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `cheapest_upstream` (`batch_routing.py`) is now actually called by
+  `CostRoutingCoordinator`: resolving an unspecified embedding batch member
+  out of several capability-matched candidates (e.g. operator-managed
+  model-group members) now picks the cheapest one by the configured price
+  table instead of an arbitrary first/ranked pick. Previously it was a
+  headline-documented, `__all__`-exported utility with no production caller
+  anywhere in the router.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

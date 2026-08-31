@@ -36,6 +36,7 @@ from .batch_routing import (
     LocalEmbeddingBatchBackend,
     RoutingHints,
     RoutingPolicy,
+    cheapest_upstream,
 )
 from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
@@ -137,6 +138,30 @@ class CostRoutingCoordinator:
         """Derive the ledger provider/model identity for one served agent."""
         provider = agent.provider_name or _provider_from_base_url(agent.base_url)
         return provider or "unknown", agent.model or fallback_model
+
+    def _cheapest_capability_candidate(self, candidates: List[Any]) -> Any:
+        """Pick the lowest-priced member of a capability candidate list.
+
+        Wires :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`
+        — the module's cost-optimising upstream selector — into a real
+        routing decision: among several capability-matched members (e.g.
+        operator-managed model-group members) that could all serve one
+        request, prefer the cheapest by the configured price table rather
+        than an arbitrary first pick. Unpriced or tied candidates keep the
+        original (ranked) order, so behavior is unchanged whenever the price
+        table has nothing to optimise.
+        """
+        priced = [
+            dict(zip(("provider", "model"), self._agent_provider_model(candidate, candidate.model)))
+            for candidate in candidates
+        ]
+        best = cheapest_upstream(priced, self.price_book)
+        if best is None:  # pragma: no cover - callers only pass non-empty pools
+            return candidates[0]
+        for index, entry in enumerate(priced):
+            if entry is best:
+                return candidates[index]
+        return candidates[0]  # pragma: no cover - defensive: cheapest_upstream returns an input entry
 
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
@@ -812,7 +837,8 @@ class CostRoutingCoordinator:
         with self.orchestrator.request_policy(zdr_only):
             candidates = self.orchestrator._capability_agents("embedding", selection_model)
         if agent_id is None:
-            return candidates[0].model, candidates[0].id
+            chosen = self._cheapest_capability_candidate(candidates)
+            return chosen.model, chosen.id
         for candidate in candidates:
             if candidate.id == agent_id:
                 return candidate.model, candidate.id

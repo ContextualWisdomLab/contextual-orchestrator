@@ -133,6 +133,11 @@ def cheapest_upstream(
     representative request shape and return the cheapest. Unpriced candidates
     cost ``0`` and are treated as free (explicit, so a missing price is visible
     rather than silently expensive). Ties keep input order.
+
+    :class:`~contextual_orchestrator.cost_router.CostRoutingCoordinator` calls
+    this (via its ``_cheapest_capability_candidate`` helper) to resolve one
+    embedding member out of several capability-matched candidates, so this is
+    not just a standalone utility — it backs a real routing decision.
     """
     if not candidates:
         return None
