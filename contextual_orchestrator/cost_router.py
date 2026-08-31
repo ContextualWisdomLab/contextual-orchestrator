@@ -413,7 +413,7 @@ class CostRoutingCoordinator:
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
                 "measurement_status": aggregate_measurement_status,
             }
-            if len(currencies) > 1:
+            if len(currencies) > 1 and aggregate_measurement_status != "unavailable":
                 provider_response["cost"]["currency_components"] = [
                     {
                         "currency_code": currency,
@@ -550,7 +550,7 @@ class CostRoutingCoordinator:
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
             "measurement_status": aggregate_measurement_status,
         }
-        if len(currencies) > 1:
+        if len(currencies) > 1 and aggregate_measurement_status != "unavailable":
             result["cost"]["currency_components"] = [
                 {
                     "currency_code": currency,

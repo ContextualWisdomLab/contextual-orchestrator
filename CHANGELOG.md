@@ -26,7 +26,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   and silently summed the loser's unknown cost as `0`. Both paths now use
   the same unavailable-outranks-estimated-outranks-measured precedence as
   `record_stream_usage()`, and `cost_amount` becomes `None` rather than a
-  partial sum whenever any contributing record is unavailable.
+  partial sum whenever any contributing record is unavailable. Mixed-currency
+  responses also suppress their otherwise partial `currency_components`.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
