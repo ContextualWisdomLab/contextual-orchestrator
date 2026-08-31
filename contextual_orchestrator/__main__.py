@@ -725,6 +725,7 @@ def main(argv: list[str] | None = None) -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        allow_empty_agents=args.auto_discover_model_agents,
     )
     if args.auto_discover_model_agents:
         _auto_discover_runtime_agents(orchestrator)

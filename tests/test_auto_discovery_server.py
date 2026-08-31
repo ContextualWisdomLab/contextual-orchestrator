@@ -9,6 +9,7 @@ import pytest
 from contextual_orchestrator.__main__ import (
     _auto_discover_runtime_agents,
     _probe_configured_gateway_structured_chat,
+    main,
 )
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
@@ -239,6 +240,62 @@ def test_failed_gateway_catalog_probe_transiently_retires_the_only_blank_seed(
 
     assert recovered["added"] == [agent_id_for(model)]
     assert restarted.agents[0].model == model.model_id
+
+
+def test_auto_discovery_restart_recovers_a_persisted_disabled_gateway_seed(
+    monkeypatch, tmp_path
+) -> None:
+    """A legacy failure tombstone cannot stop a later healthy discovery pass."""
+    model = DiscoveredModel(
+        provider_name="configured_gateway",
+        model_id="recovered-model",
+        credential_name="LLM_GATEWAY_API_KEY",
+        chat_base_url="https://gateway.synthetic.example/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+    )
+    seed = ModelAgent(
+        "configured_gateway_bootstrap",
+        "",
+        base_url="https://gateway.synthetic.example/v1",
+        provider_name="configured_gateway",
+        credential_key="LLM_GATEWAY_API_KEY",
+        tags=("bootstrap_seed",),
+    )
+    agents_db = str(tmp_path / "agents.db")
+    failed = TaskOrchestrator([seed], agents_db=agents_db)
+    failed.sync_discovered_agents([replace(seed, disabled=True)])
+    failed.close()
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.load_agents", lambda _path: [seed]
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.get_credential", lambda _name: "present"
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([model], []),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__._probe_configured_gateway_structured_chat",
+        lambda *_args: True,
+    )
+    active_models = []
+
+    def complete(orchestrator, *_args, **_kwargs):
+        active_models.extend(agent.model for agent in orchestrator.agents)
+        return {"answer": "ok"}
+
+    monkeypatch.setattr(TaskOrchestrator, "complete", complete)
+
+    main([
+        "recover",
+        "--agents-db", agents_db,
+        "--auto-discover-model-agents",
+    ])
+
+    assert active_models == [model.model_id]
 
 
 def test_failed_gateway_probe_disables_persisted_discovered_agent_after_restart(
