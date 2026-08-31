@@ -66,9 +66,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   empty-content placeholder instead of the request actually submitted, so a
   large prompt whose provider marked usage invalid was undercounted to
   near-zero prompt tokens — understating batch cost. (CodeRabbit review)
-  `submit_batch()` now keeps the submitted `BatchRequest` list keyed by job
-  id so `retrieve_batch()` can look the original request up by `custom_id`
-  and estimate prompt tokens from what was actually sent.
+  `submit_batch()` now computes a real prompt-token estimate per
+  `custom_id` before submission and stores it as a `prompt_token_estimates`
+  field on the durable `BatchJob` record itself, rather than the raw
+  submitted messages (Devin review: a batch registry can be Valkey-backed
+  with a multi-day retention shared across processes, and a submitted
+  prompt may be ZDR-flagged or otherwise sensitive — a token count carries
+  no reconstructable prompt content). Publishing it on the existing
+  `BatchJob` write also means an accepted job still has exactly one
+  publication write, so a metadata-only estimate can never orphan an
+  already-accepted (and possibly billed) backend job behind a raised
+  exception with no job id ever returned to the caller. `retrieve_batch()`
+  reads that stored estimate instead of falling back to an empty
+  placeholder.
 
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
