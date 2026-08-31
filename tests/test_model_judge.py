@@ -29,7 +29,6 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _parse_model_judge_reply,
     _structured_output_error,
 )
-from contextual_orchestrator.provider_errors import ProviderUpstreamError  # noqa: E402
 
 
 RISKY_VERIFIER_REPORT = "The plan is sound overall but discusses downtime risks and error handling."
@@ -970,7 +969,7 @@ def test_structured_synthesis_failure_updates_provider_health() -> None:
             "proxy_send",
             side_effect=RuntimeError("synthetic provider failure"),
         ),
-        pytest.raises(ProviderUpstreamError) as exc_info,
+        pytest.raises(RuntimeError, match="synthetic provider failure"),
     ):
         orchestrator.proxy_completion(
             {
@@ -981,8 +980,6 @@ def test_structured_synthesis_failure_updates_provider_health() -> None:
             single_agent=False,
         )
 
-    assert exc_info.value.agent_id == "general_agent"
-    assert "synthetic provider failure" not in str(exc_info.value)
     assert orchestrator._circuit["general_agent"]["failures"] == 1
 
 

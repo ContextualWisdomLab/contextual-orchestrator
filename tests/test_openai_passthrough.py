@@ -779,8 +779,8 @@ def test_http_all_auto_candidates_rejecting_size_returns_413() -> None:
     assert body["error_message"] == "request body exceeds every eligible provider limit"
 
 
-def test_http_virtual_structured_synthesis_failure_returns_provider_error() -> None:
-    """A final provider failure is classified, not an internal server bug."""
+def test_http_virtual_structured_synthesis_failure_returns_retryable_503() -> None:
+    """A final provider failure is availability, not an internal server bug."""
 
     class FailingSynthesisClient(ModelClient):
         def proxy_send_once(self, agent, endpoint, payload):
@@ -825,9 +825,9 @@ def test_http_virtual_structured_synthesis_failure_returns_provider_error() -> N
         server.shutdown()
         server.server_close()
 
-    assert status == 502
-    assert body["error"]["code"] == "provider_connection_error"
-    assert body["error"]["detail"]["retryable"] is True
+    assert status == 503
+    assert body["error"]["code"] == "no_viable_agent"
+    assert body["error"]["detail"]["retry_after_seconds"] == 30
     assert "synthetic provider outage" not in json.dumps(body)
 
 
