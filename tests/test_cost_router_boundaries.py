@@ -168,6 +168,46 @@ def test_provider_confirmed_zero_usage_stays_measured_and_price_known() -> None:
     assert item["cost_amount"] == 0.0
 
 
+def test_invalid_batch_usage_estimates_prompt_tokens_from_original_request() -> None:
+    """usage_valid=False must estimate from the real submitted prompt.
+
+    CodeRabbit review (PR #956): retrieve_batch's invalid-usage fallback
+    passed a hardcoded empty-content placeholder into the estimation path
+    instead of the request actually submitted, so a large prompt whose
+    provider marked usage invalid was undercounted to near-zero prompt
+    tokens -- understating batch cost. The original request is now looked
+    up by custom_id and used for estimation instead.
+    """
+    class InvalidUsageBackend:
+        name = "invalid-usage"
+
+        def submit(self, requests, metadata=None):  # type: ignore[no-untyped-def]
+            del metadata
+            self._custom_id = requests[0].custom_id
+            return BatchJob("invalid-usage-job", self.name, request_count=1)
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            return [BatchResultItem(
+                self._custom_id, "short answer", prompt_tokens=-1, completion_tokens=2,
+                model="mock-a", usage_valid=False,
+            )]
+
+    coordinator = _coordinator(batch_backend=InvalidUsageBackend())
+    large_prompt = "word " * 500
+    job = coordinator.submit_batch([
+        BatchRequest(messages=[{"role": "user", "content": large_prompt}], model="mock-a")
+    ])
+
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+
+    assert item["measurement_status"] == "estimated"
+    # A hardcoded empty placeholder would estimate near-zero prompt tokens
+    # regardless of the real prompt's size; the actual submitted prompt must
+    # drive the estimate instead.
+    assert item["prompt_tokens"] > 100
+
+
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
     coordinator = _coordinator()
     with pytest.raises(TypeError, match="cache_bypass"):

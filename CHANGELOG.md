@@ -55,6 +55,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   synthetic `("cache", "response")` provider/model never has a price row —
   is always `price_known=True`, `cost_amount=0.0` rather than being wrongly
   reported as an unpriced request.
+- `retrieve_batch()`'s `item.prompt_tokens or None` treated a legitimately
+  reported zero token count the same as a missing one (Python's falsy-zero),
+  so a genuinely confirmed zero-usage batch item was silently downgraded to
+  an unmeasured estimate instead of staying a real, priced `measured` `0`.
+  `PgLlmBatchBackend.retrieve()` and `BatchResultItem` now carry an explicit
+  `usage_valid` tri-state (confirmed-typed non-negative counts vs. missing/
+  malformed usage), and `retrieve_batch()` reads that instead of relying on
+  truthiness. That same estimation fallback also passed a hardcoded
+  empty-content placeholder instead of the request actually submitted, so a
+  large prompt whose provider marked usage invalid was undercounted to
+  near-zero prompt tokens — understating batch cost. (CodeRabbit review)
+  `submit_batch()` now keeps the submitted `BatchRequest` list keyed by job
+  id so `retrieve_batch()` can look the original request up by `custom_id`
+  and estimate prompt tokens from what was actually sent.
 
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while

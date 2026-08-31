@@ -117,6 +117,12 @@ class CostRoutingCoordinator:
         )
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
+        # job_id -> submitted BatchRequest list, so retrieve_batch can estimate
+        # prompt tokens from the real submitted prompt (not an empty
+        # placeholder) whenever a provider marks a batch item's usage invalid.
+        self._batch_requests = registry.mapping(
+            "batch_requests", decode=lambda raw: BatchRequest(**raw)
+        )
         # embeddings batch state: job handle + submitted requests + cached doc,
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
         self._embedding_jobs = registry.mapping("embedding_jobs", decode=lambda raw: BatchJob(**raw))
@@ -674,6 +680,7 @@ class CostRoutingCoordinator:
         job = self.batch_backend.submit(prepared_requests, metadata=metadata)
         job.owner_id = owner_id
         self._batch_jobs[job.job_id] = job
+        self._batch_requests[job.job_id] = prepared_requests
         return job
 
     def _resolve_batch_request(self, request: BatchRequest) -> BatchRequest:
@@ -712,6 +719,9 @@ class CostRoutingCoordinator:
         """Retrieve results for a batch owned by ``owner_id`` and record usage."""
         job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
+        request_by_custom_id = {
+            request.custom_id: request for request in self._batch_requests.get(job_id, [])
+        }
         recorded: List[Dict[str, Any]] = []
         for item in items:
             provider_model = self._resolve_batch_provider_model(item)
@@ -726,8 +736,19 @@ class CostRoutingCoordinator:
                     )
                 )
             )
+            original_request = request_by_custom_id.get(item.custom_id)
+            # An invalid/missing provider usage falls back to estimating
+            # prompt tokens from the request messages (see _record_completion).
+            # A hardcoded empty placeholder would silently undercount prompt
+            # tokens for a real, possibly large submitted prompt -- use the
+            # actual submitted request when it is available.
+            estimation_messages = (
+                original_request.messages
+                if not usage_valid and original_request is not None
+                else [{"role": "user", "content": ""}]
+            )
             record = self._record_completion(
-                messages=[{"role": "user", "content": ""}],
+                messages=estimation_messages,
                 answer=item.answer,
                 route_mode=item.mode,
                 request_channel="batch",
