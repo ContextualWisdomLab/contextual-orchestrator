@@ -88,6 +88,30 @@ def _post_sse(port: int, token: str, body: dict) -> tuple[int, list[dict]]:
         return response.status, events
 
 
+def _post_responses(
+    port: int, token: str, body: dict, *, stream: bool = False
+) -> tuple[int, dict | list[dict]]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/responses",
+        data=json.dumps(body).encode(),
+        headers={
+            "authorization": f"Bearer {token}",
+            "content-type": "application/json",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        raw = response.read().decode()
+        if stream:
+            return response.status, [
+                json.loads(line.removeprefix("data: "))
+                for line in raw.splitlines()
+                if line.startswith("data: {")
+            ]
+        return response.status, json.loads(raw)
+
+
 def _serve():
     client = _CandidateClient()
     orchestrator = TaskOrchestrator(
@@ -220,4 +244,38 @@ def test_candidate_pin_is_honored_by_structured_and_streaming_chat_paths() -> No
     assert stream_status == 200
     terminal = next(event for event in events if event.get("choices", [{}])[0].get("finish_reason") == "stop")
     assert terminal["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert set(client.calls) == {"candidate_b"}
+
+
+def test_candidate_pin_is_honored_by_responses_json_and_stream_paths() -> None:
+    server, thread, token, client = _serve()
+    routing = {"candidate_id": "candidate_b", "exclude_candidate_ids": ["candidate_a"]}
+    try:
+        json_status, json_body = _post_responses(
+            server.server_address[1],
+            token,
+            {"model": "orchestrator/auto", "input": "short", "routing": routing},
+        )
+        stream_status, stream_events = _post_responses(
+            server.server_address[1],
+            token,
+            {
+                "model": "orchestrator/auto",
+                "input": "short",
+                "stream": True,
+                "routing": routing,
+            },
+            stream=True,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert json_status == 200
+    assert isinstance(json_body, dict)
+    assert json_body["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
+    assert stream_status == 200
+    assert isinstance(stream_events, list)
+    completed = next(event for event in stream_events if event["type"] == "response.completed")
+    assert completed["response"]["orchestration"]["routing"]["served_candidate_id"] == "candidate_b"
     assert set(client.calls) == {"candidate_b"}
