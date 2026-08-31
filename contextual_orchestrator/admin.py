@@ -55,10 +55,10 @@ ADMIN_TRANSLATIONS = {
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
-        "spend_output_tokens": "Est. output tokens",
-        "spend_prompt_tokens": "Est. prompt tokens",
+        "spend_output_tokens": "Output tokens",
+        "spend_prompt_tokens": "Prompt tokens",
         "spend_steps": "Steps",
-        "spend_cost": "Est. cost",
+        "spend_cost": "Cost (USD)",
         "spend_runs": "Runs",
         "settings_title": "Settings",
         "session_title": "Operator session",
@@ -316,10 +316,10 @@ ADMIN_TRANSLATIONS = {
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
-        "spend_output_tokens": "추정 출력 토큰",
-        "spend_prompt_tokens": "추정 입력 토큰",
+        "spend_output_tokens": "출력 토큰",
+        "spend_prompt_tokens": "입력 토큰",
         "spend_steps": "단계",
-        "spend_cost": "추정 비용",
+        "spend_cost": "비용 (USD)",
         "spend_runs": "실행",
         "settings_title": "설정",
         "session_title": "운영자 세션",
@@ -1056,7 +1056,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="spend_title">Spend</h1><span class="chip" id="spendStatus">estimate</span></div>
           <div class="kpis" id="spendTotals"></div>
-          <table><thead><tr><th data-i18n="spend_model">Model</th><th data-i18n="spend_output_tokens">Est. output tokens</th><th data-i18n="spend_steps">Steps</th><th>$/1M</th><th data-i18n="spend_cost">Est. cost</th></tr></thead><tbody id="spendRows"></tbody></table>
+          <table><thead><tr><th data-i18n="spend_model">Model</th><th data-i18n="spend_output_tokens">Output tokens</th><th data-i18n="spend_steps">Steps</th><th>$/1M</th><th data-i18n="spend_cost">Cost (USD)</th></tr></thead><tbody id="spendRows"></tbody></table>
           <p class="muted" id="spendNote"></p>
         </section>
       </section>

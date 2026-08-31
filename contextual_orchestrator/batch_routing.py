@@ -771,7 +771,14 @@ class ProviderEmbeddingBatchBackend:
 
     def _run_job(self, job_id: str) -> None:
         """Execute or reclaim one persisted job until it becomes terminal."""
-        deadline_epoch = self._execution_deadline(job_id)
+        while not self._closed.is_set() and self._states.get(job_id) in {"queued", "running"}:
+            try:
+                deadline_epoch = self._execution_deadline(job_id)
+                break
+            except ClaimNotAcquired:
+                threading.Event().wait(min(0.05, self._claim_lease_seconds))
+        else:
+            return
         while (
             not self._closed.is_set()
             and self._states.get(job_id) in {"queued", "running"}

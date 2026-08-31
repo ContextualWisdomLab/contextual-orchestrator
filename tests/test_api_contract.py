@@ -64,6 +64,16 @@ def test_openapi_documents_compatibility_front_door() -> None:
         "measured",
         "unavailable",
     ]
+    measured, unavailable = chat_response["oneOf"]
+    assert measured["properties"]["usage_measurement_status"] == {"const": "measured"}
+    assert measured["properties"]["usage"]["required"] == [
+        "prompt_tokens",
+        "completion_tokens",
+    ]
+    assert unavailable["properties"]["usage_measurement_status"] == {
+        "const": "unavailable"
+    }
+    assert unavailable["properties"]["usage"] == {"type": "null"}
     assert OPENAPI_SPEC["paths"]["/api/v1/access_reports/{workflow_run_id}"]["get"][
         "security"
     ] == [{"admin_bearer_auth": [], "trace_bearer_auth": []}]

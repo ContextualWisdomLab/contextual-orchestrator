@@ -22,6 +22,7 @@ OPENAPI_SPEC = {
         "schemas": {
             "AuthoritativeUsage": {
                 "type": ["object", "null"],
+                "required": ["prompt_tokens", "completion_tokens"],
                 "properties": {
                     "prompt_tokens": {"type": "integer", "minimum": 0},
                     "completion_tokens": {"type": "integer", "minimum": 0},
@@ -43,6 +44,23 @@ OPENAPI_SPEC = {
             "ChatCompletionResponse": {
                 "type": "object",
                 "required": ["id", "object", "created", "model", "choices", "usage", "usage_measurement_status"],
+                "oneOf": [
+                    {
+                        "properties": {
+                            "usage_measurement_status": {"const": "measured"},
+                            "usage": {
+                                "type": "object",
+                                "required": ["prompt_tokens", "completion_tokens"],
+                            },
+                        }
+                    },
+                    {
+                        "properties": {
+                            "usage_measurement_status": {"const": "unavailable"},
+                            "usage": {"type": "null"},
+                        }
+                    },
+                ],
                 "properties": {
                     "id": {"type": "string"},
                     "object": {"type": "string"},

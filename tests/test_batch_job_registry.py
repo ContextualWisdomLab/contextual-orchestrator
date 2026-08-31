@@ -48,6 +48,7 @@ class FakeValkeyClient:
         self.strings: Dict[str, Any] = {}
         self.execution_extension_attempted = threading.Event()
         self.lose_execution_extension = True
+        self.execution_acquire_failures = 0
 
     class LockNotOwnedError(RuntimeError):
         pass
@@ -64,6 +65,12 @@ class FakeValkeyClient:
             self._owned = False
 
         def acquire(self) -> bool:
+            if (
+                "provider_embedding_job_execution" in self.name
+                and self._client.execution_acquire_failures > 0
+            ):
+                self._client.execution_acquire_failures -= 1
+                return False
             self._owned = True
             self._client.strings[self.name] = self.local.token
             return True
@@ -476,11 +483,28 @@ def test_batch_lifetime_allows_one_client_timeout_per_request() -> None:
         runner,
         job_registry=JobRegistryFactory(client),
         claim_lease_seconds=0.05,
-        execution_timeout_seconds=0.05,
+        execution_timeout_seconds=0.1,
     )
     job = backend.submit(
         [EmbeddingBatchRequest(input_text="one"), EmbeddingBatchRequest(input_text="two")]
     )
+
+    assert backend.wait(job, timeout=1)["status"] == "completed"
+    backend.close()
+
+
+def test_batch_retries_initial_execution_deadline_claim() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    client.execution_acquire_failures = 1
+    backend = ProviderEmbeddingBatchBackend(
+        lambda requests: ([[1.0] for _request in requests], len(requests)),
+        job_registry=JobRegistryFactory(client),
+        claim_lease_seconds=0.01,
+        execution_timeout_seconds=1,
+    )
+
+    job = backend.submit([EmbeddingBatchRequest(input_text="one")])
 
     assert backend.wait(job, timeout=1)["status"] == "completed"
     backend.close()
