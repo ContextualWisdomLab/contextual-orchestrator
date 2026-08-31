@@ -350,6 +350,7 @@ class UsageTelemetryEvent:
             "contextual_orchestrator.usage_record_id": record.usage_record_id,
             "contextual_orchestrator.request_channel": record.request_channel,
             "contextual_orchestrator.usage.export_state": export_state,
+            "contextual_orchestrator.usage.price_known": record.price_known,
         }
         if record.workflow_run_id:
             attributes["contextual_orchestrator.workflow_run_id"] = record.workflow_run_id
@@ -364,9 +365,10 @@ class UsageTelemetryEvent:
             "gen_ai.usage.input_tokens": float(record.prompt_tokens),
             "gen_ai.usage.output_tokens": float(record.completion_tokens),
             "gen_ai.usage.total_tokens": float(record.total_tokens),
-            "gen_ai.usage.cost": float(record.cost_amount),
             "contextual_orchestrator.usage.records": 1.0,
         }
+        if record.price_known:
+            metrics["gen_ai.usage.cost"] = float(record.cost_amount)
         if error_type:
             metrics["contextual_orchestrator.usage.export_failures"] = 1.0
         return cls(

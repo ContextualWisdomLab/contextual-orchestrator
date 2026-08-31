@@ -15,6 +15,7 @@ from contextual_orchestrator import (
 )
 from contextual_orchestrator.batch_routing import (
     BatchJob,
+    BatchRequest,
     BatchResultItem,
     EmbeddingBatchResultItem,
 )
@@ -94,6 +95,49 @@ def test_stream_usage_aggregates_trace_steps_without_text_estimates() -> None:
         model_name="requested-model",
     )
     assert len(coordinator.ledger.records()) == 2
+
+
+def test_unpriced_stream_usage_omits_cost_total() -> None:
+    result = _coordinator().record_stream_usage(
+        result={
+            "workflow_run_id": "unpriced-stream",
+            "mode": "route",
+            "trace": [{"agent_id": "mock_worker", "usage": {"prompt_tokens": 1, "completion_tokens": 1}}],
+        },
+        attribution=None,
+        model_name="mock-a",
+    )
+    assert result["cost"]["price_known"] is False
+    assert result["cost"]["cost_amount"] is None
+
+
+def test_unpriced_sync_cost_omits_total() -> None:
+    result = _coordinator().complete([{"role": "user", "content": "hello"}])
+    assert result["cost"]["price_known"] is False
+    assert result["cost"]["cost_amount"] is None
+
+
+def test_unpriced_provider_request_cost_omits_total() -> None:
+    result = _coordinator().complete(
+        [{"role": "user", "content": "return json"}],
+        provider_request={
+            "model": "mock-a",
+            "messages": [{"role": "user", "content": "return json"}],
+            "response_format": {"type": "json_object"},
+        },
+    )
+    assert result["cost"]["price_known"] is False
+    assert result["cost"]["cost_amount"] is None
+
+
+def test_unpriced_batch_item_omits_cost() -> None:
+    coordinator = _coordinator()
+    job = coordinator.submit_batch(
+        [BatchRequest(messages=[{"role": "user", "content": "batch"}], model="mock-a")]
+    )
+    item = coordinator.retrieve_batch(job.job_id)["results"][0]
+    assert item["price_known"] is False
+    assert item["cost_amount"] is None
 
 
 def test_complete_rejects_non_boolean_cache_bypass() -> None:
@@ -327,6 +371,13 @@ def test_embeddings_document_is_idempotent_after_completion() -> None:
     assert backend.polled.count(job.job_id) == 1
 
 
+def test_unpriced_embeddings_document_omits_cost() -> None:
+    document = _coordinator().complete_embeddings_batch(["unpriced embedding"])
+    assert document["price_known"] is False
+    assert document["cost_amount"] is None
+    assert document["cost_micro_usd"] is None
+
+
 def test_embeddings_document_requires_known_batch() -> None:
     coordinator = _coordinator()
     with pytest.raises(KeyError, match="embeddings batch job"):
@@ -442,7 +493,8 @@ def test_complete_embeddings_batch_round_trips_locally() -> None:
     )
     assert document["status"] == "completed"
     assert document["embeddings"][0]["index"] == 0
-    assert document["cost_micro_usd"] >= 0
+    assert document["cost_micro_usd"] is None
+    assert document["price_known"] is False
 
 
 

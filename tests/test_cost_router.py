@@ -527,8 +527,8 @@ def test_structured_mixed_currency_costs_are_never_implicitly_converted() -> Non
     assert result["cost"]["cost_amount"] is None
     assert result["cost"]["currency_code"] == "MIXED"
     assert result["cost"]["currency_components"] == [
-        {"currency_code": "EUR", "cost_amount": 2.0},
-        {"currency_code": "USD", "cost_amount": 1.0},
+        {"currency_code": "EUR", "cost_amount": 2.0, "price_known": True},
+        {"currency_code": "USD", "cost_amount": 1.0, "price_known": True},
     ]
     assert "approved exchange-rate source" in result["cost"]["customer_action"]
 

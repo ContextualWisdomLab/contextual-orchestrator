@@ -314,6 +314,20 @@ def test_non_blocking_store_records_p2028_like_failure_as_telemetry_only() -> No
     assert "secret answer" not in repr(sink.events())
 
 
+def test_unpriced_usage_telemetry_omits_cost_metric() -> None:
+    sink = InMemoryUsageTelemetrySink()
+    ledger = CostLedger(PriceBook(InMemoryConfigStore()), telemetry_sink=sink)
+    ledger.record_usage(
+        provider="unknown",
+        model="unpriced",
+        prompt_tokens=1,
+        completion_tokens=1,
+    )
+    event = sink.events()[0]
+    assert event.attributes["contextual_orchestrator.usage.price_known"] is False
+    assert "gen_ai.usage.cost" not in event.metrics
+
+
 def test_multi_dimensional_rollup_correctness() -> None:
     ledger = _priced_ledger()
     ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=1000,

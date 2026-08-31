@@ -371,16 +371,18 @@ class CostRoutingCoordinator:
                     )
                 )
             currencies = {record.currency_code for record in records}
+            price_known = all(record.price_known for record in records)
             provider_response["usage_record_ids"] = [
                 record.usage_record_id for record in records
             ]
             provider_response["cost"] = {
                 "cost_amount": (
                     round(sum(record.cost_amount for record in records), 6)
-                    if len(currencies) == 1
+                    if price_known and len(currencies) == 1
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "price_known": price_known,
                 "measurement_status": (
                     "estimated"
                     if any(record.measurement_status == "estimated" for record in records)
@@ -391,14 +393,12 @@ class CostRoutingCoordinator:
                 provider_response["cost"]["currency_components"] = [
                     {
                         "currency_code": currency,
-                        "cost_amount": round(
-                            sum(
-                                record.cost_amount
-                                for record in records
-                                if record.currency_code == currency
-                            ),
-                            6,
+                        "cost_amount": (
+                            round(sum(record.cost_amount for record in records if record.currency_code == currency), 6)
+                            if all(record.price_known for record in records if record.currency_code == currency)
+                            else None
                         ),
+                        "price_known": all(record.price_known for record in records if record.currency_code == currency),
                     }
                     for currency in sorted(currencies)
                 ]
@@ -506,13 +506,15 @@ class CostRoutingCoordinator:
             "total_tokens": sum(item.total_tokens for item in client_usage_records),
         }
         currencies = {item.currency_code for item in records}
+        price_known = all(item.price_known for item in records)
         result["cost"] = {
             "cost_amount": (
                 round(sum(item.cost_amount for item in records), 6)
-                if len(currencies) == 1
+                if price_known and len(currencies) == 1
                 else None
             ),
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+            "price_known": price_known,
             "measurement_status": (
                 "estimated"
                 if any(item.measurement_status == "estimated" for item in records)
@@ -523,14 +525,12 @@ class CostRoutingCoordinator:
             result["cost"]["currency_components"] = [
                 {
                     "currency_code": currency,
-                    "cost_amount": round(
-                        sum(
-                            item.cost_amount
-                            for item in records
-                            if item.currency_code == currency
-                        ),
-                        6,
+                    "cost_amount": (
+                        round(sum(item.cost_amount for item in records if item.currency_code == currency), 6)
+                        if all(item.price_known for item in records if item.currency_code == currency)
+                        else None
                     ),
+                    "price_known": all(item.price_known for item in records if item.currency_code == currency),
                 }
                 for currency in sorted(currencies)
             ]
@@ -629,6 +629,7 @@ class CostRoutingCoordinator:
             else "measured"
         )
         currencies = {record.currency_code for record in records}
+        price_known = all(record.price_known for record in records)
         return {
             "usage_record_ids": [record.usage_record_id for record in records],
             "usage": (
@@ -643,11 +644,12 @@ class CostRoutingCoordinator:
             "cost": {
                 "cost_amount": (
                     round(sum(record.cost_amount for record in records), 6)
-                    if measurement_status == "measured" and len(currencies) == 1
+                    if measurement_status == "measured" and price_known and len(currencies) == 1
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
                 "measurement_status": measurement_status,
+                "price_known": price_known,
             },
         }
 
@@ -730,8 +732,9 @@ class CostRoutingCoordinator:
                     "custom_id": item.custom_id,
                     "answer": item.answer,
                     "usage_record_id": record.usage_record_id,
-                    "cost_amount": record.cost_amount,
+                    "cost_amount": record.cost_amount if record.price_known else None,
                     "currency_code": record.currency_code,
+                    "price_known": record.price_known,
                     "prompt_tokens": record.prompt_tokens,
                     "completion_tokens": record.completion_tokens,
                     "measurement_status": record.measurement_status,
@@ -1041,6 +1044,7 @@ class CostRoutingCoordinator:
         embeddings: List[Dict[str, Any]] = []
         token_counts: List[int] = []
         total_cost_amount = 0.0
+        price_known = True
         currency_code = "USD"
         for source_index in range(input_count):
             parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])
@@ -1065,6 +1069,7 @@ class CostRoutingCoordinator:
                 attribution=attribution,
             )
             total_cost_amount += float(record.cost_amount)
+            price_known = price_known and record.price_known
             currency_code = record.currency_code
             token_counts.append(record.prompt_tokens)
             embeddings.append(
@@ -1090,9 +1095,10 @@ class CostRoutingCoordinator:
                 "strategy": "token_budgeted_embedding_parts_weighted_average",
                 **part_limits,
             },
-            "cost_amount": round(total_cost_amount, 6),
+            "cost_amount": round(total_cost_amount, 6) if price_known else None,
             "currency_code": currency_code,
-            "cost_micro_usd": int(round(total_cost_amount * 1_000_000)),
+            "price_known": price_known,
+            "cost_micro_usd": int(round(total_cost_amount * 1_000_000)) if price_known else None,
         }
         self._embedding_documents[batch_id] = document
         return document
