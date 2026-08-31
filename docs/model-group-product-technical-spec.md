@@ -178,6 +178,13 @@ binary success observations. The quotient of those estimates is a transparent
 engineering policy with units of expected successful responses per second, not a
 published optimum.
 
+The same success observations maintain a 60-second sliding completion window per
+member. Admin evidence exposes the highest achieved request count and sum of
+provider-reported total tokens in such a window as `max_observed_rpm` and
+`max_observed_tpm`. They are workload-specific lower bounds, not inferred quotas;
+missing usage never becomes an estimated token count and measurement creates no
+additional provider calls.
+
 OpenRouter's current official documentation defines `output_modalities=all`,
 input/output modality metadata, and zero-valued pricing. OpenCode's current Zen
 documentation publishes the mutable availability endpoint `/zen/v1/models`, while

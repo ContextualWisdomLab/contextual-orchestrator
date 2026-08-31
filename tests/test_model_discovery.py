@@ -263,7 +263,7 @@ def test_duplicate_discovery_withholds_conflicting_price_and_privacy_evidence() 
             DiscoveredModel(
                 provider_name="gateway",
                 model_id="shared-model",
-                credential_name="KEY_B",
+                credential_name="KEY_A",
                 chat_base_url="https://gateway.example/v1",
                 auth_scheme="Bearer",
                 prompt_price_per_1k=1.0,
@@ -303,7 +303,7 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
             DiscoveredModel(
                 provider_name="gateway",
                 model_id="shared-model",
-                credential_name="KEY_B",
+                credential_name="KEY_A",
                 chat_base_url="https://gateway.example/v1",
                 auth_scheme="Bearer",
                 zdr_capable=False,
@@ -313,6 +313,53 @@ def test_duplicate_discovery_withholds_conflicting_zdr_capability() -> None:
 
     assert len(discovered) == 1
     assert discovered[0].zdr_capable is False
+
+
+def test_same_provider_model_under_different_credentials_remains_independent() -> None:
+    """Credential accounts may expose different evidence for the same model id."""
+    discovered = _deduplicate_discovered_models(
+        [
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_A",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                is_free=True,
+            ),
+            DiscoveredModel(
+                provider_name="gateway",
+                model_id="shared-model",
+                credential_name="KEY_B",
+                chat_base_url="https://gateway.example/v1",
+                auth_scheme="Bearer",
+                is_free=False,
+            ),
+        ]
+    )
+
+    assert [(model.credential_name, model.is_free) for model in discovered] == [
+        ("KEY_A", True),
+        ("KEY_B", False),
+    ]
+
+
+def test_discovery_debug_log_identifies_account_without_secret(caplog) -> None:
+    """Verbose diagnostics expose account progress but never credential values."""
+    register_credential("OPENAI_API_KEY", "secret-value-must-not-appear")
+    with (
+        caplog.at_level("DEBUG", logger="contextual_orchestrator.model_discovery"),
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            return_value=_Response({"data": [{"id": "gpt-test"}]}),
+        ),
+    ):
+        discover_provider_models(OPENAI_SOURCE, models_dev_metadata=None)
+
+    assert "account=openai" in caplog.text
+    assert "OPENAI_API_KEY" not in caplog.text
+    assert "model_count=1" in caplog.text
+    assert "secret-value-must-not-appear" not in caplog.text
 
 
 def test_configured_gateway_withholds_heterogeneous_capabilities() -> None:

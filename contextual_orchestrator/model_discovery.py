@@ -16,6 +16,7 @@ from __future__ import annotations
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import math
 import re
 import ssl
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+_LOGGER = logging.getLogger(__name__)
 # One bounded retry for a provider's primary model-list fetch, reusing the same
 # transient-vs-terminal classification completion calls already trust
 # (is_transient_error). A short, fixed delay and a shortened retry timeout keep
@@ -171,8 +173,8 @@ def configured_gateway_source(
     )
 
 
-# NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
-# keys participate in upstream load balancing without a second provider identity.
+# Each NVIDIA NIM KV credential is an independent account boundary and may expose
+# a different catalog even though both currently use the same API endpoint.
 PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openai",
@@ -456,9 +458,9 @@ def _price_per_1k(value: Any) -> float | None:
     return per_1k if _valid_price_component(per_1k) else None
 
 
-def _serving_identity(model: DiscoveredModel) -> tuple[str, str]:
-    """Return the durable agent identity used by discovery synchronization."""
-    return (model.provider_name, model.model_id)
+def _serving_identity(model: DiscoveredModel) -> tuple[str, str, str]:
+    """Return the account-scoped identity used by discovery synchronization."""
+    return (model.provider_name, model.credential_name, model.model_id)
 
 
 def _source_tiebreaker(model: DiscoveredModel) -> tuple[str, str, str, str]:
@@ -476,13 +478,13 @@ def _deduplicate_discovered_models(
 ) -> list[DiscoveredModel]:
     """Collapse duplicate agent identities and withhold conflicting price evidence.
 
-    Exact duplicate catalog rows become one candidate. When the same provider/model
-    identity is repeated with conflicting metadata or prices, one deterministic
-    transport record is retained but its prices become unknown. Provider row order
+    Exact duplicate catalog rows from one credential become one candidate. When the
+    same account/model identity repeats with conflicting metadata or prices, one
+    deterministic transport record is retained but its prices become unknown. Provider row order
     therefore cannot fabricate a cheaper bootstrap candidate or consume failover
     capacity twice.
     """
-    unique: dict[tuple[str, str], DiscoveredModel] = {}
+    unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
         identity = _serving_identity(model)
         previous = unique.get(identity)
@@ -1131,7 +1133,15 @@ def discover_provider_models(
     """
     api_key = get_credential(source.credential_name)
     if not api_key:
+        _LOGGER.debug(
+            "model discovery skipped account=%s reason=key_missing",
+            source.provider_name,
+        )
         return []
+    _LOGGER.debug(
+        "model discovery started account=%s",
+        source.provider_name,
+    )
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
@@ -1163,7 +1173,13 @@ def discover_provider_models(
                 break
             time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
     if last_exc is not None:
-        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(last_exc)) from None
+        error_code = _provider_discovery_error_code(last_exc)
+        _LOGGER.debug(
+            "model discovery failed account=%s error_code=%s",
+            source.provider_name,
+            error_code,
+        )
+        raise ProviderDiscoveryError(source.provider_name, error_code) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
             metadata = _fetch_models_dev_metadata(timeout=timeout)
@@ -1207,7 +1223,13 @@ def discover_provider_models(
         discovered = _parse_bytez(payload, source)
     else:
         discovered = _parse_openai_compatible(payload, source)
-    return [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    _LOGGER.debug(
+        "model discovery completed account=%s model_count=%d",
+        source.provider_name,
+        len(result),
+    )
+    return result
 
 
 def discover_all_models(
@@ -1576,13 +1598,6 @@ def _discovery_price_key(
     return (0, cost, model.provider_name, model.model_id)
 
 
-def _provider_family(provider_name: str) -> str:
-    """Collapse credentials that share one upstream provider outage domain."""
-    if provider_name in {"nvidia_nim", "nvidia_nim_sub"}:
-        return "nvidia_nim"
-    return provider_name
-
-
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
@@ -1629,10 +1644,9 @@ def select_bootstrap_discovered_agents(
     """Build a deterministic, price-honest, provider-diverse initial pool.
 
     Candidates retain the known-price-first ordering above, but the first pass
-    takes at most one model from each independent provider family. Remaining
-    capacity is filled in the same deterministic cost order. NVIDIA NIM primary
-    and sub credentials are one outage domain, so they participate in the second
-    pass only after independently hosted providers have had a chance to enter.
+    takes at most one model from each independently discovered provider account.
+    Remaining capacity is filled in the same deterministic cost order. No vendor
+    or endpoint name is used to infer a shared family or collapse credential state.
     Duplicate serving identities never consume capacity twice.
     """
     if limit <= 0:
@@ -1651,14 +1665,13 @@ def select_bootstrap_discovered_agents(
     )
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
-    provider_families: set[str] = set()
+    providers: set[str] = set()
 
     for model in ranked:
-        family = _provider_family(model.provider_name)
-        if family in provider_families:
+        if model.provider_name in providers:
             deferred.append(model)
             continue
-        provider_families.add(family)
+        providers.add(model.provider_name)
         selected.append(model)
         if len(selected) == limit:
             return selected
