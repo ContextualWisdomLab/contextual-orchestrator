@@ -43,6 +43,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     discover_provider_models,
     free_discovered_models,
     general_free_serving_candidates,
+    is_routable_discovered_model,
     openrouter_paid_inference_available,
     refresh_price_book,
     select_cheapest_discovered_agent,
@@ -1505,12 +1506,13 @@ def test_discover_all_models_leaves_bytez_unaffected_and_skips_models_dev() -> N
 
 
 def test_default_sources_request_openrouter_full_modality_catalog() -> None:
+    """OpenRouter is a normal routable source: ZDR is per-model evidence, not a blanket ban."""
     sources = {source.provider_name: source for source in PROVIDER_MODEL_SOURCES}
 
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
-    assert sources["openrouter"].evidence_only is True
+    assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
@@ -1626,6 +1628,52 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
         ("openrouter", False),
         ("nvidia_nim", True),
     ]
+
+
+def test_openrouter_free_zdr_verified_model_is_routable_and_servable() -> None:
+    """ZDR is per-model evidence, not grounds to bar the whole account from serving.
+
+    OpenRouter is no longer ``evidence_only`` in ``PROVIDER_MODEL_SOURCES``
+    (see ContextualWisdomLab/contextual-orchestrator#941/#945 and the
+    ``.github`` sidecar's own ``zdr_policy.is_zdr_model``, which already
+    evaluates OpenRouter per exact route, never as a blanket exclusion). A
+    free, ZDR-attested OpenRouter model must become a normal routable,
+    servable candidate carrying honest ``zdr_capable``/``privacy:zdr``
+    evidence, exactly like any other provider's free models.
+    """
+    register_credential("OPENROUTER_API_KEY", "sk-openrouter")
+    openrouter_source = next(
+        source for source in PROVIDER_MODEL_SOURCES if source.provider_name == "openrouter"
+    )
+    assert openrouter_source.evidence_only is False
+
+    def urlopen(request, timeout=None):
+        return _Response(
+            {"data": [{"id": "free/zdr-model", "pricing": {"prompt": "0", "completion": "0"}}]}
+        )
+
+    with (
+        patch(
+            "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+            side_effect=urlopen,
+        ),
+        patch(
+            "contextual_orchestrator.model_discovery._fetch_json_same_host_https",
+            return_value={"data": [{"model_id": "free/zdr-model"}]},
+        ),
+    ):
+        discovered, errors = discover_all_models((openrouter_source,))
+
+    assert errors == []
+    model = next(m for m in discovered if m.model_id == "free/zdr-model")
+    assert model.evidence_only is False
+    assert model.zdr_capable is True
+    assert model.is_free is True
+    assert is_routable_discovered_model(model) is True
+
+    agent = agent_from_discovered(model)
+    assert "privacy:zdr" in agent.tags
+    assert model in general_free_serving_candidates(discovered)
 
 
 def test_openrouter_zdr_evidence_uses_the_registered_kv_credential() -> None:

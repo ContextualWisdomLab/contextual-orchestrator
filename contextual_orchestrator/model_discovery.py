@@ -197,7 +197,6 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
         chat_base_url="https://openrouter.ai/api/v1",
         capabilities=("chat",),
-        evidence_only=True,
     ),
     ProviderModelSource(
         provider_name="opencode_zen",
@@ -1279,9 +1278,12 @@ def discover_all_models(
             )
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
-    # matching privacy evidence for discovered models from other providers. It
-    # is never selected as an inference upstream here.
+    # OpenRouter's public ZDR endpoint supplies exact-match, route-level privacy
+    # evidence (zdr_capable) for every discovered model, OpenRouter's own rows
+    # included. ZDR is model-level evidence, not grounds to bar an entire
+    # provider account from serving: a caller that needs ZDR-only routes reads
+    # zdr_capable / the privacy:zdr tag per model, same as for any other
+    # provider.
     return _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
