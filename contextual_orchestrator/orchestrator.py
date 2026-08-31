@@ -3626,6 +3626,18 @@ class TaskOrchestrator:
         own — they take the plain passthrough path exactly like an absent key.
         Direct callers retain the established single-provider passthrough
         contract.
+
+        ``effort_profile=None`` (the default) does not mean "no profile": on
+        every single-agent passthrough path below (including the server's
+        tool-loop call site) it resolves to the opted-in
+        ``role_effort_catalog``'s ``"worker"`` entry, since this method
+        always selects/fails over across a "worker"-role agent when the
+        caller does not name one. This mirrors
+        ``_orchestrated_provider_completion``'s identical fallback to its own
+        ``"synthesizer"`` entry. A caller that passes its own
+        ``effort_profile`` is unaffected, and so is every caller when no
+        ``role_effort_catalog`` is configured (``_role_effort_profile``
+        returns ``None`` and behavior is unchanged).
         """
         normalized_endpoint = endpoint.strip("/")
         api_surface = "responses" if normalized_endpoint == "responses" else "chat.completions"
@@ -3642,6 +3654,18 @@ class TaskOrchestrator:
                 endpoint=normalized_endpoint,
                 effort_profile=effort_profile,
             )
+        # Every path below this point resolves one "worker"-role agent (see
+        # _select_agent(..., "worker", ...) and _failover_candidates(...,
+        # "worker", ...) further down), so an unset caller profile defaults
+        # to the worker role's own catalog entry -- mirroring the identical
+        # `effort_profile or self._role_effort_profile(role)` pattern
+        # _orchestrated_provider_completion already applies for its
+        # "synthesizer" role. This keeps every proxy_completion caller (the
+        # server's single-agent tool loop included) inside an opted-in
+        # role_effort_catalog's sampling/token/seed/reasoning settings
+        # without each call site having to resolve the profile itself; a
+        # caller that explicitly passes its own effort_profile is untouched.
+        effort_profile = effort_profile or self._role_effort_profile("worker")
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)

@@ -57,6 +57,41 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   removing or disabling the pool's last supporting agent at runtime via
   `remove_agent`/`patch_agent` is not revalidated against an active catalog;
   see the docstrings on those two methods.
+- The startup guard above still only proved that *some enabled agent
+  anywhere* in the pool supports `reasoning_effort`, which is weaker than
+  what role-based selection actually requires: `_ranked_agents`/
+  `_select_agent` only ever offer a role a *general-chat* agent (see
+  `_is_general_chat_agent`) that is not excluded from that specific role via
+  `provider_exclusions`. A pool whose only proving agent was non-chat (e.g.
+  an embedding-only model with `reasoning_effort_supported: true`), or was
+  excluded from every active fail-closed role, passed the old check and
+  still failed every request for that role (`EffortProfileError`, or
+  `RuntimeError("no eligible agent available for role=...")` when the sole
+  prover was role-excluded). `_require_eligible_role_effort_agents` now
+  reapplies the same general-chat and `provider_exclusions` eligibility
+  rules used by role selection, per active fail-closed role, reusing
+  `agent_proves_reasoning_effort_support`/`_eligible_role_effort_candidates`
+  rather than new logic. Deliberately does not reapply
+  `_zdr_agent_allowed`, since that gate is per-request privacy-policy state,
+  not a static pool property.
+- The startup rejection path now closes the already-constructed
+  `TaskOrchestrator` (`orchestrator.close()`) before calling argparse's
+  `parser.error()` (which raises `SystemExit`), instead of relying on
+  process exit to release its optional durable resources
+  (`state_db`/`agents_db` connections). This only matters for an embedded
+  caller of `contextual_orchestrator.__main__.main()` that catches
+  `SystemExit` and keeps running in the same process; the CLI/process-exit
+  path was already unaffected.
+- `TaskOrchestrator.proxy_completion`'s single-agent passthrough (the
+  server's `tool_loop` call site, and any other caller that omits
+  `effort_profile`) now defaults an unset `effort_profile` to the opted-in
+  `role_effort_catalog`'s `"worker"` entry — the role every selection/
+  failover call in that method already uses — instead of silently skipping
+  sampling/token/seed/reasoning-effort injection. This mirrors the
+  pre-existing `effort_profile or self._role_effort_profile("synthesizer")`
+  fallback `_orchestrated_provider_completion` already applies for its own
+  role. A caller that passes its own `effort_profile` is unaffected, and so
+  is every caller when no `role_effort_catalog` is configured.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

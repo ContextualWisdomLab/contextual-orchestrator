@@ -33,6 +33,8 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     ModelClient,
     TaskOrchestrator,
+    _eligible_role_effort_candidates,
+    _is_general_chat_agent,
     agent_proves_reasoning_effort_support,
     load_agents,
 )
@@ -90,22 +92,69 @@ def _require_eligible_role_effort_agents(
     raise ``EffortProfileError`` on every subsequent request. Reject at
     startup instead, with an actionable fix, rather than after the pool is
     already live for ``--serve`` or a CLI prompt.
+
+    Proving support somewhere in the pool is not sufficient on its own:
+    role-based selection (``TaskOrchestrator._ranked_agents`` /
+    ``_select_agent``) only ever offers one *general-chat* agent (see
+    ``_is_general_chat_agent``) that is not excluded from that specific role
+    via ``provider_exclusions`` for a given role. A pool whose only proving
+    agent is non-chat (e.g. an embedding-only model with
+    ``reasoning_effort_supported: true``), or is excluded from every active
+    fail-closed role, would pass a pool-wide "any agent anywhere proves
+    support" check and still fail every request for that role at request
+    time -- either ``EffortProfileError`` (no proving candidate was ever
+    offered) or ``RuntimeError("no eligible agent available for
+    role=...")`` (the only proving candidate was role-excluded). So this
+    reapplies the same general-chat and ``provider_exclusions`` eligibility
+    rules used by role selection, and the same
+    ``agent_proves_reasoning_effort_support`` /
+    ``_eligible_role_effort_candidates`` proof round 2 added, once per
+    active fail-closed role: a pool that passes this guard is guaranteed at
+    least one eligible, proving agent for each such role at request time
+    too. Deliberately does NOT reapply ``_zdr_agent_allowed``: that gate
+    depends on per-request privacy-policy state
+    (``request_policy(zdr_only=...)``), not a static pool property, so it
+    cannot be evaluated once at startup without assuming every future
+    request's privacy scope.
     """
     catalog = orchestrator.role_effort_catalog
     if catalog is None:
         return
-    if not any(profile.unsupported_provider_fallback != "omit" for profile in catalog.values()):
+    fail_closed_roles = sorted(
+        role for role, profile in catalog.items() if profile.unsupported_provider_fallback != "omit"
+    )
+    if not fail_closed_roles:
         return
-    if any(agent_proves_reasoning_effort_support(agent) for agent in orchestrator.agents):
+    chat_agents = [
+        agent for agent in orchestrator.agents if not agent.disabled and _is_general_chat_agent(agent)
+    ]
+    unsupported_roles = [
+        role
+        for role in fail_closed_roles
+        if not any(
+            agent_proves_reasoning_effort_support(agent)
+            for agent in _eligible_role_effort_candidates(
+                [agent for agent in chat_agents if role not in agent.provider_exclusions],
+                catalog[role],
+            )
+        )
+    ]
+    if not unsupported_roles:
         return
+    orchestrator.close()
     parser.error(
-        "--role-effort-catalog default requires at least one agent in "
-        f"--agents {agents_source!r} to prove native reasoning-effort support: "
-        'set "reasoning_effort_supported": true on that agent in the config, '
-        "or point --agents at a mock:// pool (e.g. examples/agents.mock.json) "
+        "--role-effort-catalog default requires, for every fail-closed role "
+        f"({', '.join(unsupported_roles)}), at least one enabled general-chat "
+        f"agent in --agents {agents_source!r} that both proves native "
+        "reasoning-effort support and is not excluded from that role via "
+        "provider_exclusions: set \"reasoning_effort_supported\": true on a "
+        "chat-capable agent (not an embedding/rerank/transcription-only "
+        "model) that is not listed in that role's provider_exclusions, or "
+        "point --agents at a mock:// pool (e.g. examples/agents.mock.json) "
         "for evaluation. Every role in the default catalog fails closed "
         "(unsupported_provider_fallback='abstain') without that proof, so "
-        "every request would otherwise raise EffortProfileError. See ADR 0021 "
+        "every request for an unsupported role would otherwise raise "
+        "EffortProfileError or find no eligible agent. See ADR 0021 "
         "(docs/planning/adrs/0021-reasoning-effort-profiles.md)."
     )
 

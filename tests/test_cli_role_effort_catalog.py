@@ -199,3 +199,132 @@ def test_role_effort_catalog_default_allows_pool_with_explicit_support(tmp_path:
     ):
         main()
     assert serve.called
+
+
+def test_role_effort_catalog_default_rejects_pool_whose_only_prover_is_non_chat(
+    tmp_path: Path,
+) -> None:
+    """A pool-wide 'some agent proves support' check is not enough (PR #958 round 3).
+
+    ``TaskOrchestrator._ranked_agents``/``_select_agent`` never offer a
+    non-general-chat agent (embedding, rerank, transcription, ...) to
+    role-based selection at all (see ``_is_general_chat_agent``), so an
+    embedding-only agent proving ``reasoning_effort_supported: true`` can
+    never actually serve a workflow role. Before this fix, round 2's guard
+    only checked "does any enabled agent anywhere prove support" and would
+    let this pool start, only to raise ``EffortProfileError`` on the first
+    real request (the ordinary unsupported chat agent is the only one ever
+    selected). It must be rejected at startup instead.
+    """
+    agents = [
+        {
+            "id": "chat_agent",
+            "model": "gpt-5.5",
+            "base_url": "https://api.openai.com/v1",
+            "credential_key": "OPENAI_API_KEY",
+            "tags": ["reasoning", "writing", "planning", "analysis"],
+            "priority": 1,
+            # reasoning_effort_supported omitted: unproven, like every
+            # shipped example config and every auto-discovered agent.
+        },
+        {
+            "id": "embedding_agent",
+            "model": "text-embedding-3-large",
+            "base_url": "https://api.openai.com/v1",
+            "credential_key": "OPENAI_API_KEY",
+            "tags": ["embedding"],
+            "priority": 1,
+            "reasoning_effort_supported": True,
+        },
+    ]
+    config_path = tmp_path / "agents.json"
+    config_path.write_text(json.dumps({"agents": agents}), encoding="utf-8")
+    stderr = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--role-effort-catalog",
+                "default",
+                "--agents",
+                str(config_path),
+                "hi",
+            ],
+        ),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError(
+                "a pool whose only proving agent is non-chat must be rejected at startup"
+            )
+    message = stderr.getvalue()
+    assert "reasoning_effort_supported" in message
+    assert "worker" in message
+
+
+def test_role_effort_catalog_default_rejects_pool_whose_sole_prover_is_role_excluded(
+    tmp_path: Path,
+) -> None:
+    """A proving chat agent excluded from every active role is still unusable (PR #958 round 3).
+
+    ``provider_exclusions`` on the pool's only agent that proves
+    ``reasoning_effort_supported`` covers every role in
+    ``default_role_effort_catalog()``. Round 2's guard did not apply
+    ``provider_exclusions`` at all, so it would let this pool start; at
+    request time ``TaskOrchestrator._select_agent`` would raise
+    ``RuntimeError("no eligible agent available for role=...")`` for every
+    role instead. Startup must reject it up front.
+    """
+    agent = {
+        "id": "excluded_agent",
+        "model": "gpt-5.5",
+        "base_url": "https://api.openai.com/v1",
+        "credential_key": "OPENAI_API_KEY",
+        "tags": ["reasoning", "writing", "planning", "analysis"],
+        "priority": 1,
+        "reasoning_effort_supported": True,
+        "provider_exclusions": [
+            "thinker",
+            "worker",
+            "verifier",
+            "synthesizer",
+            "planner",
+            "judge",
+        ],
+    }
+    config_path = tmp_path / "agents.json"
+    config_path.write_text(json.dumps({"agents": [agent]}), encoding="utf-8")
+    stderr = StringIO()
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--role-effort-catalog",
+                "default",
+                "--agents",
+                str(config_path),
+                "hi",
+            ],
+        ),
+        patch.object(sys, "stderr", stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:  # pragma: no cover
+            raise AssertionError(
+                "a pool whose sole prover is excluded from every active role "
+                "must be rejected at startup"
+            )
+    message = stderr.getvalue()
+    assert "provider_exclusions" in message
+    assert "worker" in message
