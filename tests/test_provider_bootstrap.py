@@ -197,8 +197,8 @@ def test_provider_bootstrap_reuses_shared_chat_capability_policy(model_id, eligi
     assert eligible is is_general_chat_agent_model_id(model_id)
 
 
-def test_provider_bootstrap_collapses_nim_credentials_to_one_outage_domain():
-    """Primary and secondary NIM credentials cannot displace an independent provider."""
+def test_provider_bootstrap_keeps_nim_credentials_as_independent_accounts():
+    """Each credential account competes independently, even at the same vendor."""
     nim_primary = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "primary-model", 0.01)
     nim_secondary = _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "secondary-model", 0.02)
     independent = _model("bytez", "BYTEZ_API_KEY", "independent-model", 0.5)
@@ -209,7 +209,7 @@ def test_provider_bootstrap_collapses_nim_credentials_to_one_outage_domain():
 
     assert [(item.provider_name, item.model_id) for item in selected] == [
         ("nvidia_nim", "primary-model"),
-        ("bytez", "independent-model"),
+        ("nvidia_nim_sub", "secondary-model"),
     ]
 
 
