@@ -293,11 +293,16 @@ def test_exhausted_safe_retry_then_fails_over_once() -> None:
     assert result["answer"] == "backup recovered"
     assert client.calls == ["primary_worker", "primary_worker", "backup_worker"]
     events = list(reversed(orchestrator.list_recent_audit_events()))
-    assert [event["event_detail"]["action"] for event in events] == [
+    # The audit stream also carries this request's failover_candidates_resolved
+    # event (from _failover_candidates, unrelated to tool-fallback decisions);
+    # filter to tool_fallback_decision events specifically, matching this
+    # test's actual intent.
+    fallback_events = [e for e in events if e["event_type"] == "tool_fallback_decision"]
+    assert [event["event_detail"]["action"] for event in fallback_events] == [
         "retry_same_agent",
         "failover_agent",
     ]
-    assert events[-1]["event_detail"]["reason_code"] == (
+    assert fallback_events[-1]["event_detail"]["reason_code"] == (
         "tool_failure.timeout.failover_agent"
     )
 

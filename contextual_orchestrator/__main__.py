@@ -42,6 +42,42 @@ from .server import DEFAULT_MAX_JSON_BODY_BYTES, SecurityConfig, serve
 DEFAULT_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+LOG_LEVEL_ENVIRONMENT_VARIABLE = "CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL"
+
+
+def _configure_logging(explicit_level_name: str | None = None) -> None:
+    """Attach a stderr handler at the requested level to the package logger.
+
+    Every ``contextual_orchestrator.*`` module logger (``orchestrator.py``'s
+    audit-event bridge included, which already emits every routing/failover
+    decision at DEBUG in a secret-free, redacted shape) inherits its
+    effective level from this shared parent by Python's dotted-logger-name
+    hierarchy, since none of them call ``setLevel`` themselves. Without a
+    handler here, DEBUG and INFO records are silently dropped even though
+    they were already safe to print -- this is the one place that makes
+    that existing, already-safe evidence actually visible, whether from an
+    operator's local ``--verbose`` flag or the CI sidecar's
+    ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL`` environment variable. An explicit
+    argument (``--verbose`` maps to ``"DEBUG"``) always wins over the
+    environment variable. Omitting both leaves logging exactly as it was:
+    unconfigured, falling back to Python's default WARNING-and-above
+    last-resort stderr handler.
+    """
+    level_name = (explicit_level_name or os.environ.get(LOG_LEVEL_ENVIRONMENT_VARIABLE) or "").strip().upper()
+    if not level_name:
+        return
+    level = logging.getLevelName(level_name)
+    if not isinstance(level, int):
+        raise ValueError(
+            f"invalid {LOG_LEVEL_ENVIRONMENT_VARIABLE} value: {level_name!r}; "
+            "expected a standard logging level name such as DEBUG, INFO, WARNING, or ERROR"
+        )
+    package_logger = logging.getLogger("contextual_orchestrator")
+    package_logger.setLevel(level)
+    if not any(isinstance(handler, logging.StreamHandler) for handler in package_logger.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        package_logger.addHandler(handler)
 
 
 def _bootstrap_telemetry_config() -> InMemoryConfigStore:
@@ -270,7 +306,10 @@ def _discover_models_command(argv: list[str]) -> None:
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Emit secret-free provider discovery diagnostics to stderr.",
+        help=(
+            f"Emit DEBUG-level per-provider discovery evidence to stderr "
+            f"(equivalent to {LOG_LEVEL_ENVIRONMENT_VARIABLE}=DEBUG; this flag wins if both are set)."
+        ),
     )
     parser.add_argument(
         "--agents-db",
@@ -306,7 +345,7 @@ def _discover_models_command(argv: list[str]) -> None:
     )
     args = parser.parse_args(argv)
     if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
+        _configure_logging("DEBUG")
     if args.enable_cheapest and not args.agents_db:
         parser.error("--enable-cheapest requires --agents-db")
 
@@ -455,6 +494,7 @@ def _auto_discover_runtime_agents(orchestrator: TaskOrchestrator) -> dict[str, l
 
 def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
+    _configure_logging()
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] == "register-credential":
         _register_credential_command(arguments[1:])
@@ -468,16 +508,20 @@ def main(argv: list[str] | None = None) -> None:
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help=(
+            f"Emit DEBUG-level routing/failover/discovery evidence to stderr "
+            f"(equivalent to {LOG_LEVEL_ENVIRONMENT_VARIABLE}=DEBUG; this flag wins if both are set)."
+        ),
+    )
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
-    parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Emit secret-free runtime and model-discovery diagnostics to stderr.",
-    )
     parser.add_argument(
         "--release-authority-json",
         default=None,
@@ -568,7 +612,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(arguments)
     if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
+        _configure_logging("DEBUG")
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,

@@ -324,11 +324,33 @@ def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
     """
     for attempt in range(_MODELS_DEV_FETCH_ATTEMPTS):
         try:
-            return _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            payload = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+            error_code = _provider_discovery_error_code(exc)
             if attempt < _MODELS_DEV_FETCH_ATTEMPTS - 1:
+                _LOGGER.warning(
+                    "models_dev_fetch_retry attempt=%s max_attempts=%s error_code=%s",
+                    attempt + 1,
+                    _MODELS_DEV_FETCH_ATTEMPTS,
+                    error_code,
+                )
                 time.sleep(_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS)
-    return None
+                continue
+            _LOGGER.warning(
+                "models_dev_fetch_exhausted attempts=%s error_code=%s "
+                "orchestrator_free_coverage_degraded=true",
+                _MODELS_DEV_FETCH_ATTEMPTS,
+                error_code,
+            )
+            return None
+        if attempt > 0:
+            _LOGGER.info(
+                "models_dev_fetch_recovered attempt=%s max_attempts=%s",
+                attempt + 1,
+                _MODELS_DEV_FETCH_ATTEMPTS,
+            )
+        return payload
+    return None  # pragma: no cover - loop always returns or raises above
 
 
 def _fetch_configured_gateway_json(
@@ -1116,9 +1138,10 @@ def discover_provider_models(
     """
     api_key = get_credential(source.credential_name)
     if not api_key:
-        _LOGGER.debug(
-            "model discovery skipped account=%s reason=key_missing",
+        _LOGGER.info(
+            "provider_discovery_skipped provider=%s credential_name=%s reason=no_credential_registered",
             source.provider_name,
+            source.credential_name,
         )
         return []
     _LOGGER.debug(
@@ -1146,8 +1169,8 @@ def discover_provider_models(
         # subclasses, so a raw provider transport failure can never escape the
         # discovery boundary with provider text attached.
         error_code = _provider_discovery_error_code(exc)
-        _LOGGER.debug(
-            "model discovery failed account=%s error_code=%s",
+        _LOGGER.warning(
+            "provider_discovery_failed provider=%s error_code=%s",
             source.provider_name,
             error_code,
         )
@@ -1195,13 +1218,14 @@ def discover_provider_models(
         discovered = _parse_bytez(payload, source)
     else:
         discovered = _parse_openai_compatible(payload, source)
-    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
-    _LOGGER.debug(
-        "model discovery completed account=%s model_count=%d",
+    resolved = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    _LOGGER.info(
+        "provider_discovery_completed provider=%s discovered_count=%s free_count=%s",
         source.provider_name,
-        len(result),
+        len(resolved),
+        sum(1 for model in resolved if model.is_free),
     )
-    return result
+    return resolved
 
 
 def discover_all_models(
@@ -1245,10 +1269,18 @@ def discover_all_models(
     # The OpenRouter catalog is evidence-only; its public ZDR endpoint supplies
     # matching privacy evidence for discovered models from other providers. It
     # is never selected as an inference upstream here.
-    return _apply_discovered_model_evidence(
+    resolved = _apply_discovered_model_evidence(
         _deduplicate_discovered_models(discovered),
         _openrouter_zdr_model_ids(timeout=timeout),
-    ), errors
+    )
+    _LOGGER.info(
+        "discovery_run_completed discovered_count=%s free_count=%s zdr_capable_count=%s provider_error_count=%s",
+        len(resolved),
+        sum(1 for model in resolved if model.is_free),
+        sum(1 for model in resolved if model.zdr_capable),
+        len(errors),
+    )
+    return resolved, errors
 
 
 def openrouter_paid_inference_available(

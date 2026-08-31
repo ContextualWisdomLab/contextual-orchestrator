@@ -76,6 +76,18 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   model group — instead of surfacing an opaque error; exhausting every
   eligible candidate still fails closed with the last classified provider
   error. See [ADR 0001's amendment](adr/0001-tool-execution-fallback-policy.md#amendment-2026-08-30-explicit-provider-transport-classification).
+  `_failover_candidates`, `_invoke`'s pool-exhaustion path, and the circuit
+  breaker all now emit their already-secret-free decision evidence through
+  the standard `logging` module at DEBUG/INFO/WARNING (invisible by default;
+  opt in with `--verbose`/`CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL=DEBUG`) — the
+  evidence a thin or exhausted `orchestrator/free` pool needs to root-cause
+  instead of only an opaque final error. `model_discovery.py`'s per-provider
+  fetch lifecycle and the shared Models.dev retry loop log the same way.
+  Buyer next action: run with `--verbose` (or set
+  `CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL=DEBUG`) and watch for
+  `failover_candidates_resolved`, `candidate_pool_exhausted`,
+  `circuit_breaker_opened`, `provider_discovery_skipped`, and
+  `models_dev_fetch_exhausted` event lines.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.

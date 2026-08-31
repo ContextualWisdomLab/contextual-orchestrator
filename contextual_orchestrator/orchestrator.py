@@ -16,6 +16,7 @@ import http.client
 import io
 import ipaddress
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -90,6 +91,7 @@ from .reasoning_effort_profile import (
 ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
+_LOGGER = logging.getLogger(__name__)
 _PASSTHROUGH_UNAVAILABLE_STATUS = frozenset({404, 410, 413})
 _PROVIDER_ERROR_CHAIN_LIMIT = 8
 _PROVIDER_TOOL_DESCRIPTION_LIMIT_MESSAGE = (
@@ -6661,6 +6663,28 @@ class TaskOrchestrator:
                     )
                 self._record_success(agent.id)
                 return output, agent.id, usage
+        # The whole candidate pool is exhausted -- the exact incident shape
+        # ("orchestrator/free pool exhausted") that has repeatedly surfaced
+        # as an opaque final error with no visibility into which candidates
+        # were actually tried or why. Record it once, unconditionally, before
+        # classifying which specific exception the caller receives.
+        self._append_audit_event(
+            "candidate_pool_exhausted",
+            {
+                "role": role,
+                "candidate_count": len(candidates),
+                "candidate_agent_ids": [agent.id for agent in candidates],
+                "every_failure_was_request_too_large": every_failure_was_request_too_large,
+                "bounded_provider_response_failures": bounded_provider_response_failures,
+                "final_error_kind": (
+                    type(last_provider_response_error).__name__
+                    if last_provider_response_error is not None
+                    else type(last_upstream_error).__name__
+                    if last_upstream_error is not None
+                    else "unknown"
+                ),
+            },
+        )
         if (
             last_provider_response_error is not None
             and bounded_provider_response_failures == len(candidates)
@@ -6736,6 +6760,26 @@ class TaskOrchestrator:
             if allowed_agent_ids is None or primary.id in allowed_agent_ids
             else []
         ) + [agent for agent in ranked if agent.id != primary.id]
+        pre_eligibility_count = len(ordered)
+        disabled_excluded = sum(1 for agent in ordered if agent.disabled)
+        zdr_excluded = sum(
+            1 for agent in ordered if not agent.disabled and not self._zdr_agent_allowed(agent)
+        )
+        non_chat_excluded = sum(
+            1
+            for agent in ordered
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            and not _is_general_chat_agent(agent)
+        )
+        tag_mismatch_excluded = sum(
+            1
+            for agent in ordered
+            if not agent.disabled
+            and self._zdr_agent_allowed(agent)
+            and _is_general_chat_agent(agent)
+            and not all(tag in agent.tags for tag in required_tags)
+        )
         ordered = [
             agent
             for agent in ordered
@@ -6747,9 +6791,34 @@ class TaskOrchestrator:
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible
+        resolved = healthy or eligible
+        # A stage-by-stage funnel of why the candidate set is the size it is --
+        # the exact evidence a thin or exhausted orchestrator/free pool needs
+        # to root-cause (was it ZDR-only mode, a capability/tag mismatch, an
+        # open circuit breaker, or genuinely few ranked candidates to begin
+        # with?) instead of only ever seeing the final opaque count.
+        self._append_audit_event(
+            "failover_candidates_resolved",
+            {
+                "role": role,
+                "primary_agent_id": primary.id,
+                "required_tags": list(required_tags),
+                "zdr_only": bool(_REQUEST_ZDR_ONLY.get()),
+                "ranked_count": pre_eligibility_count,
+                "excluded_disabled": disabled_excluded,
+                "excluded_zdr": zdr_excluded,
+                "excluded_non_chat": non_chat_excluded,
+                "excluded_tag_mismatch": tag_mismatch_excluded,
+                "eligible_count": len(eligible),
+                "healthy_count": len(healthy),
+                "used_circuit_open_fallback": not healthy and bool(eligible),
+                "resolved_agent_ids": [agent.id for agent in resolved],
+            },
+        )
+        return resolved
 
     def _circuit_open(self, agent_id: str) -> bool:
+        auto_closed = False
         with self._circuit_lock:
             state = self._circuit.get(agent_id)
             if not state or state["failures"] < self.circuit_failure_threshold:
@@ -6757,19 +6826,40 @@ class TaskOrchestrator:
             if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
                 state["failures"] = 0.0
                 state["opened_at"] = 0.0
-                return False
-            return True
+                auto_closed = True
+            else:
+                is_open = True
+        if auto_closed:
+            _LOGGER.info(
+                "circuit_breaker_auto_closed agent_id=%s reset_seconds=%s",
+                agent_id,
+                self.circuit_reset_seconds,
+            )
+            return False
+        return is_open
 
     def _record_failure(self, agent_id: str) -> None:
+        just_opened = False
         with self._circuit_lock:
             state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
             state["failures"] += 1.0
             if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
                 state["opened_at"] = time.monotonic()
+                just_opened = True
+            failures = state["failures"]
+        if just_opened:
+            _LOGGER.warning(
+                "circuit_breaker_opened agent_id=%s failures=%s threshold=%s",
+                agent_id,
+                failures,
+                self.circuit_failure_threshold,
+            )
 
     def _record_success(self, agent_id: str) -> None:
         with self._circuit_lock:
-            self._circuit.pop(agent_id, None)
+            had_state = self._circuit.pop(agent_id, None) is not None
+        if had_state:
+            _LOGGER.info("circuit_breaker_closed agent_id=%s reason=success", agent_id)
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:
@@ -6990,16 +7080,40 @@ class TaskOrchestrator:
         stream: str = "audit",
         durable: bool = True,
     ) -> None:
-        """Append a durable event to a bounded audit stream by default."""
+        """Append a durable event to a bounded audit stream by default.
+
+        Every caller of this method already builds a secret-free (or, for
+        declared ``pii_fields``, field-level-encrypted) event detail -- that
+        is the whole point of routing decisions through here instead of an
+        ad hoc dict. Nothing surfaced that detail anywhere visible during a
+        live run, though: it only ever lived in the bounded in-memory list
+        and the optional durable store, both of which need a separate query
+        to inspect after the fact. This also emits the same event through
+        the standard ``logging`` module at DEBUG, gated by
+        :func:`redact_value` as one more layer of defense beyond the
+        already-applied PII encryption, so an operator running with
+        ``CONTEXTUAL_ORCHESTRATOR_LOG_LEVEL=DEBUG`` (or ``--verbose``) can
+        watch these decisions happen in real time -- the exact evidence a
+        request-time incident like a ``orchestrator/free`` pool exhaustion
+        needs to root-cause, instead of an opaque final error.
+        """
+        protected_detail = self._protected_event_detail(detail, pii_fields)
         event = {
             "created_at": int(time.time()),
             "event_type": event_type,
-            "event_detail": self._protected_event_detail(detail, pii_fields),
+            "event_detail": protected_detail,
         }
         events = self._authorization_events if stream == "authorization" else self._audit_events
         events.append(event)
         if self._store is not None:
             self._store.save(stream, None, event, durable=durable)
+        if _LOGGER.isEnabledFor(logging.DEBUG):
+            _LOGGER.debug(
+                "orchestrator.audit_event event_type=%s stream=%s detail=%s",
+                event_type,
+                stream,
+                redact_value(protected_detail),
+            )
 
     def record_authorization_decision(
         self,
