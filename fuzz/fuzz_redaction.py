@@ -22,12 +22,14 @@ with atheris.instrument_imports():
 
 
 def one_input(data: bytes) -> None:
+    """Feed one Atheris-fuzzed byte string through secret/PII redaction."""
     fdp = atheris.FuzzedDataProvider(data)
     text = fdp.ConsumeUnicodeNoSurrogates(fdp.remaining_bytes())
     exercise_redaction(text)
 
 
 def main() -> None:
+    """Run the Atheris coverage-guided fuzz loop against ``one_input``."""
     atheris.Setup(sys.argv, one_input)
     atheris.Fuzz()
 

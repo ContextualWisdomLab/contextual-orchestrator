@@ -21,7 +21,10 @@ from contextual_orchestrator.credentials import (  # noqa: E402
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelClient,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -116,8 +119,22 @@ def test_auth_scheme_defaults_to_bearer() -> None:
     assert agent.auth_scheme == "Bearer"
 
 
+def test_format_authorization_header_prefixes_ordinary_schemes() -> None:
+    from contextual_orchestrator.orchestrator import format_authorization_header
+
+    assert format_authorization_header("Bearer", "sk-example") == "Bearer sk-example"
+
+
+def test_format_authorization_header_sends_raw_token_for_the_sentinel() -> None:
+    from contextual_orchestrator.orchestrator import format_authorization_header
+
+    assert format_authorization_header(AUTH_SCHEME_RAW_TOKEN, "bytez-secret") == "bytez-secret"
+
+
 def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
-    # Bytez (and similar providers) use "Key <token>" instead of "Bearer <token>".
+    # Bytez documents its Authorization header as the bare credential with no
+    # scheme word at all (https://docs.bytez.com/http-reference/list/models.md),
+    # unlike "Bearer <token>" providers.
     from unittest.mock import patch
 
     agent = ModelAgent(
@@ -125,7 +142,7 @@ def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
         "some/model",
         base_url="https://api.bytez.com/models/v2/openai/v1",
         credential_key="BYTEZ_API_KEY",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
     )
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     client = ModelClient(max_retries=0)
@@ -156,7 +173,7 @@ def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
         return_value=(2, ("93.184.216.34", 443)),
     ), patch.object(client, "_open_provider", side_effect=open_provider):
         assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "ok"
-    assert seen[0].get_header("Authorization") == "Key bytez-secret"
+    assert seen[0].get_header("Authorization") == "bytez-secret"
 
 
 def test_auth_scheme_rejects_empty_value() -> None:
