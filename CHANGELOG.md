@@ -40,6 +40,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   the `cheapest_upstream` table-driven load balancing already covered by
   [ADR 0003](docs/adr/0003-cost-aware-sync-batch-routing.md#consequences);
   no new research grounding applies to this bugfix.
+- `_cheapest_capability_candidate` no longer ranks comparable embedding
+  candidates through `cheapest_upstream`'s ledger-rounded (six-decimal-place)
+  `PriceBook.compute_cost` output. Two genuinely different low per-1K prices
+  (e.g. `0.00000049` and `0.00000001`) can both round to the same `0.0`
+  ledger cost for the assumed request size, which collapsed a real price
+  difference into a tie and let the ranked-first (possibly costlier)
+  candidate win. Ranking now compares each candidate's raw, unrounded
+  `PriceEntry.prompt_price_per_1k` directly (embedding requests carry zero
+  completion tokens, so completion price stays out of the comparison).
+  `cheapest_upstream` itself, currency filtering, the unpriced-exclusion
+  behavior, and ranked-order tie-breaking on a true price tie are unchanged.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

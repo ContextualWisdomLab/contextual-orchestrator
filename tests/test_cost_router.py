@@ -1031,6 +1031,62 @@ def test_cheapest_capability_candidate_compares_equivalent_currency_spellings() 
     assert chosen.id == padded_lowercase_member.id
 
 
+def test_cheapest_capability_candidate_breaks_ledger_rounding_ties_on_raw_price() -> None:
+    """Devin round-3 bug: tiny embedding prices must not collapse into ties.
+
+    ``ranked_first`` (0.00000049 per 1K) and ``cheaper`` (0.00000001 per 1K)
+    are genuinely different prices, but ``PriceBook.compute_cost`` quantizes
+    to six decimal places for ledger reporting, so both round to the same
+    ``0.0`` cost for the assumed 1,000-token request that ``cheapest_upstream``
+    prices candidates against. A comparison that goes through that rounded
+    cost sees a tie and keeps the ranked-first (here, pricier) candidate;
+    the fix must instead compare the raw, unrounded ``prompt_price_per_1k``
+    and pick the actually-cheaper member.
+    """
+    ranked_first = ModelAgent(
+        "ranked_first_member", "tiny-expensive-embedding", "mock://tiny-expensive",
+        provider_name="tiny-expensive-provider", tags=("embedding",), priority=10,
+    )
+    cheaper = ModelAgent(
+        "cheaper_member", "tiny-cheap-embedding", "mock://tiny-cheap",
+        provider_name="tiny-cheap-provider", tags=("embedding",), priority=1,
+    )
+    orchestrator = TaskOrchestrator([ranked_first, cheaper])
+    with orchestrator.request_policy(False):
+        candidates = orchestrator._capability_agents("embedding", None)
+    assert [agent.id for agent in candidates] == [ranked_first.id, cheaper.id]
+
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(
+        PriceEntry(
+            "tiny-expensive-provider", "tiny-expensive-embedding",
+            prompt_price_per_1k=0.00000049, completion_price_per_1k=0.0,
+        )
+    )
+    price_book.set_price(
+        PriceEntry(
+            "tiny-cheap-provider", "tiny-cheap-embedding",
+            prompt_price_per_1k=0.00000001, completion_price_per_1k=0.0,
+        )
+    )
+    # Confirm both really do collapse to the same rounded ledger cost, so
+    # this test would have failed against the pre-fix rounded comparison.
+    expensive_cost, _ = price_book.compute_cost(
+        "tiny-expensive-provider", "tiny-expensive-embedding", 1000, 0
+    )
+    cheap_cost, _ = price_book.compute_cost(
+        "tiny-cheap-provider", "tiny-cheap-embedding", 1000, 0
+    )
+    assert expensive_cost == cheap_cost == 0.0
+
+    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+
+    chosen = coordinator._cheapest_capability_candidate(candidates)
+
+    assert chosen.id == cheaper.id
+
+
 def test_non_zdr_embedding_batch_selects_cheapest_capability_candidate_when_unspecified() -> None:
     """Devin bug: ordinary (non-ZDR) unspecified embedding batches must also price-route.
 

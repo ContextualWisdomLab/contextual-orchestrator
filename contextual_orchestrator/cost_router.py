@@ -36,10 +36,9 @@ from .batch_routing import (
     LocalEmbeddingBatchBackend,
     RoutingHints,
     RoutingPolicy,
-    cheapest_upstream,
 )
 from .batch_job_registry import JobRegistryFactory, build_job_registry
-from .cost_ledger import CostLedger, PriceBook
+from .cost_ledger import CostLedger, PriceBook, PriceEntry
 from .kv_config import InMemoryConfigStore
 from .model_discovery import _currency_is_comparable
 from .token_counting import HeuristicTokenCounter, build_token_counter
@@ -143,12 +142,13 @@ class CostRoutingCoordinator:
     def _cheapest_capability_candidate(self, candidates: List[Any]) -> Any:
         """Pick the lowest-priced member of a capability candidate list.
 
-        Wires :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`
-        — the module's cost-optimising upstream selector — into a real
-        routing decision: among several capability-matched members (e.g.
-        operator-managed model-group members) that could all serve one
-        request, prefer the cheapest by the configured price table rather
-        than an arbitrary first pick.
+        Plays the same cost-optimising role as
+        :func:`~contextual_orchestrator.batch_routing.cheapest_upstream` — the
+        module's general upstream selector — for a real routing decision:
+        among several capability-matched members (e.g. operator-managed
+        model-group members) that could all serve one request, prefer the
+        cheapest by the configured price table rather than an arbitrary first
+        pick.
 
         Only candidates with a *known* price in the price book's own
         ``default_currency`` are comparable: a missing/invalid price entry
@@ -161,13 +161,29 @@ class CostRoutingCoordinator:
         discovery price book applies — so a lowercase or whitespace-padded
         same-currency code (e.g. ``"usd"`` or ``" USD "`` against ``"USD"``)
         is still recognized as comparable rather than silently excluded.
-        Comparison uses ``assumed_completion_tokens=0`` because embedding
-        requests never consume completion tokens. Candidates with no
-        comparable price — including an all-unpriced or all-mismatched-
-        currency pool — keep the original (ranked) order, so behavior is
-        unchanged whenever the price table has nothing to optimise.
+
+        Ranking compares each comparable candidate's raw, unrounded
+        :attr:`~contextual_orchestrator.cost_ledger.PriceEntry.prompt_price_per_1k`
+        directly rather than delegating to ``cheapest_upstream``'s
+        :meth:`~contextual_orchestrator.cost_ledger.PriceBook.compute_cost`,
+        which quantizes to six decimal places for ledger reporting: two
+        genuinely different low per-1K embedding prices (e.g. ``0.00000049``
+        and ``0.00000001``) can both round to the same ``0.0`` ledger cost for
+        an assumed request size, which would collapse a real price
+        difference into a tie and let the more expensive candidate win by
+        rank order alone. Comparing the raw prompt price is equivalent to
+        comparing the full-precision cost for embeddings, which is why
+        ``completion_price_per_1k`` is not part of the comparison at all
+        (embedding requests never consume completion tokens). ``cheapest_upstream``
+        itself is untouched — its rounded cost remains correct for its own
+        ledger-reporting callers. Candidates with no comparable price —
+        including an all-unpriced or all-mismatched-currency pool — keep the
+        original (ranked) order, so behavior is unchanged whenever the price
+        table has nothing to optimise; a true tie in raw price also keeps the
+        first-ranked candidate, matching ``cheapest_upstream``'s own
+        input-order tie-breaking.
         """
-        comparable: list[tuple[Any, dict[str, str]]] = []
+        comparable: list[tuple[Any, PriceEntry]] = []
         for candidate in candidates:
             provider, model = self._agent_provider_model(candidate, candidate.model)
             entry = self.price_book.get_price(provider, model)
@@ -175,18 +191,14 @@ class CostRoutingCoordinator:
                 entry.currency_code, self.price_book.default_currency
             ):
                 continue
-            comparable.append((candidate, {"provider": provider, "model": model}))
+            comparable.append((candidate, entry))
         if not comparable:
             return candidates[0]
-        best = cheapest_upstream(
-            [priced for _, priced in comparable], self.price_book, assumed_completion_tokens=0
-        )
-        if best is None:  # pragma: no cover - comparable is non-empty here
-            return candidates[0]
-        for candidate, priced in comparable:
-            if priced is best:
-                return candidate
-        return candidates[0]  # pragma: no cover - defensive: cheapest_upstream returns an input entry
+        best_candidate, best_entry = comparable[0]
+        for candidate, entry in comparable[1:]:
+            if entry.prompt_price_per_1k < best_entry.prompt_price_per_1k:
+                best_candidate, best_entry = candidate, entry
+        return best_candidate
 
     def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
