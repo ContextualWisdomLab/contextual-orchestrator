@@ -294,6 +294,86 @@ def test_admin_state_refreshes_each_routing_ledger_once(tmp_path, monkeypatch) -
         orchestrator.close()
 
 
+def test_group_listing_refreshes_each_routing_ledger_once(tmp_path, monkeypatch) -> None:
+    agents = [
+        ModelAgent("member_a", "mock-a", group_name="shared_model"),
+        ModelAgent("member_b", "mock-b", group_name="shared_model"),
+    ]
+    orchestrator = TaskOrchestrator(
+        agents,
+        state_db=str(tmp_path / "state.sqlite"),
+        routing_observation_window_seconds=60,
+    )
+    refreshes = {"transport": 0, "quality": 0}
+    original_transport = orchestrator._group_router.refresh
+    original_quality = orchestrator._quality_router.refresh
+
+    def refresh_transport() -> None:
+        refreshes["transport"] += 1
+        original_transport()
+
+    def refresh_quality() -> None:
+        refreshes["quality"] += 1
+        original_quality()
+
+    try:
+        monkeypatch.setattr(orchestrator._group_router, "refresh", refresh_transport)
+        monkeypatch.setattr(orchestrator._quality_router, "refresh", refresh_quality)
+        orchestrator.list_model_groups()
+        assert refreshes == {"transport": 1, "quality": 1}
+    finally:
+        orchestrator.close()
+
+
+def test_routing_context_changes_with_credential_identity() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("route_member", "mock-model")])
+    first = ModelAgent(
+        "route_member", "mock-model", base_url="local://worker", credential_key="ACCOUNT_ONE", local_credential_key="LOCAL_ONE"
+    )
+    second = ModelAgent(
+        "route_member", "mock-model", base_url="local://worker", credential_key="ACCOUNT_TWO", local_credential_key="LOCAL_ONE"
+    )
+    third = ModelAgent(
+        "route_member", "mock-model", base_url="local://worker", credential_key="ACCOUNT_ONE", local_credential_key="LOCAL_TWO"
+    )
+
+    assert orchestrator._routing_observation_context_for_agent(first) != (
+        orchestrator._routing_observation_context_for_agent(second)
+    )
+    assert orchestrator._routing_observation_context_for_agent(first) != (
+        orchestrator._routing_observation_context_for_agent(third)
+    )
+
+
+def test_stream_judgement_keeps_served_agent_context_after_reassignment(monkeypatch) -> None:
+    served = ModelAgent(
+        "route_member", "mock-model", group_name="shared_model", credential_key="ACCOUNT_ONE"
+    )
+    replacement = ModelAgent(
+        "route_member", "mock-model", group_name="shared_model", credential_key="ACCOUNT_TWO"
+    )
+    orchestrator = TaskOrchestrator([served])
+    expected_context = orchestrator._routing_observation_context_for_agent(served)
+    observed_contexts: list[str | None] = []
+
+    def stream_chat(*args, **kwargs):
+        del args, kwargs
+        orchestrator.agents = [replacement]
+        yield "answer"
+
+    def judge(**kwargs):
+        observed_contexts.append(kwargs["observation_context_key"])
+        return {"accepted": True, "reason": "test", "verifier_output": "answer"}
+
+    monkeypatch.setattr(orchestrator.client, "stream_chat", stream_chat)
+    monkeypatch.setattr(orchestrator, "_realtime_route_judge", judge)
+
+    assert list(orchestrator.stream_route([{"role": "user", "content": "hello"}])) == [
+        "answer"
+    ]
+    assert observed_contexts == [expected_context]
+
+
 def test_stream_preserves_emitted_answer_when_observation_write_fails(
     tmp_path, monkeypatch, caplog
 ) -> None:
@@ -584,6 +664,27 @@ def test_shorter_writer_window_does_not_delete_longer_window_evidence(tmp_path) 
     )
 
     assert [row.member_id for row in rows] == ["member_a", "member_b"]
+
+
+def test_closed_long_window_no_longer_controls_physical_retention(tmp_path) -> None:
+    path = tmp_path / "routing.sqlite"
+    clock = _Clock(100.0)
+    long_window = SqliteRoutingObservationStore(path, 60, clock=clock)
+    short_window = SqliteRoutingObservationStore(path, 10, clock=clock)
+    long_window.append(
+        "transport", "member_a", context_key="member_a:v1", observed_at=50.0, success=False
+    )
+    long_window.close()
+
+    short_window.append(
+        "transport", "member_b", context_key="member_b:v1", observed_at=100.0, success=False
+    )
+
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(
+            "SELECT member_id FROM routing_observations ORDER BY observation_id"
+        ).fetchall()
+    assert rows == [("member_b",)]
 
 
 def test_store_prunes_only_rows_older_than_database_retention_window(tmp_path) -> None:

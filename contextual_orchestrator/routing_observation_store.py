@@ -14,6 +14,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterable, Mapping
 from typing import Protocol
 
@@ -92,6 +93,10 @@ class SqliteRoutingObservationStore:
         "metadata_key TEXT PRIMARY KEY, metadata_value INTEGER NOT NULL)"
     )
     _MAX_RETENTION_WINDOW_KEY = "max_retention_window_seconds"
+    _CREATE_REGISTRATIONS_TABLE_SQL = (
+        "CREATE TABLE IF NOT EXISTS routing_observation_registrations ("
+        "registration_id TEXT PRIMARY KEY, window_seconds INTEGER NOT NULL)"
+    )
 
     def __init__(
         self,
@@ -116,15 +121,23 @@ class SqliteRoutingObservationStore:
         self._window_seconds = window_seconds
         self._clock = clock
         self._lock = threading.Lock()
+        self._registration_id = uuid.uuid4().hex
+        self._closed = False
         with self._lock:
             connection = self._connect()
             try:
                 connection.execute(self._CREATE_TABLE_SQL)
                 connection.execute(self._CREATE_METADATA_TABLE_SQL)
+                connection.execute(self._CREATE_REGISTRATIONS_TABLE_SQL)
                 self._ensure_schema(connection)
                 connection.execute(self._CREATE_INDEX_SQL)
                 connection.execute(self._CREATE_RETENTION_INDEX_SQL)
                 self._register_retention_window(connection)
+                connection.execute(
+                    "INSERT INTO routing_observation_registrations "
+                    "(registration_id, window_seconds) VALUES (?, ?)",
+                    (self._registration_id, self._window_seconds),
+                )
                 connection.commit()
             finally:
                 connection.close()
@@ -175,10 +188,13 @@ class SqliteRoutingObservationStore:
     def _retention_cutoff(self, connection: sqlite3.Connection) -> float:
         """Return the physical prune boundary from the shared database-wide window."""
         row = connection.execute(
-            "SELECT metadata_value FROM routing_observation_metadata WHERE metadata_key = ?",
-            (self._MAX_RETENTION_WINDOW_KEY,),
+            "SELECT MAX(window_seconds) FROM routing_observation_registrations",
         ).fetchone()
-        max_window_seconds = self._window_seconds if row is None else max(int(row[0]), 1)
+        max_window_seconds = (
+            self._window_seconds
+            if row is None or row[0] is None
+            else max(int(row[0]), 1)
+        )
         return self._now() - float(max_window_seconds)
 
     @staticmethod
@@ -336,8 +352,21 @@ class SqliteRoutingObservationStore:
                 connection.close()
 
     def close(self) -> None:
-        """Keep the lifecycle contract; operations use short-lived connections."""
-        return
+        """Release this store's retention-window registration."""
+        with self._lock:
+            if self._closed:
+                return
+            connection = self._connect()
+            try:
+                connection.execute(
+                    "DELETE FROM routing_observation_registrations "
+                    "WHERE registration_id = ?",
+                    (self._registration_id,),
+                )
+                connection.commit()
+                self._closed = True
+            finally:
+                connection.close()
 
 
 __all__ = ["RoutingObservation", "RoutingObservationStore", "SqliteRoutingObservationStore"]

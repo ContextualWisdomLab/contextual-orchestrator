@@ -619,6 +619,87 @@ def test_structured_repair_reuses_provider_that_accepted_request() -> None:
     ]
 
 
+def test_structured_repair_records_success_with_final_provider_context(monkeypatch) -> None:
+    """A repair-time 413 must not attach the fallback success to the first account."""
+    class RepairFailoverClient(SequencedProxyClient):
+        def proxy_send_once(
+            self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            del endpoint
+            self.calls.append((agent.id, deepcopy(payload)))
+            if len(self.calls) == 1:
+                return {
+                    "model": agent.model,
+                    "choices": [{"message": {"content": "not json"}}],
+                }
+            if agent.id == "primary_agent":
+                raise _http_error(413)
+            return {
+                "model": agent.model,
+                "choices": [{"message": {"content": "{}"}}],
+            }
+
+        proxy_send = proxy_send_once
+
+    client = RepairFailoverClient({})
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "primary_agent",
+                "primary-model",
+                priority=10,
+                provider_name="primary",
+                credential_key="PRIMARY_ACCOUNT",
+                group_name="shared_model",
+                tags=("response_format",),
+            ),
+            ModelAgent(
+                "fallback_agent",
+                "fallback-model",
+                priority=1,
+                provider_name="fallback",
+                credential_key="FALLBACK_ACCOUNT",
+                group_name="shared_model",
+                tags=("response_format",),
+            ),
+        ],
+        client=client,
+    )
+    orchestrator.conduct = lambda *args, **kwargs: {  # type: ignore[method-assign]
+        "mode": "conduct",
+        "answer": "evidence",
+        "trace": [],
+        "verification": {"accepted": True, "reason": "test", "verifier_output": ""},
+    }
+    observations: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        orchestrator._group_router,
+        "observe_success",
+        lambda member_id, latency_seconds, **kwargs: observations.append(
+            (member_id, kwargs.get("observation_context_key"))
+        ),
+    )
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": TaskOrchestrator.AUTO_MODEL,
+            "messages": [{"role": "user", "content": "repair this"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"schema": {"type": "object"}},
+            },
+        },
+        single_agent=False,
+    )
+
+    fallback = orchestrator._agent("fallback_agent")
+    assert result["model"] == "fallback-model"
+    assert observations[-1] == (
+        "fallback_agent",
+        orchestrator._routing_observation_context_for_agent(fallback),
+    )
+
+
 def test_all_virtual_candidates_rejecting_size_preserves_request_too_large() -> None:
     """Exhausted 413 routing remains a client-visible size error, not HTTP 500."""
     client = SequencedProxyClient(

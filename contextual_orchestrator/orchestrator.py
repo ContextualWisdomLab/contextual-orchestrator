@@ -4311,7 +4311,11 @@ class TaskOrchestrator:
             self._record_group_success_for_agent(
                 final_agent,
                 time.perf_counter() - synthesis_started,
-                observation_context_key=synthesis_context_key,
+                observation_context_key=(
+                    repair_context_key
+                    if repair_step is not None
+                    else synthesis_context_key
+                ),
             )
         if response_request:
             raw.setdefault("output_text", synthesis_output)
@@ -4562,6 +4566,7 @@ class TaskOrchestrator:
                 latency_seconds=latency_seconds,
                 usage=usage,
                 free_only=model_name == self.FREE_MODEL,
+                observation_context_key=observation_context_key,
             )
         except RoutingObservationPersistenceError:
             _LOGGER.error(
@@ -5118,7 +5123,10 @@ class TaskOrchestrator:
                 for capability in sorted(MODEL_CAPABILITIES)
                 if any(capability in agent.tags for agent in members)
             },
-            "members": [self._agent_to_admin_payload(self._agent(agent_id)) for agent_id in ranked_ids],
+            "members": [
+                self._agent_to_admin_payload(self._agent(agent_id), refresh=False)
+                for agent_id in ranked_ids
+            ],
         }
 
     def set_model_group(self, group_name: str, member_agent_ids: list[str]) -> dict[str, Any]:
@@ -7049,8 +7057,10 @@ class TaskOrchestrator:
         payload = {
             "auth_scheme": agent.auth_scheme,
             "base_url": agent.base_url,
+            "credential_name": agent.credential_name,
             "group_name": canonical_group_name(agent.group_name) if agent.group_name else "",
             "id": agent.id,
+            "local_credential_key": agent.local_credential_key,
             "model": agent.model,
             "provider_name": agent.provider_name,
         }
