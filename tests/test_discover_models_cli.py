@@ -88,6 +88,7 @@ def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None
         "privacy_policy_analysis": [],
         "enabled_agent_ids": [],
         "free_tier_count": 0,
+        "general_free_serving_count": 0,
         "free_data_privacy": {"supported": 0, "unsupported": 0, "unknown": 0},
         "models": [],
     }
@@ -399,7 +400,7 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
         if host == "api.openai.com":
             return _Response({"data": [{"id": "pricey-model", "pricing": {"prompt": "0.00005", "completion": "0.0001"}}]})
         if host == "openrouter.ai":
-            return _Response({"data": [{"id": "cheap-model", "pricing": {"prompt": "0.0000001", "completion": "0.0000002"}}]})
+            return _Response({"data": [{"id": "cheap-model", "pricing": {"prompt": "0", "completion": "0"}}]})
         return _Response({"data": []})
 
     try:
@@ -417,15 +418,15 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
         set_backend(None)
 
     report = json.loads(stdout.getvalue())
-    assert report["enabled_agent_ids"] == ["openai_pricey_model"]
+    assert report["enabled_agent_ids"] == ["openrouter_cheap_model"]
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
-    assert by_id["openai_pricey_model"].disabled is False
+    assert by_id["openrouter_cheap_model"].disabled is False
 
 
-def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> None:
-    """CLI bootstrap must use the provider-diverse selector, not only the cheapest vendor."""
+def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> None:
+    """CLI bootstrap must preserve independent accounts, not only the cheapest vendor."""
     from contextual_orchestrator import TaskOrchestrator
     from contextual_orchestrator.orchestrator import ModelAgent
 
@@ -440,7 +441,7 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
         host = urllib.parse.urlsplit(request.full_url).hostname
         payloads = {
             "api.openai.com": {"data": [{"id": "openai-model", "pricing": {"prompt": "0.001", "completion": "0.001"}}]},
-            "openrouter.ai": {"data": [{"id": "router-model", "pricing": {"prompt": "0.000001", "completion": "0.000001"}}]},
+            "openrouter.ai": {"data": [{"id": "router-model", "pricing": {"prompt": "0", "completion": "0"}}]},
             "integrate.api.nvidia.com": {"data": [{"id": "nim-model", "pricing": {"prompt": "0.000002", "completion": "0.000002"}}]},
         }
         return _Response(payloads.get(host, {"data": []}))
@@ -461,6 +462,7 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
 
     report = json.loads(stdout.getvalue())
     assert report["enabled_agent_ids"] == [
+        "openrouter_router_model",
         "nvidia_nim_nim_model",
         "openai_openai_model",
     ]

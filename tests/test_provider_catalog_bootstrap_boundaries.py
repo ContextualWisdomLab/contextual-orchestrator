@@ -360,3 +360,139 @@ def test_main_requires_inventory_by_default(monkeypatch: pytest.MonkeyPatch) -> 
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(ProviderBootstrapError, match="complete credential inventory"):
         pcb.main([])
+
+
+def _complete_report(**overrides: Any) -> dict[str, Any]:
+    """A minimal report shaped like ``ProviderCatalogBootstrapReport.as_dict()``."""
+    payload: dict[str, Any] = {
+        "registered_credentials": sorted(PROVIDER_CREDENTIAL_NAMES),
+        "restored_credentials": [],
+        "providers_with_errors": [],
+        "provider_error_classifications": {},
+        "catalog_refresh_failure_count": 0,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_classify_discovery_error_code_rejects_non_string_input() -> None:
+    """A non-string error code (an adversarial/malformed input) is unknown,
+    never mistaken for a stable classified code.
+    """
+    assert pcb._classify_discovery_error_code(None) == pcb.UNKNOWN_FAILURE_CLASSIFICATION
+    assert pcb._classify_discovery_error_code(500) == pcb.UNKNOWN_FAILURE_CLASSIFICATION
+
+
+def test_credential_inventory_verdict_ok_when_nothing_is_missing() -> None:
+    """A complete inventory is silently fine: no warning, no failure."""
+    verdict = pcb.evaluate_provider_credential_inventory(
+        _complete_report(), {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    )
+    assert verdict == pcb.ProviderCredentialInventoryVerdict(True, None, None)
+
+
+def test_credential_inventory_verdict_hard_fails_on_unconfigured_secret() -> None:
+    """A credential missing from the job environment entirely -- never even
+    attempted -- is a real configuration gap, not tolerable degradation.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    environ["BYTEZ_API_KEY"] = "   "  # blank/whitespace-only counts as absent
+    report = _complete_report(
+        registered_credentials=sorted(set(PROVIDER_CREDENTIAL_NAMES) - {"BYTEZ_API_KEY"}),
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is False
+    assert verdict.warning_message is None
+    assert "not configured in secrets" in verdict.hard_fail_reason
+    assert "BYTEZ_API_KEY" in verdict.hard_fail_reason
+
+
+def test_credential_inventory_verdict_hard_fails_on_unexplained_rollback() -> None:
+    """A rollback with no discovery-failure evidence for it must not be
+    silently excused -- it could be masking a real bug.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(set(PROVIDER_CREDENTIAL_NAMES) - {"BYTEZ_API_KEY"}),
+        # providers_with_errors/provider_error_classifications stay empty:
+        # nothing ties the missing credential to a provider failure.
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is False
+    assert verdict.warning_message is None
+    assert "unexplained rollback" in verdict.hard_fail_reason
+    assert "BYTEZ_API_KEY" in verdict.hard_fail_reason
+
+
+def test_credential_inventory_verdict_evaluates_restored_names_even_when_registered_is_complete() -> None:
+    """A durable-KV rollback can restore an old-but-valid credential value,
+    so ``registered_credentials`` looks complete even though this run's
+    discovery for that provider failed. ``restored_credentials`` must still
+    drive the same classification the "missing" path uses -- a hard-fail
+    classification here (authentication_failure) must hard-fail even though
+    no credential name is actually absent from ``registered_credentials``.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(PROVIDER_CREDENTIAL_NAMES),  # nothing missing
+        restored_credentials=["BYTEZ_API_KEY"],
+        providers_with_errors=["bytez"],
+        provider_error_classifications={
+            "bytez": pcb.AUTHENTICATION_FAILURE_CLASSIFICATION
+        },
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is False
+    assert verdict.warning_message is None
+    assert "not a tolerated transient outage" in verdict.hard_fail_reason
+    assert "'BYTEZ_API_KEY': 'authentication_failure'" in verdict.hard_fail_reason
+
+
+def test_credential_inventory_verdict_hard_fails_on_unexplained_restored_credential() -> None:
+    """A name in ``restored_credentials`` with no corresponding
+    ``providers_with_errors`` entry is exactly as suspicious as an
+    unexplained fully-missing credential -- being restored is not itself
+    proof of a legitimate, classifiable failure.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(PROVIDER_CREDENTIAL_NAMES),  # nothing missing
+        restored_credentials=["BYTEZ_API_KEY"],
+        # providers_with_errors/provider_error_classifications stay empty.
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is False
+    assert verdict.warning_message is None
+    assert "unexplained rollback" in verdict.hard_fail_reason
+    assert "BYTEZ_API_KEY" in verdict.hard_fail_reason
+
+
+def test_credential_inventory_verdict_tolerates_restored_transient_failure_when_registered_is_complete() -> None:
+    """The fix must not over-correct: a restored name with a genuinely
+    transient classification is still tolerated as a warning even when
+    ``registered_credentials`` already looks complete.
+    """
+    environ = {name: "secret" for name in PROVIDER_CREDENTIAL_NAMES}
+    report = _complete_report(
+        registered_credentials=sorted(PROVIDER_CREDENTIAL_NAMES),  # nothing missing
+        restored_credentials=["BYTEZ_API_KEY"],
+        providers_with_errors=["bytez"],
+        provider_error_classifications={
+            "bytez": pcb.TRANSIENT_FAILURE_CLASSIFICATION
+        },
+    )
+
+    verdict = pcb.evaluate_provider_credential_inventory(report, environ)
+
+    assert verdict.ok is True
+    assert verdict.hard_fail_reason is None
+    assert verdict.warning_message is not None
+    assert "BYTEZ_API_KEY" in verdict.warning_message
