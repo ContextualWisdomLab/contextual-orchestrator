@@ -473,6 +473,52 @@ def test_enable_cheapest_reuses_and_activates_legacy_discovered_id(tmp_path) -> 
     reloaded.close()
 
 
+def test_enable_cheapest_does_not_activate_matching_manual_agent(tmp_path) -> None:
+    from dataclasses import replace
+    from contextual_orchestrator import TaskOrchestrator
+
+    model = DiscoveredModel(
+        "openrouter", "cheap-model", "OPENROUTER_API_KEY",
+        "https://openrouter.ai/api/v1", "Bearer", is_free=True,
+    )
+    db_path = str(tmp_path / "manual-and-discovered.db")
+    seeded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    legacy = replace(agent_from_discovered(model), id="openrouter_cheap_model")
+    seeded.sync_discovered_agents([legacy])
+    manual = replace(legacy, id="manual_cheap_model", tags=("operator",))
+    seeded._pool_store.save(manual)
+    seeded.close()
+    set_backend(InMemoryCredentialBackend())
+    register_credential("OPENROUTER_API_KEY", "sk-router")
+    stdout = StringIO()
+
+    try:
+        with (
+            patch.object(sys, "argv", [
+                "contextual-orchestrator", "discover-models", "--agents-db", db_path,
+                "--enable-cheapest", "1",
+            ]),
+            patch.object(sys, "stdout", stdout),
+            patch(
+                "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                return_value=_Response({"data": [{
+                    "id": "cheap-model", "pricing": {"prompt": "0", "completion": "0"},
+                }]}),
+            ),
+        ):
+            main()
+    finally:
+        set_backend(None)
+
+    report = json.loads(stdout.getvalue())
+    assert report["enabled_agent_ids"] == [legacy.id]
+    reloaded = TaskOrchestrator([], agents_db=db_path, allow_empty_agents=True)
+    by_id = {agent.id: agent for agent in reloaded.candidates}
+    assert by_id[legacy.id].disabled is False
+    assert by_id[manual.id].disabled is True
+    reloaded.close()
+
+
 def test_enable_cheapest_bootstraps_independent_provider_accounts(tmp_path) -> None:
     """CLI bootstrap must preserve independent accounts, not only the cheapest vendor."""
     from contextual_orchestrator import TaskOrchestrator

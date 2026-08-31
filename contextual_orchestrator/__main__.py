@@ -354,7 +354,8 @@ def _discover_models_command(argv: list[str]) -> None:
                     matches = [
                         candidate
                         for candidate in bootstrap.candidates
-                        if candidate.provider_name == incoming.provider_name
+                        if "discovered" in candidate.tags
+                        and candidate.provider_name == incoming.provider_name
                         and candidate.credential_name == incoming.credential_name
                         and candidate.model == incoming.model
                     ]
