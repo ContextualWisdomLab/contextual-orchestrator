@@ -62,6 +62,132 @@ _DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # safe to send on every request, authenticated or not.
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
+
+
+def _parallel_tool_call_evidence(supported_parameters: list[Any]) -> bool | None:
+    """Return the strongest tool-call parallelism signal in a parameter list.
+
+    Provider ``supported_parameters`` entries (e.g. from OpenRouter or a
+    LiteLLM-model-info proxy) name request fields the model accepts. A literal
+    ``"parallel_tool_calls"`` parameter is direct evidence the model can receive
+    multiple tool-call requests at once. A ``"tools"`` parameter alone tells us
+    only that some form of tool calling is accepted, not whether multiple calls
+    may be requested simultaneously; without an explicit ``parallel_tool_calls``
+    signal we stay honest and report ``None`` rather than guessing ``False``.
+    """
+    if not isinstance(supported_parameters, list):
+        return None
+    params = {
+        value.strip().casefold()
+        for value in supported_parameters
+        if isinstance(value, str) and value.strip()
+    }
+    if "parallel_tool_calls" in params:
+        return True
+    return None
+
+
+def _tool_call_parallelism_from_error(error_payload: Any) -> bool | None:
+    """Return ``False`` when a provider's 400 clearly rejects multi-tool calls.
+
+    The only negative signal this function trusts is a provider error whose
+    message explicitly says the model accepts only one tool call at a time, or
+    that ``parallel_tool_calls`` is not supported. Ambiguous 400s (malformed
+    payload, auth, rate limits, etc.) return ``None`` so the pool stays open
+    rather than excluding a model on a misunderstood error.
+    """
+    if isinstance(error_payload, dict):
+        error = error_payload.get("error", {})
+        if not isinstance(error, dict):
+            error = error_payload
+        message = str(error.get("message", ""))
+        if not message and isinstance(error_payload.get("message"), str):
+            message = error_payload["message"]
+    elif isinstance(error_payload, str):
+        message = error_payload
+    else:
+        return None
+    text = message.casefold()
+    if "single tool" in text or "one tool" in text or "parallel_tool_calls" in text:
+        return False
+    return None
+
+
+def probe_discovered_model_tool_call_capability(
+    discovered: DiscoveredModel,
+    *,
+    timeout: float = 30.0,
+) -> bool | None:
+    """Probe whether a discovered model accepts multi-tool-call requests.
+
+    Sends a minimal ``/chat/completions`` request with ``parallel_tool_calls: true``
+    and two tool definitions, using the provider credential registered in the KV.
+    A successful response means the model accepted the multi-tool shape
+    (``True``). A 400 whose error text clearly says the model only supports a
+    single tool call means it does not (``False``). Any network, auth, or
+    ambiguous error returns ``None`` so the pool stays open rather than
+    excluding a model on a flaky probe.
+
+    This is real runtime evidence, not a model-name heuristic. It is deliberately
+    separate from :func:`discover_all_models` so callers decide when the extra
+    latency and token cost are justified.
+    """
+    api_key = get_credential(discovered.credential_name)
+    if not api_key:
+        return None
+    url = discovered.chat_base_url.rstrip("/") + "/chat/completions"
+    if not url.startswith("https://"):
+        return None
+    payload = {
+        "model": discovered.model_id,
+        "messages": [{"role": "user", "content": "Call both functions."}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_a",
+                    "description": "Probe function A",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "probe_b",
+                    "description": "Probe function B",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+        "parallel_tool_calls": True,
+        "max_tokens": 1,
+        "temperature": 0.0,
+        "stream": False,
+    }
+    headers = {
+        "content-type": "application/json",
+        "user-agent": _HTTP_USER_AGENT,
+        "authorization": format_authorization_header(discovered.auth_scheme, api_key),
+    }
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - scoped provider probe
+            response.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code != 400:
+            return None
+        body = exc.read().decode("utf-8", errors="replace")
+        try:
+            error_payload = json.loads(body)
+        except json.JSONDecodeError:
+            error_payload = {"message": body}
+        return _tool_call_parallelism_from_error(error_payload)
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return None
+    return True
+
+
 _MODELS_DEV_URL = "https://models.dev/api.json"
 # Small bounded retry budget for the one shared, unauthenticated, third-party
 # Models.dev fetch that every ``models_dev_provider_id``-joined source's
@@ -285,6 +411,7 @@ class DiscoveredModel:
     zdr_capable: bool = False
     evidence_only: bool = False
     spend_admitted: bool = True
+    supports_parallel_tool_calls: bool | None = None
 
 
 class ProviderDiscoveryError(RuntimeError):
@@ -941,6 +1068,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
             if isinstance(row.get("supported_parameters"), list)
             else []
         )
+        parallel_tool_calls = _parallel_tool_call_evidence(supported_parameters)
         raw_inputs = architecture.get("input_modalities")
         raw_outputs = architecture.get("output_modalities")
         inputs = tuple(value for value in raw_inputs if isinstance(value, str)) if isinstance(raw_inputs, list) else ()
@@ -1029,6 +1157,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                     else None
                 ),
                 privacy_policy_urls=_privacy_policy_urls(source, row),
+                supports_parallel_tool_calls=parallel_tool_calls,
             )
         )
     return _deduplicate_discovered_models(discovered)
@@ -1437,6 +1566,7 @@ def is_discovered_chat_candidate(discovered: DiscoveredModel) -> bool:
         discovered.model_id,
         capabilities=discovered.capabilities,
         output_modalities=discovered.output_modalities,
+        supports_parallel_tool_calls=discovered.supports_parallel_tool_calls,
     )
 
 
@@ -1461,9 +1591,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     if not any(
         capability not in {"chat", "response_format"}
         for capability in discovered.capabilities
-    ) and not (
-        is_general_chat_agent_model_id(discovered.model_id)
-    ):
+    ) and not is_discovered_chat_candidate(discovered):
         raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),
@@ -1481,6 +1609,13 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
             *(f"capability:{value}" for value in discovered.capabilities),
             *(f"input:{value}" for value in discovered.input_modalities),
             *(f"output:{value}" for value in discovered.output_modalities),
+            *(
+                ("tool_call:multi",)
+                if discovered.supports_parallel_tool_calls is True
+                else ("tool_call:single",)
+                if discovered.supports_parallel_tool_calls is False
+                else ()
+            ),
         ),
         priority=priority,
         disabled=True,
@@ -1521,6 +1656,16 @@ def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
     other.
     """
     return requires_non_text_input(discovered.input_modalities)
+
+
+def _requires_single_tool_call(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog/probe evidence shows this model only supports one tool call at a time.
+
+    The general blind serving pool may send multi-tool-call requests, so a model
+    whose evidence says it cannot handle ``parallel_tool_calls`` is disqualified
+    from that pool. ``None`` (no evidence) never triggers exclusion.
+    """
+    return discovered.supports_parallel_tool_calls is False
 
 
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
@@ -1603,10 +1748,15 @@ def general_free_serving_candidates(
     an extra input modality (e.g. an image) could ever use meaningfully;
     :func:`_requires_non_text_input` excludes exactly those rows here, using
     catalog evidence discovery already records, not a per-model name rule.
+    Similarly, a model whose evidence says it only accepts a single tool call
+    at a time is not fit for arbitrary tool-calling requests;
+    :func:`_requires_single_tool_call` excludes those rows, while ``None``
+    (no evidence) keeps the pool open.
     Such a model remains fully discovered, fully counted in
     :func:`free_discovered_models`'s price-based inventory, and eligible for
-    a pool that is not modality-blind (e.g. one built for vision/multimodal
-    tasks) -- it is only withheld from *this* general-purpose free selector.
+    a pool that is not modality-blind or tool-call-blind (e.g. one built for
+    vision/multimodal or single-tool tasks) -- it is only withheld from *this*
+    general-purpose free selector.
 
     Reproduces ContextualWisdomLab/.github#1198's required Strix Security Scan
     failure (run 33325907333, job 99295892400): NVIDIA NIM's free
@@ -1641,7 +1791,9 @@ def general_free_serving_candidates(
     candidates = [
         model
         for model in free_discovered_models(discovered)
-        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+        if is_routable_discovered_model(model)
+        and not _requires_non_text_input(model)
+        and not _requires_single_tool_call(model)
     ]
     _log_zero_free_serving_contribution(discovered, candidates)
     return candidates

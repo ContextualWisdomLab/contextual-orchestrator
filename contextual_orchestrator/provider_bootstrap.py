@@ -193,6 +193,13 @@ def serving_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
                 *(f"capability:{value}" for value in model.capabilities),
                 *(f"input:{value}" for value in model.input_modalities),
                 *(f"output:{value}" for value in model.output_modalities),
+                *(
+                    ("tool_call:multi",)
+                    if model.supports_parallel_tool_calls is True
+                    else ("tool_call:single",)
+                    if model.supports_parallel_tool_calls is False
+                    else ()
+                ),
             )
         )
     )

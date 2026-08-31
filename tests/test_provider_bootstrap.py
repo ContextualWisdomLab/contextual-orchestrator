@@ -325,6 +325,59 @@ def test_active_agent_from_discovered_free_vision_model_is_not_free_pool_eligibl
     assert orchestrator._is_general_free_agent(agent) is False
 
 
+def test_serving_tags_preserve_tool_call_parallelism_evidence():
+    """Explicit parallel/single tool-call evidence survives bootstrap tag normalization."""
+    multi = replace(
+        _model("openai", "OPENAI_API_KEY", "gpt-4o-mini", 0.0),
+        capabilities=("chat",),
+        supports_parallel_tool_calls=True,
+    )
+    single = replace(
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "meta/llama-3.2-11b-vision-instruct", 0.0),
+        capabilities=("chat",),
+        supports_parallel_tool_calls=False,
+    )
+    assert "tool_call:multi" in provider_bootstrap.serving_tags_for_discovered(multi)
+    assert "tool_call:single" in provider_bootstrap.serving_tags_for_discovered(single)
+
+
+def test_single_tool_call_model_is_not_chat_serving_candidate():
+    """A model known to accept only one tool call at a time is not a general chat candidate."""
+    single = replace(
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "generic/single-tool-model", 0.0),
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        supports_parallel_tool_calls=False,
+    )
+    assert provider_bootstrap.is_chat_serving_candidate(single) is False
+
+
+def test_bootstrap_active_free_single_tool_agent_is_not_free_pool_eligible():
+    """A bootstrap-activated free single-tool-call agent stays out of orchestrator/free."""
+    single_tool = replace(
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "generic/single-tool-model", 0.0),
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+        supports_parallel_tool_calls=False,
+    )
+
+    tags = provider_bootstrap.serving_tags_for_discovered(single_tool)
+    agent = ModelAgent(
+        "generic_single_tool_model",
+        "generic/single-tool-model",
+        tags=tags,
+    )
+    orchestrator = TaskOrchestrator([agent])
+
+    assert "cost:free" in agent.tags
+    assert "tool_call:single" in agent.tags
+    assert orchestrator._is_free_agent(agent) is True
+    assert orchestrator._is_general_free_agent(agent) is False
+
+
 def test_serving_tags_preserve_explicit_no_zdr_evidence():
     """Explicit unsupported zero-data retention survives tag normalization."""
     model = replace(

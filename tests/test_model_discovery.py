@@ -6,6 +6,7 @@ import json
 import sys
 import urllib.error
 import urllib.parse
+from io import BytesIO
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -36,10 +37,13 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_configured_gateway_metadata,
     _merge_openrouter_provider_privacy,
     _merge_openrouter_zdr_metadata,
+    _parallel_tool_call_evidence,
     _price_per_1k,
     _parse_openai_compatible,
+    _tool_call_parallelism_from_error,
     agent_from_discovered,
     agent_id_for,
+    probe_discovered_model_tool_call_capability,
     discover_all_models,
     discover_provider_models,
     free_discovered_models,
@@ -2363,3 +2367,202 @@ def test_sync_discovered_agents_persists_when_agents_db_is_set(tmp_path) -> None
 
     second = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     assert any(a.id == "openai_gpt_5_5" for a in second.candidates)
+
+
+def _single_tool_discovered_model() -> DiscoveredModel:
+    return DiscoveredModel(
+        provider_name="nvidia_nim",
+        model_id="generic/single-tool-model",
+        credential_name="NVIDIA_NIM_API_KEY",
+        chat_base_url="https://integrate.api.nvidia.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        input_modalities=("text",),
+        output_modalities=("text",),
+        is_free=True,
+        supports_parallel_tool_calls=False,
+    )
+
+
+def test_parallel_tool_call_evidence_from_supported_parameters() -> None:
+    """Direct ``parallel_tool_calls`` parameter is positive evidence; absence is not."""
+    assert _parallel_tool_call_evidence(["parallel_tool_calls", "temperature"]) is True
+    assert _parallel_tool_call_evidence(["tools", "temperature"]) is None
+    assert _parallel_tool_call_evidence([]) is None
+    assert _parallel_tool_call_evidence(None) is None
+    assert _parallel_tool_call_evidence(["  PARALLEL_TOOL_CALLS  "]) is True
+
+
+def test_tool_call_parallelism_from_error_recognizes_single_tool_rejection() -> None:
+    """Only explicit single-tool-call messages are treated as negative evidence."""
+    assert (
+        _tool_call_parallelism_from_error(
+            {"error": {"message": "This model only supports single tool-calls at once!"}}
+        )
+        is False
+    )
+    assert (
+        _tool_call_parallelism_from_error(
+            {"message": "parallel_tool_calls is not supported for this model."}
+        )
+        is False
+    )
+    assert (
+        _tool_call_parallelism_from_error({"error": {"message": "Invalid API key"}})
+        is None
+    )
+    assert _tool_call_parallelism_from_error("only supports one tool call at a time.") is False
+    assert _tool_call_parallelism_from_error({"error": {}}) is None
+
+
+def test_probe_discovered_model_tool_call_capability_success_returns_true() -> None:
+    """A 200 response to a multi-tool probe means the model accepted the shape."""
+    discovered = _single_tool_discovered_model()
+    response = urllib.request.addinfourl(
+        BytesIO(b'{"id":"chatcmpl"}'),
+        {"content-type": "application/json"},
+        "",
+    )
+    response.code = 200
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "urllib.request.urlopen", return_value=response
+    ) as mocked:
+        result = probe_discovered_model_tool_call_capability(discovered, timeout=5.0)
+    assert result is True
+    request = mocked.call_args[0][0]
+    assert request.get_full_url() == "https://integrate.api.nvidia.com/v1/chat/completions"
+    assert request.method == "POST"
+    payload = json.loads(request.data)
+    assert payload["parallel_tool_calls"] is True
+    assert len(payload["tools"]) == 2
+
+
+def test_probe_discovered_model_tool_call_capability_single_tool_400_returns_false() -> None:
+    """NIM's explicit single-tool 400 is captured as negative evidence."""
+    discovered = _single_tool_discovered_model()
+    body = json.dumps(
+        {"error": {"message": "This model only supports single tool-calls at once!"}}
+    ).encode()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url, 400, "Bad Request", {}, BytesIO(body)
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "urllib.request.urlopen", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is False
+
+
+def test_probe_returns_none_without_credential() -> None:
+    """No credential means no probe; absence of evidence stays open."""
+    discovered = _single_tool_discovered_model()
+    assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_returns_none_on_network_error() -> None:
+    """Network failures are not evidence one way or the other."""
+    discovered = _single_tool_discovered_model()
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_tool_call_parallelism_from_error_handles_non_dict_error_value() -> None:
+    """A string ``error`` value still lets us read ``message`` from the payload."""
+    assert (
+        _tool_call_parallelism_from_error(
+            {"error": "string-value", "message": "This model only supports single tool-calls"}
+        )
+        is False
+    )
+
+
+def test_tool_call_parallelism_from_error_rejects_unrecognised_types() -> None:
+    """Non-dict, non-string payloads carry no usable signal."""
+    assert _tool_call_parallelism_from_error(123) is None
+    assert _tool_call_parallelism_from_error(None) is None
+
+
+def test_probe_returns_none_for_non_https_url() -> None:
+    """A non-HTTPS base URL is not probed for safety."""
+    discovered = replace(_single_tool_discovered_model(), chat_base_url="http://insecure.example/v1")
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_returns_none_for_non_400_http_error() -> None:
+    """Only 400 responses are interpreted as capability evidence."""
+    discovered = _single_tool_discovered_model()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url, 500, "Internal Error", {}, BytesIO(b"oops")
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "urllib.request.urlopen", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is None
+
+
+def test_probe_reads_non_json_400_body_as_plain_message() -> None:
+    """A plain-text 400 body is still searched for a single-tool signal."""
+    discovered = _single_tool_discovered_model()
+    exc = urllib.error.HTTPError(
+        discovered.chat_base_url, 400, "Bad Request", {}, BytesIO(b"only supports single tool-calls")
+    )
+    with patch("contextual_orchestrator.model_discovery.get_credential", return_value="test-key"), patch(
+        "urllib.request.urlopen", side_effect=exc
+    ):
+        assert probe_discovered_model_tool_call_capability(discovered, timeout=5.0) is False
+
+
+def test_is_routable_discovered_model_false_when_single_tool_only() -> None:
+    """Single-tool-call evidence makes a discovered row not a general chat candidate."""
+    discovered = _single_tool_discovered_model()
+    assert is_routable_discovered_model(discovered) is False
+
+
+def test_general_free_serving_candidates_excludes_single_tool_call_model() -> None:
+    """The general free pool excludes a model known to only accept one tool call."""
+    single = _single_tool_discovered_model()
+    multi = replace(single, model_id="generic/multi-tool-model", supports_parallel_tool_calls=True)
+    unknown = replace(single, model_id="generic/unknown-tool-model", supports_parallel_tool_calls=None)
+    candidates = general_free_serving_candidates([single, multi, unknown])
+    assert [model.model_id for model in candidates] == [
+        "generic/multi-tool-model",
+        "generic/unknown-tool-model",
+    ]
+
+
+def test_discovery_and_orchestrator_tool_call_eligibility_cannot_drift() -> None:
+    """``general_free_serving_candidates`` and ``_is_general_free_agent`` agree on tool calls."""
+    single = _single_tool_discovered_model()
+    multi = replace(single, model_id="generic/multi-tool-model", supports_parallel_tool_calls=True)
+    unknown = replace(single, model_id="generic/unknown-tool-model", supports_parallel_tool_calls=None)
+    discovered = [single, multi, unknown]
+    serving_model_ids = {
+        model.model_id for model in general_free_serving_candidates(discovered)
+    }
+    agent_id_translation = str.maketrans("/.-", "___")
+    agents = {
+        model.model_id: ModelAgent(
+            model.model_id.casefold().translate(agent_id_translation),
+            model.model_id,
+            tags=(
+                "cost:free",
+                *(f"input:{value}" for value in model.input_modalities),
+                *(
+                    ("tool_call:multi",)
+                    if model.supports_parallel_tool_calls is True
+                    else ("tool_call:single",)
+                    if model.supports_parallel_tool_calls is False
+                    else ()
+                ),
+            ),
+        )
+        for model in discovered
+    }
+    orchestrator = TaskOrchestrator(list(agents.values()))
+    for model in discovered:
+        agent = agents[model.model_id]
+        assert orchestrator._is_general_free_agent(agent) == (
+            model.model_id in serving_model_ids
+        ), model.model_id

@@ -565,6 +565,11 @@ class ModelAgent:
 
 def _is_general_chat_agent(agent: ModelAgent) -> bool:
     """Apply persisted provider capability tags before model-name fallback."""
+    supports_parallel_tool_calls: bool | None = None
+    if "tool_call:multi" in agent.tags:
+        supports_parallel_tool_calls = True
+    elif "tool_call:single" in agent.tags:
+        supports_parallel_tool_calls = False
     return is_general_chat_candidate(
         agent.model,
         capabilities=(
@@ -577,6 +582,7 @@ def _is_general_chat_agent(agent: ModelAgent) -> bool:
             for tag in agent.tags
             if tag.startswith("output:")
         ),
+        supports_parallel_tool_calls=supports_parallel_tool_calls,
     )
 
 
@@ -5920,6 +5926,18 @@ class TaskOrchestrator:
             tag[len("input:"):] for tag in agent.tags if tag.startswith("input:")
         )
 
+    @staticmethod
+    def _agent_requires_single_tool_call(agent: ModelAgent) -> bool:
+        """Return whether an agent's discovery-derived tags declare single-tool-call only.
+
+        Tool-call capability is carried as ``tool_call:multi`` or
+        ``tool_call:single`` tags. The general blind chat pool may send
+        multi-tool-call requests, so an agent tagged ``tool_call:single`` is
+        not eligible there. Absence of either tag means no evidence either way
+        and keeps the agent eligible.
+        """
+        return "tool_call:single" in agent.tags
+
     def _is_free_agent(self, agent: ModelAgent) -> bool:
         """Return true only for explicitly zero-priced configured models.
 
@@ -5946,10 +5964,11 @@ class TaskOrchestrator:
         ``orchestrator/free`` chat pool: that pool serves every role and
         request shape -- including tool-calling requests -- without knowing
         in advance which capability a request will need. An agent whose tags
-        declare a non-text input modality (e.g. a vision-input deployment) is
-        therefore never treated as free *here*, even when it is honestly
-        tagged ``cost:free`` for price inventory purposes and for its own
-        capability-scoped free route (see :meth:`_is_free_agent`, and
+        declare a non-text input modality (e.g. a vision-input deployment) or
+        single-tool-call-only capability is therefore never treated as free
+        *here*, even when it is honestly tagged ``cost:free`` for price
+        inventory purposes and for its own capability-scoped free route (see
+        :meth:`_is_free_agent`, and
         ``contextual_orchestrator.model_discovery.general_free_serving_candidates``
         for the equivalent discovery-time selector and its incident writeup).
         This is the single choke point every *general chat* ``FREE_MODEL``
@@ -5957,7 +5976,11 @@ class TaskOrchestrator:
         pool store that was written before this exclusion existed, or one
         activated by a pool-construction path this repository adds later.
         """
-        return self._is_free_agent(agent) and not self._agent_requires_non_text_input(agent)
+        return (
+            self._is_free_agent(agent)
+            and not self._agent_requires_non_text_input(agent)
+            and not self._agent_requires_single_tool_call(agent)
+        )
 
     # --- semantic-affinity evidence (cosine similarity; no keyword lists) ---
 

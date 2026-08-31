@@ -2405,3 +2405,39 @@ shows this is now occasional, not the dominant failure mode (most
 is an overall deadline on `_invoke`'s candidate/retry loop, not another
 timeout increase on the sidecar's client side — deferred rather than
 rushed into this heavily-tested core file without dedicated validation.
+
+## 2026-08-31 orchestrator/free: single-tool-call models enter the general free pool and fail at runtime (#940)
+
+Live NIM failure (`openai.BadRequestError: 400 ... This model only supports single
+tool-calls at once!`) on `meta/llama-3.2-11b-vision-instruct` showed that
+`DiscoveredModel` had no tool-call parallelism signal. Even after the vision-input
+exclusion from ADR 0035, there was no honest way to keep a single-tool-call model
+out of the capability-blind `orchestrator/free` pool used by OpenCode, Noema, and
+Strix.
+
+**Gap:** model discovery and runtime agent tags did not carry parallel vs. single
+tool-call capability, so `general_free_serving_candidates` and
+`_is_general_free_agent` could not reject single-tool models.
+
+**Fix (PR [#940](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/940)):**
+added `supports_parallel_tool_calls: bool | None = None` to `DiscoveredModel`:
+
+- `True` when provider `supported_parameters` lists `parallel_tool_calls` or a live
+  multi-tool probe succeeds.
+- `False` when provider evidence or a probe 400 explicitly reports single-tool-call
+  only.
+- `None` when there is no evidence, preserving positive-declaration semantics.
+
+Wired through `is_general_chat_candidate`, `is_discovered_chat_candidate`,
+`is_routable_discovered_model`, `general_free_serving_candidates`,
+`agent_from_discovered`, `serving_tags_for_discovered`, `_is_general_chat_agent`,
+and `_is_general_free_agent`. Added runtime `tool_call:multi`/`tool_call:single`
+tags and `_agent_requires_single_tool_call`. Added `probe_discovered_model_tool_call_capability`
+for opt-in live probing. Added ADR 0039.
+
+**Remaining follow-up:** `ContextualWisdomLab/.github`'s
+`scripts/ci/contextual_orchestrator_review_launcher.py` and
+`contextual_orchestrator_review_policy.py` still build their own CI review catalog
+and do not consume `general_free_serving_candidates` or preserve `input:` and
+`tool_call:` tags, so the NIM vision/single-tool models can still enter the
+`orchestrator/free` CI selection unless the vendored sidecar is updated.
