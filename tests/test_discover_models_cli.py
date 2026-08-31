@@ -412,11 +412,11 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
         set_backend(None)
 
     report = json.loads(stdout.getvalue())
-    assert report["enabled_agent_ids"] == ["openai_pricey_model"]
+    assert report["enabled_agent_ids"] == ["openrouter_cheap_model"]
 
     reloaded = TaskOrchestrator([ModelAgent("seed_agent", "seed-model")], agents_db=db_path)
     by_id = {agent.id: agent for agent in reloaded.candidates}
-    assert by_id["openai_pricey_model"].disabled is False
+    assert by_id["openrouter_cheap_model"].disabled is False
 
 
 def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> None:
@@ -456,6 +456,7 @@ def test_enable_cheapest_bootstraps_independent_provider_families(tmp_path) -> N
 
     report = json.loads(stdout.getvalue())
     assert report["enabled_agent_ids"] == [
+        "openrouter_router_model",
         "nvidia_nim_nim_model",
         "openai_openai_model",
     ]

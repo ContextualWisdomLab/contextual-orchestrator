@@ -33,9 +33,11 @@ time, in `_parse_openai_compatible` (`_pricing_is_free`, unless a merged row
 already carries an explicit `is_free` boolean), which requires a provider's
 own model-list response to carry a real per-token price of exactly zero. Of
 this gateway's six configured provider sources, only OpenRouter's own API
-ever reports real pricing, and OpenRouter is deliberately `evidence_only=True`
-(commit `952996ec`, a ZDR-privacy hardening that stays untouched) and so never
-serves inference. Of the remaining five, `openai`, `nvidia_nim`,
+ever reports real pricing, and at the time this ADR was written OpenRouter's
+`ProviderModelSource` set `evidence_only=True` (commit `952996ec`), so it
+never served inference. That characterization of `952996ec` as settled,
+owner-endorsed policy was false — see this ADR's 2026-08-31 Amendment, which
+corrects the record and removes the flag. Of the remaining five, `openai`, `nvidia_nim`,
 `nvidia_nim_sub`, and `bytez` never report pricing in their own `/v1/models`
 responses, so `is_free` was never `True` for any of them. `orchestrator/free`
 was therefore structurally empty in practice: the one provider ADR 0032
@@ -176,6 +178,29 @@ still leaves `is_free = False` once the retry budget is genuinely exhausted;
 nothing about the retry can turn a paid model free. Motivated by the
 `orchestrator/free` review-sidecar reliability gap in
 `ContextualWisdomLab/.github` PR #1433.
+
+## Amendment (2026-08-31): OpenRouter is no longer `evidence_only`
+
+This ADR's Context section characterized OpenRouter's `evidence_only=True`
+(commit `952996ec`) as settled, deliberate ZDR-privacy hardening "that stays
+untouched." That characterization was false; it was reversed on direct
+review this pass: ZDR eligibility is a route/model-level property
+(`is_zdr_model`, exact feed matching), never grounds to block an entire
+provider account from serving. OpenRouter's `ProviderModelSource` entry no
+longer sets `evidence_only=True`.
+
+This directly closes the gap this ADR's Context section itself identified
+("only OpenRouter's own API ever reports real pricing... and OpenRouter...
+never serves inference... `orchestrator/free` was therefore structurally
+empty in practice"): OpenRouter can now serve like every other discovered
+provider, independent of and in addition to this ADR's Models.dev join for
+the other five sources. The provider-neutral ZDR-evidence-application
+contract (OpenRouter's feed also crediting matching rows from *other*
+providers, insisted on during PR #901's review) is unchanged; what changed
+is that OpenRouter's own rows are no longer the one arbitrary exception to
+it. See `docs/product-technical-gap-baseline.md`'s 2026-08-31 entry for the
+full mechanism, the request-time ZDR-pinning enforcement this required, and
+its stated scope limits.
 
 ## References
 

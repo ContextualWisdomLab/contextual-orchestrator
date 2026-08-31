@@ -169,13 +169,13 @@ def test_auto_discovery_activates_provider_catalog_rows(monkeypatch) -> None:
     assert agent.disabled is False
 
 
-def test_auto_discovery_never_activates_openrouter_evidence_rows(monkeypatch) -> None:
-    """OpenRouter catalog rows provide evidence but never serving agents."""
+def test_auto_discovery_never_activates_evidence_only_rows(monkeypatch) -> None:
+    """A row explicitly marked evidence_only never becomes a serving agent."""
     evidence = DiscoveredModel(
-        provider_name="openrouter",
+        provider_name="example_evidence_provider",
         model_id="provider/router-chat",
-        credential_name="OPENROUTER_API_KEY",
-        chat_base_url="https://openrouter.ai/api/v1",
+        credential_name="EXAMPLE_EVIDENCE_PROVIDER_API_KEY",
+        chat_base_url="https://example-evidence-provider.example/v1",
         auth_scheme="Bearer",
         capabilities=("chat", "response_format"),
         evidence_only=True,

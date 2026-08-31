@@ -541,7 +541,6 @@ OPENROUTER_SOURCE = ProviderModelSource(
     list_url="https://openrouter.ai/api/v1/models?output_modalities=all",
     chat_base_url="https://openrouter.ai/api/v1",
     capabilities=("chat",),
-    evidence_only=True,
 )
 
 BYTEZ_SOURCE = ProviderModelSource(
@@ -611,10 +610,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
     assert discovered[0].capabilities == ("chat", "response_format")
     assert discovered[1].capabilities == ("chat",)
-    assert all(model.evidence_only for model in discovered)
-    assert "response_format" in agent_from_discovered(
-        replace(discovered[0], evidence_only=False)
-    ).tags
+    assert not any(model.evidence_only for model in discovered)
+    assert "response_format" in agent_from_discovered(discovered[0]).tags
 
 
 def test_openrouter_discovery_preserves_every_declared_modality() -> None:
@@ -651,7 +648,7 @@ def test_openrouter_discovery_preserves_every_declared_modality() -> None:
     embedding = next(model for model in discovered if "embedding" in model.capabilities)
     assert embedding.output_modalities == ("embeddings",)
     assert {"input:text", "output:embeddings"} <= set(
-        agent_from_discovered(replace(embedding, evidence_only=False)).tags
+        agent_from_discovered(embedding).tags
     )
 
 
@@ -763,7 +760,7 @@ def test_discovery_retains_full_catalog_and_marks_free_models() -> None:
 
     assert [model.model_id for model in discovered] == ["vendor/free-model", "paid/model", "request-fee/model"]
     assert [model.model_id for model in free_discovered_models(discovered)] == ["vendor/free-model"]
-    assert agent_from_discovered(replace(discovered[0], evidence_only=False)).group_name == ""
+    assert agent_from_discovered(discovered[0]).group_name == ""
 
 
 def _nim_vision_model() -> DiscoveredModel:
@@ -1510,7 +1507,7 @@ def test_default_sources_request_openrouter_full_modality_catalog() -> None:
     assert sources["openai"].capabilities == ()
     assert sources["openrouter"].capabilities == ("chat",)
     assert sources["openrouter"].list_url.endswith("?output_modalities=all")
-    assert sources["openrouter"].evidence_only is True
+    assert sources["openrouter"].evidence_only is False
     assert sources["opencode_zen"].list_url == "https://opencode.ai/zen/v1/models"
     assert sources["nvidia_nim"].capabilities == ("chat",)
     assert sources["nvidia_nim_sub"].capabilities == ("chat",)
@@ -1623,7 +1620,7 @@ def test_discover_all_models_applies_model_zdr_evidence_to_other_sources() -> No
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", True),
     ]
 
@@ -1712,7 +1709,7 @@ def test_discover_all_models_does_not_match_a_shared_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
@@ -1752,7 +1749,7 @@ def test_discover_all_models_rejects_an_ambiguous_zdr_model_suffix() -> None:
 
     assert errors == []
     assert [(model.provider_name, model.zdr_capable) for model in discovered] == [
-        ("openrouter", False),
+        ("openrouter", True),
         ("nvidia_nim", False),
     ]
 
@@ -1944,11 +1941,12 @@ def test_agent_from_discovered_builds_disabled_agent_with_correct_auth() -> None
 
 
 def test_agent_from_discovered_rejects_evidence_only_rows() -> None:
+    """Any row explicitly marked evidence_only stays unroutable, regardless of provider."""
     discovered = DiscoveredModel(
-        provider_name="openrouter",
+        provider_name="example_evidence_provider",
         model_id="provider/evidence-model",
-        credential_name="OPENROUTER_API_KEY",
-        chat_base_url="https://openrouter.ai/api/v1",
+        credential_name="EXAMPLE_EVIDENCE_PROVIDER_API_KEY",
+        chat_base_url="https://example-evidence-provider.example/v1",
         auth_scheme="Bearer",
         evidence_only=True,
     )

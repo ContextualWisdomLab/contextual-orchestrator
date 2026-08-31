@@ -247,6 +247,27 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
 
+
+def _pin_openrouter_zdr(agent: ModelAgent, payload: dict[str, Any]) -> dict[str, Any]:
+    """Force OpenRouter to enforce zero-data-retention at request time.
+
+    OpenRouter can multiplex one model id across several backing providers;
+    a discovery-time ZDR feed snapshot proves a route was ZDR-attested when
+    it was fetched, not which provider actually serves a later request. Their
+    documented ``provider: {"zdr": true}`` request field is OpenRouter's own
+    server-side enforcement (https://openrouter.ai/docs/features/provider-routing)
+    and is authoritative for the request being sent right now, so it is
+    applied here rather than trusted to have been decided correctly upstream.
+    A caller-supplied ``provider`` object (e.g. explicit routing preferences)
+    is preserved and only gains the ``zdr`` key.
+    """
+    if not _REQUEST_ZDR_ONLY.get() or agent.provider_name != "openrouter":
+        return payload
+    provider_routing = dict(payload.get("provider") or {})
+    provider_routing["zdr"] = True
+    return {**payload, "provider": provider_routing}
+
+
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
@@ -1659,6 +1680,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
+        payload = _pin_openrouter_zdr(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
@@ -1857,6 +1879,7 @@ class ModelClient:
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         self._local.usage = None
+        payload = _pin_openrouter_zdr(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -2185,6 +2208,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
+        payload = _pin_openrouter_zdr(agent, payload)
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:

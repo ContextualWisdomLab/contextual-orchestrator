@@ -109,12 +109,12 @@ def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
 
 
 def test_build_review_orchestrator_never_routes_evidence_only_models(monkeypatch):
-    """OpenRouter catalog rows are evidence, never review upstreams."""
+    """A row explicitly marked evidence_only is never a review upstream."""
     discovered = [
         _discovered(
-            "openrouter",
+            "bytez",
             "router-review",
-            "OPENROUTER_API_KEY",
+            "BYTEZ_API_KEY",
             0.01,
             evidence_only=True,
         )
@@ -122,7 +122,7 @@ def test_build_review_orchestrator_never_routes_evidence_only_models(monkeypatch
     monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
 
     with pytest.raises(NotConfigured, match="general chat models"):
-        review_gateway.build_review_orchestrator({"OPENROUTER_API_KEY": "router-secret"})
+        review_gateway.build_review_orchestrator({"BYTEZ_API_KEY": "router-secret"})
 
 
 def test_build_review_orchestrator_excludes_endpoint_only_models(monkeypatch):
