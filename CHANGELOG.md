@@ -78,7 +78,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   already-accepted (and possibly billed) backend job behind a raised
   exception with no job id ever returned to the caller. `retrieve_batch()`
   reads that stored estimate instead of falling back to an empty
-  placeholder.
+  placeholder. (Devin review) A job accepted before this fix has no
+  `prompt_token_estimates` at all, and its original request never lived
+  anywhere durable that a post-fix retrieval could still read — so
+  `retrieve_batch()` now also reads a legacy, pre-fix `batch_requests`
+  registry entry (still populated only for jobs submitted before this
+  change; nothing writes new entries there anymore) whenever a custom_id
+  has no stored estimate, computes the real prompt-token count from it the
+  same way a fresh submission would have, and persists that estimate back
+  onto the job so a re-retrieval never repeats the lookup. That legacy
+  lookup initially gated on whether `job.prompt_token_estimates` was
+  non-empty at all — wrong once any one custom_id had already picked up an
+  estimate (including from an earlier partial retrieval of the same job),
+  since every other still-unestimated custom_id would then silently stop
+  being looked up for the rest of that job's lifetime. It now gates on
+  whether the current retrieval actually has an item that still needs the
+  legacy lookup, so a legacy job's estimates can be filled in correctly
+  across as many partial retrievals as it takes; a job that has never
+  needed the legacy path (everything submitted after this fix) still never
+  touches that registry.
 
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while

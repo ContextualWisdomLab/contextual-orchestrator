@@ -720,22 +720,19 @@ class CostRoutingCoordinator:
         """Retrieve results for a batch owned by ``owner_id`` and record usage."""
         job = self._require_job(job_id, owner_id=owner_id)
         items: List[BatchResultItem] = self.batch_backend.retrieve(job)
-        request_by_custom_id = self._legacy_batch_requests(job)
         prompt_token_estimates = dict(job.prompt_token_estimates)
+        needs_legacy_lookup = any(
+            not self._batch_item_usage_valid(item)
+            and item.custom_id not in prompt_token_estimates
+            for item in items
+        )
+        request_by_custom_id = (
+            self._legacy_batch_requests(job) if needs_legacy_lookup else {}
+        )
         recorded: List[Dict[str, Any]] = []
         for item in items:
             provider_model = self._resolve_batch_provider_model(item)
-            usage_valid = (
-                item.prompt_tokens >= 0
-                and item.completion_tokens >= 0
-                and (
-                    item.usage_valid is True
-                    or (
-                        item.usage_valid is None
-                        and (item.prompt_tokens > 0 or item.completion_tokens > 0)
-                    )
-                )
-            )
+            usage_valid = self._batch_item_usage_valid(item)
             if not usage_valid and item.custom_id not in prompt_token_estimates:
                 original_request = request_by_custom_id.get(item.custom_id)
                 if original_request is not None:
@@ -781,10 +778,33 @@ class CostRoutingCoordinator:
             "results": recorded,
         }
 
+    @staticmethod
+    def _batch_item_usage_valid(item: BatchResultItem) -> bool:
+        """True when a batch result item's provider-reported usage is trustworthy."""
+        return (
+            item.prompt_tokens >= 0
+            and item.completion_tokens >= 0
+            and (
+                item.usage_valid is True
+                or (
+                    item.usage_valid is None
+                    and (item.prompt_tokens > 0 or item.completion_tokens > 0)
+                )
+            )
+        )
+
     def _legacy_batch_requests(self, job: BatchJob) -> Dict[str, BatchRequest]:
-        """Read pre-upgrade batch requests only when a stored estimate is absent."""
-        if job.prompt_token_estimates:
-            return {}
+        """Read pre-upgrade batch requests for a job with an unestimated custom_id.
+
+        Callers gate this on whether the current retrieval actually needs a
+        legacy lookup (some item still lacks a stored/computed estimate), not
+        on whether ``job.prompt_token_estimates`` is merely non-empty -- a
+        job's estimates can be filled in incrementally across multiple
+        ``retrieve_batch`` calls, and gating on non-emptiness alone would stop
+        looking up any custom_id not yet covered by an earlier partial
+        retrieval. A job never seen by the legacy registry (every job
+        submitted after this fix) costs one cheap KeyError-guarded miss.
+        """
         legacy_requests = self._job_registry.mapping(
             "batch_requests", decode=lambda raw: BatchRequest(**raw)
         )

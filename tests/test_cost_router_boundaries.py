@@ -254,6 +254,75 @@ def test_invalid_batch_usage_uses_legacy_request_registry_when_job_predates_prom
     }
 
 
+def test_legacy_batch_requests_stay_available_across_partial_retrievals() -> None:
+    """A partial retrieval must not stop a later one from reaching legacy fallback.
+
+    (Devin review on #956) Once one legacy custom_id picks up a stored
+    estimate, ``job.prompt_token_estimates`` becomes non-empty -- gating the
+    legacy registry lookup on mere non-emptiness would silently stop looking
+    up every other still-unestimated custom_id from that point on, even
+    though the legacy request registry still holds their original prompts.
+    """
+    class LegacyRegistry(JobRegistryFactory):
+        def __init__(self) -> None:
+            super().__init__()
+            self._mappings: dict[str, Any] = {}
+
+        def mapping(self, name, *, decode=None):  # type: ignore[no-untyped-def]
+            if name not in self._mappings:
+                self._mappings[name] = {}
+            return self._mappings[name]
+
+    class TwoPassInvalidUsageBackend:
+        name = "invalid-usage"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def retrieve(self, job):  # type: ignore[no-untyped-def]
+            del job
+            self.calls += 1
+            custom_id = "legacy-request-one" if self.calls == 1 else "legacy-request-two"
+            return [BatchResultItem(
+                custom_id, "short answer", prompt_tokens=-1, completion_tokens=2,
+                model="mock-a", usage_valid=False,
+            )]
+
+    registry = LegacyRegistry()
+    backend = TwoPassInvalidUsageBackend()
+    coordinator = _coordinator(batch_backend=backend, job_registry=registry)
+    coordinator._batch_jobs["legacy-job"] = BatchJob(  # noqa: SLF001
+        "legacy-job", "invalid-usage", request_count=2
+    )
+    registry.mapping("batch_requests", decode=lambda raw: BatchRequest(**raw))["legacy-job"] = [
+        BatchRequest(
+            messages=[{"role": "user", "content": "word " * 500}],
+            model="mock-a",
+            custom_id="legacy-request-one",
+        ),
+        BatchRequest(
+            messages=[{"role": "user", "content": "word " * 700}],
+            model="mock-a",
+            custom_id="legacy-request-two",
+        ),
+    ]
+
+    first = coordinator.retrieve_batch("legacy-job")["results"][0]
+    assert first["prompt_tokens"] > 100  # first partial retrieval: legacy lookup works
+
+    second = coordinator.retrieve_batch("legacy-job")["results"][0]
+    # Pre-fix: the first retrieval already left prompt_token_estimates
+    # non-empty, so this second retrieval's legacy lookup was skipped
+    # entirely and this custom_id's real prompt was never found.
+    assert second["custom_id"] == "legacy-request-two"
+    assert second["prompt_tokens"] > 100
+
+    assert coordinator._batch_jobs["legacy-job"].prompt_token_estimates == {  # noqa: SLF001
+        "legacy-request-one": first["prompt_tokens"],
+        "legacy-request-two": second["prompt_tokens"],
+    }
+
+
 def test_batch_prompt_fallback_has_no_separate_registry_publication() -> None:
     """Accepted jobs publish their safe fallback metadata in one job record."""
     class RecordingRegistry(JobRegistryFactory):
