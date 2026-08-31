@@ -7654,11 +7654,12 @@ def build_server(
                     "batch_model_unavailable",
                     "no eligible model-group member is available for this batch request",
                 )
-            except ProviderResponseError:
+            except ProviderResponseError as exc:
                 self._send_error(
                     502,
                     "invalid_structured_output",
                     "The selected model could not satisfy the requested response schema.",
+                    exc.detail,
                 )
             except FileContractError:
                 self._send_error(

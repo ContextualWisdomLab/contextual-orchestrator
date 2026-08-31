@@ -365,6 +365,31 @@ def test_provider_request_hides_raw_error_text_and_cause() -> None:
         raise AssertionError("a failed provider request must raise")
 
 
+def test_response_content_classifies_reasoning_without_content() -> None:
+    agent = ModelAgent("worker_agent", "gpt")
+
+    with pytest.raises(ProviderResponseError) as error:
+        ModelClient._response_content(
+            agent,
+            {"choices": [{"message": {"reasoning": "thinking only"}}]},
+        )
+
+    assert error.value.detail["provider_response_failure_kind"] == "reasoning_without_content"
+    assert "thinking only" not in str(error.value)
+
+
+def test_response_content_classifies_missing_assistant_content() -> None:
+    agent = ModelAgent("worker_agent", "gpt")
+
+    with pytest.raises(ProviderResponseError) as error:
+        ModelClient._response_content(
+            agent,
+            {"choices": [{"message": {"tool_calls": []}}]},
+        )
+
+    assert error.value.detail["provider_response_failure_kind"] == "assistant_content_missing"
+
+
 class _AgentDownClient(ModelClient):
     """Fails for a chosen agent id, succeeds for the rest."""
 

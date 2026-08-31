@@ -143,6 +143,20 @@ class BudgetExceededError(RuntimeError):
 class ProviderResponseError(RuntimeError):
     """Raised for a provider response that cannot become a safe completion."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_kind: str = "invalid_provider_response",
+        detail: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_kind = failure_kind
+        self.detail = {
+            "provider_response_failure_kind": failure_kind,
+            **(dict(detail) if detail else {}),
+        }
+
 
 class ProviderRequestTooLargeError(ProviderUpstreamError):
     """Preserve request-size taxonomy across transport and telemetry boundaries."""
@@ -1695,9 +1709,13 @@ class ModelClient:
         if isinstance(message, dict) and message.get("reasoning"):
             raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
-                "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
+                "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens",
+                failure_kind="reasoning_without_content",
             )
-        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
+        raise ProviderResponseError(
+            f"provider {agent.id} response did not contain assistant content",
+            failure_kind="assistant_content_missing",
+        )
     @staticmethod
     def _connect_validated(
         destination: ProviderDestination, timeout: float | None, source_address: tuple[str, int] | None

@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import ProviderResponseError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "chat_response_format_http_honesty_token"  # noqa: S105
@@ -223,6 +224,67 @@ def test_http_chat_fails_closed_when_provider_violates_valid_json_schema() -> No
         assert status == 502, body
         assert body["error"]["code"] == "invalid_structured_output"
     finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_surfaces_machine_readable_provider_response_failure_kind() -> None:
+    orchestrator = build()
+    original_chat = orchestrator.client.chat
+    raised = 0
+
+    def classified_failure(agent, messages, **kwargs):
+        nonlocal raised
+        raised += 1
+        if raised == 1:
+            raise ProviderResponseError(
+                "provider general_agent returned reasoning without content",
+                failure_kind="reasoning_without_content",
+            )
+        raise ProviderResponseError(
+            "provider general_agent response did not contain assistant content",
+            failure_kind="assistant_content_missing",
+        )
+
+    orchestrator.client.chat = classified_failure
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        first_status, first_body = _post(
+            server.server_address[1],
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        second_status, second_body = _post(
+            server.server_address[1],
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert first_status == 502, first_body
+        assert first_body["error"]["code"] == "invalid_structured_output"
+        assert (
+            first_body["error"]["detail"]["provider_response_failure_kind"]
+            == "reasoning_without_content"
+        )
+        assert "reasoning without content" not in json.dumps(first_body)
+        assert second_status == 502, second_body
+        assert (
+            second_body["error"]["detail"]["provider_response_failure_kind"]
+            == "assistant_content_missing"
+        )
+    finally:
+        orchestrator.client.chat = original_chat
         server.shutdown()
         thread.join(timeout=5)
 
