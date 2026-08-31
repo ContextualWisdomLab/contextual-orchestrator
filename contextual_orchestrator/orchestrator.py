@@ -7474,6 +7474,41 @@ class TaskOrchestrator:
                 bucket["reported_steps"] += 1 if is_reported else 0
                 total_output_tokens += effective
 
+            verification = run.get("verification")
+            judge_usage = (
+                verification.get("judge_usage")
+                if isinstance(verification, Mapping)
+                else None
+            )
+            judge_agent_id = (
+                verification.get("judge_agent_id")
+                if isinstance(verification, Mapping)
+                else None
+            )
+            if isinstance(judge_usage, Mapping):
+                judge_output, judge_reported = _step_output_tokens(
+                    {"usage": dict(judge_usage), "output": ""}
+                )
+                if judge_reported:
+                    judge_model = model_by_agent.get(judge_agent_id, "unknown")
+                    judge_prompt = judge_usage.get("prompt_tokens")
+                    if type(judge_prompt) is int and judge_prompt >= 0:
+                        reported_prompt_tokens += judge_prompt
+                        any_reported_prompt = True
+                    bucket = by_model.setdefault(
+                        judge_model,
+                        {
+                            "estimated_output_tokens": 0,
+                            "output_tokens": 0,
+                            "step_count": 0,
+                            "reported_steps": 0,
+                        },
+                    )
+                    bucket["output_tokens"] += judge_output
+                    bucket["step_count"] += 1
+                    bucket["reported_steps"] += 1
+                    total_output_tokens += judge_output
+
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
         total_cost_usd = Decimal(0)

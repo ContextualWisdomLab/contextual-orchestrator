@@ -447,6 +447,10 @@ def test_batch_route_budget_meter_includes_reported_judge_usage() -> None:
         orchestrator.batch_route(["task one"])
 
     assert orchestrator.budget_status()["spent_output_tokens"] == 8
+    spend = orchestrator.spend_analytics()
+    assert spend["totals"]["estimated_output_tokens"] == 8
+    assert spend["by_model"][0]["output_tokens"] == 8
+    assert spend["by_model"][0]["estimated_cost_usd"] == pytest.approx(0.00008)
 
 
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
