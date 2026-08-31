@@ -186,10 +186,8 @@ def _structured_output_error(
         instance = json.loads(content)
     except (TypeError, json.JSONDecodeError):
         return "invalid_json"
-    if not isinstance(instance, Mapping):
-        return "invalid_json_object"
     if response_type == "json_object":
-        return None
+        return None if isinstance(instance, Mapping) else "invalid_json_object"
     validator_type = validator_for(schema)
     try:
         validator_type.check_schema(schema)
