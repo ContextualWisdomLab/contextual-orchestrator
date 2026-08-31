@@ -49,6 +49,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   being a constant ~3-token count derived from empty content regardless of
   the real prompt's length, misrepresenting what "estimated" meant to a
   buyer reading the ledger.
+- Fixed a stale test assumption left behind by the per-step batch usage
+  attribution above:
+  `test_batch_routing_jobs_endpoint_submits_multiple_requests` still
+  hardcoded "one ledger row per batch item," which was already false for
+  `CostRoutingCoordinator.complete()`'s documented per-trace-step
+  attribution contract (each conduct-mode step is a separate billable
+  provider call). Two 2-request submissions through
+  `/api/v1/batch_routing_jobs` with the default single-agent mock pool
+  triage to the conduct path (4 steps each), producing 8 ledger rows, not
+  2 — the assertion now derives its expectation from the retrieved results'
+  own `usage_record_ids`, matching the fix already applied to the sibling
+  assertions in `tests/test_cost_router.py`.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.
