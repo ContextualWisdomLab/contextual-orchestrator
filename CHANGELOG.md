@@ -43,6 +43,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   retry's current price/measurement state instead of what actually priced
   the original spend. `append()` is now a true no-op on a rejected
   duplicate.
+- `price_known` now propagates from the ledger into every downstream usage
+  surface: `CostRoutingCoordinator.complete()`'s sync/provider-request cost
+  dicts and their per-currency components, `record_stream_usage()`,
+  `retrieve_batch()`'s per-item results, and `embeddings_batch_document()`.
+  An unpriced request's `cost_amount` is `null` rather than a silent `0`
+  wherever it surfaces, not just in the ledger's own rollups.
+  `PriceBook.compute_cost()` treats zero token usage as the one exception:
+  zero tokens cost zero regardless of whether the provider/model's price is
+  known (zero times any finite price is still zero), so a cache hit — whose
+  synthetic `("cache", "response")` provider/model never has a price row —
+  is always `price_known=True`, `cost_amount=0.0` rather than being wrongly
+  reported as an unpriced request.
 
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while

@@ -227,8 +227,16 @@ class PriceBook:
         ``False`` for that case so callers can tell "priced at zero" apart
         from "we do not know the price" instead of silently fabricating a
         free price for an unpriced model.
+
+        Zero usage is the one exception: zero tokens cost zero regardless of
+        whether this provider/model's per-token price is known, since zero
+        times any finite price is still zero. A cache hit (and any other
+        genuinely zero-token record, priced or not) is therefore always
+        ``price_known=True`` -- there is no unknown quantity left to guess.
         """
         entry = self.get_price(provider, model)
+        if prompt_tokens == 0 and completion_tokens == 0:
+            return 0.0, entry.currency_code if entry is not None else self.default_currency, True
         if entry is None:
             return 0.0, self.default_currency, False
         prompt_cost = (Decimal(prompt_tokens) / Decimal(1000)) * Decimal(
