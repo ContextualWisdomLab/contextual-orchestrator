@@ -480,6 +480,23 @@ class InMemoryProviderCatalogStore:
         started_at = _now()
         eligible = set(normalized).intersection(eligible_model_ids)
         with self._lock:
+            previous = self._models.get(account_id, {})
+            normalized = {
+                model_name: replace(
+                    model,
+                    max_output_tokens=(
+                        model.max_output_tokens
+                        if model.max_output_tokens is not None
+                        else previous.get(model_name, model).max_output_tokens
+                    ),
+                    context_window=(
+                        model.context_window
+                        if model.context_window is not None
+                        else previous.get(model_name, model).context_window
+                    ),
+                )
+                for model_name, model in normalized.items()
+            }
             self._accounts[account_id] = source
             self._models[account_id] = normalized
             self._eligible[account_id] = eligible
@@ -761,8 +778,10 @@ class PostgresProviderCatalogStore:
                         "true, %s, %s) "
                         "ON CONFLICT (provider_model_id) DO UPDATE SET "
                         "model_name = EXCLUDED.model_name, "
-                        "max_output_tokens = EXCLUDED.max_output_tokens, "
-                        "context_window = EXCLUDED.context_window, "
+                        "max_output_tokens = COALESCE(EXCLUDED.max_output_tokens, "
+                        "provider_model.max_output_tokens), "
+                        "context_window = COALESCE(EXCLUDED.context_window, "
+                        "provider_model.context_window), "
                         "prompt_price_per_1k = EXCLUDED.prompt_price_per_1k, "
                         "completion_price_per_1k = EXCLUDED.completion_price_per_1k, "
                         "currency_code = EXCLUDED.currency_code, "

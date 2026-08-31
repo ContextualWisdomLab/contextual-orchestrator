@@ -261,6 +261,43 @@ def test_last_known_good_restores_free_and_modality_evidence() -> None:
     assert store.serving_models(source) == [model]
 
 
+def test_successful_refresh_retains_known_limits_when_metadata_is_unknown() -> None:
+    source = _source()
+    known = replace(
+        _model(source, "model-a", 1.0),
+        max_output_tokens=4096,
+        context_window=128000,
+    )
+    store = InMemoryProviderCatalogStore()
+    store.record_success(
+        source,
+        [known],
+        eligible_model_ids={known.model_id},
+        serving_tags={known.model_id: ("discovered", "chat")},
+    )
+
+    unknown = replace(
+        known,
+        max_output_tokens=None,
+        context_window=None,
+        prompt_price_per_1k=2.0,
+        completion_price_per_1k=2.0,
+    )
+    store.record_success(
+        source,
+        [unknown],
+        eligible_model_ids={unknown.model_id},
+        serving_tags={unknown.model_id: ("discovered", "chat")},
+    )
+
+    refreshed = store.serving_models(source)[0]
+    assert (refreshed.max_output_tokens, refreshed.context_window) == (4096, 128000)
+    assert (
+        refreshed.prompt_price_per_1k,
+        refreshed.completion_price_per_1k,
+    ) == (2.0, 2.0)
+
+
 def test_last_known_good_restores_explicit_no_zdr_evidence() -> None:
     """A catalog round trip preserves an explicit lack of zero-data retention."""
     source = _source(provider="opencode_zen", credential="OPENCODE_ZEN_API_KEY")
@@ -488,6 +525,14 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert "UPDATE provider_model SET enabled_flag = false" in success_sql
     assert "INSERT INTO model_serving_tag" in success_sql
     assert "INSERT INTO model_policy_source" in success_sql
+    assert (
+        "COALESCE(EXCLUDED.max_output_tokens, provider_model.max_output_tokens)"
+        in success_sql
+    )
+    assert (
+        "COALESCE(EXCLUDED.context_window, provider_model.context_window)"
+        in success_sql
+    )
     assert connections[-1].commits >= 1
 
     store.record_failure(source, error_code="provider_timeout: secret-token")
