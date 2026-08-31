@@ -16,9 +16,11 @@ from __future__ import annotations
 from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 import math
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 import certifi
@@ -26,14 +28,34 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from .chat_capability import is_general_chat_agent_model_id, is_general_chat_candidate
+from .chat_capability import (
+    is_general_chat_agent_model_id,
+    is_general_chat_candidate,
+    requires_non_text_input,
+)
 from .credentials import get_credential
-from .orchestrator import ModelAgent, ModelClient
+from .orchestrator import (
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelAgent,
+    ModelClient,
+    format_authorization_header,
+    is_transient_error,
+)
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+_LOGGER = logging.getLogger(__name__)
+# One bounded retry for a provider's primary model-list fetch, reusing the same
+# transient-vs-terminal classification completion calls already trust
+# (is_transient_error). A short, fixed delay and a shortened retry timeout keep
+# the added worst case small and predictable for CI callers with their own
+# overall time budget (see ContextualWisdomLab/.github's review sidecar).
+# Non-transient failures (auth/config errors, malformed responses) are never
+# retried — a retry cannot fix those and would only waste the time budget.
+_DISCOVERY_RETRY_TIMEOUT_SECONDS = 5.0
+_DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 # Some discovery endpoints (verified live: models.dev returns Cloudflare HTTP
 # 403 error 1010) reject urllib's default "Python-urllib/X.Y" user agent as a
 # bot signature. A stable, identifying user agent is not a credential and is
@@ -41,6 +63,15 @@ DISCOVERY_TIMEOUT_SECONDS = 15.0
 _HTTP_USER_AGENT = "contextual-orchestrator/0.2.0 (+https://github.com/ContextualWisdomLab/contextual-orchestrator)"
 _CAPABILITY_NAMES = {"embeddings": "embedding"}
 _MODELS_DEV_URL = "https://models.dev/api.json"
+# Small bounded retry budget for the one shared, unauthenticated, third-party
+# Models.dev fetch that every ``models_dev_provider_id``-joined source's
+# free-tier classification depends on (ADR 0041/0032). It has already been
+# observed live to reject urllib's default user agent as a bot signature (see
+# ``_HTTP_USER_AGENT`` above); a lone transient failure of that kind must not
+# silently erase every dependent provider's ``orchestrator/free`` coverage for
+# the whole discovery run the way a single un-retried attempt would.
+_MODELS_DEV_FETCH_ATTEMPTS = 3
+_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS = 0.05
 _OPENROUTER_ZDR_ENDPOINTS_URL = "https://openrouter.ai/api/v1/endpoints/zdr"
 _OPENROUTER_PROVIDER_POLICIES_URL = "https://openrouter.ai/api/frontend/v1/all-providers"
 CONFIGURED_GATEWAY_CREDENTIAL_NAME = "LLM_GATEWAY_API_KEY"
@@ -66,10 +97,17 @@ def _provider_discovery_error_code(exc: Exception) -> str:
         return "transport_error"
     if isinstance(exc, ValueError):
         return "invalid_response"
+    if isinstance(exc, RuntimeError):
+        # The configured-gateway transport (ModelClient._resolve_addresses /
+        # _open_provider) wraps DNS resolution and request-validation
+        # failures as plain RuntimeError, not an OSError subclass. Still a
+        # transport-level failure from the caller's perspective.
+        return "transport_error"
     # The sole caller catches exactly (URLError, TimeoutError, ValueError,
-    # OSError) plus HTTPError (a URLError subtype), every one of which is
-    # classified above. Reaching this point means the catch tuple drifted;
-    # fail loudly instead of silently labeling an unclassified failure.
+    # OSError, RuntimeError) plus HTTPError (a URLError subtype), every one
+    # of which is classified above. Reaching this point means the catch
+    # tuple drifted; fail loudly instead of silently labeling an
+    # unclassified failure.
     raise AssertionError(f"unclassified provider discovery failure: {exc!r}")
 
 
@@ -142,8 +180,8 @@ def configured_gateway_source(
     )
 
 
-# NVIDIA NIM is listed twice under two KV credential names (primary + sub) so both
-# keys participate in upstream load balancing without a second provider identity.
+# Each NVIDIA NIM KV credential is an independent account boundary and may expose
+# a different catalog even though both currently use the same API endpoint.
 PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
     ProviderModelSource(
         provider_name="openai",
@@ -191,7 +229,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
         credential_name="BYTEZ_API_KEY",
         list_url="https://api.bytez.com/models/v2/list/models",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
         capabilities=("chat",),
@@ -267,7 +305,7 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         raise ValueError(f"refusing non-https model discovery URL: {url!r}")
     headers = {"user-agent": _HTTP_USER_AGENT}
     if api_key:
-        headers["authorization"] = f"{auth_scheme} {api_key}"
+        headers["authorization"] = format_authorization_header(auth_scheme, api_key)
     request = urllib.request.Request(url, headers=headers, method="GET")
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
     try:
@@ -281,6 +319,33 @@ def _fetch_json(url: str, *, api_key: str = "", auth_scheme: str = "Bearer", tim
         )
     with response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_models_dev_metadata(*, timeout: float) -> Any | None:
+    """Fetch the shared Models.dev catalog with a small bounded retry.
+
+    Every ``models_dev_provider_id``-joined source (``opencode_zen``,
+    ``nvidia_nim``, ``nvidia_nim_sub``, ``openai``) shares this one
+    unauthenticated, best-effort, third-party fetch for its free-cost
+    evidence; none of those providers report their own pricing, so a lone
+    transient failure here (a timeout, a reset connection, or the
+    bot-signature rejection ``_HTTP_USER_AGENT`` already guards against) used
+    to silently degrade every one of them to ``is_free = False`` for the rest
+    of the discovery run, collapsing ``orchestrator/free`` coverage over a
+    blip in a service this gateway does not control.
+
+    Returns ``None`` -- the existing "no evidence" fail-closed signal
+    :func:`_merge_models_dev_metadata` already handles -- only once every
+    bounded attempt has failed; a successful attempt returns immediately
+    without spending the rest of the retry budget.
+    """
+    for attempt in range(_MODELS_DEV_FETCH_ATTEMPTS):
+        try:
+            return _fetch_json(_MODELS_DEV_URL, timeout=timeout)
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            if attempt < _MODELS_DEV_FETCH_ATTEMPTS - 1:
+                time.sleep(_MODELS_DEV_FETCH_RETRY_DELAY_SECONDS)
+    return None
 
 
 def _fetch_configured_gateway_json(
@@ -314,7 +379,7 @@ def _fetch_configured_gateway_json(
         credential_key=CONFIGURED_GATEWAY_CREDENTIAL_NAME,
     )
     destination = client._validate_provider(agent)
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     with client._open_provider(request, destination, timeout=timeout) as response:
         raw = response.read(MAX_DISCOVERY_RESPONSE_BYTES + 1)
@@ -352,7 +417,7 @@ def _fetch_json_same_host_https(
     parsed = urlsplit(url)
     if not parsed.hostname:
         raise ValueError(f"refusing discovery URL without hostname: {url!r}")
-    headers = {"authorization": f"{auth_scheme} {api_key}"} if api_key else {}
+    headers = {"authorization": format_authorization_header(auth_scheme, api_key)} if api_key else {}
     request = urllib.request.Request(url, headers=headers, method="GET")
     opener = urllib.request.build_opener(
         _TrustedDiscoveryRedirectHandler(parsed.hostname)
@@ -400,9 +465,9 @@ def _price_per_1k(value: Any) -> float | None:
     return per_1k if _valid_price_component(per_1k) else None
 
 
-def _serving_identity(model: DiscoveredModel) -> tuple[str, str]:
-    """Return the durable agent identity used by discovery synchronization."""
-    return (model.provider_name, model.model_id)
+def _serving_identity(model: DiscoveredModel) -> tuple[str, str, str]:
+    """Return the account-scoped identity used by discovery synchronization."""
+    return (model.provider_name, model.credential_name, model.model_id)
 
 
 def _source_tiebreaker(model: DiscoveredModel) -> tuple[str, str, str, str]:
@@ -420,13 +485,13 @@ def _deduplicate_discovered_models(
 ) -> list[DiscoveredModel]:
     """Collapse duplicate agent identities and withhold conflicting price evidence.
 
-    Exact duplicate catalog rows become one candidate. When the same provider/model
-    identity is repeated with conflicting metadata or prices, one deterministic
-    transport record is retained but its prices become unknown. Provider row order
+    Exact duplicate catalog rows from one credential become one candidate. When the
+    same account/model identity repeats with conflicting metadata or prices, one
+    deterministic transport record is retained but its prices become unknown. Provider row order
     therefore cannot fabricate a cheaper bootstrap candidate or consume failover
     capacity twice.
     """
-    unique: dict[tuple[str, str], DiscoveredModel] = {}
+    unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
         identity = _serving_identity(model)
         previous = unique.get(identity)
@@ -1065,37 +1130,68 @@ def discover_provider_models(
     this call does not repeat the fetch. Leaving it at the default sentinel
     preserves this function's existing lazy, per-call fetch-on-demand
     behavior for every other caller, tests included.
+
+    The primary model-list fetch gets one bounded retry (short fixed delay,
+    shortened timeout) when the failure is transient (5xx/timeout/connection
+    reset, per :func:`~contextual_orchestrator.orchestrator.is_transient_error`)
+    — a single provider's momentary blip no longer has to zero out that
+    provider's entire contribution for this discovery pass. A non-transient
+    failure (bad credential, malformed response) is never retried.
     """
     api_key = get_credential(source.credential_name)
     if not api_key:
+        _LOGGER.debug(
+            "model discovery skipped account=%s reason=key_missing",
+            source.provider_name,
+        )
         return []
+    _LOGGER.debug(
+        "model discovery started account=%s",
+        source.provider_name,
+    )
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
-    try:
-        fetch = (
-            _fetch_configured_gateway_json
-            if source.provider_name == "configured_gateway"
-            else _fetch_json
+    fetch = (
+        _fetch_configured_gateway_json
+        if source.provider_name == "configured_gateway"
+        else _fetch_json
+    )
+    fetch_kwargs = {
+        "api_key": api_key,
+        "auth_scheme": source.auth_scheme,
+        **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
+    }
+    attempt_timeouts = (timeout, min(timeout, _DISCOVERY_RETRY_TIMEOUT_SECONDS))
+    payload: Any = None
+    last_exc: Exception | None = None
+    for attempt_index, attempt_timeout in enumerate(attempt_timeouts):
+        try:
+            payload = fetch(url, timeout=attempt_timeout, **fetch_kwargs)
+            last_exc = None
+            break
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError, RuntimeError) as exc:
+            # OSError covers ConnectionError/reset failures that are not URLError
+            # subclasses, and RuntimeError covers the configured-gateway transport's
+            # (ModelClient._resolve_addresses / _open_provider) DNS and request-
+            # validation failures, so a raw provider transport failure can never
+            # escape the discovery boundary with provider text attached.
+            last_exc = exc
+            is_last_attempt = attempt_index == len(attempt_timeouts) - 1
+            if is_last_attempt or not is_transient_error(exc):
+                break
+            time.sleep(_DISCOVERY_RETRY_DELAY_SECONDS)
+    if last_exc is not None:
+        error_code = _provider_discovery_error_code(last_exc)
+        _LOGGER.debug(
+            "model discovery failed account=%s error_code=%s",
+            source.provider_name,
+            error_code,
         )
-        payload = fetch(
-            url,
-            api_key=api_key,
-            auth_scheme=source.auth_scheme,
-            timeout=timeout,
-            **({"ca_bundle": ca_bundle} if source.provider_name == "configured_gateway" else {}),
-        )
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        # OSError covers ConnectionError/reset failures that are not URLError
-        # subclasses, so a raw provider transport failure can never escape the
-        # discovery boundary with provider text attached.
-        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
+        raise ProviderDiscoveryError(source.provider_name, error_code) from None
     if source.models_dev_provider_id:
         if models_dev_metadata is _NOT_FETCHED:
-            try:
-                metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-            except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-                metadata = None
+            metadata = _fetch_models_dev_metadata(timeout=timeout)
         else:
             metadata = models_dev_metadata
         payload = _merge_models_dev_metadata(payload, metadata, source.models_dev_provider_id)
@@ -1136,7 +1232,13 @@ def discover_provider_models(
         discovered = _parse_bytez(payload, source)
     else:
         discovered = _parse_openai_compatible(payload, source)
-    return [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    result = [replace(model, evidence_only=source.evidence_only) for model in discovered]
+    _LOGGER.debug(
+        "model discovery completed account=%s model_count=%d",
+        source.provider_name,
+        len(result),
+    )
+    return result
 
 
 def discover_all_models(
@@ -1152,7 +1254,8 @@ def discover_all_models(
 
     Up to four sources (``opencode_zen``, ``nvidia_nim``, ``nvidia_nim_sub``,
     ``openai``) each want the same Models.dev catalog. When any registered
-    source declares ``models_dev_provider_id``, fetch it here exactly once and
+    source declares ``models_dev_provider_id``, fetch it here exactly once
+    (:func:`_fetch_models_dev_metadata`, with its own small bounded retry) and
     hand every source the identical parsed payload, instead of each source
     independently repeating the fetch inside :func:`discover_provider_models`.
     """
@@ -1163,10 +1266,7 @@ def discover_all_models(
         source.models_dev_provider_id and get_credential(source.credential_name)
         for source in sources
     ):
-        try:
-            models_dev_metadata = _fetch_json(_MODELS_DEV_URL, timeout=timeout)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
-            models_dev_metadata = None
+        models_dev_metadata = _fetch_models_dev_metadata(timeout=timeout)
     for source in sources:
         try:
             discovered.extend(
@@ -1304,9 +1404,114 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     )
 
 
+def _requires_non_text_input(discovered: DiscoveredModel) -> bool:
+    """Return whether catalog evidence shows this model needs non-text input.
+
+    A model whose provider/catalog architecture evidence declares an input
+    modality other than ``"text"`` (e.g. ``image``, ``audio``, ``video``) is a
+    specialized multimodal deployment: a caller cannot use it for an arbitrary
+    request without knowing in advance that the request must carry that extra
+    modality. Absence of modality evidence is not evidence of a multimodal
+    requirement, so an empty ``input_modalities`` tuple never triggers this.
+
+    This is a deliberately conservative reading: catalog fields such as
+    Models.dev's ``modalities.input`` document *supported* inputs, not which
+    ones a given request must supply, so a model that lists ``text`` next to
+    ``image`` still trips this check. ContextualWisdomLab/.github#1198's
+    incident model (NVIDIA NIM's ``meta/llama-3.2-90b-vision-instruct``) is
+    exactly that shape -- Models.dev reports its inputs as ``text`` *and*
+    ``image`` -- yet NIM's live deployment rejected a plain tool-calling
+    request against it three times in a row. With no reliable per-deployment
+    tool-calling signal available (see :func:`general_free_serving_candidates`
+    for the incident writeup), treating "declares any non-text input" as
+    disqualifying for *blind* serving is the only evidence-based reading that
+    actually keeps that incident fixed; a model believed to also serve plain
+    text requests just fine can still be reached through a pool that is not
+    modality-blind (see :func:`general_free_serving_candidates`'s docstring).
+
+    Delegates the actual classification to
+    ``chat_capability.requires_non_text_input``, the single evidence-based
+    rule shared with ``orchestrator.TaskOrchestrator._agent_requires_non_text_input``
+    (which reads an agent's persisted ``input:<modality>`` tags instead of
+    ``DiscoveredModel`` directly) so the two representations of the same
+    catalog evidence cannot drift on this question independently of each
+    other.
+    """
+    return requires_non_text_input(discovered.input_modalities)
+
+
 def free_discovered_models(discovered: list[DiscoveredModel]) -> list[DiscoveredModel]:
-    """Return models whose provider metadata identifies zero-cost inference."""
+    """Return the complete zero-cost model inventory (price evidence only).
+
+    This is pure price-based inventory: every model whose structured
+    provider/catalog pricing evidence is entirely zero, regardless of input
+    or output modality. Reporting surfaces that answer "is this model free"
+    -- the ``discover-models`` CLI's ``--free-only`` report, ``free_tier_count``,
+    and the free-tier data-privacy totals -- need this complete inventory, not
+    a servable subset.
+
+    Fitness for the general-purpose *blind* serving pool (``orchestrator/free``)
+    is a stricter, separate question: see :func:`general_free_serving_candidates`.
+    An earlier revision of this function conflated the two, which silently
+    undercounted genuinely free models that are simply unsuited to
+    capability-blind serving in every "is this model free" report.
+    """
     return [model for model in discovered if model.is_free]
+
+
+def general_free_serving_candidates(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Return free models fit for the general-purpose blind serving pool.
+
+    A zero price alone does not certify fitness for arbitrary callers: the
+    free pool (``orchestrator/free``) serves every role and request shape --
+    including tool/function-calling requests -- without knowing in advance
+    which capability a given request will need. Provider pricing can be
+    reliably zero on a model that only a caller who already knows to supply
+    an extra input modality (e.g. an image) could ever use meaningfully;
+    :func:`_requires_non_text_input` excludes exactly those rows here, using
+    catalog evidence discovery already records, not a per-model name rule.
+    Such a model remains fully discovered, fully counted in
+    :func:`free_discovered_models`'s price-based inventory, and eligible for
+    a pool that is not modality-blind (e.g. one built for vision/multimodal
+    tasks) -- it is only withheld from *this* general-purpose free selector.
+
+    Reproduces ContextualWisdomLab/.github#1198's required Strix Security Scan
+    failure (run 33325907333, job 99295892400): NVIDIA NIM's free
+    ``meta/llama-3.2-90b-vision-instruct`` passed every existing chat-capability
+    check, yet NIM's live deployment rejected Strix's tool-calling request
+    against it with a definitive HTTP 400 three independent times in a row --
+    because the free pool had no other candidate to fail over to, this one
+    vision-input model alone exhausted the whole tool-calling pool.
+
+    This is the selector every runtime pool-construction path must apply
+    before treating a discovered model as eligible for blind free serving
+    (e.g. tagging an agent ``cost:free`` in a context where that tag alone
+    drives general-chat ``orchestrator/free`` routing).
+    ``TaskOrchestrator._is_general_free_agent`` additionally re-checks an
+    agent's persisted ``input:<modality>`` tags at selection time -- but only
+    for the capability-blind general chat pool, never for a capability-scoped
+    free route (``_capability_agents``), where that same tag is the expected
+    shape, not a surprise -- so a durable agent-pool row written by an older
+    build, before this exclusion existed, cannot bypass it either.
+
+    Zero price and text-only input still are not enough on their own: an
+    ``evidence_only`` catalog row can never become a serving agent at all
+    (:func:`agent_from_discovered` refuses to build one), and a free
+    non-chat-capable model (e.g. an embedding-only deployment) is not a
+    general chat candidate either. :func:`is_routable_discovered_model` --
+    the same predicate ``_auto_discover_runtime_agents`` and
+    ``provider_bootstrap`` already require before promoting a discovered row
+    to an ordinary chat agent -- excludes both here too, so this selector's
+    count never overstates how many free models the general chat pool could
+    actually serve.
+    """
+    return [
+        model
+        for model in free_discovered_models(discovered)
+        if is_routable_discovered_model(model) and not _requires_non_text_input(model)
+    ]
 
 
 def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
@@ -1402,13 +1607,6 @@ def _discovery_price_key(
     return (0, cost, model.provider_name, model.model_id)
 
 
-def _provider_family(provider_name: str) -> str:
-    """Collapse credentials that share one upstream provider outage domain."""
-    if provider_name in {"nvidia_nim", "nvidia_nim_sub"}:
-        return "nvidia_nim"
-    return provider_name
-
-
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
@@ -1455,10 +1653,9 @@ def select_bootstrap_discovered_agents(
     """Build a deterministic, price-honest, provider-diverse initial pool.
 
     Candidates retain the known-price-first ordering above, but the first pass
-    takes at most one model from each independent provider family. Remaining
-    capacity is filled in the same deterministic cost order. NVIDIA NIM primary
-    and sub credentials are one outage domain, so they participate in the second
-    pass only after independently hosted providers have had a chance to enter.
+    takes at most one model from each independently discovered provider account.
+    Remaining capacity is filled in the same deterministic cost order. No vendor
+    or endpoint name is used to infer a shared family or collapse credential state.
     Duplicate serving identities never consume capacity twice.
     """
     if limit <= 0:
@@ -1477,14 +1674,13 @@ def select_bootstrap_discovered_agents(
     )
     selected: list[DiscoveredModel] = []
     deferred: list[DiscoveredModel] = []
-    provider_families: set[str] = set()
+    providers: set[str] = set()
 
     for model in ranked:
-        family = _provider_family(model.provider_name)
-        if family in provider_families:
+        if model.provider_name in providers:
             deferred.append(model)
             continue
-        provider_families.add(family)
+        providers.add(model.provider_name)
         selected.append(model)
         if len(selected) == limit:
             return selected

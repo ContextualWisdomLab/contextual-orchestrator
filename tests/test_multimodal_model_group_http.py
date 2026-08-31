@@ -545,6 +545,63 @@ def test_free_virtual_model_uses_only_zero_cost_media_models() -> None:
     assert result["model"] == "provider/free"
 
 
+def test_free_virtual_model_selects_a_free_agent_whose_own_capability_needs_non_text_input() -> None:
+    """The blind-chat modality exclusion must not reach capability-scoped routes.
+
+    Devin's review on PR #933, fourth finding: ``TaskOrchestrator._is_free_agent``
+    had grown a non-text-input exclusion meant only for the capability-blind
+    general chat pool, but it also backed ``_capability_agents`` (every
+    ``/v1/audio/transcriptions``, ``/v1/videos``, image, speech, and rerank
+    route). A free transcription agent naturally carries an ``input:audio``
+    tag and a free image/video agent an ``input:image`` tag -- exactly the
+    modality its own capability-scoped free route is asking for, not a
+    surprise -- so the shared predicate made those genuinely free agents
+    unreachable through their own free route. Fails pre-fix (agent excluded,
+    ``RuntimeError``), passes post-fix (``_is_free_agent`` stays modality-blind;
+    only ``_is_general_free_agent`` -- the general-chat-only variant -- adds
+    the exclusion).
+    """
+    orchestrator = TaskOrchestrator([
+        ModelAgent(
+            "free_transcription",
+            "provider/free-transcription",
+            tags=("transcription", "cost:free", "input:audio"),
+        ),
+    ])
+
+    result = orchestrator.proxy_capability(
+        {"model": orchestrator.FREE_MODEL, "prompt": "demo"},
+        capability="transcription",
+        endpoint="audio/transcriptions",
+    )
+
+    assert result["model"] == "provider/free-transcription"
+
+
+def test_free_virtual_model_selects_a_free_video_agent_whose_input_is_image() -> None:
+    """Same regression as above for a free video/image-edit agent's own route.
+
+    A video (or image-edit) agent naturally and correctly declares
+    ``input:image`` -- the request's own required extra input, not a
+    surprise -- so its own capability-scoped free route must still find it.
+    """
+    orchestrator = TaskOrchestrator([
+        ModelAgent(
+            "free_video_edit",
+            "provider/free-video-edit",
+            tags=("video", "cost:free", "input:image"),
+        ),
+    ])
+
+    result = orchestrator.proxy_capability(
+        {"model": orchestrator.FREE_MODEL, "prompt": "demo"},
+        capability="video",
+        endpoint="videos",
+    )
+
+    assert result["model"] == "provider/free-video-edit"
+
+
 def test_free_virtual_model_fails_closed_without_zero_cost_media_models() -> None:
     orchestrator = TaskOrchestrator([
         ModelAgent("paid_video", "provider/paid", tags=("video",)),

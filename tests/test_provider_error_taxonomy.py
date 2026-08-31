@@ -85,6 +85,31 @@ def test_safe_message_reads_only_a_bounded_provider_body() -> None:
     assert body.requested_size == MAX_PROVIDER_ERROR_BODY_BYTES + 1
 
 
+def test_transient_classification_survives_a_stalled_error_body_read() -> None:
+    """A dropped/stalled body read during classification must not escape uncaught.
+
+    ``is_transient_error`` inspects the HTTP error body (for the
+    tool-execution-stopped contract) before returning a verdict. If the
+    provider connection stalls or drops mid-read, ``HTTPError.read()`` can
+    raise ``http.client.IncompleteRead`` -- not an ``OSError`` subclass, so
+    it was not caught by the body-cache's except clause and would escape
+    classification entirely, aborting whatever loop called
+    ``is_transient_error`` instead of yielding a plain classification.
+    """
+    import http.client
+
+    class StallingBody(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            raise http.client.IncompleteRead(b"partial")
+
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/models", 500, "error", None, StallingBody(b"")
+    )
+
+    assert is_transient_error(error) is True
+    assert safe_provider_message(error) is None
+
+
 def test_safe_message_reuses_body_after_retryability_inspection() -> None:
     """Tool-stop and caller-safe classification share one bounded body read."""
     error = _body_http_error(401, {"error": {"message": "invalid credential"}})
