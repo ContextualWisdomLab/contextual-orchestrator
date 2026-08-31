@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
+import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 from contextual_orchestrator.rater_observation import (
-    GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
     GOVERNED_RATER_CONFORMANCE_SHA256,
+    GOVERNED_RATER_OBSERVATION_CONTRACT_V1,
     GOVERNED_RATER_SCHEMA_SHA256,
     GOVERNED_RATER_UPSTREAM_REVISION,
     MAX_RATER_EVIDENCE_REFERENCES,
@@ -183,26 +184,53 @@ def test_configuration_requires_exact_fields_and_bounded_references() -> None:
 
 
 def test_shared_canonical_reference_conformance_fixture() -> None:
-    fixture_path = Path(__file__).parent / "fixtures/governed_rater_observation_v1_conformance.json"
+    fixture_path = (
+        Path(__file__).parent
+        / "fixtures/governed_rater_observation_v1_conformance.json"
+    )
     fixture_bytes = fixture_path.read_bytes()
     fixture = json.loads(fixture_bytes)
+    assert (
+        hashlib.sha256(fixture_bytes).hexdigest() == GOVERNED_RATER_CONFORMANCE_SHA256
+    )
     assert fixture["contract_id"] == GOVERNED_RATER_OBSERVATION_CONTRACT_V1
-    assert GOVERNED_RATER_UPSTREAM_REVISION == "38487df3f5f84b475e07b39cf13c893293e542e7"
-    assert GOVERNED_RATER_SCHEMA_SHA256 == "7d112c652523ca55546eea1114ecb9fd82727d77fc27434f2ee0ab2acd11d281"
-    assert GOVERNED_RATER_CONFORMANCE_SHA256 == "c7c6c1a84d6f3073fa14ef0e65d409e5f35412b8667c9f2b759a30dc91d0024c"
+    assert (
+        GOVERNED_RATER_UPSTREAM_REVISION == "38487df3f5f84b475e07b39cf13c893293e542e7"
+    )
+    assert (
+        GOVERNED_RATER_SCHEMA_SHA256
+        == "7d112c652523ca55546eea1114ecb9fd82727d77fc27434f2ee0ab2acd11d281"
+    )
+    assert (
+        GOVERNED_RATER_CONFORMANCE_SHA256
+        == "c7c6c1a84d6f3073fa14ef0e65d409e5f35412b8667c9f2b759a30dc91d0024c"
+    )
     assert fixture["reference_cases"]
     for case in fixture["reference_cases"]:
         configuration = _configuration()
         configuration["provider_ref"] = case["value"]
         if case["valid"]:
-            assert RaterConfigurationIdentity.from_mapping(configuration).provider_ref == case["value"]
+            assert (
+                RaterConfigurationIdentity.from_mapping(configuration).provider_ref
+                == case["value"]
+            )
         else:
-            assert _error_code(lambda: RaterConfigurationIdentity.from_mapping(configuration)) == "invalid_reference"
+            assert (
+                _error_code(
+                    lambda configuration=configuration: (
+                        RaterConfigurationIdentity.from_mapping(configuration)
+                    )
+                )
+                == "invalid_reference"
+            )
 
 
 def test_shared_duplicate_member_cases_fail_before_mapping_validation() -> None:
     fixture = json.loads(
-        (Path(__file__).parent / "fixtures/governed_rater_observation_v1_conformance.json").read_text()
+        (
+            Path(__file__).parent
+            / "fixtures/governed_rater_observation_v1_conformance.json"
+        ).read_text()
     )
     for case in fixture["observation_identity_cases"]:
         if case["valid"]:
@@ -211,7 +239,15 @@ def test_shared_duplicate_member_cases_fail_before_mapping_validation() -> None:
         raw = json.dumps(_invocation()).replace(
             json.dumps(_invocation()["observations"]), observations
         )
-        assert _error_code(lambda raw=raw: RaterInvocation.from_json(raw)) == "duplicate_object_member"
+        assert (
+            _error_code(lambda raw=raw: RaterInvocation.from_json(raw))
+            == "duplicate_object_member"
+        )
+
+
+def test_deep_json_is_rejected_as_a_domain_error() -> None:
+    raw = "[" * 10_000 + "0" + "]" * 10_000
+    assert _error_code(lambda: RaterInvocation.from_json(raw)) == "invalid_json"
 
 
 def test_observation_schema_is_exact_and_status_is_bounded() -> None:
@@ -249,13 +285,19 @@ def test_observation_schema_is_exact_and_status_is_bounded() -> None:
         invalid_status = _observed()
         invalid_status["status"] = invalid_value
         assert _error_code(
-            lambda: CriterionObservation.from_mapping(invalid_status)
+            lambda invalid_status=invalid_status: CriterionObservation.from_mapping(
+                invalid_status
+            )
         ) == ("invalid_status")
 
         invalid_uncertainty = _observed()
         invalid_uncertainty["uncertainty"] = invalid_value
         assert (
-            _error_code(lambda: CriterionObservation.from_mapping(invalid_uncertainty))
+            _error_code(
+                lambda invalid_uncertainty=invalid_uncertainty: (
+                    CriterionObservation.from_mapping(invalid_uncertainty)
+                )
+            )
             == "invalid_uncertainty"
         )
 
@@ -355,8 +397,7 @@ def test_invocation_aggregate_enforces_contract_and_criterion_uniqueness() -> No
 
     oversized = _invocation()
     oversized["observations"] = {
-        f"criterion-{index}": _observed()
-        for index in range(MAX_RATER_OBSERVATIONS + 1)
+        f"criterion-{index}": _observed() for index in range(MAX_RATER_OBSERVATIONS + 1)
     }
     assert _error_code(lambda: RaterInvocation.from_mapping(oversized)) == (
         "invalid_observations"

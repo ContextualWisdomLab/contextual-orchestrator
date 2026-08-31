@@ -8,17 +8,20 @@ evidence references while structurally rejecting scores and decisions.
 
 from __future__ import annotations
 
+import json
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
-import json
 from typing import Any
-import unicodedata
-
 
 GOVERNED_RATER_OBSERVATION_CONTRACT_V1 = "cwl_governed_rater_observation/v1"
 GOVERNED_RATER_UPSTREAM_REVISION = "38487df3f5f84b475e07b39cf13c893293e542e7"
-GOVERNED_RATER_SCHEMA_SHA256 = "7d112c652523ca55546eea1114ecb9fd82727d77fc27434f2ee0ab2acd11d281"
-GOVERNED_RATER_CONFORMANCE_SHA256 = "c7c6c1a84d6f3073fa14ef0e65d409e5f35412b8667c9f2b759a30dc91d0024c"
+GOVERNED_RATER_SCHEMA_SHA256 = (
+    "7d112c652523ca55546eea1114ecb9fd82727d77fc27434f2ee0ab2acd11d281"
+)
+GOVERNED_RATER_CONFORMANCE_SHA256 = (
+    "c7c6c1a84d6f3073fa14ef0e65d409e5f35412b8667c9f2b759a30dc91d0024c"
+)
 MAX_RATER_REFERENCE_LENGTH = 256
 MAX_RATER_OBSERVATIONS = 128
 MAX_RATER_EVIDENCE_REFERENCES = 64
@@ -289,7 +292,9 @@ class CriterionObservation:
                 f"observation is missing required fields: {sorted(missing)}",
             )
         return cls(
-            criterion_ref=(payload["criterion_ref"] if criterion_ref is None else criterion_ref),
+            criterion_ref=(
+                payload["criterion_ref"] if criterion_ref is None else criterion_ref
+            ),
             status=payload["status"],
             category_anchor_ref=payload["category_anchor_ref"],
             evidence_reference_ids=payload["evidence_reference_ids"],
@@ -366,11 +371,15 @@ class RaterInvocation:
     def from_json(cls, value: str) -> RaterInvocation:
         """Decode raw JSON while rejecting duplicate members at every depth."""
         if type(value) is not str:
-            raise RaterObservationError("invalid_json", "invocation JSON must be a string")
+            raise RaterObservationError(
+                "invalid_json", "invocation JSON must be a string"
+            )
         try:
             payload = json.loads(value, object_pairs_hook=_unique_object)
-        except json.JSONDecodeError as exc:
-            raise RaterObservationError("invalid_json", "invocation JSON is invalid") from exc
+        except (json.JSONDecodeError, RecursionError) as exc:
+            raise RaterObservationError(
+                "invalid_json", "invocation JSON is invalid"
+            ) from exc
         return cls.from_mapping(payload)
 
     @classmethod
