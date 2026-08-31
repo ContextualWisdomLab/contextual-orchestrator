@@ -7042,7 +7042,12 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            verification["judge_agent_id"] = judge_adapter.served_agent_id or judge.id
+            judge_served_id = judge_adapter.served_agent_id or judge.id
+            verification["judge_agent_id"] = judge_served_id
+            verification["judge_model"] = next(
+                (agent.model for agent in self.candidates if agent.id == judge_served_id),
+                judge.model,
+            )
             if result.usage:
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
@@ -7378,13 +7383,16 @@ class TaskOrchestrator:
         if isinstance(verification, Mapping):
             usage = verification.get("judge_usage")
             judge_agent_id = verification.get("judge_agent_id")
+            judge_model_stored = verification.get("judge_model")
             completion_tokens = (
                 usage.get("completion_tokens", usage.get("output_tokens"))
                 if isinstance(usage, Mapping)
                 else None
             )
             if type(completion_tokens) is int and completion_tokens >= 0:
-                judge_model = model_by_agent.get(judge_agent_id, "unknown")
+                judge_model = judge_model_stored or model_by_agent.get(
+                    judge_agent_id, "unknown"
+                )
                 output_by_model[judge_model] = (
                     output_by_model.get(judge_model, 0) + completion_tokens
                 )
@@ -7485,12 +7493,19 @@ class TaskOrchestrator:
                 if isinstance(verification, Mapping)
                 else None
             )
+            judge_model_stored = (
+                verification.get("judge_model")
+                if isinstance(verification, Mapping)
+                else None
+            )
             if isinstance(judge_usage, Mapping):
                 judge_output, judge_reported = _step_output_tokens(
                     {"usage": dict(judge_usage), "output": ""}
                 )
                 if judge_reported:
-                    judge_model = model_by_agent.get(judge_agent_id, "unknown")
+                    judge_model = judge_model_stored or model_by_agent.get(
+                        judge_agent_id, "unknown"
+                    )
                     judge_prompt = judge_usage.get("prompt_tokens")
                     if type(judge_prompt) is int and judge_prompt >= 0:
                         reported_prompt_tokens += judge_prompt

@@ -453,6 +453,47 @@ def test_batch_route_budget_meter_includes_reported_judge_usage() -> None:
     assert spend["by_model"][0]["estimated_cost_usd"] == pytest.approx(0.00008)
 
 
+def test_batch_route_judge_usage_survives_agent_pool_model_change() -> None:
+    """A judge's historical spend must stay pinned to the model that actually served
+    it, not silently reattribute when the serving agent's id is later reused for a
+    different model (Devin review on #961: judge model was re-resolved from the live
+    pool on every read, unlike worker steps, whose ``model_name`` is pinned at write
+    time)."""
+
+    class _UsageJudge(_ScriptedFastJudge):
+        def judge(self, **kwargs):
+            result = super().judge(**kwargs)
+            result.usage = {"completion_tokens": 2}
+            return result
+
+    components = replace(_scripted_fast_components(), judge_cls=_UsageJudge)
+    orchestrator = _orch(_CountingClient())
+
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=components,
+    ):
+        orchestrator.batch_route(["task one"])
+
+    assert orchestrator.budget_status()["spent_output_tokens"] == 8
+
+    # Re-discovery upserts the same agent id under a new (unpriced) model -- the
+    # real-world path that reuses an agent id for a different model and triggers
+    # _rebuild_budget_meter().
+    orchestrator.sync_discovered_agents(
+        [ModelAgent("general_agent", "model-y", tags=("reasoning", "writing"))]
+    )
+
+    assert orchestrator.budget_status()["spent_output_tokens"] == 8
+    spend = orchestrator.spend_analytics()
+    assert spend["totals"]["estimated_output_tokens"] == 8
+    by_model = {row["model"]: row for row in spend["by_model"]}
+    assert "model-y" not in by_model  # no historical spend leaks onto the new model
+    assert by_model["model-x"]["output_tokens"] == 8  # worker (6) + judge (2), pinned
+    assert by_model["model-x"]["estimated_cost_usd"] == pytest.approx(0.00008)
+
+
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
     client = ModelClient()
     agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")

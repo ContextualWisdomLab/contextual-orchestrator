@@ -124,6 +124,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   its absence — the only thing that actually distinguishes a not-yet-judged
   batch row from every other persisted run, regardless of what its answer
   happens to be.
+- `batch_route`'s real judge calls (see above) reported provider usage that
+  `spend_analytics()` never counted — it only ever traversed each run's
+  worker `trace` steps, so a batch under active `realtime_judge` judging
+  could consume real judge tokens and budget while remaining invisible to
+  buyer-facing spend/cost analytics. `spend_analytics()` now also attributes
+  reported `verification.judge_usage` completion tokens to the judge's
+  model, matching how `_run_budget_output_by_model` (the live budget meter)
+  already counted it; missing/invalid judge usage stays absent rather than
+  estimated from unrelated verifier text. (Devin review on #961) That judge
+  model was being re-resolved from the *current* agent pool on every read
+  (`model_by_agent.get(judge_agent_id, "unknown")` in both
+  `_run_budget_output_by_model` and `spend_analytics()`), unlike worker
+  steps, whose `model_name` is pinned into the persisted record at write
+  time. If a judge agent's id was later reused for a different model (the
+  real `sync_discovered_agents` re-discovery upsert path) or the agent left
+  the pool, previously-recorded judge spend would silently reattribute to
+  the new model or an unpriced/unknown bucket — a live report of judge
+  spend could rewrite history on every pool change instead of describing
+  what actually happened. `_model_judge_verification` now resolves and
+  persists a `verification["judge_model"]` at judge-call time (the served
+  agent's model at that exact moment, following failover the same way
+  `judge_agent_id` already does), and both read sites prefer that stored
+  value, falling back to the old live-pool resolution only for
+  already-persisted records that predate this fix.
 
 ### Added
 
