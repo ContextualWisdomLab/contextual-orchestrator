@@ -10,6 +10,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.2.0] - Unreleased
 
+### Added
+
+- Add request-local `routing.candidate_id` and `exclude_candidate_ids` controls
+  for trusted virtual-model chat and Responses calls. Pins and exclusions are
+  strictly validated, never persisted, honored by route, structured, and
+  streaming paths, and disclosed only as per-response routing evidence; the
+  public model catalog remains unchanged.
+
 ### Fixed
 
 - OpenRouter discovery no longer marks the entire credential account

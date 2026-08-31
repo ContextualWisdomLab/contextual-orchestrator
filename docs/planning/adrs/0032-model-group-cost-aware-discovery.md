@@ -153,6 +153,25 @@ OpenRouter. (2026). *Provider logging and data policies*. https://openrouter.ai/
 
 OpenRouter. (2026). *Zero data retention enforcement*. https://openrouter.ai/docs/features/provider-routing#zero-data-retention-enforcement
 
+## Request-local candidate control amendment (2026-09-01)
+
+Trusted sidecars sometimes possess stronger current failure evidence than the
+gateway's process-local measurements. For one virtual-model request they may
+pin an exact private agent ID with `routing.candidate_id` and exclude at most 32
+unique IDs with `routing.exclude_candidate_ids`. The controls are validated
+before execution, never persisted, never expand `/v1/models`, and apply to the
+same selection boundary for plain, structured, and streamed requests. A pin
+that is unknown, disabled, non-chat, excluded, or incompatible with active ZDR
+policy fails closed. Concrete model names cannot be combined with candidate
+controls because two simultaneous routing authorities would be ambiguous.
+
+The response records requested, excluded, attempted, and served candidate IDs
+under `orchestration.routing` only when a caller supplied the controls. This is
+an operational override, not a learned-routing claim: RouteLLM and FrugalGPT
+motivate evidence-based model routing, while this amendment only makes one
+caller-held observation explicit and auditable. Ordinary omitted-control
+behavior and response shape remain unchanged.
+
 OpenRouter. (2026). *Create speech*. https://openrouter.ai/docs/api/api-reference/speech/create-audio-speech
 
 OpenRouter. (2026). *Image generation*. https://openrouter.ai/docs/guides/overview/multimodal/image-generation

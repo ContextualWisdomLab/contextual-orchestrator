@@ -20,6 +20,29 @@ OPENAPI_SPEC = {
             },
         },
         "schemas": {
+            "CandidateRoutingControls": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "enum": ["sync", "batch"]},
+                    "latency_tolerant": {"type": "boolean"},
+                    "priority": {
+                        "type": "string",
+                        "enum": ["interactive", "normal", "bulk"],
+                    },
+                    "candidate_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Exact private agent ID to use for this request.",
+                    },
+                    "exclude_candidate_ids": {
+                        "type": "array",
+                        "maxItems": 32,
+                        "uniqueItems": True,
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                },
+                "additionalProperties": False,
+            },
             "ModelGroupWrite": {
                 "type": "object",
                 "required": ["group_name", "member_agent_ids"],
@@ -157,6 +180,9 @@ OPENAPI_SPEC = {
                                         "description": "When true, select only model-group members with ZDR evidence.",
                                     },
                                     "response_format": {"type": "object"},
+                                    "routing": {
+                                        "$ref": "#/components/schemas/CandidateRoutingControls"
+                                    },
                                     "include_orchestration_trace": {
                                         "type": "boolean",
                                         "description": "Requires the same caller to have the trace purpose",
@@ -383,6 +409,9 @@ OPENAPI_SPEC = {
                                     "model": {"type": "string"},
                                     "input": {"oneOf": [{"type": "string"}, {"type": "array"}]},
                                     "stream": {"type": "boolean"},
+                                    "routing": {
+                                        "$ref": "#/components/schemas/CandidateRoutingControls"
+                                    },
                                     "zdr_only": {
                                         "type": "boolean",
                                         "description": "When true, select only model-group members with ZDR evidence.",

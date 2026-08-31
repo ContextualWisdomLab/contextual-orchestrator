@@ -262,6 +262,15 @@ is read from a **KV config store**, never `os.getenv`.
   (`{"routing": {"latency_tolerant": true}}` on `/v1/chat/completions`) plus
   KV thresholds. Interactive requests stay on the fast sync path; latency-tolerant
   or bulk requests are dispatched to a batch backend.
+- **Stateless candidate control.** Trusted callers may add
+  `routing.candidate_id` to pin one private agent ID and
+  `routing.exclude_candidate_ids` (at most 32 unique IDs) to omit known-bad
+  candidates for one virtual-model request. The gateway validates the full set
+  before any provider call, forces synchronous execution, and returns
+  requested, excluded, attempted, and served IDs under
+  `orchestration.routing`. Omitting both keys preserves the existing request
+  and response contract. Concrete provider model names cannot be combined with
+  these controls; candidate IDs remain absent from `/v1/models`.
 - **Batch routing to pg-llm-batch.** The production batch backend is an injected
   [`pg-llm-batch`](https://github.com/ContextualWisdomLab/pg-llm-batch)
   OpenAI-compatible Batch API client (submit JSONL -> poll -> retrieve). A local

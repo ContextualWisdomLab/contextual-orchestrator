@@ -261,9 +261,15 @@ class CostRoutingCoordinator:
             raise TypeError("cache_bypass must be a boolean")
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
+        routing_controls = hints if isinstance(hints, dict) else {}
+        has_candidate_controls = any(
+            key in routing_controls for key in ("candidate_id", "exclude_candidate_ids")
+        )
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
+        if has_candidate_controls and decision.channel == "batch":
+            decision = replace(decision, channel="sync", reason="candidate controls require sync routing")
 
         if decision.channel == "batch" and provider_request is None:
             request = BatchRequest(
@@ -299,7 +305,9 @@ class CostRoutingCoordinator:
             }
             race_token = self._race_usage_context.set(race_context)
             try:
-                with self.orchestrator.request_policy(zdr_only):
+                with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
+                    routing_controls, model_name=model_name
+                ):
                     provider_response = self.orchestrator.proxy_completion(
                         provider_request,
                         endpoint=provider_endpoint,
@@ -320,6 +328,9 @@ class CostRoutingCoordinator:
             ):
                 raise RuntimeError("provider completion omitted orchestration lineage")
             result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
+            routing_evidence = provider_response.pop("_candidate_routing", None)
+            if routing_evidence is not None:
+                lineage["routing"] = routing_evidence
             race_records = list(race_context["records"])
             records = list(race_records)
             # The caller's request prompt is attributed at most once per
@@ -426,8 +437,13 @@ class CostRoutingCoordinator:
         }
         race_token = self._race_usage_context.set(race_context)
         try:
-            with self.orchestrator.request_policy(zdr_only):
+            with self.orchestrator.request_policy(zdr_only), self.orchestrator.candidate_routing_policy(
+                routing_controls, model_name=model_name
+            ):
                 result = self.orchestrator.run(messages, **run_kwargs)
+                routing_evidence = self.orchestrator._candidate_routing_evidence(result)
+                if routing_evidence is not None:
+                    result["candidate_routing"] = routing_evidence
             if isinstance(result.get("workflow_run_id"), str):
                 race_context["workflow_run_id"] = result["workflow_run_id"]
             race_context["workflow_ready"] = True

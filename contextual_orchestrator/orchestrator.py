@@ -246,6 +246,12 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
     default=None,
 )
 _REQUEST_ZDR_ONLY: ContextVar[bool] = ContextVar("request_zdr_only", default=False)
+_REQUEST_CANDIDATE_ID: ContextVar[str | None] = ContextVar(
+    "request_candidate_id", default=None
+)
+_REQUEST_EXCLUDED_CANDIDATE_IDS: ContextVar[frozenset[str]] = ContextVar(
+    "request_excluded_candidate_ids", default=frozenset()
+)
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -3440,6 +3446,102 @@ class TaskOrchestrator:
         finally:
             _REQUEST_ZDR_ONLY.reset(token)
 
+    @contextmanager
+    def candidate_routing_policy(
+        self,
+        routing: Mapping[str, Any] | None,
+        *,
+        model_name: str = GATEWAY_DEFAULT_MODEL,
+    ):
+        """Apply trusted request-local candidate pin and exclusion controls."""
+        routing = routing or {}
+        candidate_id = routing.get("candidate_id")
+        excluded = routing.get("exclude_candidate_ids", ())
+        if candidate_id is None and not excluded:
+            yield
+            return
+        if model_name not in {self.GATEWAY_DEFAULT_MODEL, self.AUTO_MODEL, self.FREE_MODEL}:
+            raise ValueError("candidate controls require a virtual gateway model")
+        if candidate_id is not None and (
+            not isinstance(candidate_id, str) or not candidate_id.strip()
+        ):
+            raise ValueError("candidate_id must be a non-empty agent ID")
+        if not isinstance(excluded, (list, tuple)) or len(excluded) > 32:
+            raise ValueError("exclude_candidate_ids must contain at most 32 agent IDs")
+        normalized = tuple(value.strip() for value in excluded if isinstance(value, str))
+        if len(normalized) != len(excluded) or any(not value for value in normalized):
+            raise ValueError("exclude_candidate_ids must contain non-empty agent IDs")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("exclude_candidate_ids must contain unique agent IDs")
+        candidate_id = candidate_id.strip() if isinstance(candidate_id, str) else None
+        if candidate_id in normalized:
+            raise ValueError("candidate_id cannot also be excluded")
+        configured = {agent.id: agent for agent in self.candidates}
+        unknown = sorted(set(normalized) - configured.keys())
+        if unknown:
+            raise ValueError("exclude_candidate_ids contains an unknown agent ID")
+        if candidate_id is not None:
+            candidate = configured.get(candidate_id)
+            if (
+                candidate is None
+                or candidate.disabled
+                or not self._zdr_agent_allowed(candidate)
+                or not _is_general_chat_agent(candidate)
+            ):
+                raise ValueError("candidate_id is not an eligible agent")
+            if model_name == self.FREE_MODEL and not self._is_general_free_agent(candidate):
+                raise ValueError("candidate_id is not eligible for orchestrator/free")
+        candidate_token = _REQUEST_CANDIDATE_ID.set(candidate_id)
+        excluded_token = _REQUEST_EXCLUDED_CANDIDATE_IDS.set(frozenset(normalized))
+        try:
+            yield
+        finally:
+            _REQUEST_EXCLUDED_CANDIDATE_IDS.reset(excluded_token)
+            _REQUEST_CANDIDATE_ID.reset(candidate_token)
+
+    @staticmethod
+    def _request_candidate_allowed(agent: ModelAgent) -> bool:
+        pinned = _REQUEST_CANDIDATE_ID.get()
+        return (
+            agent.id not in _REQUEST_EXCLUDED_CANDIDATE_IDS.get()
+            and (pinned is None or agent.id == pinned)
+        )
+
+    @staticmethod
+    def _candidate_routing_evidence(result: Mapping[str, Any]) -> dict[str, Any] | None:
+        pinned = _REQUEST_CANDIDATE_ID.get()
+        excluded = sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get())
+        if pinned is None and not excluded:
+            return None
+        trace = result.get("trace")
+        rows = trace if isinstance(trace, list) else []
+        attempted = [
+            value
+            for row in rows
+            if isinstance(row, Mapping)
+            for value in [row.get("agent_id")]
+            if isinstance(value, str) and value
+        ]
+        served = next(
+            (
+                value
+                for row in reversed(rows)
+                if isinstance(row, Mapping)
+                for value in [row.get("served_agent_id") or row.get("agent_id")]
+                if isinstance(value, str) and value
+            ),
+            None,
+        )
+        evidence: dict[str, Any] = {
+            "exclude_candidate_ids": excluded,
+            "attempted_candidate_ids": list(dict.fromkeys(attempted)),
+        }
+        if pinned is not None:
+            evidence["candidate_id"] = pinned
+        if served is not None:
+            evidence["served_candidate_id"] = served
+        return evidence
+
     @staticmethod
     def _zdr_agent_allowed(agent: ModelAgent) -> bool:
         """Return whether one agent is eligible under the active privacy policy."""
@@ -3590,11 +3692,17 @@ class TaskOrchestrator:
                 for key in _PASSTHROUGH_TRIGGER_KEYS
             )
         ):
-            return self._orchestrated_provider_completion(
+            result = self._orchestrated_provider_completion(
                 body,
                 endpoint=normalized_endpoint,
                 effort_profile=effort_profile,
             )
+            workflow_id = (result.get("orchestration") or {}).get("workflow_run_id")
+            workflow = self.get_workflow_run(workflow_id) if isinstance(workflow_id, str) else {}
+            evidence = self._candidate_routing_evidence(workflow)
+            if evidence is not None:
+                result["_candidate_routing"] = evidence
+            return result
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
@@ -3700,6 +3808,11 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     agent.id, time.perf_counter() - started_at
                 )
+            evidence = self._candidate_routing_evidence(
+                {"trace": [{"agent_id": agent.id, "served_agent_id": agent.id}]}
+            )
+            if evidence is not None:
+                result["_candidate_routing"] = evidence
             return result
 
         allowed_agent_ids = ({agent.id} if isinstance(required_agent_id, str) else (
@@ -3811,6 +3924,18 @@ class TaskOrchestrator:
                 self._group_router.observe_success(
                     candidate.id, time.perf_counter() - started_at
                 )
+            evidence = self._candidate_routing_evidence(
+                {
+                    "trace": [
+                        {
+                            "agent_id": candidate.id,
+                            "served_agent_id": candidate.id,
+                        }
+                    ]
+                }
+            )
+            if evidence is not None:
+                result["_candidate_routing"] = evidence
             return result
         if last_failure is not None and every_failure_was_request_too_large:
             raise ProviderRequestTooLargeError(
@@ -4534,6 +4659,11 @@ class TaskOrchestrator:
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
         parameters = {**parameters, "zdr_only": _REQUEST_ZDR_ONLY.get()}
+        pinned_candidate = _REQUEST_CANDIDATE_ID.get()
+        excluded_candidates = sorted(_REQUEST_EXCLUDED_CANDIDATE_IDS.get())
+        if pinned_candidate is not None or excluded_candidates:
+            parameters["candidate_id"] = pinned_candidate
+            parameters["exclude_candidate_ids"] = excluded_candidates
         return build_response_cache_key(
             messages,
             mode,
@@ -5440,7 +5570,9 @@ class TaskOrchestrator:
                     additional_cost_usd=in_flight_cost,
                 )
             agent = self._agent(step.agent_id)
-            if any(tag not in agent.tags for tag in required_tags):
+            if not self._request_candidate_allowed(agent) or any(
+                tag not in agent.tags for tag in required_tags
+            ):
                 try:
                     capable = self._ranked_agents(
                         step.subtask,
@@ -5757,6 +5889,7 @@ class TaskOrchestrator:
             agent
             for agent in source
             if not agent.disabled
+            and self._request_candidate_allowed(agent)
             and self._zdr_agent_allowed(agent)
             if (
                 not free_only
@@ -14221,6 +14354,7 @@ def chat_completion_response(
         "routing_reason": result.get("routing_reason"),
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
+        "routing": result.get("candidate_routing"),
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
@@ -14313,6 +14447,7 @@ def chat_completion_chunks(
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result.get("mode"),
         "verification": result.get("verification"),
+        "routing": result.get("candidate_routing"),
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
