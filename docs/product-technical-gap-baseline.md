@@ -1,5 +1,165 @@
 # Contextual Orchestrator: Product & Technical Gap Baseline
 
+## 2026-08-30 provider-catalog-sync: no scheduled run has succeeded in 5 days over one provider; workflow check was too strict
+
+`provider-catalog-sync.yml` (run `33312773022`, job `99260685380`) failed with `credential
+inventory mismatch: ['BYTEZ_API_KEY']`. Traced to `bootstrap_provider_catalog_runtime`
+(`contextual_orchestrator/provider_catalog_bootstrap.py`): it registers all provider credentials up
+front, and per-provider discovery failures (an entry in `errors`, or zero live models matching that
+provider/credential pair) roll the credential back to its previous KV value via
+`_restore_provider_credentials_atomically` — for a run-scoped ephemeral KV that previous value is
+`None`, so the credential is deleted again. `registered_credentials` on the final report is then
+filtered to `durable_registered_credentials = tuple(name for name in registered if
+get_credential(name) is not None)`, correctly excluding the rolled-back credential. This is exactly
+the graceful degradation the function's own docstring describes ("retains last-known-good models for
+failed providers") — but the workflow's embedded verification script asserted
+`set(report['registered_credentials']) == set(PROVIDER_CREDENTIAL_NAMES)` unconditionally, with no
+tolerance for a single isolated provider outage, turning every occurrence into a hard CI failure.
+
+**Not a one-off flake.** `list_workflow_runs` for this workflow (runs #4-#49, `2026-08-25T09:01:27Z`
+through today's #49 at `2026-08-30T12:55:16Z`) shows 44 `failure` / 1 `cancelled` / 1 `skipped` — zero
+successes since the schedule started, across both the 43 `schedule`-triggered runs (42 failure, 1
+cancelled) and the 3 manual `workflow_dispatch` runs (2 failure, 1 skipped). The only `success` runs
+(#1-3) were `pull_request`-triggered before the workflow went live on `main`. This had gone unnoticed
+for 5 days of continuous near-hourly failures — itself evidence that a hard-fail-on-any-provider-hiccup
+design was not actually serving as a useful signal.
+
+**Bytez code path checked for a false-positive bug** (`contextual_orchestrator/model_discovery.py`
+`PROVIDER_MODEL_SOURCES`/`_parse_bytez`/`discover_provider_models`): URL
+(`https://api.bytez.com/models/v2/list/models?task=chat`), `Authorization: Key <token>` header, and
+response parsing all look correct and match this repo's stdlib `urllib` discovery convention used by
+every other provider; nothing there would unconditionally reject every response. No `BYTEZ_API_KEY`
+is available in this sandbox to replay the exact authenticated call, but an unauthenticated live probe
+of the same endpoint returned a fast, well-formed `401 {"error":"Unauthorized"}` (not a 500), showing
+the endpoint itself is reachable and enforcing auth normally right now. Independent corroborating
+evidence from earlier the same day, a completely different code path (`ContextualWisdomLab/.github`'s
+`noema-review` sidecar, which vendors this repo's discovery code) logged
+`provider_discovery_failed provider=bytez code=http_status_500` (see the entry below). A real
+`http_status_500` from Bytez's own backend, reproduced independently, is a stronger signal than a
+one-off flake — but five straight days with zero successes is also too long/consistent to be an
+ordinary transient outage; it's most consistent with a persistent problem specific to Bytez's handling
+of this account/key/query shape (or, less likely, a quietly invalid `BYTEZ_API_KEY` secret returning
+500 instead of the clean 401 an actually-wrong key gets from the same endpoint). Not resolvable from
+this repo alone — needs an operator check of the Bytez account/dashboard for this credential.
+
+**Fix applied, PR [#928](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/928)**
+(`contextual_orchestrator/provider_catalog_bootstrap.py`,
+`.github/workflows/provider-catalog-sync.yml`): a new
+`evaluate_provider_credential_inventory()` — real, unit-tested production code, not YAML-inline
+branching — judges a credential missing from `registered_credentials` and still hard-fails every case
+that must not be silently swallowed:
+
+- the secret was never supplied to the job at all (`environ` empty — a real configuration gap);
+- the report gives no `providers_with_errors` evidence tying the rollback to a discovery failure (an
+  unexplained rollback, which could hide a real bug elsewhere);
+- **the rollback isn't classified as a genuinely retryable, transient condition** —
+  `ProviderDiscoveryError.error_code` (already computed by
+  `model_discovery._provider_discovery_error_code`, just previously discarded before reaching the
+  report) is now bucketed into a small report-safe classification
+  (`provider_error_classifications`), and `evaluate_provider_credential_inventory` default-denies:
+  only `transient_failure` is tolerated, everything else hard-fails. `transient_failure` is
+  deliberately narrow — a rate limit (`http_status_429`), a request-timeout status
+  (`http_status_408`), any `http_status_5xx`, or a below-HTTP-layer `timeout`/`transport_error` — the
+  set standard retry semantics call retryable. `authentication_failure` (`http_status_401`/`403`), a
+  persistent non-auth 4xx (`http_status_400`/`404`/…), an unparseable response (`invalid_response`), a
+  successful-but-empty listing, and anything unrecognized all collapse to `unknown_failure` and
+  hard-fail. An invalid/expired credential or a permanently broken integration (wrong endpoint,
+  malformed request shape, a provider that moved/retired the API) must never be excused as a
+  transient blip: left alone, either would let that provider stay silently disabled forever, no
+  alert, every run;
+- **more than one provider is affected at once** — bounded at exactly one provider
+  (`max_tolerated_missing_providers=1`) so a broader outage (several providers degraded
+  simultaneously) still fails instead of reporting success while serving a stale catalog. The bound
+  counts every provider whose discovery failed this run — both providers that actually lost their
+  registered credential (`registered_credentials` no longer has the name) and providers whose
+  credential was restored to an old-but-still-valid durable value and therefore never dropped out of
+  `registered_credentials` at all (see the third review round below). A provider that merely logged
+  any error with no corresponding rollback at all still does not count against the bound — the bound
+  is about discovery failures with rollback evidence, not raw error-log noise.
+
+Only when a single provider's credential is missing, the secret was supplied, and its classification is
+exactly `transient_failure` does the job print a `::warning::` (with `providers_with_errors`,
+`catalog_refresh_failure_count`, `restored_credentials`) and succeed — matching what the bootstrap
+design already promises: the pool keeps serving from last-known-good/other-provider models. The
+existing `catalog_model_count`/`eligible_model_count`/`selected_agent_ids` checks are unchanged and
+still fail the job if the pool itself is unhealthy.
+
+**Four review rounds, not one.** The first cut only checked whether the missing credential's provider
+appeared anywhere in `providers_with_errors`, with no auth/transient distinction and no bound on
+simultaneous providers. Devin and CodeRabbit's first pass caught both gaps (fixed above). Devin's
+*second* pass on that fix caught a narrower version of the same underlying problem: the original
+transient bucket was `_TRANSIENT_FAILURE_ERROR_CODES | {any http_status_*}`, so a *persistent* non-auth
+4xx (400, 404, …) or a successful-but-empty listing — either plausibly a permanently broken
+integration, not a blip — was still being tolerated forever. Narrowed to the retryable-only set above,
+plus the default-deny reframing so a future new classification value is hard-fail by default rather
+than silently allowed. Devin's research-grounding finding on this entry was declined: this is a CI
+reliability bugfix (isolating transient vs. permanent provider failures), not a novel algorithm or
+research claim, and no other CI-only fix in this repo's history (`abb9aaa6`, `b3278df7`, `c328c1e8`,
+`1bbda718`, `8abc4b45`) attaches a paper either.
+
+Devin's *third* pass ("Durable rollback bypasses failure verdict") found the deepest gap of the three,
+in the still-standing `if not missing: return ... True ...` early return itself. `missing` is computed
+as `expected_credential_names - registered_credentials`, and `registered_credentials` on the report is
+filtered to names where `get_credential(name) is not None` *after* rollback has already run. On the
+run-scoped/first-registration KV every test above exercises, a failed provider's rollback restores
+`previous_credentials[name] = None` (nothing was registered before), so the name both leaves
+`registered_credentials` and enters `restored_credentials` — the two were accidentally redundant in
+every scenario the first two rounds tested. But on a KV that already durably held a still-valid value
+for that name from an earlier successful run, rollback restores *that* value instead of `None`: the
+credential never leaves `registered_credentials` at all, `missing` comes back empty, and the function
+returned healthy at the very first line — without ever inspecting `provider_error_classifications`.
+After a scheduled sync's first successful run against the durable PostgreSQL KV, this made the entire
+auth-failure/persistent-4xx/multi-provider hard-fail logic built across the first two rounds silently
+unreachable: a revoked or rotated credential, or several providers failing at once, would both report
+`ok=True` forever. Fixed by evaluating the union of `missing` and `restored_credentials` (bridged
+credential-name→provider-name through the same `provider_by_credential` map the `missing` path already
+used, joined on `expected_credential_names` for defense against untrusted report input) through the
+identical unconfigured/unexplained/classification/bound checks, rather than `missing` alone — a name
+that shows up in `restored_credentials` for a reason the report can't tie to `providers_with_errors`
+still hard-fails as an unexplained rollback, exactly like a fully-missing name would.
+
+Devin's *fourth* pass ("One NVIDIA outage fails sync") caught a false-positive introduced by fixing the
+third-round gap: `nvidia_nim` and `nvidia_nim_sub` are two separate `provider_name` values but one
+upstream outage domain — two KV credential names (`NVIDIA_NIM_API_KEY`/`NVIDIA_NIM_API_KEY_SUB`)
+registered for load balancing against the same NVIDIA endpoint, per `PROVIDER_MODEL_SOURCES`'s own
+comment and `model_discovery._provider_family` (already used by `select_provider_diverse_models` for
+exactly this collapsing). The `affected_providers` bound counted raw `provider_name`, so a single
+NVIDIA-side blip that happened to fail both keys at once counted as *two* providers degraded and
+hard-failed — exactly the isolated-outage case the tolerance exists for, misread as a broad one.
+Fixed by routing `affected_providers` through `_provider_family` before comparing against
+`max_tolerated_missing_providers`; the per-credential unconfigured/unexplained/classification checks
+are untouched (they still key off the real `provider_name`, since `providers_with_errors`/
+`provider_error_classifications` are recorded per source, not per family).
+
+Regression coverage in `tests/test_provider_catalog_bootstrap.py` (a genuinely retryable status —
+408/429/5xx — tolerated as a warning; an HTTP 401/403 authentication failure still hard-failing; a
+persistent non-auth 4xx and an unparseable response still hard-failing; two simultaneous provider
+failures still hard-failing; for the third round, an authentication failure and two simultaneous
+failures each reproduced end to end with the credential pre-registered so rollback restores a
+durable, non-`None` prior value — `test_durable_rollback_with_auth_failure_still_hard_fails`,
+`test_durable_rollback_with_two_simultaneous_failures_still_hard_fails` — plus
+`test_durable_rollback_with_single_transient_failure_is_still_tolerated` confirming the fix doesn't
+over-correct into hard-failing a legitimately tolerable single transient outage; and, for the fourth
+round, both NVIDIA keys failing together still tolerated as one family
+(`test_nvidia_primary_and_sub_outage_together_is_one_provider_family`) contrasted with that same
+NVIDIA-family outage plus a genuinely distinct provider still hard-failing
+(`test_nvidia_family_outage_plus_a_distinct_provider_still_hard_fails`)) and
+`tests/test_provider_catalog_bootstrap_boundaries.py` (the verdict function's own edge cases: fully
+healthy, unconfigured secret, unexplained rollback, non-string error code, and three third-round unit
+cases exercising the union directly against a report where `registered_credentials` is already
+complete —
+`test_credential_inventory_verdict_evaluates_restored_names_even_when_registered_is_complete`,
+`test_credential_inventory_verdict_hard_fails_on_unexplained_restored_credential`,
+`test_credential_inventory_verdict_tolerates_restored_transient_failure_when_registered_is_complete`)
+exercises all of it end to end through `bootstrap_provider_catalog_runtime`, not just the workflow's
+string content. `tests/test_provider_bootstrap_secret_normalization.py` now asserts the workflow
+delegates to this tested function instead of pinning inline branching logic. 100% statement and
+docstring coverage on `provider_catalog_bootstrap.py`; targeted suite green (79 tests across
+`tests/test_provider_bootstrap*.py`/`tests/test_provider_catalog_bootstrap*.py`); full
+`python -m pytest tests -q` (excluding `tests/test_psychometric_routing.py`, which fails to collect
+in this sandbox for lack of `numpy` — an unrelated pre-existing environment gap) completed clean at
+`2781 passed, 1 skipped in 720.75s`.
+
 ## 2026-08-30 full incident timeline: the verdict-checker isn't the bug, here's what actually collided
 
 Checked whether the `.github` `opencode-review` required check's own verdict-matching logic (the
