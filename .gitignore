@@ -16,4 +16,4 @@ tempcred.txt
 .coverage
 
 # background-agent isolated worktree scratch state (nested git checkouts)
-.claude/
+.claude/worktrees/
