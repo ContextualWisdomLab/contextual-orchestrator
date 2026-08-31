@@ -84,6 +84,24 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(socket.timeout("slow"))
 
 
+def test_transient_classification_unwraps_a_temporary_dns_runtime_error() -> None:
+    """ModelClient._resolve_addresses wraps socket.gaierror as RuntimeError.
+
+    A genuinely temporary DNS failure (EAI_AGAIN) must still be retried even
+    through that wrapper; a permanent one (e.g. EAI_NONAME, a bad hostname)
+    and a config RuntimeError with no DNS cause must not be.
+    """
+    temporary_dns = RuntimeError("provider host 'gateway.example' could not be resolved")
+    temporary_dns.__cause__ = socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+    assert is_transient_error(temporary_dns) is True
+
+    permanent_dns = RuntimeError("provider host 'gateway.example' could not be resolved")
+    permanent_dns.__cause__ = socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+    assert is_transient_error(permanent_dns) is False
+
+    assert is_transient_error(RuntimeError("provider host 'gateway.example' has no stream address")) is False
+
+
 def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> None:
     class StoppedProviderClient(ModelClient):
         def __init__(self) -> None:

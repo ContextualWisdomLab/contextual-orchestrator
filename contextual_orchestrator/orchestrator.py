@@ -1119,6 +1119,14 @@ def is_transient_error(exc: BaseException) -> bool:
         return True
     if isinstance(exc, socket.gaierror):
         return exc.errno == socket.EAI_AGAIN
+    # ModelClient._resolve_addresses wraps a DNS resolution failure as plain
+    # RuntimeError (not a socket.gaierror subclass) with the original
+    # exception chained as __cause__, so a temporary DNS hiccup (EAI_AGAIN)
+    # is still worth retrying through that wrapper. Any other RuntimeError
+    # (a malformed URL, no resolvable stream address) has no such cause and
+    # falls through to the non-transient default below.
+    if isinstance(exc, RuntimeError) and isinstance(exc.__cause__, socket.gaierror):
+        return exc.__cause__.errno == socket.EAI_AGAIN
     # A VPN/socket path can surface as an SSL EOF or SSL_ERROR_SYSCALL. Keep
     # certificate verification failures non-transient so a bad trust boundary
     # is never retried as if it were a network fault.
