@@ -124,20 +124,27 @@ def test_configure_logging_is_a_noop_unless_verbose(restore_root_logger) -> None
     assert root.level == level_before
 
 
-def test_configure_logging_enables_debug_with_bounded_format(restore_root_logger) -> None:
-    """Verbose startup configures a timestamp/level/logger-name format and scopes DEBUG.
+def test_configure_logging_installs_a_bounded_format_handler_on_a_bare_root(
+    restore_root_logger,
+) -> None:
+    """On a process with no root handler yet, verbose startup installs one.
 
-    Root's own level is left untouched -- see ``_VERBOSE_LOGGER_NAMES``'s
-    docstring in ``__main__.py``: raising the ROOT (or a whole-package)
-    logger's level would raise every child logger's EFFECTIVE level through
-    inheritance, including loggers this change never audited. Only the
-    specific named module loggers move to DEBUG.
+    Root's own LEVEL is left untouched either way -- see
+    ``_VERBOSE_LOGGER_NAMES``'s docstring in ``__main__.py``: raising the
+    ROOT (or a whole-package) logger's level would raise every child
+    logger's EFFECTIVE level through inheritance, including loggers this
+    change never audited. Only the specific named module loggers move to
+    DEBUG. This test simulates the bare-process case (no handler installed
+    yet by anything -- a hosting runtime, a test harness) by clearing
+    root.handlers first; ``restore_root_logger`` puts back whatever was
+    really there afterward.
     """
     root = logging.getLogger()
     level_before = root.level
+    root.handlers.clear()
     _configure_logging(True)
     assert root.level == level_before
-    assert root.handlers, "verbose logging must attach a handler"
+    assert root.handlers, "verbose logging must attach a handler when none exists"
     formatter = root.handlers[0].formatter
     assert formatter is not None
     assert "%(asctime)s" in formatter._fmt
@@ -149,6 +156,41 @@ def test_configure_logging_enables_debug_with_bounded_format(restore_root_logger
         "contextual_orchestrator.model_discovery",
     ):
         assert logging.getLogger(logger_name).level == logging.DEBUG, logger_name
+
+
+def test_configure_logging_never_discards_an_existing_root_handler(
+    restore_root_logger,
+) -> None:
+    """SEC/availability regression: verbose mode must never destroy existing log delivery.
+
+    Devin's fourth review round caught this: an earlier version called
+    ``logging.basicConfig(..., force=True)``, which unconditionally closes
+    and removes every existing root handler before installing its own --
+    silently discarding whatever a hosting runtime (a structured/JSON
+    logging handler, a log shipper) or a test harness had already
+    configured, replacing it with a plain stderr handler the moment
+    ``--verbose`` was turned on. This preconfigures a custom root handler
+    (simulating that already-configured delivery path), enables verbose
+    mode, and asserts the custom handler is still attached, was never
+    closed, and still receives an audited logger's DEBUG record.
+    """
+    root = logging.getLogger()
+    custom_handler = logging.Handler()
+    records: list[logging.LogRecord] = []
+    custom_handler.emit = records.append  # type: ignore[method-assign]
+    close_calls: list[bool] = []
+    custom_handler.close = lambda: close_calls.append(True)  # type: ignore[method-assign]
+    root.addHandler(custom_handler)
+
+    _configure_logging(True)
+
+    assert custom_handler in root.handlers, "verbose mode discarded an existing root handler"
+    assert close_calls == [], "verbose mode must never close an existing root handler"
+
+    logging.getLogger("contextual_orchestrator.orchestrator").debug("probe record")
+    assert any(record.getMessage() == "probe record" for record in records), (
+        "the preexisting handler must still receive records after verbose mode is enabled"
+    )
 
 
 def test_configure_logging_never_raises_openrouter_uptime_or_root(restore_root_logger) -> None:
@@ -179,6 +221,15 @@ def test_verbose_mode_keeps_openrouter_uptime_failures_silent(
     ``_fetch_uptime``) Devin's review named. It logs ``str(exc)`` directly at
     DEBUG and was never rewritten to stop doing that, so verbose mode must
     never raise ITS logger's level -- only the three audited-safe loggers.
+
+    Deliberately does NOT wrap the call in ``caplog.at_level("DEBUG")``:
+    that targets the ROOT logger by default, which would itself raise
+    ``openrouter_uptime``'s inherited effective level to DEBUG regardless of
+    what ``_configure_logging`` did -- an artificial condition production
+    code never creates (root's level is never touched; see
+    ``_VERBOSE_LOGGER_NAMES``). The realistic check is whether
+    ``_configure_logging(True)`` alone -- which is what a real ``--verbose``
+    run does -- lets this record through.
     """
     import contextual_orchestrator.openrouter_uptime as openrouter_uptime_module
     from contextual_orchestrator.model_group import ModelGroupRouter
@@ -194,8 +245,7 @@ def test_verbose_mode_keeps_openrouter_uptime_failures_silent(
         [], ModelGroupRouter(), ModelGroupRouter()
     )
 
-    with caplog.at_level("DEBUG"):
-        result = collector._fetch_uptime("openrouter/some-model")
+    result = collector._fetch_uptime("openrouter/some-model")
 
     assert result is None
     assert "Failed to fetch OpenRouter uptime" not in caplog.text

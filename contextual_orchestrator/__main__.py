@@ -83,22 +83,27 @@ def _configure_logging(verbose: bool) -> None:
     unrequested log noise, and ``.debug()`` call sites across the package stay
     silent unless a caller explicitly opts in here or via ``VERBOSE_ENV_VAR``.
 
-    When true, this installs one shared timestamp/level/logger-name formatter
-    (``basicConfig`` with no ``level=``, so the *root* logger's level is left
-    untouched -- WARNING and above already reach stderr by default via
-    Python's handler-of-last-resort, and this only adds consistent
-    formatting for that existing output) and then raises the level to DEBUG
-    on exactly the loggers named in ``_VERBOSE_LOGGER_NAMES``, never the root
-    logger and never a whole-package logger. See that constant's comment for
-    why the distinction matters. ``force=True`` lets a later call (or a test
-    invoking ``main()`` more than once in one process) replace an earlier
-    handler instead of silently no-op'ing, matching stdlib
-    ``logging.basicConfig`` semantics for a process whose configuration is
-    decided exactly once at startup.
+    When true, this raises the level to DEBUG on exactly the loggers named in
+    ``_VERBOSE_LOGGER_NAMES``, never the root logger and never a whole-package
+    logger (see that constant's comment for why the distinction matters), and
+    -- only when the root logger has no handler at all -- installs one bounded
+    timestamp/level/logger-name stderr handler so that DEBUG output has
+    somewhere to go in a bare process. It never removes or replaces a handler
+    that is already there: an earlier version called ``basicConfig(...,
+    force=True)``, which unconditionally closes and discards every existing
+    root handler before installing its own. In a process that had already
+    configured its own log delivery (a hosted structured/JSON logging
+    handler, a log shipper, a test harness's capture handler) that silently
+    destroyed it and replaced it with a plain stderr handler the moment
+    ``--verbose`` was turned on (Devin review). ``logging.basicConfig()``
+    without ``force`` already no-ops whenever root has any handler -- exactly
+    the "leave existing delivery alone" semantics wanted here -- so this only
+    ever adds a handler, never removes one.
     """
     if not verbose:
         return
-    logging.basicConfig(format=_VERBOSE_LOG_FORMAT, force=True)
+    if not logging.getLogger().handlers:
+        logging.basicConfig(format=_VERBOSE_LOG_FORMAT)
     for logger_name in _VERBOSE_LOGGER_NAMES:
         logging.getLogger(logger_name).setLevel(logging.DEBUG)
 
