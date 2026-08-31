@@ -962,6 +962,35 @@ def test_append_preserves_caller_owned_sqlite_transaction() -> None:
     assert store.query(None, None) == []
 
 
+def test_duplicate_append_does_not_rewrite_price_provenance() -> None:
+    """Devin review (#956): a rejected duplicate parent insert must stay a
+    true no-op. Previously the satellite usage_measurements/
+    usage_price_knowledge/attribution writes ran unconditionally even when
+    the parent row already existed, so a retry with today's price state
+    could backfill a historical price-unknown row's provenance from an
+    unrelated later call instead of what actually priced that original
+    spend (the exact gap an upgrade-migrated pre-price-knowledge row is
+    supposed to preserve).
+    """
+    connection = sqlite3.connect(":memory:", isolation_level=None)
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+
+    accepted_first = store.append(
+        _guard_usage_record(measurement_status="unavailable", price_known=False)
+    )
+    assert accepted_first is True
+
+    accepted_retry = store.append(
+        _guard_usage_record(measurement_status="measured", price_known=True)
+    )
+    assert accepted_retry is False
+
+    rows = store.query(None, None)
+    assert len(rows) == 1
+    assert rows[0]["measurement_status"] == "unavailable"
+    assert not rows[0]["price_known"]
+
+
 def test_sql_ledger_rejects_unknown_parameter_style() -> None:
     try:
         SqlLedgerStore(sqlite3.connect(":memory:"), paramstyle="named")

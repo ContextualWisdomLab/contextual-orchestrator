@@ -1175,15 +1175,26 @@ class SqlLedgerStore:
                 tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
             )
             accepted = getattr(cur, "rowcount", 1) != 0
-            cur.execute(
-                _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
-                (row["usage_record_id"], row.get("measurement_status", "unavailable")),
-            )
-            cur.execute(
-                _USAGE_PRICE_KNOWLEDGE_INSERT_SQL[self._paramstyle],
-                (row["usage_record_id"], 1 if row.get("price_known", True) else 0),
-            )
-            self._insert_normalized_attribution(cur, row)
+            # A rejected duplicate parent insert (a retried usage_record_id)
+            # must stay fully idempotent: skipping the satellite writes below
+            # keeps a duplicate append a true no-op. Without this guard, a
+            # retry whose parent row already exists but predates one of
+            # these satellite tables (e.g. a pre-upgrade row with no
+            # usage_price_knowledge child, intentionally read as
+            # price-unknown) would insert that child using the retry's
+            # *current* price/measurement state -- silently relabeling a
+            # historical unknown-price row's provenance from an unrelated
+            # later call, not from what actually priced that original spend.
+            if accepted:
+                cur.execute(
+                    _USAGE_MEASUREMENT_INSERT_SQL[self._paramstyle],
+                    (row["usage_record_id"], row.get("measurement_status", "unavailable")),
+                )
+                cur.execute(
+                    _USAGE_PRICE_KNOWLEDGE_INSERT_SQL[self._paramstyle],
+                    (row["usage_record_id"], 1 if row.get("price_known", True) else 0),
+                )
+                self._insert_normalized_attribution(cur, row)
             if outer_transaction:
                 cur.execute("RELEASE SAVEPOINT usage_record_append")
             else:

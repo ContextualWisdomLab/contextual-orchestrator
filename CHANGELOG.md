@@ -23,6 +23,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (measured/estimated/unavailable) alongside the existing flat `cost_amount`
   total, so measured, estimated, and unavailable-priced spend are no longer
   opaquely blended into one authoritative-looking number.
+- `CostLedger.rollup()`/`.report()` add the same treatment one level further:
+  an additive `cost_amount_by_price_status`/`record_count_by_price_status`
+  breakdown (`known`/`unknown`) alongside the measured/estimated/unavailable
+  one, so an unpriced request's spend is visible even after rolling many
+  records up into one bucket. `cheapest_upstream()` no longer treats an
+  unpriced candidate as free (cost `0`) when selecting the lowest-cost
+  upstream — an unknown price is excluded from the comparison entirely
+  rather than winning it by default; `None` is returned when no candidate
+  has a known price.
+- (Devin review on #956) `SqlLedgerStore._append_locked()`'s satellite
+  writes (`usage_measurements`, `usage_price_knowledge`, attribution) now
+  only run when the parent `llm_usage_records` insert is actually accepted.
+  A retried `usage_record_id` whose parent insert is correctly rejected as
+  a duplicate previously still ran these satellite inserts unconditionally
+  — for a parent row that predates one of these tables (e.g. an
+  upgrade-migrated row with no `usage_price_knowledge` child, intentionally
+  read as price-unknown) that silently backfilled its provenance from the
+  retry's current price/measurement state instead of what actually priced
+  the original spend. `append()` is now a true no-op on a rejected
+  duplicate.
 
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
