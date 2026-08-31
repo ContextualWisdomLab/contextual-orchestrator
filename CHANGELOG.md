@@ -12,6 +12,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `route_once(..., deadline_seconds=...)`'s combined deadline now caps every
+  provider attempt at `ModelClient.timeout` even when the deadline itself is
+  longer, bounds the local-provider execution-slot wait by the same
+  deadline instead of always waiting up to `self.timeout`, and fails closed
+  with an explicit `RuntimeError` if affinity ranking alone (including any
+  semantic-affinity embedding call, which runs before the deadline-checking
+  loop and is not itself deadline-bounded) exhausts the deadline before any
+  candidate is attempted -- previously this silently returned an
+  `"accepted": False` payload indistinguishable from an ordinary rejected
+  answer. Devin review findings on contextual-orchestrator#974.
 - OpenRouter discovery no longer marks the entire credential account
   evidence-only. Authenticated catalog rows may serve ordinary requests, while
   ZDR-only requests still require explicit route-level ZDR evidence.

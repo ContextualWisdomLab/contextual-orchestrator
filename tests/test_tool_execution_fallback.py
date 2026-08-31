@@ -1162,5 +1162,95 @@ def test_route_once_deadline_seconds_rejects_invalid_values(value: object) -> No
         )
 
 
+def test_chat_caps_each_attempt_at_client_timeout_even_with_a_longer_deadline() -> None:
+    """A deadline larger than ``client.timeout`` must not let one attempt run past it.
+
+    Regression test (Devin review, contextual-orchestrator#974): ``chat()``
+    called ``_send_with_retry`` without passing ``timeout=self.timeout``, so
+    once a deadline was set, ``_send_with_retry``'s own attempt-timeout
+    computation used the deadline's full remaining budget uncapped -- one
+    slow attempt could consume the entire deadline instead of failing over
+    on schedule.
+    """
+
+    class _RecordingClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(timeout=0.05, max_retries=0)
+            self.observed_timeouts: list[float | None] = []
+
+        def _validate_provider(self, agent):  # type: ignore[override]
+            del agent
+            return None
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination
+            self.observed_timeouts.append(timeout)
+            raise TimeoutError("simulated slow provider")
+
+    client = _RecordingClient()
+    agent = ModelAgent(
+        "provider_agent",
+        "model-x",
+        base_url="https://provider.example/v1",
+        credential_key="",
+    )
+    with client.request_settings(deadline=time.monotonic() + 10.0):
+        with pytest.raises(Exception):  # noqa: B017 - classify_provider_failure's exact type is not under test
+            client.chat(agent, [{"role": "user", "content": "hi"}])
+
+    assert client.observed_timeouts == [0.05]
+
+
+def test_local_slot_timeout_is_capped_by_a_shorter_deadline() -> None:
+    """The local-provider execution-slot wait must not outlive a caller's deadline.
+
+    Regression test (Devin review, contextual-orchestrator#974): ``_proxy_send``
+    always waited up to ``self.timeout`` for a local-provider execution slot
+    regardless of a shorter route deadline, so queue acquisition alone could
+    exhaust a short deadline before any request attempt was even dispatched.
+    """
+    client = ModelClient(timeout=90)
+    assert client._local_slot_timeout() == 90
+
+    with client.request_settings(deadline=time.monotonic() + 0.05):
+        slot_timeout = client._local_slot_timeout()
+    assert 0 < slot_timeout <= 0.05
+
+    with client.request_settings(deadline=time.monotonic() - 1.0):
+        slot_timeout = client._local_slot_timeout()
+    assert slot_timeout == 0.0
+
+
+def test_route_once_raises_when_ranking_alone_exhausts_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ranking that alone exhausts the deadline must fail closed, not return an empty success.
+
+    Regression test (Devin review, contextual-orchestrator#974): ``_ranked_agents``
+    (including any semantic-affinity embedding call) runs before ``route_once``'s
+    own deadline-checking loop and is not itself deadline-bounded. If ranking
+    alone consumed the whole deadline, the loop's first iteration broke
+    immediately having attempted no candidate, and ``route_once`` returned its
+    default ``"no candidate attempted"`` payload as an ordinary (if rejected)
+    return value instead of raising the same explicit signal ``_invoke`` uses.
+    """
+    client = _ScriptedToolClient({"primary_worker": ["unused"], "backup_worker": ["unused"]})
+    orchestrator = _orchestrator(client)
+
+    def slow_ranking(*args: object, **kwargs: object) -> list[ModelAgent]:
+        del args, kwargs
+        time.sleep(0.05)
+        return list(orchestrator.agents)
+
+    monkeypatch.setattr(orchestrator, "_ranked_agents", slow_ranking)
+
+    with pytest.raises(RuntimeError, match="deadline exceeded before any candidate"):
+        orchestrator.route_once(
+            [{"role": "user", "content": "inspect repository"}],
+            deadline_seconds=0.01,
+        )
+    assert client.calls == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

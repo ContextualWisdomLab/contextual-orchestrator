@@ -1507,7 +1507,19 @@ class ModelClient:
         ):
             if deadline is None:
                 return self._send_with_retry(agent, payload, destination)
-            return self._send_with_retry(agent, payload, destination, deadline=deadline)
+            # Pass self.timeout explicitly only on this deadline-aware branch
+            # (not just relying on _open_provider's own self.timeout default)
+            # so a deadline longer than self.timeout still caps each
+            # individual attempt at self.timeout via _send_with_retry's
+            # min(timeout, remaining) -- otherwise one slow attempt could
+            # consume the entire remaining deadline instead of failing over.
+            # Left off the deadline-less branch above so that path stays
+            # byte-for-byte identical to before deadline support existed,
+            # including for test doubles overriding _send/_send_with_retry
+            # with a narrower signature that predates the deadline parameter.
+            return self._send_with_retry(
+                agent, payload, destination, timeout=self.timeout, deadline=deadline
+            )
 
     def apply_effort_profile(
         self,
@@ -1670,6 +1682,19 @@ class ModelClient:
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
         return self.local_max_retries if _is_local_provider_url(agent.base_url) else self.max_retries
+
+    def _local_slot_timeout(self) -> float:
+        """Bound the wait for a local-provider execution slot by any active route deadline.
+
+        Without this, a busy local provider's queue wait always used the full
+        ``self.timeout`` regardless of a shorter caller-supplied deadline,
+        letting queue acquisition alone consume a short deadline before any
+        request attempt was even dispatched.
+        """
+        deadline = self.request_settings_snapshot()["deadline"]
+        if deadline is None:
+            return self.timeout
+        return min(self.timeout, max(0.0, deadline - time.monotonic()))
 
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
@@ -2037,7 +2062,7 @@ class ModelClient:
                 chat_payload.setdefault("max_tokens", self.request_settings_snapshot()["max_output_tokens"])
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     chat_payload["chat_template_kwargs"] = self.chat_template_args
-                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                with _local_provider_slot(agent, self.local_concurrency, self._local_slot_timeout()):
                     chat_response = self._send_raw_with_retry(
                         agent,
                         "chat/completions",
@@ -2046,7 +2071,9 @@ class ModelClient:
                         allow_transient_retries=allow_transient_retries,
                     )
                 return _chat_to_responses_payload(chat_response, payload)
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            with _local_provider_slot(
+                agent, self.local_concurrency, self._local_slot_timeout()
+            ):  # pragma: no cover
                 return self._send_raw_with_retry(
                     agent,
                     normalized_endpoint,
@@ -2181,11 +2208,16 @@ class ModelClient:
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError("provider request deadline exceeded")
+                # Cap each attempt at self.timeout even when a deadline leaves
+                # more time than that -- otherwise one slow attempt could
+                # consume the entire remaining deadline instead of failing
+                # over to the next attempt/candidate within budget.
+                attempt_timeout = remaining if remaining is None else min(self.timeout, remaining)
                 return (
                     self._send_raw(agent, endpoint, payload, destination)
-                    if remaining is None
+                    if attempt_timeout is None
                     else self._send_raw(
-                        agent, endpoint, payload, destination, timeout=remaining
+                        agent, endpoint, payload, destination, timeout=attempt_timeout
                     )
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
@@ -5360,6 +5392,19 @@ class TaskOrchestrator:
             # Rejected answers already recorded a quality-ledger failure in
             # _realtime_route_judge; keep the last (best-available) answer but
             # fail over to the next measured candidate while budget remains.
+
+        if deadline is not None and not tried_ids:
+            # _ranked_agents (affinity ranking, including any semantic-affinity
+            # embedding call) runs before this loop and is not itself deadline
+            # bounded; if it alone consumes the whole deadline, the loop above
+            # exits on its first deadline check having attempted nothing. Fail
+            # closed with the same explicit signal _invoke uses instead of
+            # silently returning the empty, nominally-"accepted": False
+            # default payload below as if a candidate had actually been tried.
+            raise RuntimeError(
+                "request deadline exceeded before any candidate agent could be "
+                "attempted for route_once"
+            )
 
         final_row = trace_rows[-1] if trace_rows else {
             "id": 0,

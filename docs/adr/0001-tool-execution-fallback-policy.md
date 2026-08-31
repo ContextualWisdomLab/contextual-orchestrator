@@ -108,12 +108,29 @@ retry and fail-closed rules; they do not require a different action table.
   only for bounded isolation after repeated failure (same-agent retry
   budget, then sequential failover). Fail-closed itself is grounded in
   RFC 9110 §9.2.2 and SP 800-53 SC-24 / SI-11, not in 800-204.
+- Dean and Barroso identify unbounded per-request retry/fan-out budgets as a
+  primary cause of tail latency in large distributed systems, and describe
+  binding a caller's own fixed request budget across every internal
+  retry/replica attempt as the corrective pattern (Dean & Barroso, 2013).
+  That is the same shape as the 2026-08-31 caller-scoped combined deadline
+  amendment above: `route_once(..., deadline_seconds=...)` binds
+  `_send_with_retry`'s transport retries, `_invoke`'s same-agent retry, and
+  its cross-candidate failover to one caller-chosen ceiling instead of
+  letting their sum grow unbounded relative to an external caller's own
+  fixed timeout. This ADR already cites the same source for the unrelated,
+  separately-gated `immediate_race` hedged-request mechanism
+  (`docs/doctoring/equivalent-endpoint-racing.md`); their evidence motivates
+  bounding combined latency here in the same way, without implying this
+  amendment performs any hedging or duplicate work of its own.
 
 ## References
 
 Chandramouli, R. (2019). *Security strategies for microservices-based
 application systems* (NIST Special Publication 800-204). National Institute
 of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-204
+
+Dean, J., & Barroso, L. A. (2013). The tail at scale. *Communications of the
+ACM, 56*(2), 74–80. https://doi.org/10.1145/2408776.2408794
 
 Fielding, R., Nottingham, M., & Reschke, J. (2022). *HTTP semantics*
 (RFC 9110). Internet Engineering Task Force.
