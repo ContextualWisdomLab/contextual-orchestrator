@@ -125,6 +125,17 @@ class FakeValkeyClient:
         keys = values[:key_count]
         args = values[key_count:]
         if key_count == 2:
+            if len(args) == 5:
+                lock_key, states_key = keys
+                token, job_id, queued, running, retention = args
+                if self.strings.get(lock_key) != token:
+                    return 0
+                current = self.hashes.get(states_key, {}).get(job_id)
+                if current not in {queued, running}:
+                    return 0
+                self.hset(states_key, job_id, running)
+                self.expire(states_key, int(retention))
+                return 1
             states_key, cancellations_key = keys
             job_id, reserved, queued, running, cancellation, cancelled, retention = args
             current = self.hashes.get(states_key, {}).get(job_id)
@@ -395,6 +406,23 @@ def test_durable_job_past_deadline_becomes_failed_atomically() -> None:
     assert backend.retrieve(job) == []
     assert backend.usage(job) == {}
     backend.close()
+
+
+def test_durable_cancellation_cannot_be_overwritten_by_running_transition() -> None:
+    client = FakeValkeyClient()
+    client.lose_execution_extension = False
+    registry = JobRegistryFactory(client)
+    states = registry.mapping("provider_embedding_states")
+    states["job"] = "queued"
+    assert registry.cancel_provider_embedding("job", reason="caller cancelled")
+
+    with registry.lock(
+        "provider_embedding_job_execution", "job", lease_seconds=1
+    ) as claim:
+        with pytest.raises(ClaimNotAcquired, match="cancelled"):
+            registry.mark_provider_embedding_running(claim, "job")
+
+    assert states["job"] == "cancelled"
 
 
 if __name__ == "__main__":

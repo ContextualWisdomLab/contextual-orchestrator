@@ -823,14 +823,17 @@ class ProviderEmbeddingBatchBackend:
     def _run_claimed_job(self, job_id: str, execution_claim: Any) -> None:
         """Run one claim attempt and atomically publish its terminal outcome."""
         execution_claim.ensure_owned()
-        with self._registry.lock(
-            "provider_embedding_job_states",
-            job_id,
-            lease_seconds=self._claim_lease_seconds,
-        ):
-            if self._states.get(job_id) not in {"queued", "running"}:
-                return
-            self._states[job_id] = "running"
+        if self._registry.durable:
+            self._registry.mark_provider_embedding_running(execution_claim, job_id)
+        else:
+            with self._registry.lock(
+                "provider_embedding_job_states",
+                job_id,
+                lease_seconds=self._claim_lease_seconds,
+            ):
+                if self._states.get(job_id) not in {"queued", "running"}:
+                    return
+                self._states[job_id] = "running"
         requests = list(self._requests[job_id])
         try:
             vectors, prompt_tokens = self._runner(requests)
@@ -863,7 +866,7 @@ class ProviderEmbeddingBatchBackend:
             error = {
                 "error_type": type(exc).__name__,
                 "http_status": getattr(
-                    exc, "provider_status", getattr(exc, "status_code", None)
+                    exc, "client_status", getattr(exc, "status_code", None)
                 ),
                 "provider_code": getattr(
                     exc, "error_code", getattr(exc, "provider_code", None)

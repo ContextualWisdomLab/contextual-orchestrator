@@ -331,6 +331,34 @@ class JobRegistryFactory:
             claim.mark_lost()
             raise ClaimNotAcquired("durable job claim ownership was lost before publication")
 
+    def mark_provider_embedding_running(self, claim: _ClaimLease, job_id: str) -> None:
+        """Atomically retain a pending job and mark it running under its claim."""
+        if self._client is None:
+            raise RuntimeError("atomic state transition requires a durable registry")
+        lock_name, token = claim.atomic_identity()
+        script = """
+        if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+        local current = redis.call('hget', KEYS[2], ARGV[2])
+        if current ~= ARGV[3] and current ~= ARGV[4] then return 0 end
+        redis.call('hset', KEYS[2], ARGV[2], ARGV[4])
+        redis.call('expire', KEYS[2], ARGV[5])
+        return 1
+        """
+        transitioned = self._client.eval(
+            script,
+            2,
+            lock_name,
+            "batch_job_registry:provider_embedding_states",
+            token,
+            job_id,
+            _encode("queued"),
+            _encode("running"),
+            self._retention_seconds,
+        )
+        if not transitioned:
+            claim.mark_lost()
+            raise ClaimNotAcquired("durable job was cancelled or claim ownership was lost")
+
     def cancel_provider_embedding(self, job_id: str, *, reason: str) -> bool:
         """Atomically cancel a durable job unless terminal publication won."""
         if self._client is None:

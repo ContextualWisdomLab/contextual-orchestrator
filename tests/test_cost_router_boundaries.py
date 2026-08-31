@@ -20,6 +20,7 @@ from contextual_orchestrator.batch_routing import (
     BatchResultItem,
     EmbeddingBatchResultItem,
 )
+from contextual_orchestrator.batch_job_registry import ClaimNotAcquired
 from contextual_orchestrator.cost_router import (
     CostRoutingCoordinator as Coordinator,
 )
@@ -385,6 +386,34 @@ def test_concurrent_embedding_polls_record_usage_once() -> None:
 
     assert documents[0] == documents[1]
     assert len(coordinator.ledger.records()) == 1
+
+
+def test_contended_embedding_document_claim_returns_cache_or_pending() -> None:
+    backend = _DroppingEmbeddingBackend()
+    coordinator = _coordinator(embedding_batch_backend=backend)
+    job = coordinator.submit_embeddings_batch(["only one"])
+
+    class _ContendedClaim:
+        def __enter__(self):
+            raise ClaimNotAcquired("owned by another poller")
+
+        def __exit__(self, *_args):
+            return False
+
+    coordinator.job_registry.lock = lambda *_args, **_kwargs: _ContendedClaim()
+
+    pending = coordinator.embeddings_batch_document(job.job_id)
+    assert pending == {
+        "batch_id": job.job_id,
+        "status": "in_progress",
+        "backend": job.backend,
+        "model": "contextual-orchestrator",
+        "embeddings": None,
+    }
+
+    cached = {**pending, "status": "completed", "embeddings": []}
+    coordinator._embedding_documents[job.job_id] = cached
+    assert coordinator.embeddings_batch_document(job.job_id) == cached
 
 
 def test_embeddings_document_requires_known_batch() -> None:

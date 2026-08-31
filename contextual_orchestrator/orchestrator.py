@@ -4145,11 +4145,12 @@ class TaskOrchestrator:
             last_model_not_found: ProviderUpstreamError | None = None
             saw_request_too_large = False
             ordered_candidates = [
-                preferred,
+                *([preferred] if preferred.id not in request_exclusions else []),
                 *(
                     candidate
                     for candidate in synthesis_candidates
                     if candidate.id != preferred.id
+                    and candidate.id not in request_exclusions
                 ),
             ]
             for candidate in ordered_candidates:

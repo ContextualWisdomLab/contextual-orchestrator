@@ -186,7 +186,7 @@ def test_provider_batch_failure_preserves_classified_provider_details() -> None:
             error_code="rate_limit_exceeded",
             message="provider request failed",
             client_status=429,
-            provider_status=429,
+            provider_status=503,
             retryable=True,
             transport="embedding",
         )

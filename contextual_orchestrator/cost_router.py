@@ -39,7 +39,7 @@ from .batch_routing import (
     RoutingHints,
     RoutingPolicy,
 )
-from .batch_job_registry import JobRegistryFactory, build_job_registry
+from .batch_job_registry import ClaimNotAcquired, JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import (
@@ -1198,15 +1198,29 @@ class CostRoutingCoordinator:
         self, batch_id: str, *, owner_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """Materialize one owner-bound document under the shared job lock."""
-        self._require_embedding_job(batch_id, owner_id=owner_id)
+        job = self._require_embedding_job(batch_id, owner_id=owner_id)
         raw_lease = getattr(self.orchestrator.client, "timeout", 30) or 30
         lease_seconds = max(1.0, float(raw_lease))
-        with self.job_registry.lock(
-            "embedding_document", batch_id, lease_seconds=lease_seconds
-        ):
-            return self._embeddings_batch_document_locked(
-                batch_id, owner_id=owner_id
-            )
+        try:
+            with self.job_registry.lock(
+                "embedding_document", batch_id, lease_seconds=lease_seconds
+            ):
+                return self._embeddings_batch_document_locked(
+                    batch_id, owner_id=owner_id
+                )
+        except ClaimNotAcquired:
+            cached = self._embedding_documents.get(batch_id)
+            if cached is not None:
+                return cached
+            return {
+                "batch_id": batch_id,
+                "status": "in_progress",
+                "backend": job.backend,
+                "model": self._embedding_models.get(
+                    batch_id, "contextual-orchestrator"
+                ),
+                "embeddings": None,
+            }
 
     def _embeddings_batch_document_locked(
         self, batch_id: str, *, owner_id: Optional[str] = None

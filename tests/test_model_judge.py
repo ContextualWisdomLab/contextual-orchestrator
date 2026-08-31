@@ -12,6 +12,7 @@ from pathlib import Path
 import contextual_orchestrator.orchestrator as orchestrator_module
 import sys
 from types import SimpleNamespace
+import urllib.error
 from unittest.mock import patch
 
 import pytest
@@ -22,6 +23,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
     ModelClient,
+    ProviderRequestTooLargeError,
     ProviderResponseError,
     _parse_model_judge_reply,
     _structured_output_error,
@@ -592,6 +594,58 @@ def test_strict_schema_validation_and_repair_stay_in_the_conduct_trace() -> None
     assert orchestrator.budget_status()["spent_output_tokens"] == traced_tokens
     assert _structured_output_error('{"input_count":10}', response_format) is None
     assert _structured_output_error('{"input_count":6}', response_format) == "schema_violation"
+
+
+def test_structured_repair_does_not_retry_request_excluded_model() -> None:
+    stale = ModelAgent("stale_agent", "stale-model", "mock://catalog")
+    live = ModelAgent("live_agent", "live-model", "mock://catalog")
+    orchestrator = TaskOrchestrator([stale, live])
+    calls = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        if calls == [stale.id]:
+            raise urllib.error.HTTPError("https://synthetic.invalid", 404, "missing", {}, None)
+        if calls == [stale.id, live.id]:
+            return {"choices": [{"message": {"content": '{"input_count":6}'}}]}
+        if agent.id == live.id:
+            raise urllib.error.HTTPError("https://synthetic.invalid", 413, "large", {}, None)
+        return {"choices": [{"message": {"content": '{"input_count":10}'}}]}
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    with (
+        patch.object(
+            orchestrator,
+            "conduct",
+            return_value={"mode": "conduct", "answer": "evidence", "trace": [], "verification": {}},
+        ),
+        patch.object(orchestrator, "_select_agent", return_value=stale),
+        patch.object(orchestrator, "_failover_candidates", return_value=[stale, live]),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+        pytest.raises(ProviderRequestTooLargeError),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert calls == [stale.id, live.id, live.id]
 
 
 def test_structured_synthesis_failure_updates_provider_health() -> None:
