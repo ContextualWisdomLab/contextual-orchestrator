@@ -387,6 +387,18 @@ class CostRoutingCoordinator:
                     else "measured"
                 ),
             }
+            if all(record.measurement_status == "measured" for record in records):
+                race_ids = {record.usage_record_id for record in race_records}
+                client_records = [
+                    record for record in records if record.usage_record_id not in race_ids
+                ]
+                provider_response["usage"] = {
+                    "prompt_tokens": sum(record.prompt_tokens for record in client_records),
+                    "completion_tokens": sum(
+                        record.completion_tokens for record in client_records
+                    ),
+                    "total_tokens": sum(record.total_tokens for record in client_records),
+                }
             if len(currencies) > 1:
                 provider_response["cost"]["currency_components"] = [
                     {

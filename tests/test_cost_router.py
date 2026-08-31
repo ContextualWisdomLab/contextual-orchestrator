@@ -367,6 +367,12 @@ def test_structured_provider_workflow_records_each_reported_call() -> None:
     assert {record["workflow_run_id"] for record in records} == {
         result["orchestration"]["workflow_run_id"]
     }
+    client_call_count = len(records) - 1  # the model-group race loser is billed separately
+    assert result["usage"] == {
+        "prompt_tokens": 2 * client_call_count,
+        "completion_tokens": client_call_count,
+        "total_tokens": 3 * client_call_count,
+    }
 
 
 def test_structured_empty_trace_records_winner_even_after_race_loser() -> None:
