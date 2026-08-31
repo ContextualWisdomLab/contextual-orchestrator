@@ -251,8 +251,26 @@ def test_race_usage_sink_receives_completed_loser_but_not_winner() -> None:
     completed, finalize = orchestrator._race_attempt_collector("text")
     completed("winner_endpoint", ("winner", "winner_endpoint", {"prompt_tokens": 1, "completion_tokens": 1}), None)
     completed("loser_endpoint", ("loser", "loser_endpoint", {"prompt_tokens": 2, "completion_tokens": 2}), None)
-    finalize("winner_endpoint")
-    assert emitted == ["__race_pending__", "loser_endpoint"]
+    finalize("winner_endpoint", ())
+    assert emitted == ["loser_endpoint"]
+
+
+def test_race_usage_sink_marks_an_unfinished_safe_drain_incomplete() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("first_endpoint", "mock-a", tags=("reasoning",))]
+    )
+    emitted: list[str] = []
+    orchestrator._race_usage_sink = lambda endpoint_id, _value: emitted.append(endpoint_id)
+    completed, finalize = orchestrator._race_attempt_collector("text")
+    completed(
+        "winner_endpoint",
+        ("winner", "winner_endpoint", {"prompt_tokens": 1, "completion_tokens": 1}),
+        None,
+    )
+
+    finalize("winner_endpoint", (("loser_endpoint", "safe_drain"),))
+
+    assert emitted == ["__race_incomplete__"]
 
 
 def test_all_race_failures_reenter_existing_sequential_failover_boundary() -> None:
