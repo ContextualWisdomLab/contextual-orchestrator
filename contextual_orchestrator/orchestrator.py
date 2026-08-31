@@ -4256,37 +4256,41 @@ class TaskOrchestrator:
                 "request body exceeds every eligible provider limit"
             )
 
-        synthesis_started = time.perf_counter()
-        try:
-            raw, final_agent = send_synthesis(upstream)
-        except Exception as exc:
-            if not _is_request_too_large_error(exc) and not synthesis_failure_recorded:
-                self._record_failure(final_agent.id)
-            if final_agent.group_name and not _is_request_too_large_error(exc):
-                self._group_router.observe_failure(final_agent.id)
-            raise
-        synthesis_output = provider_output(final_agent, raw)
-        synthesis_step: dict[str, Any] = {
-            "id": len(workflow["trace"]),
-            "role": "synthesizer",
-            "agent_id": final_agent.id,
-            "subtask": "Provider-facing structured synthesis",
-            "access": [step["id"] for step in workflow["trace"]],
-            "latency_ms": round((time.perf_counter() - synthesis_started) * 1000, 2),
-            "output": synthesis_output,
-        }
-        if isinstance(raw.get("usage"), dict):
-            synthesis_step["usage"] = _canonical_provider_usage(
-                raw["usage"], responses=response_request
-            )
-        repair_step: dict[str, Any] | None = None
         response_format = chat_body.get("response_format")
-        contract_error = _structured_output_error(synthesis_output, response_format)
-        if contract_error == "schema_missing":
-            raise ProviderResponseError(
-                "response_format.json_schema is missing a schema"
-            )
-        if contract_error is not None:
+        synthesis_started = time.perf_counter()
+        while True:
+            synthesis_failure_recorded = False
+            try:
+                raw, final_agent = send_synthesis(upstream)
+            except Exception as exc:
+                if not _is_request_too_large_error(exc) and not synthesis_failure_recorded:
+                    self._record_failure(final_agent.id)
+                if final_agent.group_name and not _is_request_too_large_error(exc):
+                    self._group_router.observe_failure(final_agent.id)
+                raise
+            synthesis_output = provider_output(final_agent, raw)
+            synthesis_step = {
+                "id": len(workflow["trace"]),
+                "role": "synthesizer",
+                "agent_id": final_agent.id,
+                "subtask": "Provider-facing structured synthesis",
+                "access": [step["id"] for step in workflow["trace"]],
+                "latency_ms": round((time.perf_counter() - synthesis_started) * 1000, 2),
+                "output": synthesis_output,
+            }
+            if isinstance(raw.get("usage"), dict):
+                synthesis_step["usage"] = _canonical_provider_usage(
+                    raw["usage"], responses=response_request
+                )
+            repair_step: dict[str, Any] | None = None
+            contract_error = _structured_output_error(synthesis_output, response_format)
+            if contract_error == "schema_missing":
+                raise ProviderResponseError(
+                    "response_format.json_schema is missing a schema"
+                )
+            if contract_error is None:
+                break
+
             in_flight_tokens, in_flight_cost = self._trace_budget_spend(
                 [*workflow["trace"], synthesis_step]
             )
@@ -4325,28 +4329,50 @@ class TaskOrchestrator:
                     self._group_router.observe_failure(final_agent.id)
                 raise
             repaired_output = provider_output(final_agent, repaired)
-            if _structured_output_error(repaired_output, response_format) is not None:
-                self._record_failure(final_agent.id)
-                if final_agent.group_name:
-                    self._group_router.observe_failure(final_agent.id)
+            repair_error = _structured_output_error(repaired_output, response_format)
+            if repair_error is None:
+                repair_step = {
+                    "id": synthesis_step["id"] + 1,
+                    "role": "repair",
+                    "agent_id": final_agent.id,
+                    "subtask": "Strict JSON Schema repair",
+                    "access": [synthesis_step["id"]],
+                    "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
+                    "output": repaired_output,
+                }
+                if isinstance(repaired.get("usage"), dict):
+                    repair_step["usage"] = _canonical_provider_usage(
+                        repaired["usage"], responses=response_request
+                    )
+                raw = repaired
+                synthesis_output = repaired_output
+                break
+
+            failed_agent = final_agent
+            self._record_failure(failed_agent.id)
+            if failed_agent.group_name:
+                self._group_router.observe_failure(failed_agent.id)
+            if not virtual_model:
                 raise ProviderResponseError(
                     "structured synthesis and repair violated response_format"
                 )
-            repair_step = {
-                "id": synthesis_step["id"] + 1,
-                "role": "repair",
-                "agent_id": final_agent.id,
-                "subtask": "Strict JSON Schema repair",
-                "access": [synthesis_step["id"]],
-                "latency_ms": round((time.perf_counter() - repair_started) * 1000, 2),
-                "output": repaired_output,
-            }
-            if isinstance(repaired.get("usage"), dict):
-                repair_step["usage"] = _canonical_provider_usage(
-                    repaired["usage"], responses=response_request
+            request_exclusions.add(failed_agent.id)
+            failed_endpoint = failed_agent.base_url.rstrip("/").casefold()
+            next_agent = next(
+                (
+                    candidate
+                    for candidate in synthesis_candidates
+                    if candidate.id not in request_exclusions
+                    and candidate.base_url.rstrip("/").casefold() == failed_endpoint
+                ),
+                None,
+            )
+            if next_agent is None:
+                raise ProviderResponseError(
+                    "every eligible model on the selected endpoint violated response_format"
                 )
-            raw = repaired
-            synthesis_output = repaired_output
+            final_agent = next_agent
+            synthesis_started = time.perf_counter()
         self._record_success(final_agent.id)
         if final_agent.group_name:
             self._group_router.observe_success(

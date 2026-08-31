@@ -648,6 +648,100 @@ def test_structured_repair_does_not_retry_request_excluded_model() -> None:
     assert calls == [stale.id, live.id, live.id]
 
 
+def test_virtual_structured_schema_failure_advances_on_same_endpoint() -> None:
+    """A virtual candidate that fails synthesis and repair is excluded once."""
+    first = ModelAgent("first_agent", "first-model", "mock://catalog")
+    second = ModelAgent("second_agent", "second-model", "mock://catalog")
+    other = ModelAgent("other_agent", "other-model", "mock://other")
+    orchestrator = TaskOrchestrator([first, second, other])
+    calls: list[str] = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        count = 10 if agent.id == second.id else 6
+        return {"choices": [{"message": {"content": f'{{"input_count": {count}}}'}}]}
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    with (
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+        patch.object(orchestrator, "_select_agent", return_value=first),
+        patch.object(
+            orchestrator,
+            "_failover_candidates",
+            return_value=[first, second, other],
+        ),
+        patch.object(orchestrator.client, "proxy_send_once", side_effect=send),
+    ):
+        result = orchestrator.proxy_completion(
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert result["choices"][0]["message"]["content"] == '{"input_count": 10}'
+    assert calls == [first.id, first.id, second.id]
+    assert other.id not in calls
+
+
+def test_explicit_structured_schema_failure_remains_pinned() -> None:
+    """An explicit model never switches after its synthesis and repair fail schema."""
+    first = ModelAgent("first_agent", "first-model", "mock://catalog")
+    second = ModelAgent("second_agent", "second-model", "mock://catalog")
+    orchestrator = TaskOrchestrator([first, second])
+    calls: list[str] = []
+
+    def send(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        return {"choices": [{"message": {"content": '{"input_count": 6}'}}]}
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "exact_count",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"input_count": {"const": 10}},
+                "required": ["input_count"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    with (
+        patch.object(orchestrator, "conduct", return_value={"trace": []}),
+        patch.object(orchestrator.client, "proxy_send", side_effect=send),
+        pytest.raises(
+            ProviderResponseError,
+            match="structured synthesis and repair violated response_format",
+        ),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": first.model,
+                "messages": [{"role": "user", "content": "classify ten items"}],
+                "response_format": response_format,
+            },
+            single_agent=False,
+        )
+
+    assert calls == [first.id, first.id]
+
+
 def test_structured_synthesis_failure_updates_provider_health() -> None:
     """A failed final provider is excluded by the existing circuit policy."""
     orchestrator, _ = _orch("unused")

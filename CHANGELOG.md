@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Virtual structured workflows now exclude a same-endpoint candidate only
+  after both its synthesis and bounded repair violate the caller's schema,
+  then continue with the next eligible model on that endpoint. Explicit model
+  pins remain single-model and exhausted virtual pools return a typed error.
 - Configured-gateway runtime discovery now retains chat rows only after a
   bounded structured-output probe, and virtual structured workflows share one
   request-scoped missing-model exclusion set across evidence and synthesis.

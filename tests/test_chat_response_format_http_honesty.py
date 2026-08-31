@@ -164,6 +164,68 @@ def test_virtual_structured_synthesis_replaces_stale_model_on_same_endpoint() ->
         thread.join(timeout=5)
 
 
+def test_virtual_structured_schema_exhaustion_is_typed_and_non_repeating() -> None:
+    """Schema-invalid synthesis and repair exhaust each same-endpoint model once."""
+    agents = [
+        ModelAgent("first_agent", "first-model", "mock://catalog"),
+        ModelAgent("second_agent", "second-model", "mock://catalog"),
+        ModelAgent("other_agent", "other-model", "mock://other"),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    calls: list[str] = []
+    orchestrator.conduct = lambda *_args, **_kwargs: {"trace": []}  # type: ignore[method-assign]
+    orchestrator._select_agent = lambda *_args, **_kwargs: agents[0]  # type: ignore[method-assign]
+    orchestrator._failover_candidates = lambda *_args, **_kwargs: list(agents)  # type: ignore[method-assign]
+
+    def invalid(agent, _endpoint, _payload):
+        calls.append(agent.id)
+        return {"choices": [{"message": {"content": '{"milestones":[{"extra":true}]}'}}]}
+
+    orchestrator.client.proxy_send_once = invalid
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post(
+            server.server_address[1],
+            {
+                "model": TaskOrchestrator.AUTO_MODEL,
+                "messages": [{"role": "user", "content": "synthetic structured request"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "milestone_list",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "milestones": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {"label": {"type": "string"}},
+                                        "required": ["label"],
+                                        "additionalProperties": False,
+                                    },
+                                }
+                            },
+                            "required": ["milestones"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "session_id": "synthetic-session",
+            },
+        )
+        assert status == 502, body
+        assert body["error"]["code"] == "invalid_structured_output"
+        assert calls == ["first_agent", "first_agent", "second_agent", "second_agent"]
+        assert "other_agent" not in calls
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_virtual_structured_workflow_never_reuses_request_scoped_missing_model() -> None:
     """A model missing in evidence work is excluded from every later role and synthesis."""
     agents = [
