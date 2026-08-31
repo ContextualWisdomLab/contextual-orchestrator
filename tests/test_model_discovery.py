@@ -39,6 +39,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     _merge_openrouter_zdr_metadata,
     _price_per_1k,
     _parse_openai_compatible,
+    _positive_int_metadata,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -51,6 +52,12 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+
+
+def test_positive_limit_metadata_is_bounded_without_raising() -> None:
+    assert _positive_int_metadata(2_147_483_648) == 2_147_483_648
+    assert _positive_int_metadata(9_223_372_036_854_775_808) is None
+    assert _positive_int_metadata("9" * 5000) is None
 
 
 def test_openrouter_zdr_metadata_covers_paid_and_free_models() -> None:

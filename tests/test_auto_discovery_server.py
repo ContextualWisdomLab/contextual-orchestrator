@@ -419,6 +419,49 @@ def test_auto_discovery_preserves_existing_operator_settings(monkeypatch) -> Non
     assert orchestrator.candidates == [bootstrap, existing]
 
 
+def test_auto_discovery_refreshes_discovered_limits_across_restart(
+    monkeypatch, tmp_path
+) -> None:
+    discovered = DiscoveredModel(
+        provider_name="openai",
+        model_id="chat-capable-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        capabilities=("chat",),
+        max_output_tokens=8192,
+        context_window=256000,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.__main__.discover_all_models",
+        lambda *_args, **_kwargs: ([discovered], []),
+    )
+    existing = ModelAgent(
+        "openai_chat_capable_model",
+        discovered.model_id,
+        tags=("discovered", "chat", "operator-tag"),
+        priority=17,
+        group_name="operator-group",
+        max_output_tokens=2048,
+        context_window=128000,
+    )
+    bootstrap = ModelAgent("bootstrap_agent", "bootstrap-model")
+    database = str(tmp_path / "agents.db")
+    first = TaskOrchestrator([bootstrap, existing], agents_db=database)
+
+    assert _auto_discover_runtime_agents(first)["updated"] == [existing.id]
+    refreshed = first._agent(existing.id)
+    assert (refreshed.max_output_tokens, refreshed.context_window) == (8192, 256000)
+    assert (refreshed.priority, refreshed.group_name) == (17, "operator_group")
+    assert refreshed.tags == existing.tags
+
+    restarted = TaskOrchestrator([bootstrap, existing], agents_db=database)
+    restored = restarted._agent(existing.id)
+    assert (restored.max_output_tokens, restored.context_window) == (8192, 256000)
+    assert (restored.priority, restored.group_name) == (17, "operator_group")
+    assert restored.tags == existing.tags
+
+
 def test_auto_discovery_disables_existing_discovered_paid_openrouter_without_credit(
     monkeypatch,
 ) -> None:

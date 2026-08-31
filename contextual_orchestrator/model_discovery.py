@@ -303,18 +303,21 @@ def _positive_int_metadata(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if value > 0 else None
+        return value if 0 < value <= 9_223_372_036_854_775_807 else None
     if isinstance(value, float):
         if not math.isfinite(value) or not value.is_integer():
             return None
         integer = int(value)
-        return integer if integer > 0 else None
+        return integer if 0 < integer <= 9_223_372_036_854_775_807 else None
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped.isdigit():
             return None
-        integer = int(stripped)
-        return integer if integer > 0 else None
+        try:
+            integer = int(stripped)
+        except ValueError:
+            return None
+        return integer if 0 < integer <= 9_223_372_036_854_775_807 else None
     return None
 
 

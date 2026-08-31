@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from .privacy_policy_analysis import PrivacyPolicyAssessment
 
 
-_POSTGRES_INT_MAX = 2_147_483_647
+_POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
 
 
 PROVIDER_CATALOG_SCHEMA_SQL = """
@@ -53,13 +53,13 @@ CREATE TABLE IF NOT EXISTS provider_model (
     provider_account_id text NOT NULL
         REFERENCES provider_account(provider_account_id) ON DELETE CASCADE,
     model_name text NOT NULL,
-    max_output_tokens integer CHECK (
+    max_output_tokens bigint CHECK (
         max_output_tokens IS NULL
-        OR (max_output_tokens > 0 AND max_output_tokens <= 2147483647)
+        OR (max_output_tokens > 0 AND max_output_tokens <= 9223372036854775807)
     ),
-    context_window integer CHECK (
+    context_window bigint CHECK (
         context_window IS NULL
-        OR (context_window > 0 AND context_window <= 2147483647)
+        OR (context_window > 0 AND context_window <= 9223372036854775807)
     ),
     prompt_price_per_1k numeric(20, 8),
     completion_price_per_1k numeric(20, 8),
@@ -281,17 +281,17 @@ def _normalize_positive_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if 0 < value <= _POSTGRES_INT_MAX else None
+        return value if 0 < value <= _POSTGRES_BIGINT_MAX else None
     if isinstance(value, float):
         if not math.isfinite(value) or not value.is_integer():
             return None
         integer = int(value)
-        return integer if 0 < integer <= _POSTGRES_INT_MAX else None
+        return integer if 0 < integer <= _POSTGRES_BIGINT_MAX else None
     if isinstance(value, Decimal):
         if not value.is_finite() or value != value.to_integral_value():
             return None
         integer = int(value)
-        return integer if 0 < integer <= _POSTGRES_INT_MAX else None
+        return integer if 0 < integer <= _POSTGRES_BIGINT_MAX else None
     return None
 
 
@@ -643,15 +643,34 @@ class PostgresProviderCatalogStore:
                 cursor.execute(PROVIDER_CATALOG_SCHEMA_SQL)
                 cursor.execute(
                     "ALTER TABLE provider_model "
-                    "ADD COLUMN IF NOT EXISTS max_output_tokens integer "
+                    "ADD COLUMN IF NOT EXISTS max_output_tokens bigint "
                     "CHECK (max_output_tokens IS NULL "
-                    "OR (max_output_tokens > 0 AND max_output_tokens <= 2147483647))"
+                    "OR (max_output_tokens > 0 AND max_output_tokens <= 9223372036854775807))"
                 )
                 cursor.execute(
                     "ALTER TABLE provider_model "
-                    "ADD COLUMN IF NOT EXISTS context_window integer "
+                    "ADD COLUMN IF NOT EXISTS context_window bigint "
                     "CHECK (context_window IS NULL "
-                    "OR (context_window > 0 AND context_window <= 2147483647))"
+                    "OR (context_window > 0 AND context_window <= 9223372036854775807))"
+                )
+                cursor.execute(
+                    "ALTER TABLE provider_model "
+                    "ALTER COLUMN max_output_tokens TYPE bigint, "
+                    "ALTER COLUMN context_window TYPE bigint"
+                )
+                cursor.execute(
+                    "ALTER TABLE provider_model "
+                    "DROP CONSTRAINT IF EXISTS provider_model_max_output_tokens_check, "
+                    "DROP CONSTRAINT IF EXISTS provider_model_context_window_check"
+                )
+                cursor.execute(
+                    "ALTER TABLE provider_model "
+                    "ADD CONSTRAINT provider_model_max_output_tokens_check "
+                    "CHECK (max_output_tokens IS NULL OR (max_output_tokens > 0 "
+                    "AND max_output_tokens <= 9223372036854775807)), "
+                    "ADD CONSTRAINT provider_model_context_window_check "
+                    "CHECK (context_window IS NULL OR (context_window > 0 "
+                    "AND context_window <= 9223372036854775807))"
                 )
             connection.commit()
             self._schema_ready = True
