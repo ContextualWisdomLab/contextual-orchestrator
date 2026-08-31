@@ -111,6 +111,7 @@ class _FakeEmbeddingClient:
     """Async pg-llm-batch double for the embeddings endpoint."""
 
     def __init__(self) -> None:
+        self.poll_interval_seconds = 1.0
         self.uploaded: list[tuple[str, str]] = []
         self.created: list[Dict[str, Any]] = []
         self.status_calls: list[str] = []
@@ -228,7 +229,7 @@ def test_pg_embedding_backend_full_lifecycle_with_assembler() -> None:
 def test_pg_embedding_backend_memory_fallback_and_defaults() -> None:
     client = _FakeEmbeddingClient()
     backend = PgLlmBatchEmbeddingBackend(client, endpoint_alias="nim-east")
-    assert backend.poll_after_ms == 1000
+    assert backend.poll_after_ms == int(client.poll_interval_seconds * 1000)
     requests = [EmbeddingBatchRequest(input_text="solo input", custom_id="emb_solo")]
     job = backend.submit(requests)
     assert job.status == "validating"

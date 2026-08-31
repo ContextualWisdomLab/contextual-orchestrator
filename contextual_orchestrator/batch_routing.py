@@ -1063,7 +1063,7 @@ class PgLlmBatchEmbeddingBackend:
             if isinstance(poll_interval, (int, float))
             and not isinstance(poll_interval, bool)
             and poll_interval > 0
-            else 1000
+            else 0
         )
         self._endpoint_alias = endpoint_alias
         self._endpoint = endpoint
