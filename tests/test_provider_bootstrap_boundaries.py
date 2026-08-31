@@ -187,7 +187,7 @@ def test_select_unpriced_and_foreign_currency_models_sort_last_but_still_fill() 
     assert {m.model_id for m in selected} == {"gpt-cheap", "qwen-free", "nim-eur"}
 
 
-def test_select_fills_remaining_slots_from_same_provider_family() -> None:
+def test_select_keeps_independent_credential_accounts() -> None:
     primary = _model(
         "nvidia_nim", "NVIDIA_NIM_API_KEY", "nim-gamma", prompt=3.0
     )
@@ -195,8 +195,7 @@ def test_select_fills_remaining_slots_from_same_provider_family() -> None:
         "nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "nim-delta", prompt=4.0
     )
     selected = select_provider_diverse_models([primary, same_family_sub], limit=2)
-    # Both credentials share the nvidia_nim outage family, so diversity yields
-    # one slot and the filler loop backfills the second from the same family.
+    # A shared vendor endpoint does not collapse independent credential accounts.
     assert [m.model_id for m in selected] == ["nim-gamma", "nim-delta"]
 
 

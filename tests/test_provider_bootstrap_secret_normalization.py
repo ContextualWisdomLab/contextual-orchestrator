@@ -76,7 +76,18 @@ def test_catalog_sync_supplies_the_complete_provider_inventory() -> None:
     for credential_name in PROVIDER_CREDENTIAL_NAMES:
         assert f"{credential_name}: ${{{{ secrets.{credential_name} }}}}" in workflow
     assert "from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES" in workflow
-    assert "expected = set(PROVIDER_CREDENTIAL_NAMES)" in workflow
+
+
+def test_catalog_sync_delegates_the_credential_verdict_to_tested_production_code() -> None:
+    """The inventory hard-fail/warn/ok decision is real code, not YAML-inline logic."""
+    workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from contextual_orchestrator.provider_catalog_bootstrap import (" in workflow
+    assert "evaluate_provider_credential_inventory," in workflow
+    assert "verdict = evaluate_provider_credential_inventory(report, os.environ)" in workflow
+    assert "raise SystemExit(verdict.hard_fail_reason)" in workflow
 
 
 def test_catalog_sync_has_postgres_fallback_when_durable_kv_is_unconfigured() -> None:

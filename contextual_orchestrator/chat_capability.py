@@ -97,6 +97,31 @@ def is_general_chat_agent_model_id(model_id: str) -> bool:
     )
 
 
+def requires_non_text_input(input_modalities: Iterable[str]) -> bool:
+    """Return whether declared input-modality evidence includes non-text input.
+
+    A model whose provider/catalog architecture evidence declares an input
+    modality other than ``"text"`` (e.g. ``image``, ``audio``, ``video``) is a
+    specialized multimodal deployment: a caller cannot use it for an arbitrary
+    request without knowing in advance that the request must carry that extra
+    modality. Absence of modality evidence is not evidence of a multimodal
+    requirement, so an empty ``input_modalities`` iterable never triggers this.
+
+    Shared by ``model_discovery._requires_non_text_input`` (reading
+    ``DiscoveredModel.input_modalities`` directly) and
+    ``orchestrator.TaskOrchestrator._agent_requires_non_text_input`` (reading
+    an agent's persisted ``input:<modality>`` tags, with the ``input:`` prefix
+    already stripped by the caller) so the "what counts as non-text" reading
+    lives in exactly one place -- the two representations of the same catalog
+    evidence can never drift on this question independently of each other.
+    """
+    return any(
+        modality.strip().casefold() != "text"
+        for modality in input_modalities
+        if isinstance(modality, str) and modality.strip()
+    )
+
+
 def is_general_chat_candidate(
     model_id: str,
     *,

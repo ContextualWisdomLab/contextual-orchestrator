@@ -32,7 +32,10 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    AUTH_SCHEME_RAW_TOKEN,
+    ModelClient,
+)
 
 
 class _Response:
@@ -157,7 +160,7 @@ def test_bytez_chat_catalog_still_rejects_non_chat_identifiers() -> None:
         credential_name="BYTEZ_API_KEY",
         list_url="https://api.bytez.com/models/v2/list/models",
         chat_base_url="https://api.bytez.com/models/v2/openai/v1",
-        auth_scheme="Key",
+        auth_scheme=AUTH_SCHEME_RAW_TOKEN,
         style="bytez",
         task_filter="chat",
     )
