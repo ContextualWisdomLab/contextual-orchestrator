@@ -4752,6 +4752,16 @@ class TaskOrchestrator:
         prepared_rows: dict[int, dict[str, Any]] = {}
         run_ids: dict[int, str] = {}
         for agent_id, requests in requests_by_agent.items():
+            # A prior group's spend is already reflected in the budget meter
+            # by its own pending persist below, so a later group must not
+            # start a fresh, avoidable provider batch call once that spend
+            # alone already exceeds the cap (Devin review on #961) -- the
+            # same "block before the next not-yet-incurred provider call"
+            # check used at entry and before each judge call below.
+            if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+                budget = self.budget_status()
+                if budget["exceeded"]:
+                    raise BudgetExceededError("spend budget exceeded", detail=budget)
             agent = agents_by_id[agent_id]
             effort_profile = self._role_effort_profile("worker")
             batch_started_at = time.perf_counter()
@@ -4823,8 +4833,16 @@ class TaskOrchestrator:
             # same "block before the next not-yet-incurred provider call"
             # check the entry-point check above and conduct()'s per-step
             # checkpoint both use -- the judge call below is the only spend
-            # this check needs to gate.
-            if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+            # this check needs to gate. When realtime_judge is off,
+            # _realtime_route_judge returns its zero-cost reviewed fallback
+            # without any provider call at all (Devin review on #961): there
+            # is no next spend left to gate, so this checkpoint must not
+            # fire and strand an already-completed, already-paid-for worker
+            # answer just because the batch's total (worker-only) spend
+            # happens to already exceed the cap.
+            if self.policy.realtime_judge and (
+                self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None
+            ):
                 budget = self.budget_status()
                 if budget["exceeded"]:
                     raise BudgetExceededError("spend budget exceeded", detail=budget)

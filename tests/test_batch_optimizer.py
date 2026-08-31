@@ -577,6 +577,75 @@ def test_pending_batch_rows_excluded_from_completed_run_counts() -> None:
     assert route_driver["counts"]["route"] == 0
 
 
+def test_batch_route_blocks_a_later_group_once_an_earlier_group_exhausts_budget() -> None:
+    """A later provider group must not start once an earlier group's real,
+    already-persisted spend alone already exceeds the cap.
+
+    Devin review on #961: batch_route's budget check ran once at entry,
+    before any group's batch_chat() call. Once each group's spend started
+    persisting immediately (a prior fix on this same PR), a later group
+    could still start unconditionally even though the earlier group's own
+    spend had already blown through the cap -- incurring avoidable
+    provider charges on a batch that was already over budget.
+    """
+    agent_a = ModelAgent("agent_a", "model-a", tags=("reasoning", "writing"))
+    agent_b = ModelAgent("agent_b", "model-b", tags=("reasoning", "writing"))
+    client = _CountingClient()  # every item reports completion_tokens=6
+    orchestrator = TaskOrchestrator(
+        [agent_a, agent_b],
+        client=client,
+        price_per_million={"model-a": 10.0, "model-b": 10.0},
+        budget_max_output_tokens=6,  # exactly agent_a's group's own spend
+    )
+    agent_by_prompt = {"task one": agent_a, "task two": agent_b}
+
+    with patch.object(
+        orchestrator,
+        "_select_agent",
+        side_effect=lambda text, role, **kwargs: agent_by_prompt[text],
+    ):
+        with pytest.raises(orchestrator_module.BudgetExceededError):
+            orchestrator.batch_route(["task one", "task two"])
+
+    # agent_a's group ran and persisted; agent_b's group must never have
+    # started a provider call at all.
+    assert client.batch_calls == 1
+    assert orchestrator.budget_status()["spent_output_tokens"] == 6
+    pending = [
+        record for record in orchestrator._workflow_runs.values()  # noqa: SLF001
+        if record.get("pending_verification")
+    ]
+    assert len(pending) == 1
+    assert pending[0]["trace"][0]["agent_id"] == "agent_a"
+
+
+def test_batch_route_disabled_judging_never_strands_a_completed_answer_on_budget() -> None:
+    """With realtime_judge off, an already-exhausted budget must not block
+    finalizing an already-completed, already-paid-for worker answer.
+
+    Devin review on #961: the pre-judge-call budget checkpoint fired
+    regardless of policy.realtime_judge, even though _realtime_route_judge
+    makes no provider call at all when judging is disabled -- there was no
+    next spend left for that checkpoint to gate, so it could only ever
+    strand a result that needed no further spend to finalize.
+    """
+    client = _CountingClient()  # every item reports completion_tokens=6
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing"))],
+        client=client,
+        price_per_million={"model-x": 10.0},
+        budget_max_output_tokens=6,  # exactly the one item's own worker spend
+    )
+    orchestrator.policy = replace(orchestrator.policy, realtime_judge=False)
+
+    records = orchestrator.batch_route(["task one"])
+
+    assert len(records) == 1
+    assert records[0]["verification"]["accepted"] is True
+    assert records[0]["verification"]["reason"] == "single route path"
+    assert orchestrator.count_workflow_runs() == 1
+
+
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
     client = ModelClient()
     agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")

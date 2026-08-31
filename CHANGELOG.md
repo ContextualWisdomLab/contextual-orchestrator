@@ -190,7 +190,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   read through a new `_completed_workflow_runs()` helper that excludes
   pending rows; `spend_analytics()` deliberately keeps iterating
   `_workflow_runs` directly, since a pending row's incurred spend must
-  still be counted there.
+  still be counted there. (Devin review on #961) Two more findings on the
+  same restructured group loop: the one-time budget check at `batch_route`'s
+  entry did not cover a later group's `batch_chat()` call once each group
+  started persisting its own spend immediately, so a later group could
+  still start unconditionally even after an earlier group's own spend
+  alone already exceeded the cap -- incurring avoidable provider charges
+  on an already-over-budget batch. Each group's loop iteration now re-checks
+  the budget first, the same "block before the next not-yet-incurred
+  provider call" check already used at entry and before each judge call.
+  Conversely, the per-item checkpoint before each judge call fired
+  regardless of `policy.realtime_judge`, even though `_realtime_route_judge`
+  makes no provider call at all when judging is disabled (it returns a
+  zero-cost reviewed fallback) -- there was no next spend for that
+  checkpoint to gate, so an already-exhausted budget could strand an
+  already-completed, already-paid-for worker answer that needed no further
+  spend to finalize. That checkpoint now only runs when
+  `policy.realtime_judge` is on. New regression tests:
+  `test_batch_route_blocks_a_later_group_once_an_earlier_group_exhausts_budget`
+  (two groups, the first exhausts the cap; asserts the second group's
+  `batch_chat()` is never called) and
+  `test_batch_route_disabled_judging_never_strands_a_completed_answer_on_budget`
+  (`realtime_judge=False`, budget exhausted by the one worker call; asserts
+  `batch_route` still returns the completed, reviewed-fallback-verified
+  record instead of raising).
 
 ### Added
 
