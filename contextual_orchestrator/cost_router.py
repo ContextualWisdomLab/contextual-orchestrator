@@ -43,7 +43,6 @@ from .batch_job_registry import JobRegistryFactory, build_job_registry
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import (
-    HeuristicTokenCounter,
     TokenCountUnavailable,
     build_embedding_token_counter,
     build_token_counter,
@@ -94,9 +93,7 @@ class CostRoutingCoordinator:
         self._race_usage_context = _RACE_USAGE_CONTEXT
         if hasattr(orchestrator, "_race_usage_sink"):
             orchestrator._race_usage_sink = self._record_race_endpoint_usage
-        self.token_counter = token_counter or (
-            build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
-        )
+        self.token_counter = token_counter or build_token_counter(postgres_dsn)
         if embedding_token_counter is not None:
             self.embedding_token_counter = embedding_token_counter
         elif token_counter is not None:
@@ -363,8 +360,6 @@ class CostRoutingCoordinator:
         elif isinstance(value, dict):
             usage = value.get("usage")
         counts = self._provider_usage(usage)
-        if counts is None:
-            return
         agent = next(
             (item for item in self.orchestrator.candidates if item.id == endpoint_id),
             None,
@@ -380,8 +375,8 @@ class CostRoutingCoordinator:
             model_name=context["model_name"],
             provider_model=self._agent_provider_model(agent, context["model_name"]),
             workflow_run_id=context["workflow_run_id"],
-            prompt_tokens=counts[0],
-            completion_tokens=counts[1],
+            prompt_tokens=counts[0] if counts else None,
+            completion_tokens=counts[1] if counts else None,
         )
         context["records"].append(record)
 
@@ -418,24 +413,20 @@ class CostRoutingCoordinator:
         ``usage_record_id``. Batch requests are dispatched to the batch backend
         and return a job envelope; their cost is recorded on retrieval.
 
-        For multi-step workflows, each trace step records one ledger
-        row. Rows backed by provider-reported token counts are labeled
-        ``measurement_status="measured"``; rows that fall back to heuristic
-        estimates are labeled ``"estimated"``. The original request prompt is
-        attributed at most once across unreported rows: it lands in full on the
-        first unreported step, and later unreported steps estimate only their
-        own output tokens. Provider-reported prompt counts remain attached to
-        their respective rows because each trace step is a separate billable
-        provider call; they are neither deduplicated against nor replaced by
-        the fallback estimate for a different call.
+        Each trace step backed by valid provider token counts is ``measured``.
+        A missing count is recorded with an ``unavailable`` status and numeric
+        storage sentinels; API usage and cost remain null.
         """
         if not isinstance(cache_bypass, bool):
             raise TypeError("cache_bypass must be a boolean")
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
-        prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
-        decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
+        try:
+            prompt_tokens = self.token_counter.count_messages(messages, model_name)
+        except TokenCountUnavailable:
+            prompt_tokens = None
+        decision = self.policy.decide(routing_hints, prompt_tokens)
 
         if decision.channel == "batch" and provider_request is None:
             request = BatchRequest(
@@ -546,19 +537,23 @@ class CostRoutingCoordinator:
             provider_response["usage_record_ids"] = [
                 record.usage_record_id for record in records
             ]
+            measurement_status = (
+                "unavailable"
+                if any(record.measurement_status == "unavailable" for record in records)
+                else "measured"
+            )
             provider_response["cost"] = {
                 "cost_amount": (
                     round(sum(record.cost_amount for record in records), 6)
-                    if len(currencies) == 1
+                    if measurement_status == "measured" and len(currencies) == 1
                     else None
                 ),
                 "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
-                "measurement_status": (
-                    "estimated"
-                    if any(record.measurement_status == "estimated" for record in records)
-                    else "measured"
-                ),
+                "measurement_status": measurement_status,
             }
+            if measurement_status == "unavailable":
+                provider_response["usage"] = None
+            provider_response["usage_measurement_status"] = measurement_status
             if len(currencies) > 1:
                 provider_response["cost"]["currency_components"] = [
                     {
@@ -672,24 +667,35 @@ class CostRoutingCoordinator:
         client_usage_records = [
             item for item in records if item.usage_record_id not in race_record_ids
         ]
-        result["usage"] = {
-            "prompt_tokens": sum(item.prompt_tokens for item in client_usage_records),
-            "completion_tokens": sum(item.completion_tokens for item in client_usage_records),
-            "total_tokens": sum(item.total_tokens for item in client_usage_records),
-        }
+        client_measurement_available = all(
+            item.measurement_status == "measured" for item in client_usage_records
+        )
+        result["usage"] = (
+            {
+                "prompt_tokens": sum(item.prompt_tokens for item in client_usage_records),
+                "completion_tokens": sum(item.completion_tokens for item in client_usage_records),
+                "total_tokens": sum(item.total_tokens for item in client_usage_records),
+            }
+            if client_measurement_available
+            else None
+        )
+        result["usage_measurement_status"] = (
+            "measured" if client_measurement_available else "unavailable"
+        )
         currencies = {item.currency_code for item in records}
+        measurement_status = (
+            "unavailable"
+            if any(item.measurement_status == "unavailable" for item in records)
+            else "measured"
+        )
         result["cost"] = {
             "cost_amount": (
                 round(sum(item.cost_amount for item in records), 6)
-                if len(currencies) == 1
+                if measurement_status == "measured" and len(currencies) == 1
                 else None
             ),
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
-            "measurement_status": (
-                "estimated"
-                if any(item.measurement_status == "estimated" for item in records)
-                else "measured"
-            ),
+            "measurement_status": measurement_status,
         }
         if len(currencies) > 1:
             result["cost"]["currency_components"] = [
@@ -728,27 +734,16 @@ class CostRoutingCoordinator:
     ):
         """Record one completion's usage + cost and return its ledger record.
 
-        ``prompt_tokens``/``completion_tokens`` carry provider-reported counts;
-        when either is missing the ledger falls back to heuristic estimates and
-        the row is labeled ``measurement_status="estimated"`` instead of
-        ``"measured"``. The status is exposed on the completion's ``cost``
-        payload, batch retrieval results, and analytics usage-record rows so a
-        buyer can always tell provider-measured spend from estimated spend.
-        For multi-step structured workflows the caller passes the original
-        request ``messages`` only for the first unreported step, keeping the
-        request prompt attributed at most once per completion; later unreported
-        steps pass empty messages and estimate their own output alone.
+        Missing provider counts are unavailable. Zeroes are persisted only as
+        schema sentinels beside that status and are never exposed as measured
+        free usage or cost.
         """
         provider, model = provider_model
-        measurement_status = (
-            "measured"
-            if prompt_tokens is not None and completion_tokens is not None
-            else "estimated"
-        )
-        if prompt_tokens is None:
-            prompt_tokens = self.token_counter.count_messages(messages, model)
-        if completion_tokens is None:
-            completion_tokens = self.token_counter.count_text(answer, model)
+        measurement_status = "measured" if (
+            prompt_tokens is not None and completion_tokens is not None
+        ) else "unavailable"
+        prompt_tokens = prompt_tokens if measurement_status == "measured" else 0
+        completion_tokens = completion_tokens if measurement_status == "measured" else 0
         return self.ledger.record_usage(
             provider=provider,
             model=model,
@@ -796,9 +791,7 @@ class CostRoutingCoordinator:
             )
         statuses = {record.measurement_status for record in records}
         measurement_status = (
-            "unavailable" if "unavailable" in statuses
-            else "estimated" if "estimated" in statuses
-            else "measured"
+            "unavailable" if "unavailable" in statuses else "measured"
         )
         currencies = {record.currency_code for record in records}
         return {
@@ -894,18 +887,24 @@ class CostRoutingCoordinator:
                 model_name=item.model,
                 provider_model=provider_model,
                 workflow_run_id=job.job_id,
-                prompt_tokens=item.prompt_tokens or None,
-                completion_tokens=item.completion_tokens or None,
+                prompt_tokens=item.prompt_tokens,
+                completion_tokens=item.completion_tokens,
             )
             recorded.append(
                 {
                     "custom_id": item.custom_id,
                     "answer": item.answer,
                     "usage_record_id": record.usage_record_id,
-                    "cost_amount": record.cost_amount,
+                    "cost_amount": (
+                        record.cost_amount if record.measurement_status == "measured" else None
+                    ),
                     "currency_code": record.currency_code,
-                    "prompt_tokens": record.prompt_tokens,
-                    "completion_tokens": record.completion_tokens,
+                    "prompt_tokens": (
+                        record.prompt_tokens if record.measurement_status == "measured" else None
+                    ),
+                    "completion_tokens": (
+                        record.completion_tokens if record.measurement_status == "measured" else None
+                    ),
                     "measurement_status": record.measurement_status,
                 }
             )

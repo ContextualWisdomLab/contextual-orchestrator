@@ -13,6 +13,7 @@ They do not share numbering with `docs/planning/adrs/`.
 | [0003](0003-cost-aware-sync-batch-routing.md) | Cost-aware sync-versus-batch routing | Accepted | Chen et al. (2023) FrugalGPT arXiv:2305.05176; Ong et al. (2024) RouteLLM arXiv:2406.18665; Ding et al. (2024) Hybrid LLM arXiv:2404.14618 |
 | [0004](0004-msa-leaf-composition.md) | MSA leaf — standalone and callable | Accepted | NIST SP 800-204 independent deployability; planning ADR 0001 fail-closed judge composition |
 | [0005](0005-provider-embedding-lease-and-token-accounting.md) | Provider-embedding lease and token-accounting boundary | Accepted | Redis distributed-lock ownership/fencing guidance; PyO3 modules; OpenAI public cl100k mappings |
+| [0006](0006-authoritative-chat-token-accounting.md) | Authoritative chat token accounting | Accepted | OpenAI Chat usage contract and exact tiktoken model mappings; PyO3 modules |
 
 Each record uses Context / Decision / Consequences plus an APA 7th
 **References** section. Cite only verified DOI or official URLs. arXiv

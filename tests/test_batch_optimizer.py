@@ -115,7 +115,7 @@ def test_mock_default_batch_route_works_without_usage() -> None:
     orchestrator = _orch()  # plain ModelClient: mock batch_chat is sync, usage None
     records = orchestrator.batch_route(["hello there"])
     assert records[0]["answer"].startswith("[general_agent:")
-    assert orchestrator.spend_analytics()["by_model"][0]["usage_source"] == "estimated"
+    assert orchestrator.spend_analytics()["by_model"][0]["usage_source"] == "unavailable"
 
 
 @pytest.mark.parametrize("kind", ["missing", "content"])

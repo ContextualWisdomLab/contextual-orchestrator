@@ -22,7 +22,7 @@ def test_admin_state_includes_spend_block() -> None:
 
     assert "spend" in state
     spend = state["spend"]
-    assert spend["measurement_status"] == "local_runtime_estimate"
+    assert spend["measurement_status"] == "unavailable"
     assert spend["totals"]["run_count"] == 1
     assert isinstance(spend["by_model"], list) and spend["by_model"]
     assert spend["by_model"][0]["model"] == "priced-model"

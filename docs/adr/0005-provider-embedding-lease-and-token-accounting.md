@@ -59,10 +59,9 @@ that operational boundary grounds the explicit terminal-publication fence here.
 5. **No routing/model inference is added.** The mapping is an exact tokenizer
    contract, not evidence for model quality, provider selection, or
    equivalence. The native extension does not count chat framing.
-6. **Legacy chat estimation remains a known gap.** This ADR makes no global
-   token-accounting compliance claim. Existing chat routing and missing-usage
-   cost paths still use `HeuristicTokenCounter`; replacing that estimate with
-   authoritative provider/tokenizer evidence is required follow-up work.
+6. **Legacy chat estimation was a known gap.** This ADR made no global
+   token-accounting compliance claim. ADR 0006 subsequently replaced that
+   legacy chat estimate with authoritative-or-unavailable accounting.
 
 ## Consequences
 
@@ -81,7 +80,7 @@ that operational boundary grounds the explicit terminal-publication fence here.
   authoritative PostgreSQL counter is configured.
 - Lease fencing prevents stale publication but does not eliminate duplicate
   provider work.
-- Chat estimates remain outside this narrow compliance boundary.
+- Chat accounting is governed separately by ADR 0006.
 
 ## References
 

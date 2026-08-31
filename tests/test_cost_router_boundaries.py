@@ -29,10 +29,16 @@ from contextual_orchestrator.cost_router import (
     _weighted_average_embedding,
 )
 from contextual_orchestrator.token_counting import (
-    HeuristicTokenCounter,
     TokenCountUnavailable,
     UnavailableEmbeddingTokenCounter,
 )
+
+
+class _ExactTestCounter:
+    """Deterministic injected counter for synthetic embedding fixtures."""
+
+    def count_text(self, text: str, model: str = "") -> int:
+        return len(text.split())
 
 
 def _coordinator(**kwargs: Any) -> Coordinator:
@@ -49,7 +55,7 @@ def _coordinator(**kwargs: Any) -> Coordinator:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     if "token_counter" not in kwargs and "embedding_token_counter" not in kwargs:
-        kwargs["embedding_token_counter"] = HeuristicTokenCounter()
+        kwargs["embedding_token_counter"] = _ExactTestCounter()
     return Coordinator(orchestrator, config, price_book=price_book, **kwargs)
 
 
@@ -452,7 +458,7 @@ def test_embeddings_document_bills_the_selected_agent_not_caller_attribution() -
         orchestrator,
         config,
         price_book=price_book,
-        embedding_token_counter=HeuristicTokenCounter(),
+        embedding_token_counter=_ExactTestCounter(),
         embedding_batch_backend=_DroppingEmbeddingBackend(),
     )
 
@@ -553,8 +559,8 @@ def test_document_recounts_tokens_when_backend_reports_zero_usage() -> None:
     coordinator = _coordinator(embedding_batch_backend=_SilentEmbeddingBackend())
     job = coordinator.submit_embeddings_batch(["alpha beta gamma"])
     document = coordinator.embeddings_batch_document(job.job_id)
-    # HeuristicTokenCounter counts word units with the BPE expansion factor.
-    assert document["token_counts"] == [4]
+    # The injected exact test seam counts whitespace-delimited fixture units.
+    assert document["token_counts"] == [3]
 
 
 def test_complete_embeddings_batch_round_trips_locally() -> None:

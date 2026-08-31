@@ -20,6 +20,43 @@ OPENAPI_SPEC = {
             },
         },
         "schemas": {
+            "AuthoritativeUsage": {
+                "type": ["object", "null"],
+                "properties": {
+                    "prompt_tokens": {"type": "integer", "minimum": 0},
+                    "completion_tokens": {"type": "integer", "minimum": 0},
+                    "total_tokens": {"type": "integer", "minimum": 0},
+                },
+            },
+            "UsageCost": {
+                "type": "object",
+                "required": ["cost_amount", "currency_code", "measurement_status"],
+                "properties": {
+                    "cost_amount": {"type": ["number", "null"]},
+                    "currency_code": {"type": "string"},
+                    "measurement_status": {
+                        "type": "string",
+                        "enum": ["measured", "unavailable"],
+                    },
+                },
+            },
+            "ChatCompletionResponse": {
+                "type": "object",
+                "required": ["id", "object", "created", "model", "choices", "usage", "usage_measurement_status"],
+                "properties": {
+                    "id": {"type": "string"},
+                    "object": {"type": "string"},
+                    "created": {"type": "integer"},
+                    "model": {"type": "string"},
+                    "choices": {"type": "array", "items": {"type": "object"}},
+                    "usage": {"$ref": "#/components/schemas/AuthoritativeUsage"},
+                    "usage_measurement_status": {
+                        "type": "string",
+                        "enum": ["measured", "unavailable"],
+                    },
+                    "orchestration": {"type": "object"},
+                },
+            },
             "ModelGroupWrite": {
                 "type": "object",
                 "required": ["group_name", "member_agent_ids"],
@@ -167,7 +204,15 @@ OPENAPI_SPEC = {
                     },
                 },
                 "responses": {
-                    "200": {"description": "Chat completion or SSE response"},
+                    "200": {
+                        "description": "Chat completion or SSE response; missing provider usage is explicitly unavailable",
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/ChatCompletionResponse"}
+                            },
+                            "text/event-stream": {"schema": {"type": "string"}},
+                        },
+                    },
                     "400": {"description": "Invalid request"},
                 },
             }
