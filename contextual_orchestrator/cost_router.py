@@ -520,11 +520,15 @@ class CostRoutingCoordinator:
         client_usage_records = [
             item for item in records if item.usage_record_id not in race_record_ids
         ]
-        result["usage"] = {
-            "prompt_tokens": sum(item.prompt_tokens for item in client_usage_records),
-            "completion_tokens": sum(item.completion_tokens for item in client_usage_records),
-            "total_tokens": sum(item.total_tokens for item in client_usage_records),
-        }
+        result["usage"] = (
+            {
+                "prompt_tokens": sum(item.prompt_tokens for item in client_usage_records),
+                "completion_tokens": sum(item.completion_tokens for item in client_usage_records),
+                "total_tokens": sum(item.total_tokens for item in client_usage_records),
+            }
+            if race_context["race_usage_complete"]
+            else None
+        )
         currencies = {item.currency_code for item in records}
         result["cost"] = {
             "cost_amount": (
@@ -535,7 +539,8 @@ class CostRoutingCoordinator:
             "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
             "measurement_status": (
                 "estimated"
-                if any(item.measurement_status == "estimated" for item in records)
+                if not race_context["race_usage_complete"]
+                or any(item.measurement_status == "estimated" for item in records)
                 else "measured"
             ),
         }

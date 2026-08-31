@@ -6307,6 +6307,10 @@ class TaskOrchestrator:
         Callable[[str | None], None],
     ]:
         """Return callbacks that ledger completed loser usage after winner selection."""
+        # ponytail: a raced request stays unmeasured until the race API can
+        # synchronously prove every uncancellable attempt's provider usage.
+        if self._race_usage_sink is not None:
+            self._race_usage_sink("__race_pending__", None)
         state_lock = threading.Lock()
         pending: list[tuple[str, Any]] = []
         state: dict[str, Any] = {"finalized": False, "winner": None}

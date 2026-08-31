@@ -252,7 +252,7 @@ def test_race_usage_sink_receives_completed_loser_but_not_winner() -> None:
     completed("winner_endpoint", ("winner", "winner_endpoint", {"prompt_tokens": 1, "completion_tokens": 1}), None)
     completed("loser_endpoint", ("loser", "loser_endpoint", {"prompt_tokens": 2, "completion_tokens": 2}), None)
     finalize("winner_endpoint")
-    assert emitted == ["loser_endpoint"]
+    assert emitted == ["__race_pending__", "loser_endpoint"]
 
 
 def test_all_race_failures_reenter_existing_sequential_failover_boundary() -> None:
