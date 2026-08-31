@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Batch cost retrieval now preserves cache hits, completed endpoint-race loser
+  usage, and strict provider usage evidence. Remote fallbacks retain the real
+  submitted prompt, repeated result retrieval reuses deterministic ledger ids,
+  and mixed-currency results expose per-currency components.
 - Batch result retrieval no longer converts an explicit download failure into
   a silent empty result. `PgLlmBatchBackend.retrieve()` and
   `PgLlmBatchEmbeddingBackend.retrieve()` now raise a new

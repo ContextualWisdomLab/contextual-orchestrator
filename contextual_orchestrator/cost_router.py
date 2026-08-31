@@ -87,7 +87,9 @@ class CostRoutingCoordinator:
         if hasattr(orchestrator, "_race_usage_sink"):
             orchestrator._race_usage_sink = self._record_race_endpoint_usage
         self.token_counter = token_counter or (
-            build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
+            build_token_counter(postgres_dsn)
+            if postgres_dsn
+            else HeuristicTokenCounter()
         )
         self.policy = routing_policy or RoutingPolicy(self.config)
         # Job registries live in Valkey when the credential registry carries
@@ -95,18 +97,22 @@ class CostRoutingCoordinator:
         # restart; otherwise they are the historical in-process dicts. Built
         # before the backends so the default local backends share it and
         # their results survive a restart too.
-        registry = job_registry if job_registry is not None else build_job_registry(self.config)
+        registry = (
+            job_registry
+            if job_registry is not None
+            else build_job_registry(self.config)
+        )
         self.job_registry = registry
         if batch_backend is None:
             client = getattr(orchestrator, "client", None)
             local_concurrency = getattr(client, "local_concurrency", 1)
             self.batch_backend = LocalBatchBackend(
-                runner=lambda messages, mode, model: orchestrator.complete(
-                    messages, mode=mode, model_name=model
-                ),
+                runner=self._run_local_batch,
                 max_concurrency=local_concurrency,
                 job_registry=registry,
-                request_context=lambda request: orchestrator.request_policy(request.zdr_only),
+                request_context=lambda request: orchestrator.request_policy(
+                    request.zdr_only
+                ),
             )
         else:
             self.batch_backend = batch_backend
@@ -117,10 +123,14 @@ class CostRoutingCoordinator:
             )
         )
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
-        self._batch_jobs = registry.mapping("batch_jobs", decode=lambda raw: BatchJob(**raw))
+        self._batch_jobs = registry.mapping(
+            "batch_jobs", decode=lambda raw: BatchJob(**raw)
+        )
         # embeddings batch state: job handle + submitted requests + cached doc,
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
-        self._embedding_jobs = registry.mapping("embedding_jobs", decode=lambda raw: BatchJob(**raw))
+        self._embedding_jobs = registry.mapping(
+            "embedding_jobs", decode=lambda raw: BatchJob(**raw)
+        )
         self._embedding_models = registry.mapping("embedding_models")
         self._embedding_requests = registry.mapping(
             "embedding_requests", decode=lambda raw: EmbeddingBatchRequest(**raw)
@@ -129,6 +139,46 @@ class CostRoutingCoordinator:
         self._embedding_part_counts = registry.mapping("embedding_part_counts")
         self._embedding_part_limits = registry.mapping("embedding_part_limits")
         self._embedding_documents = registry.mapping("embedding_documents")
+
+    def _run_local_batch(
+        self, messages: List[Dict[str, str]], mode: str, model: str
+    ) -> Dict[str, Any]:
+        """Run one local item while retaining completed endpoint-race usage."""
+        context = {
+            "route_mode": mode,
+            "attribution": None,
+            "model_name": model,
+            "workflow_run_id": None,
+            "workflow_ready": False,
+            "records": [],
+            "pending_usage": [],
+        }
+        token = self._race_usage_context.set(context)
+        try:
+            result = self.orchestrator.complete(messages, mode=mode, model_name=model)
+        finally:
+            self._race_usage_context.reset(token)
+        race_usage = []
+        for endpoint_id, value in context["pending_usage"]:
+            if isinstance(value, tuple) and len(value) == 3:
+                usage = value[2]
+            elif isinstance(value, dict):
+                usage = value.get("usage")
+            else:
+                usage = None
+            counts = self._provider_usage(usage)
+            if counts is not None:
+                race_usage.append(
+                    {
+                        "agent_id": endpoint_id,
+                        "usage": {
+                            "prompt_tokens": counts[0],
+                            "completion_tokens": counts[1],
+                        },
+                    }
+                )
+        result["_batch_race_usage"] = race_usage
+        return result
 
     # ------------------------------------------------------------------
     # Provider / model resolution
@@ -139,7 +189,9 @@ class CostRoutingCoordinator:
         provider = agent.provider_name or _provider_from_base_url(agent.base_url)
         return provider or "unknown", agent.model or fallback_model
 
-    def _served_provider_model(self, result: Dict[str, Any], fallback_model: str) -> tuple[str, str]:
+    def _served_provider_model(
+        self, result: Dict[str, Any], fallback_model: str
+    ) -> tuple[str, str]:
         """Derive ``(provider, model)`` from the served agent in the trace."""
         trace = result.get("trace") or []
         agent_id = ""
@@ -160,7 +212,12 @@ class CostRoutingCoordinator:
             return None
         prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
         completion = usage.get("completion_tokens", usage.get("output_tokens"))
-        if type(prompt) is not int or prompt < 0 or type(completion) is not int or completion < 0:
+        if (
+            type(prompt) is not int
+            or prompt < 0
+            or type(completion) is not int
+            or completion < 0
+        ):
             return None
         return prompt, completion
 
@@ -171,10 +228,14 @@ class CostRoutingCoordinator:
             return None
         stable_id = hashlib.sha256(gateway_job_id.encode("utf-8")).hexdigest()
         return self.ledger.record_usage(
-            provider=agent.provider_name or "unknown", model=agent.model,
-            prompt_tokens=counts[0], completion_tokens=counts[1],
-            request_channel="async", route_mode="video",
-            workflow_run_id=gateway_job_id, measurement_status="measured",
+            provider=agent.provider_name or "unknown",
+            model=agent.model,
+            prompt_tokens=counts[0],
+            completion_tokens=counts[1],
+            request_channel="async",
+            route_mode="video",
+            workflow_run_id=gateway_job_id,
+            measurement_status="measured",
             usage_record_id=f"usage_video_{stable_id}",
         )
 
@@ -262,7 +323,11 @@ class CostRoutingCoordinator:
             raise TypeError("cache_bypass must be a boolean")
         if type(zdr_only) is not bool:
             raise TypeError("zdr_only must be a boolean")
-        routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
+        routing_hints = (
+            hints
+            if isinstance(hints, RoutingHints)
+            else RoutingHints.from_mapping(hints)
+        )
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
 
@@ -275,7 +340,9 @@ class CostRoutingCoordinator:
                 zdr_only=zdr_only,
             )
             job = self.submit_batch(
-                [request], metadata={"routing_reason": decision.reason}, owner_id=owner_id
+                [request],
+                metadata={"routing_reason": decision.reason},
+                owner_id=owner_id,
             )
             return {
                 "channel": "batch",
@@ -288,7 +355,9 @@ class CostRoutingCoordinator:
 
         if provider_request is not None:
             if provider_endpoint not in {"chat/completions", "responses"}:
-                raise ValueError("provider_endpoint must be chat/completions or responses")
+                raise ValueError(
+                    "provider_endpoint must be chat/completions or responses"
+                )
             race_context = {
                 "route_mode": mode,
                 "attribution": attribution,
@@ -320,7 +389,9 @@ class CostRoutingCoordinator:
                 lineage.get("workflow_run_id"), str
             ):
                 raise RuntimeError("provider completion omitted orchestration lineage")
-            result = dict(self.orchestrator.get_workflow_run(lineage["workflow_run_id"]))
+            result = dict(
+                self.orchestrator.get_workflow_run(lineage["workflow_run_id"])
+            )
             race_records = list(race_context["records"])
             records = list(race_records)
             # The caller's request prompt is attributed at most once per
@@ -336,7 +407,9 @@ class CostRoutingCoordinator:
                 if not isinstance(step, dict):
                     continue
                 counts = self._provider_usage(step.get("usage"))
-                attribute_request_prompt = counts is None and not request_prompt_attributed
+                attribute_request_prompt = (
+                    counts is None and not request_prompt_attributed
+                )
                 if attribute_request_prompt:
                     request_prompt_attributed = True
                 records.append(
@@ -381,10 +454,14 @@ class CostRoutingCoordinator:
                     if len(currencies) == 1
                     else None
                 ),
-                "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "currency_code": next(iter(currencies))
+                if len(currencies) == 1
+                else "MIXED",
                 "measurement_status": (
                     "estimated"
-                    if any(record.measurement_status == "estimated" for record in records)
+                    if any(
+                        record.measurement_status == "estimated" for record in records
+                    )
                     else "measured"
                 ),
             }
@@ -409,7 +486,11 @@ class CostRoutingCoordinator:
                 )
             return provider_response
 
-        run_kwargs = {"mode": mode, "workflow_run_id": workflow_run_id, "owner_id": owner_id}
+        run_kwargs = {
+            "mode": mode,
+            "workflow_run_id": workflow_run_id,
+            "owner_id": owner_id,
+        }
         if model_name != "contextual-orchestrator":
             run_kwargs["model_name"] = model_name
         if cache_bypass:
@@ -459,7 +540,9 @@ class CostRoutingCoordinator:
                 if not isinstance(step, dict):
                     continue
                 counts = self._provider_usage(step.get("usage"))
-                attribute_request_prompt = counts is None and not request_prompt_attributed
+                attribute_request_prompt = (
+                    counts is None and not request_prompt_attributed
+                )
                 if attribute_request_prompt:
                     request_prompt_attributed = True
                 records.append(
@@ -470,7 +553,9 @@ class CostRoutingCoordinator:
                         request_channel="sync",
                         attribution=attribution,
                         model_name=model_name,
-                        provider_model=self._served_provider_model({"trace": [step]}, model_name),
+                        provider_model=self._served_provider_model(
+                            {"trace": [step]}, model_name
+                        ),
                         workflow_run_id=result.get("workflow_run_id"),
                         prompt_tokens=counts[0] if counts else None,
                         completion_tokens=counts[1] if counts else None,
@@ -503,7 +588,9 @@ class CostRoutingCoordinator:
         ]
         result["usage"] = {
             "prompt_tokens": sum(item.prompt_tokens for item in client_usage_records),
-            "completion_tokens": sum(item.completion_tokens for item in client_usage_records),
+            "completion_tokens": sum(
+                item.completion_tokens for item in client_usage_records
+            ),
             "total_tokens": sum(item.total_tokens for item in client_usage_records),
         }
         currencies = {item.currency_code for item in records}
@@ -513,7 +600,9 @@ class CostRoutingCoordinator:
                 if len(currencies) == 1
                 else None
             ),
-            "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+            "currency_code": next(iter(currencies))
+            if len(currencies) == 1
+            else "MIXED",
             "measurement_status": (
                 "estimated"
                 if any(item.measurement_status == "estimated" for item in records)
@@ -554,6 +643,7 @@ class CostRoutingCoordinator:
         workflow_run_id: Optional[str],
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
+        usage_record_id: Optional[str] = None,
     ):
         """Record one completion's usage + cost and return its ledger record.
 
@@ -588,6 +678,7 @@ class CostRoutingCoordinator:
             workflow_run_id=workflow_run_id,
             attribution=attribution,
             measurement_status=measurement_status,
+            usage_record_id=usage_record_id,
         )
 
     def record_stream_usage(
@@ -606,9 +697,12 @@ class CostRoutingCoordinator:
         for index, step in enumerate(trace):
             counts = self._provider_usage(step.get("usage"))
             provider, model = self._served_provider_model({"trace": [step]}, model_name)
-            usage_record_id = "usage_stream_" + hashlib.sha256(
-                f"{workflow_run_id}:{index}".encode("utf-8")
-            ).hexdigest()
+            usage_record_id = (
+                "usage_stream_"
+                + hashlib.sha256(
+                    f"{workflow_run_id}:{index}".encode("utf-8")
+                ).hexdigest()
+            )
             records.append(
                 self.ledger.record_usage(
                     provider=provider,
@@ -625,8 +719,10 @@ class CostRoutingCoordinator:
             )
         statuses = {record.measurement_status for record in records}
         measurement_status = (
-            "unavailable" if "unavailable" in statuses
-            else "estimated" if "estimated" in statuses
+            "unavailable"
+            if "unavailable" in statuses
+            else "estimated"
+            if "estimated" in statuses
             else "measured"
         )
         currencies = {record.currency_code for record in records}
@@ -635,7 +731,9 @@ class CostRoutingCoordinator:
             "usage": (
                 {
                     "input_tokens": sum(record.prompt_tokens for record in records),
-                    "output_tokens": sum(record.completion_tokens for record in records),
+                    "output_tokens": sum(
+                        record.completion_tokens for record in records
+                    ),
                     "total_tokens": sum(record.total_tokens for record in records),
                 }
                 if measurement_status == "measured"
@@ -647,7 +745,9 @@ class CostRoutingCoordinator:
                     if measurement_status == "measured" and len(currencies) == 1
                     else None
                 ),
-                "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+                "currency_code": next(iter(currencies))
+                if len(currencies) == 1
+                else "MIXED",
                 "measurement_status": measurement_status,
             },
         }
@@ -663,7 +763,9 @@ class CostRoutingCoordinator:
     ) -> BatchJob:
         """Submit a batch, resolve its targets, and bind its authenticated owner."""
         try:
-            prepared_requests = [self._resolve_batch_request(request) for request in requests]
+            prepared_requests = [
+                self._resolve_batch_request(request) for request in requests
+            ]
         except ValueError as exc:
             raise InvalidBatchModelError(str(exc)) from exc
         except RuntimeError as exc:
@@ -702,12 +804,16 @@ class CostRoutingCoordinator:
                 )
         return replace(request, model=agent.model)
 
-    def poll_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
+    def poll_batch(
+        self, job_id: str, *, owner_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Poll a previously submitted batch job owned by ``owner_id``."""
         job = self._require_job(job_id, owner_id=owner_id)
         return self.batch_backend.poll(job)
 
-    def retrieve_batch(self, job_id: str, *, owner_id: Optional[str] = None) -> Dict[str, Any]:
+    def retrieve_batch(
+        self, job_id: str, *, owner_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Retrieve results for a batch owned by ``owner_id`` and record usage.
 
         Raises :class:`~contextual_orchestrator.batch_routing.BatchDownloadError`
@@ -726,10 +832,33 @@ class CostRoutingCoordinator:
             # estimated from what was asked rather than from empty content.
             fallback_messages = item.messages or [{"role": "user", "content": ""}]
             records = []
+            if item.cache_status == "hit":
+                records.append(
+                    self._record_completion(
+                        messages=[],
+                        answer="",
+                        route_mode=item.mode,
+                        request_channel="cache",
+                        attribution=item.attribution,
+                        model_name=item.model,
+                        provider_model=("cache", "response"),
+                        workflow_run_id=job.job_id,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        usage_record_id=self._batch_usage_record_id(
+                            job_id, item.custom_id, "cache", 0
+                        ),
+                    )
+                )
             request_prompt_attributed = False
-            for step in item.trace:
+            billable_steps = (
+                [] if item.cache_status == "hit" else [*item.race_usage, *item.trace]
+            )
+            for index, step in enumerate(billable_steps):
                 counts = self._provider_usage(step.get("usage"))
-                attribute_request_prompt = counts is None and not request_prompt_attributed
+                attribute_request_prompt = (
+                    counts is None and not request_prompt_attributed
+                )
                 if attribute_request_prompt:
                     request_prompt_attributed = True
                 records.append(
@@ -746,9 +875,17 @@ class CostRoutingCoordinator:
                         workflow_run_id=job.job_id,
                         prompt_tokens=counts[0] if counts else None,
                         completion_tokens=counts[1] if counts else None,
+                        usage_record_id=self._batch_usage_record_id(
+                            job_id, item.custom_id, "step", index
+                        ),
                     )
                 )
             if not records:
+                usage_valid = item.usage_valid is True or (
+                    item.usage_valid is None
+                    and item.prompt_tokens > 0
+                    and item.completion_tokens > 0
+                )
                 records.append(
                     self._record_completion(
                         messages=fallback_messages,
@@ -759,8 +896,13 @@ class CostRoutingCoordinator:
                         model_name=item.model,
                         provider_model=self._resolve_batch_provider_model(item),
                         workflow_run_id=job.job_id,
-                        prompt_tokens=item.prompt_tokens or None,
-                        completion_tokens=item.completion_tokens or None,
+                        prompt_tokens=item.prompt_tokens if usage_valid else None,
+                        completion_tokens=item.completion_tokens
+                        if usage_valid
+                        else None,
+                        usage_record_id=self._batch_usage_record_id(
+                            job_id, item.custom_id, "result", 0
+                        ),
                     )
                 )
             currencies = {record.currency_code for record in records}
@@ -790,6 +932,26 @@ class CostRoutingCoordinator:
                         )
                         else "measured"
                     ),
+                    **(
+                        {
+                            "currency_components": [
+                                {
+                                    "currency_code": currency,
+                                    "cost_amount": round(
+                                        sum(
+                                            record.cost_amount
+                                            for record in records
+                                            if record.currency_code == currency
+                                        ),
+                                        6,
+                                    ),
+                                }
+                                for currency in sorted(currencies)
+                            ]
+                        }
+                        if len(currencies) > 1
+                        else {}
+                    ),
                 }
             )
         return {
@@ -799,8 +961,19 @@ class CostRoutingCoordinator:
             "results": recorded,
         }
 
+    @staticmethod
+    def _batch_usage_record_id(
+        job_id: str, custom_id: str, kind: str, index: int
+    ) -> str:
+        identity = f"{job_id}\x00{custom_id}\x00{kind}\x00{index}"
+        return "usage_batch_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
     def _resolve_batch_provider_model(self, item: BatchResultItem) -> tuple[str, str]:
-        provider = str(item.attribution.get("provider") or item.attribution.get("upstream_api") or "")
+        provider = str(
+            item.attribution.get("provider")
+            or item.attribution.get("upstream_api")
+            or ""
+        )
         if not provider:
             provider = "unknown"
         return provider, item.model
@@ -835,7 +1008,9 @@ class CostRoutingCoordinator:
             raise TypeError("zdr_only must be a boolean")
         if agent_id is not None and (not isinstance(agent_id, str) or not agent_id):
             raise TypeError("agent_id must be a non-empty string when provided")
-        resolved_model, resolved_agent_id = self._resolve_embedding_target(model, zdr_only, agent_id)
+        resolved_model, resolved_agent_id = self._resolve_embedding_target(
+            model, zdr_only, agent_id
+        )
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
             inputs,
@@ -861,17 +1036,22 @@ class CostRoutingCoordinator:
             return model, None
         selection_model = (
             None
-            if model in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
+            if model
+            in {"contextual-orchestrator", getattr(self.orchestrator, "AUTO_MODEL", "")}
             else model
         )
         with self.orchestrator.request_policy(zdr_only):
-            candidates = self.orchestrator._capability_agents("embedding", selection_model)
+            candidates = self.orchestrator._capability_agents(
+                "embedding", selection_model
+            )
         if agent_id is None:
             return candidates[0].model, candidates[0].id
         for candidate in candidates:
             if candidate.id == agent_id:
                 return candidate.model, candidate.id
-        raise RuntimeError(f"embedding agent {agent_id!r} is not eligible for this request")
+        raise RuntimeError(
+            f"embedding agent {agent_id!r} is not eligible for this request"
+        )
 
     def _build_embedding_requests(
         self,
@@ -907,10 +1087,14 @@ class CostRoutingCoordinator:
                         agent_id=agent_id,
                     )
                 )
-        return requests, part_counts, {
-            "max_tokens_per_part": max_tokens,
-            "max_chars_per_part": max_chars,
-        }
+        return (
+            requests,
+            part_counts,
+            {
+                "max_tokens_per_part": max_tokens,
+                "max_chars_per_part": max_chars,
+            },
+        )
 
     def _embedding_request_limits(self) -> tuple[int, int]:
         """Return configured per-provider-call embedding ceilings.
@@ -1069,7 +1253,9 @@ class CostRoutingCoordinator:
             }
 
         try:
-            items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+            items: List[EmbeddingBatchResultItem] = (
+                self.embedding_batch_backend.retrieve(job)
+            )
         except BatchDownloadError as exc:
             # Deliberately NOT cached: an explicit download failure must stay
             # retryable. Caching this under "completed" (as a bare `return []`
@@ -1090,7 +1276,9 @@ class CostRoutingCoordinator:
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)
         part_limits = self._embedding_part_limits.get(batch_id, {})
         ordered = sorted(items, key=lambda item: item.index)
-        parts_by_source: Dict[int, List[Dict[str, Any]]] = {index: [] for index in range(input_count)}
+        parts_by_source: Dict[int, List[Dict[str, Any]]] = {
+            index: [] for index in range(input_count)
+        }
         for item in ordered:
             request = request_by_custom_id.get(item.custom_id)
             source_index = request.source_index if request else item.index
@@ -1114,7 +1302,10 @@ class CostRoutingCoordinator:
         total_cost_amount = 0.0
         currency_code = "USD"
         for source_index in range(input_count):
-            parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])
+            parts = sorted(
+                parts_by_source.get(source_index, []),
+                key=lambda item: item["part_index"],
+            )
             if not parts:
                 embeddings.append({"index": source_index, "embedding": []})
                 token_counts.append(0)
@@ -1123,7 +1314,9 @@ class CostRoutingCoordinator:
             prompt_tokens = sum(int(part["prompt_tokens"]) for part in parts)
             model_name = str(parts[0]["model"])
             provider = str(
-                attribution.get("provider") or attribution.get("upstream_api") or "unknown"
+                attribution.get("provider")
+                or attribution.get("upstream_api")
+                or "unknown"
             )
             record = self.ledger.record_usage(
                 provider=provider,
@@ -1142,7 +1335,10 @@ class CostRoutingCoordinator:
                 {
                     "index": source_index,
                     "embedding": _weighted_average_embedding(
-                        [(part["embedding"], int(part["prompt_tokens"])) for part in parts]
+                        [
+                            (part["embedding"], int(part["prompt_tokens"]))
+                            for part in parts
+                        ]
                     ),
                 }
             )
@@ -1249,6 +1445,8 @@ def _weighted_average_embedding(parts: List[tuple[List[float], int]]) -> List[fl
     for offset in range(dimension):
         weighted_sum = 0.0
         for vector, weight in parts:
-            weighted_sum += (vector[offset] if offset < len(vector) else 0.0) * max(1, int(weight))
+            weighted_sum += (vector[offset] if offset < len(vector) else 0.0) * max(
+                1, int(weight)
+            )
         reduced.append(round(weighted_sum / total_weight, 8))
     return reduced

@@ -113,10 +113,13 @@ class RoutingPolicy:
         if hints.latency_tolerant or hints.priority == "bulk":
             return RoutingDecision("batch", "latency-tolerant request routed to batch")
 
-        batch_min_tokens = int(self._config.get(_ROUTING_CATEGORY, "batch_min_tokens", 0))
+        batch_min_tokens = int(
+            self._config.get(_ROUTING_CATEGORY, "batch_min_tokens", 0)
+        )
         if batch_min_tokens and prompt_tokens >= batch_min_tokens:
             return RoutingDecision(
-                "batch", f"prompt tokens {prompt_tokens} >= batch_min_tokens {batch_min_tokens}"
+                "batch",
+                f"prompt tokens {prompt_tokens} >= batch_min_tokens {batch_min_tokens}",
             )
 
         return RoutingDecision("sync", "default interactive path")
@@ -213,6 +216,9 @@ class BatchResultItem:
     # Local runs keep their per-call identities and usage intact so the cost
     # router can meter heterogeneous conduct workflows one provider at a time.
     trace: List[Dict[str, Any]] = field(default_factory=list)
+    cache_status: Optional[str] = None
+    race_usage: List[Dict[str, Any]] = field(default_factory=list)
+    usage_valid: Optional[bool] = None
 
 
 class BatchDownloadError(RuntimeError):
@@ -242,7 +248,9 @@ class BatchBackend(Protocol):
 
     name: str
 
-    def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
+    def submit(
+        self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
         """Submit a batch of requests and return a job handle."""
         ...
 
@@ -283,14 +291,19 @@ class LocalBatchBackend:
         # Computed results survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
         self._results: Dict[str, List[BatchResultItem]] = (
-            job_registry.mapping("local_batch_results", decode=lambda raw: BatchResultItem(**raw))
+            job_registry.mapping(
+                "local_batch_results", decode=lambda raw: BatchResultItem(**raw)
+            )
             if job_registry is not None
             else {}
         )
 
-    def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
+    def submit(
+        self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
         """Run every request in-process and stash the results under a job id."""
         job_id = f"localbatch_{uuid.uuid4().hex}"
+
         def run(request: BatchRequest) -> BatchResultItem:
             context = (
                 self._request_context(request)
@@ -320,9 +333,7 @@ class LocalBatchBackend:
                 value = usage.get(key) if isinstance(usage, dict) else None
                 return value if type(value) is int and value >= 0 else 0
 
-            prompt_tokens = sum(
-                reported(step, "prompt_tokens") for step in trace
-            )
+            prompt_tokens = sum(reported(step, "prompt_tokens") for step in trace)
             completion_tokens = sum(
                 reported(step, "completion_tokens") for step in trace
             )
@@ -336,19 +347,30 @@ class LocalBatchBackend:
                 mode=result.get("mode", request.mode),
                 messages=list(request.messages),
                 trace=trace,
+                cache_status=result.get("cache_status"),
+                race_usage=list(result.get("_batch_race_usage") or []),
             )
+
         if self.max_concurrency == 1 or len(requests) <= 1:
             items = [run(request) for request in requests]
         else:
+
             def run_with_context(item: tuple[Any, BatchRequest]) -> BatchResultItem:
                 context, request = item
                 return context.run(run, request)
 
             contexts_and_requests = [(copy_context(), request) for request in requests]
-            with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(requests))) as pool:
+            with ThreadPoolExecutor(
+                max_workers=min(self.max_concurrency, len(requests))
+            ) as pool:
                 items = list(pool.map(run_with_context, contexts_and_requests))
         self._results[job_id] = items
-        return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
+        return BatchJob(
+            job_id=job_id,
+            backend=self.name,
+            status="completed",
+            request_count=len(requests),
+        )
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Local batches complete synchronously, so always report completed."""
@@ -389,7 +411,9 @@ class PgLlmBatchBackend:
         # Tracked requests survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
         self._jobs: Dict[str, Dict[str, Any]] = (
-            job_registry.mapping("pg_llm_batch_jobs") if job_registry is not None else {}
+            job_registry.mapping("pg_llm_batch_jobs")
+            if job_registry is not None
+            else {}
         )
 
     def _assemble_payload(self, requests: List[BatchRequest]) -> str:
@@ -405,7 +429,9 @@ class PgLlmBatchBackend:
     def _run(coro: Any) -> Any:
         return asyncio.run(coro)
 
-    def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
+    def submit(
+        self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
         """Upload JSONL + create a batch job via the pg-llm-batch client."""
         file_path = self._assemble_payload(requests)
 
@@ -439,6 +465,7 @@ class PgLlmBatchBackend:
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Poll batch status via the pg-llm-batch client."""
+
         async def _poll() -> Dict[str, Any]:
             return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
 
@@ -457,6 +484,7 @@ class PgLlmBatchBackend:
         download failure, instead of returning an empty list indistinguishable
         from a batch that legitimately completed with zero items.
         """
+
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
@@ -477,17 +505,27 @@ class PgLlmBatchBackend:
             body = (entry.get("response") or {}).get("body", {})
             answer = _extract_answer(body)
             usage = body.get("usage", {}) or {}
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            usage_valid = (
+                type(prompt_tokens) is int
+                and prompt_tokens >= 0
+                and type(completion_tokens) is int
+                and completion_tokens >= 0
+            )
             raw_request = tracked.get(custom_id)
             request = BatchRequest(**raw_request) if raw_request else None
             items.append(
                 BatchResultItem(
                     custom_id=custom_id,
                     answer=answer,
-                    prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                    completion_tokens=int(usage.get("completion_tokens", 0)),
+                    prompt_tokens=prompt_tokens if usage_valid else 0,
+                    completion_tokens=completion_tokens if usage_valid else 0,
                     attribution=dict(request.attribution) if request else {},
                     model=request.model if request else "contextual-orchestrator",
                     mode=request.mode if request else "auto",
+                    messages=list(request.messages) if request else [],
+                    usage_valid=usage_valid,
                 )
             )
         return items
@@ -501,9 +539,13 @@ def _extract_answer(body: Dict[str, Any]) -> str:
     return str(message.get("content", ""))
 
 
-def build_jsonl_body(requests: List[BatchRequest], endpoint: str = "/v1/chat/completions") -> str:
+def build_jsonl_body(
+    requests: List[BatchRequest], endpoint: str = "/v1/chat/completions"
+) -> str:
     """Serialize batch requests into an OpenAI Batch API JSONL body."""
-    return "\n".join(json.dumps(request.to_jsonl_line(endpoint)) for request in requests)
+    return "\n".join(
+        json.dumps(request.to_jsonl_line(endpoint)) for request in requests
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -543,9 +585,16 @@ class EmbeddingBatchRequest:
         Hashing avoids exposing or lengthening that internal identifier and keeps
         the OpenAI-compatible 64-character custom-id limit intact.
         """
-        if self.agent_id is None and len(self.custom_id) <= _PROVIDER_CUSTOM_ID_MAX_LENGTH:
+        if (
+            self.agent_id is None
+            and len(self.custom_id) <= _PROVIDER_CUSTOM_ID_MAX_LENGTH
+        ):
             return self.custom_id
-        identity = self.custom_id if self.agent_id is None else f"{self.agent_id}\x00{self.custom_id}"
+        identity = (
+            self.custom_id
+            if self.agent_id is None
+            else f"{self.agent_id}\x00{self.custom_id}"
+        )
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
@@ -579,7 +628,9 @@ class EmbeddingBatchBackend(Protocol):
     name: str
 
     def submit(
-        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+        self,
+        requests: List[EmbeddingBatchRequest],
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> BatchJob:
         """Submit a batch of embedding requests and return a job handle."""
         ...
@@ -593,7 +644,9 @@ class EmbeddingBatchBackend(Protocol):
         ...
 
 
-def heuristic_embedding(text: str, dimension: int = _DEFAULT_EMBEDDING_DIMENSION) -> List[float]:
+def heuristic_embedding(
+    text: str, dimension: int = _DEFAULT_EMBEDDING_DIMENSION
+) -> List[float]:
     """Deterministic, dependency-free embedding for the local/standalone path.
 
     Derives a stable unit-range vector from a SHA-256 digest of ``text`` so the
@@ -637,7 +690,8 @@ class LocalEmbeddingBatchBackend:
         # is injected; a plain dict preserves the historical behavior.
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = (
             job_registry.mapping(
-                "local_embedding_results", decode=lambda raw: EmbeddingBatchResultItem(**raw)
+                "local_embedding_results",
+                decode=lambda raw: EmbeddingBatchResultItem(**raw),
             )
             if job_registry is not None
             else {}
@@ -650,7 +704,9 @@ class LocalEmbeddingBatchBackend:
         return len(text.split())
 
     def submit(
-        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+        self,
+        requests: List[EmbeddingBatchRequest],
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> BatchJob:
         """Embed every input in-process and stash the results under a job id."""
         job_id = f"localembed_{uuid.uuid4().hex}"
@@ -667,7 +723,12 @@ class LocalEmbeddingBatchBackend:
                 )
             )
         self._results[job_id] = items
-        return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
+        return BatchJob(
+            job_id=job_id,
+            backend=self.name,
+            status="completed",
+            request_count=len(requests),
+        )
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Local batches complete synchronously, so always report completed."""
@@ -705,7 +766,9 @@ class PgLlmBatchEmbeddingBackend:
         # Tracked requests survive a restart when a Valkey-backed registry
         # is injected; a plain dict preserves the historical behavior.
         self._jobs: Dict[str, Dict[str, Any]] = (
-            job_registry.mapping("pg_llm_embedding_jobs") if job_registry is not None else {}
+            job_registry.mapping("pg_llm_embedding_jobs")
+            if job_registry is not None
+            else {}
         )
 
     def _assemble_payload(self, requests: List[EmbeddingBatchRequest]) -> str:
@@ -720,7 +783,9 @@ class PgLlmBatchEmbeddingBackend:
         return asyncio.run(coro)
 
     def submit(
-        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+        self,
+        requests: List[EmbeddingBatchRequest],
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> BatchJob:
         """Upload embeddings JSONL + create a batch job via the pg-llm-batch client."""
         file_path = self._assemble_payload(requests)
@@ -728,7 +793,9 @@ class PgLlmBatchEmbeddingBackend:
             request.to_jsonl_line(self._endpoint)["custom_id"] for request in requests
         ]
         job_metadata = dict(metadata) if metadata is not None else None
-        agent_ids = sorted({request.agent_id for request in requests if request.agent_id})
+        agent_ids = sorted(
+            {request.agent_id for request in requests if request.agent_id}
+        )
         if agent_ids:
             job_metadata = job_metadata or {}
             if len(agent_ids) == 1:
@@ -767,6 +834,7 @@ class PgLlmBatchEmbeddingBackend:
 
     def poll(self, job: BatchJob) -> Dict[str, Any]:
         """Poll embeddings batch status via the pg-llm-batch client."""
+
         async def _poll() -> Dict[str, Any]:
             return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
 
@@ -785,6 +853,7 @@ class PgLlmBatchEmbeddingBackend:
         download failure, instead of returning an empty list indistinguishable
         from a batch that legitimately completed with zero items.
         """
+
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
@@ -809,14 +878,20 @@ class PgLlmBatchEmbeddingBackend:
             embedding = _extract_embedding(body)
             usage = body.get("usage", {}) or {}
             raw_request = tracked_requests.get(custom_id)
-            tracked_request = EmbeddingBatchRequest(**raw_request) if raw_request else None
+            tracked_request = (
+                EmbeddingBatchRequest(**raw_request) if raw_request else None
+            )
             items.append(
                 EmbeddingBatchResultItem(
-                    custom_id=tracked_request.custom_id if tracked_request else custom_id,
+                    custom_id=tracked_request.custom_id
+                    if tracked_request
+                    else custom_id,
                     index=position_by_custom_id.get(custom_id, len(items)),
                     embedding=embedding,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                    model=tracked_request.model if tracked_request else "contextual-orchestrator",
+                    model=tracked_request.model
+                    if tracked_request
+                    else "contextual-orchestrator",
                     agent_id=tracked_request.agent_id if tracked_request else None,
                 )
             )
@@ -836,4 +911,6 @@ def build_embeddings_jsonl_body(
     requests: List[EmbeddingBatchRequest], endpoint: str = "/v1/embeddings"
 ) -> str:
     """Serialize embedding batch requests into an OpenAI Batch API JSONL body."""
-    return "\n".join(json.dumps(request.to_jsonl_line(endpoint)) for request in requests)
+    return "\n".join(
+        json.dumps(request.to_jsonl_line(endpoint)) for request in requests
+    )

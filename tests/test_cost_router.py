@@ -40,14 +40,26 @@ class _FailingLedgerStore:
 
 def _coordinator(ledger=None) -> CostRoutingCoordinator:
     agents = [
-        ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
-                   tags=("reasoning", "coding", "writing"), priority=1),
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning", "coding", "writing"),
+            priority=1,
+        ),
     ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
-    price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
-    return CostRoutingCoordinator(orchestrator, config, price_book=price_book, ledger=ledger)
+    price_book.set_price(
+        PriceEntry(
+            "mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0
+        )
+    )
+    return CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, ledger=ledger
+    )
 
 
 def test_sync_completion_records_usage_and_returns_costs() -> None:
@@ -539,7 +551,11 @@ def test_sync_completion_survives_usage_persistence_failure() -> None:
     sink = InMemoryUsageTelemetrySink()
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
-    price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
+    price_book.set_price(
+        PriceEntry(
+            "mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0
+        )
+    )
     ledger = CostLedger(
         price_book,
         store=NonBlockingLedgerStore(
@@ -549,13 +565,17 @@ def test_sync_completion_survives_usage_persistence_failure() -> None:
     )
     coordinator = _coordinator(ledger=ledger)
 
-    result = coordinator.complete([{"role": "user", "content": "hello without blocking"}])
+    result = coordinator.complete(
+        [{"role": "user", "content": "hello without blocking"}]
+    )
     assert result["channel"] == "sync"
     assert result["usage_record_id"].startswith("usage_")
     assert result["usage"]["total_tokens"] > 0
 
     assert ledger.flush(timeout=1.0)
-    assert ledger.telemetry_health()["store_failures"] == len(result["usage_record_ids"])
+    assert ledger.telemetry_health()["store_failures"] == len(
+        result["usage_record_ids"]
+    )
     assert any(
         event.attributes["contextual_orchestrator.usage.export_state"] == "export_error"
         for event in sink.events()
@@ -602,8 +622,12 @@ def test_batch_completion_records_on_retrieve() -> None:
 
 def test_local_batch_records_each_served_provider_at_its_own_price() -> None:
     agents = [
-        ModelAgent(id="worker_a", model="model-a", base_url="mock://a", provider_name="alpha"),
-        ModelAgent(id="worker_b", model="model-b", base_url="mock://b", provider_name="beta"),
+        ModelAgent(
+            id="worker_a", model="model-a", base_url="mock://a", provider_name="alpha"
+        ),
+        ModelAgent(
+            id="worker_b", model="model-b", base_url="mock://b", provider_name="beta"
+        ),
     ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
@@ -615,8 +639,14 @@ def test_local_batch_records_each_served_provider_at_its_own_price() -> None:
             "answer": "done",
             "mode": "conduct",
             "trace": [
-                {"agent_id": "worker_a", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
-                {"agent_id": "worker_b", "usage": {"prompt_tokens": 7, "completion_tokens": 3}},
+                {
+                    "agent_id": "worker_a",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                },
+                {
+                    "agent_id": "worker_b",
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+                },
             ],
         }
     )
@@ -668,9 +698,164 @@ def test_local_batch_malformed_usage_falls_back_without_coercion() -> None:
 
     assert result["measurement_status"] == "estimated"
     assert all(
-        row["measurement_status"] == "estimated"
-        for row in coordinator.ledger.records()
+        row["measurement_status"] == "estimated" for row in coordinator.ledger.records()
     )
+
+
+def test_local_batch_cache_hit_records_only_zero_cost_cache_usage() -> None:
+    coordinator = _coordinator()
+    coordinator.batch_backend = LocalBatchBackend(
+        lambda *_: {
+            "answer": "cached",
+            "cache_status": "hit",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+                }
+            ],
+        }
+    )
+
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "cached request"}],
+        hints={"channel": "batch"},
+    )
+    result = coordinator.retrieve_batch(submitted["job_id"])["results"][0]
+    rows = coordinator.ledger.records()
+
+    assert result["prompt_tokens"] == result["completion_tokens"] == 0
+    assert result["cost_amount"] == 0
+    assert [(row["provider_name"], row["request_channel"]) for row in rows] == [
+        ("cache", "cache")
+    ]
+
+
+def test_local_batch_records_completed_race_loser_once() -> None:
+    coordinator = _coordinator()
+
+    def raced_complete(*_args, **_kwargs):
+        coordinator.orchestrator._race_usage_sink(
+            "mock_worker",
+            ("loser", "mock_worker", {"prompt_tokens": 2, "completion_tokens": 3}),
+        )
+        return {
+            "answer": "winner",
+            "trace": [
+                {
+                    "agent_id": "mock_worker",
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                }
+            ],
+        }
+
+    coordinator.orchestrator.complete = raced_complete
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "race"}], hints={"channel": "batch"}
+    )
+    first = coordinator.retrieve_batch(submitted["job_id"])
+    second = coordinator.retrieve_batch(submitted["job_id"])
+
+    assert first == second
+    assert first["results"][0]["prompt_tokens"] == 7
+    assert first["results"][0]["completion_tokens"] == 10
+    assert len(first["results"][0]["usage_record_ids"]) == 2
+    assert len(coordinator.ledger.records()) == 2
+
+
+def test_pg_batch_malformed_usage_estimates_from_tracked_prompt() -> None:
+    captured = {}
+
+    class _Assembler:
+        def assemble(self, lines):
+            captured["lines"] = lines
+            return "memory://captured"
+
+    class _Client:
+        async def upload_jsonl(self, *_args):
+            return {"id": "file-1"}
+
+        async def create_batch_job(self, *_args, **_kwargs):
+            return {"id": "batch-malformed", "status": "completed"}
+
+        async def download_results(self, *_args):
+            return {
+                "success": True,
+                "responses": [
+                    {
+                        "custom_id": captured["lines"][0]["custom_id"],
+                        "response": {
+                            "body": {
+                                "choices": [{"message": {"content": "answer"}}],
+                                "usage": {
+                                    "prompt_tokens": "9",
+                                    "completion_tokens": None,
+                                },
+                            }
+                        },
+                    }
+                ],
+            }
+
+    coordinator = _coordinator()
+    coordinator.batch_backend = PgLlmBatchBackend(
+        _Client(), payload_assembler=_Assembler()
+    )
+    messages = [{"role": "user", "content": "the real remote prompt"}]
+    submitted = coordinator.complete(messages, hints={"channel": "batch"})
+    result = coordinator.retrieve_batch(submitted["job_id"])["results"][0]
+
+    assert result["measurement_status"] == "estimated"
+    assert result["prompt_tokens"] == coordinator.token_counter.count_messages(
+        messages, "contextual-orchestrator"
+    )
+
+
+def test_batch_mixed_currency_components_and_retrieval_are_idempotent() -> None:
+    agents = [
+        ModelAgent("worker_alpha", "model-a", "mock://a", provider_name="alpha"),
+        ModelAgent("worker_beta", "model-b", "mock://b", provider_name="beta"),
+    ]
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("alpha", "model-a", 1, 1, currency_code="USD"))
+    price_book.set_price(PriceEntry("beta", "model-b", 1, 1, currency_code="EUR"))
+    coordinator = CostRoutingCoordinator(
+        TaskOrchestrator(agents),
+        config,
+        price_book=price_book,
+        batch_backend=LocalBatchBackend(
+            lambda *_: {
+                "answer": "done",
+                "trace": [
+                    {
+                        "agent_id": "worker_alpha",
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    },
+                    {
+                        "agent_id": "worker_beta",
+                        "usage": {"prompt_tokens": 2, "completion_tokens": 2},
+                    },
+                ],
+            }
+        ),
+    )
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "mixed"}], hints={"channel": "batch"}
+    )
+
+    first = coordinator.retrieve_batch(submitted["job_id"])
+    second = coordinator.retrieve_batch(submitted["job_id"])
+    result = first["results"][0]
+
+    assert first == second
+    assert result["currency_code"] == "MIXED"
+    assert result["cost_amount"] is None
+    assert [part["currency_code"] for part in result["currency_components"]] == [
+        "EUR",
+        "USD",
+    ]
+    assert len(coordinator.ledger.records()) == 2
 
 
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
@@ -693,8 +878,11 @@ def test_cost_report_rolls_up_across_sync_and_batch() -> None:
     sync = coordinator.complete(
         [{"role": "user", "content": "sync one"}], attribution={"company": "acme"}
     )
-    job = coordinator.complete([{"role": "user", "content": "batch one"}],
-                               hints={"channel": "batch"}, attribution={"company": "acme"})
+    job = coordinator.complete(
+        [{"role": "user", "content": "batch one"}],
+        hints={"channel": "batch"},
+        attribution={"company": "acme"},
+    )
     batch = coordinator.retrieve_batch(job["job_id"])
 
     report = coordinator.cost_report("company")
@@ -721,7 +909,13 @@ def test_batch_backend_can_be_pg_llm_batch() -> None:
         async def upload_jsonl(self, file_path, endpoint_alias, purpose="batch"):
             return {"id": "file-1"}
 
-        async def create_batch_job(self, input_file_id, endpoint_alias, endpoint="/v1/chat/completions", metadata=None):
+        async def create_batch_job(
+            self,
+            input_file_id,
+            endpoint_alias,
+            endpoint="/v1/chat/completions",
+            metadata=None,
+        ):
             return {"id": "batch-1", "status": "validating"}
 
         async def get_batch_status(self, batch_id, endpoint_alias):
@@ -730,28 +924,52 @@ def test_batch_backend_can_be_pg_llm_batch() -> None:
         async def download_results(self, batch_id, endpoint_alias):
             return {
                 "success": True,
-                "responses": [{
-                    "custom_id": line["custom_id"],
-                    "response": {"body": {
-                        "choices": [{"message": {"content": "ok"}}],
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
-                    }},
-                } for line in captured["lines"]],
+                "responses": [
+                    {
+                        "custom_id": line["custom_id"],
+                        "response": {
+                            "body": {
+                                "choices": [{"message": {"content": "ok"}}],
+                                "usage": {
+                                    "prompt_tokens": 5,
+                                    "completion_tokens": 5,
+                                    "total_tokens": 10,
+                                },
+                            }
+                        },
+                    }
+                    for line in captured["lines"]
+                ],
             }
 
-    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
-                         tags=("reasoning",), priority=1)]
+    agents = [
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning",),
+            priority=1,
+        )
+    ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     # Batch requests carry the gateway model name; a provider-wildcard price
     # covers whichever upstream model pg-llm-batch resolves.
     price_book.set_price(PriceEntry("mock", "*", 1.0, 2.0))
-    backend = PgLlmBatchBackend(_FakeClient(), endpoint_alias="gw", payload_assembler=_CapturingAssembler())
-    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book, batch_backend=backend)
+    backend = PgLlmBatchBackend(
+        _FakeClient(), endpoint_alias="gw", payload_assembler=_CapturingAssembler()
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, batch_backend=backend
+    )
 
-    submitted = coordinator.complete([{"role": "user", "content": "route to pg-llm-batch"}],
-                                     hints={"channel": "batch"}, attribution={"provider": "mock"})
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "route to pg-llm-batch"}],
+        hints={"channel": "batch"},
+        attribution={"provider": "mock"},
+    )
     assert submitted["backend"] == "pg-llm-batch"
     retrieved = coordinator.retrieve_batch(submitted["job_id"])
     assert retrieved["backend"] == "pg-llm-batch"
@@ -762,7 +980,9 @@ def test_batch_backend_can_be_pg_llm_batch() -> None:
     assert row["request_channel"] == "batch"
 
 
-def test_retrieve_batch_propagates_download_failure_instead_of_fake_empty_success() -> None:
+def test_retrieve_batch_propagates_download_failure_instead_of_fake_empty_success() -> (
+    None
+):
     """An explicit download failure must never be reported as a zero-result success.
 
     Regression for the bug where ``PgLlmBatchBackend.retrieve()`` mapped
@@ -775,7 +995,13 @@ def test_retrieve_batch_propagates_download_failure_instead_of_fake_empty_succes
         async def upload_jsonl(self, file_path, endpoint_alias, purpose="batch"):
             return {"id": "file-1"}
 
-        async def create_batch_job(self, input_file_id, endpoint_alias, endpoint="/v1/chat/completions", metadata=None):
+        async def create_batch_job(
+            self,
+            input_file_id,
+            endpoint_alias,
+            endpoint="/v1/chat/completions",
+            metadata=None,
+        ):
             return {"id": "batch-failed", "status": "validating"}
 
         async def get_batch_status(self, batch_id, endpoint_alias):
@@ -784,17 +1010,30 @@ def test_retrieve_batch_propagates_download_failure_instead_of_fake_empty_succes
         async def download_results(self, batch_id, endpoint_alias):
             return {"success": False, "reason": "Batch not complete"}
 
-    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
-                         tags=("reasoning",), priority=1)]
+    agents = [
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning",),
+            priority=1,
+        )
+    ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("mock", "*", 1.0, 2.0))
     backend = PgLlmBatchBackend(_FailingClient())
-    coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book, batch_backend=backend)
+    coordinator = CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, batch_backend=backend
+    )
 
-    submitted = coordinator.complete([{"role": "user", "content": "route to pg-llm-batch"}],
-                                     hints={"channel": "batch"}, attribution={"provider": "mock"})
+    submitted = coordinator.complete(
+        [{"role": "user", "content": "route to pg-llm-batch"}],
+        hints={"channel": "batch"},
+        attribution={"provider": "mock"},
+    )
     with pytest.raises(BatchDownloadError) as excinfo:
         coordinator.retrieve_batch(submitted["job_id"])
     assert excinfo.value.job_id == submitted["job_id"]
@@ -828,7 +1067,9 @@ def test_zdr_batch_resolves_each_request_to_a_member_of_its_configured_pool() ->
 
         def submit(self, requests, metadata=None):
             captured.extend(requests)
-            return BatchJob("batch-zdr", self.name, status="submitted", request_count=len(requests))
+            return BatchJob(
+                "batch-zdr", self.name, status="submitted", request_count=len(requests)
+            )
 
     coordinator = CostRoutingCoordinator(
         orchestrator,
@@ -896,13 +1137,21 @@ def test_zdr_embedding_batch_preserves_selected_member_with_duplicate_models() -
 
         def submit(self, requests, metadata=None):
             self.requests.extend(requests)
-            return BatchJob("duplicate-model", self.name, status="completed", request_count=len(requests))
+            return BatchJob(
+                "duplicate-model",
+                self.name,
+                status="completed",
+                request_count=len(requests),
+            )
 
         def poll(self, job):
             return {"is_complete": True, "status": "completed"}
 
         def retrieve(self, job):
-            return [EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model) for request in self.requests]
+            return [
+                EmbeddingBatchResultItem(request.custom_id, 0, [1.0], 1, request.model)
+                for request in self.requests
+            ]
 
     backend = _RecordingEmbeddingBackend()
     orchestrator = TaskOrchestrator([first, second])
@@ -930,10 +1179,17 @@ def test_non_zdr_batch_preserves_an_explicit_model_outside_the_pool() -> None:
 
         def submit(self, requests, metadata=None):
             captured.extend(requests)
-            return BatchJob("batch-ordinary", self.name, status="submitted", request_count=len(requests))
+            return BatchJob(
+                "batch-ordinary",
+                self.name,
+                status="submitted",
+                request_count=len(requests),
+            )
 
     coordinator = CostRoutingCoordinator(
-        TaskOrchestrator([ModelAgent("configured_agent", "configured-model", "mock://configured")]),
+        TaskOrchestrator(
+            [ModelAgent("configured_agent", "configured-model", "mock://configured")]
+        ),
         batch_backend=_CapturingBackend(),
     )
     request = BatchRequest(
